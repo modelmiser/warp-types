@@ -150,3 +150,12 @@ Removing Copy+Clone from Warp<S> broke zero tests out of 274. All correct usage 
 ### Ferrite as Near-Mandatory Citation
 
 Agent 1 identified Ferrite (Chen et al., ECOOP 2022) — session types embedded in Rust using the exact same PhantomData+traits encoding. At a PL venue, not citing Ferrite would be a reviewer red flag. The distinction is clear (inter-process channels vs intra-warp lanes) but the encoding technique is shared. The shared technique actually strengthens our paper: it validates that Rust's type system is expressive enough for session-type embeddings.
+
+### False Comparability Check on Cross-Domain Claims
+
+The mm-xtal-stem:compare methodology (mechanism/scale/coupling) distinguishes genuine transfers from false parallels. Applied to §9.5 "Beyond SIMT":
+- FPGA: All 3 checks pass. Isomorphic bug class (stale pipeline register = shuffle from inactive lane). Working prototype.
+- Distributed: Mechanism partially matches (quiescence), scale diverges (bounded deterministic vs unbounded non-deterministic), coupling asymmetric (no GPU analog of network partition).
+- Database/proof: Mechanism diverges fundamentally. "Active subset selection" is structural resemblance, not shared failure mode. No communication between filtered rows analogous to shuffle.
+
+The key principle: **transfer fidelity correlates with mechanism match, not structural similarity**. Two systems can satisfy the same abstract pattern (active subset changes during execution) while having completely different failure modes. The paper now grades each claim explicitly rather than listing all four at the same confidence level.
