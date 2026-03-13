@@ -1,0 +1,177 @@
+//! Merge operations: reconverging diverged warps.
+//!
+//! Merge is the second half of the session-typed divergence pattern.
+//! The key safety property: `merge()` only compiles if the two warps
+//! have complementary active sets.
+//!
+//! # Compile-Time Safety
+//!
+//! ## Bug: Merge non-complements (caught)
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//!
+//! fn buggy_merge() {
+//!     let evens: Warp<Even> = Warp::new();
+//!     let low: Warp<LowHalf> = Warp::new();
+//!     // BUG: Even and LowHalf are not complements (they overlap)
+//!     let _ = merge(evens, low);
+//! }
+//! ```
+//!
+//! ## Bug: Merge same set (caught)
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//!
+//! fn buggy_merge_same() {
+//!     let evens1: Warp<Even> = Warp::new();
+//!     let evens2: Warp<Even> = Warp::new();
+//!     // BUG: Can't merge Even with Even
+//!     let _ = merge(evens1, evens2);
+//! }
+//! ```
+
+use crate::warp::Warp;
+use crate::active_set::*;
+
+/// Merge two warps with complementary active sets.
+///
+/// **COMPILE-TIME VERIFIED**: Only works if `S1` and `S2` are complements.
+/// You cannot merge overlapping sets. You cannot forget lanes.
+///
+/// # Examples
+///
+/// ```
+/// use warp_types::*;
+///
+/// let all: Warp<All> = Warp::new();
+/// let (evens, odds) = all.diverge_even_odd();
+/// let merged: Warp<All> = merge(evens, odds);
+/// assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+/// ```
+pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
+where
+    S1: ComplementOf<S2>,
+    S2: ActiveSet,
+{
+    Warp::new()
+}
+
+/// Merge two warps back to their parent active set (for nested divergence).
+///
+/// Unlike `merge()` which always returns `Warp<All>`, this returns the
+/// parent set `P` where `S1` and `S2` are complements within `P`.
+pub fn merge_within<S1, S2, P>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<P>
+where
+    S1: ComplementWithin<S2, P>,
+    S2: ActiveSet,
+    P: ActiveSet,
+{
+    Warp::new()
+}
+
+/// Diverge, process each branch, automatically merge.
+///
+/// This combinator provides convenient syntax for the common
+/// "diverge → do work → merge" pattern. The merge is explicit in the
+/// type signature but automatic in the control flow.
+pub fn with_diverged<S1, S2, A, F1, F2>(
+    _warp: Warp<All>,
+    then_fn: F1,
+    else_fn: F2,
+) -> (A, A, Warp<All>)
+where
+    S1: ActiveSet + ComplementOf<S2>,
+    S2: ActiveSet + ComplementOf<S1>,
+    F1: FnOnce(Warp<S1>) -> A,
+    F2: FnOnce(Warp<S2>) -> A,
+{
+    let then_result = then_fn(Warp::new());
+    let else_result = else_fn(Warp::new());
+    (then_result, else_result, Warp::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merge_even_odd() {
+        let all: Warp<All> = Warp::new();
+        let (evens, odds) = all.diverge_even_odd();
+        let merged: Warp<All> = merge(evens, odds);
+        assert_eq!(merged.active_set_name(), "All");
+    }
+
+    #[test]
+    fn test_merge_halves() {
+        let all: Warp<All> = Warp::new();
+        let (low, high) = all.diverge_halves();
+        let merged = merge(low, high);
+        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+    }
+
+    #[test]
+    fn test_merge_lane0() {
+        let all: Warp<All> = Warp::new();
+        let (lane0, rest) = all.extract_lane0();
+        let merged = merge(lane0, rest);
+        assert_eq!(merged.population(), 32);
+    }
+
+    #[test]
+    fn test_nested_merge() {
+        let all: Warp<All> = Warp::new();
+        let (evens, odds) = all.diverge_even_odd();
+        let (even_low, even_high) = evens.diverge_halves();
+
+        // Merge nested: EvenLow + EvenHigh → Even
+        let evens_restored: Warp<Even> = merge_within(even_low, even_high);
+        assert_eq!(evens_restored.active_set_name(), "Even");
+
+        // Merge top-level: Even + Odd → All
+        let all_restored = merge(evens_restored, odds);
+        assert_eq!(all_restored.active_set_name(), "All");
+    }
+
+    #[test]
+    fn test_merge_ordering_equivalence() {
+        // Tree merge via Even/Odd
+        let el1: Warp<EvenLow> = Warp::new();
+        let eh1: Warp<EvenHigh> = Warp::new();
+        let ol1: Warp<OddLow> = Warp::new();
+        let oh1: Warp<OddHigh> = Warp::new();
+
+        let even: Warp<Even> = merge_within(el1, eh1);
+        let odd: Warp<Odd> = merge_within(ol1, oh1);
+        let result1 = merge(even, odd);
+
+        // Tree merge via Low/High
+        let el2: Warp<EvenLow> = Warp::new();
+        let eh2: Warp<EvenHigh> = Warp::new();
+        let ol2: Warp<OddLow> = Warp::new();
+        let oh2: Warp<OddHigh> = Warp::new();
+
+        let low: Warp<LowHalf> = merge_within(el2, ol2);
+        let high: Warp<HighHalf> = merge_within(eh2, oh2);
+        let result2 = merge(low, high);
+
+        // Both produce Warp<All>
+        assert_eq!(result1.population(), 32);
+        assert_eq!(result2.population(), 32);
+    }
+
+    #[test]
+    fn test_with_diverged() {
+        let warp: Warp<All> = Warp::new();
+        let (a, b, merged) = with_diverged::<Even, Odd, i32, _, _>(
+            warp,
+            |_| 100,
+            |_| 200,
+        );
+        assert_eq!(a, 100);
+        assert_eq!(b, 200);
+        assert_eq!(merged.population(), 32);
+    }
+}
