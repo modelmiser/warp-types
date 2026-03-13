@@ -48,7 +48,8 @@ The type system is **strictly more permissive** than current best practice (whic
 ## Quick Start
 
 ```bash
-cargo test                                    # All 216 unit tests + 9 doc tests
+cargo test                                    # All 242 unit tests + 12 doc tests
+cargo test --examples                         # 21 tests across 5 real-bug examples
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 cargo run --example demo_bug_that_types_catch # Core safety demonstration
 ```
@@ -57,7 +58,7 @@ cargo run --example demo_bug_that_types_catch # Core safety demonstration
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Shuffle safety (diverged warp can't shuffle) | 7 compile-fail doctests | `cargo test --doc` |
+| Shuffle safety (diverged warp can't shuffle) | 8 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | NVIDIA cuda-samples #398 modeled | `cargo test --example nvidia_cuda_samples_398` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `cd reproduce && ./run.sh` |
 | Soundness (progress + preservation) | 9 tests encoding proof steps | `cargo test proof` |

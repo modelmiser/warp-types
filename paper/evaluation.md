@@ -187,7 +187,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs modeled | 4 (3 caught, 1 partial) + 1 vendor acknowledgment |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
-| Type system tests | 216 unit + 7 compile-fail |
+| Type system tests | 242 unit + 21 example + 8 compile-fail |
 | Runtime overhead | 0% (by construction) |
 | Uniform programs | Zero annotation overhead |
 | Lane-heterogeneous programs | ~3 lines per divergence point |
