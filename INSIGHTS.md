@@ -142,3 +142,11 @@ When 3-4 independent agents flag the same issue from different methodological an
 ### STEM Audit on a PL Paper
 
 The mm-xtal-stem methodology (confidence hierarchy, 10 assumption categories, ghost assumptions) transfers to PL/type-theory papers with minimal adaptation. The 10 categories mapped as: linearity→linearity, independence→type parameter correlations, equilibrium→execution model dynamics, continuity→abstraction gap, isotropy→directionality, stationarity→architecture evolution, reversibility→control flow irreversibility, determinism→non-deterministic scheduling, scale invariance→nesting depth scaling, completeness→GPU feature coverage. Every category produced at least a "not-applicable" assessment, and 7 of 10 produced substantive findings.
+
+### Zero-Breakage Linearity Enforcement
+
+Removing Copy+Clone from Warp<S> broke zero tests out of 274. All correct usage patterns were already linear — nobody was exploiting Copy. The bug was latent: the possibility of unsoundness existed but no code exercised it. This is the safety-factor pattern: patching the hole changes nothing for correct code while closing it for adversarial or accidental misuse.
+
+### Ferrite as Near-Mandatory Citation
+
+Agent 1 identified Ferrite (Chen et al., ECOOP 2022) — session types embedded in Rust using the exact same PhantomData+traits encoding. At a PL venue, not citing Ferrite would be a reviewer red flag. The distinction is clear (inter-process channels vs intra-warp lanes) but the encoding technique is shared. The shared technique actually strengthens our paper: it validates that Rust's type system is expressive enough for session-type embeddings.
