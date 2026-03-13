@@ -320,7 +320,7 @@ Descend tracks ownership and borrowing for GPU memory. We can layer divergence t
 let data: PerLane<Owned<i32>> = allocate_per_lane();
 
 // Our system: warp with active set
-let warp: Warp<All> = Warp::new();
+let warp: Warp<All> = Warp::kernel_entry();
 
 // Combined: shuffle requires active lanes AND ownership
 let result = warp.shuffle_xor(data, 1);

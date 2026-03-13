@@ -254,11 +254,15 @@ Our soundness proof establishes that well-typed programs never read from inactiv
 
 The proof is constructive: the type system not only prevents bugs but guides programmers toward correct code. When a shuffle doesn't type-check, the fix is to merge first.
 
+### Decidability
+
+Type checking in our system is decidable. The active-set lattice is finite (at most 2^W elements for warp width W), trait resolution is type-directed (one rule per constructor, no ambiguity), and complement checking is a constant-time bitwise operation. This contrasts with session types in general, where asynchronous subtyping is undecidable even for two participants [Lange and Yoshida 2016]. Our system avoids this obstacle because SIMT execution is synchronous—there is no message buffering between lanes, so subtyping questions reduce to set containment on finite bitmasks.
+
 ### Limitations
 
 Our formalization assumes:
 - **Finite warps**: We fix warp size at 32 (NVIDIA) or 64 (AMD).
-- **Structured control flow**: Diverge and merge are explicit operations, not implicit branches.
+- **Structured control flow**: Diverge and merge are explicit operations, not implicit branches. For structured control flow, divergence analysis is decidable and efficiently computable—compilers already do it [LLVM uniformity analysis].
 - **No data-dependent active sets**: The type system tracks static patterns (Even, Odd, LowHalf), not arbitrary runtime predicates.
 
 These limitations are addressed in §5 (Extensions).
@@ -285,5 +289,5 @@ fn diverge_complement_lemma() {
 }
 ```
 
-A full mechanization in Lean 4 is planned. Lean 4 is chosen for two reasons: (1) Aeneas, a production-grade toolchain (used by Microsoft for SymCrypt verification), translates Rust programs to Lean, enabling direct verification of our implementation; (2) prior work on GPU program verification (MCL framework) was built in Lean. The Coq alternative (`coq-of-rust`) is less mature, and no Coq-native GPU verification framework is comparable.
+We have begun mechanizing the core theorems in Lean 4 (`lean/WarpTypes/Basic.lean`). Six theorems are fully machine-checked (zero `sorry`): diverge partition, shuffle requires All, complement symmetry, Even/Odd complement, LowHalf/HighHalf complement, and progress for values. Full mechanization of progress and preservation requires defining a small-step reduction relation, which is ongoing. Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation; (2) prior work on GPU verification (MCL framework) was built in Lean.
 

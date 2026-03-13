@@ -89,8 +89,10 @@ where
 Attempting to merge non-complements fails at compile time:
 
 ```rust
-let evens: Warp<Even> = Warp::new();
-let low: Warp<LowHalf> = Warp::new();
+let w1: Warp<All> = Warp::kernel_entry();
+let (evens, _) = w1.diverge_even_odd();
+let w2: Warp<All> = Warp::kernel_entry();
+let (low, _) = w2.diverge_halves();
 let bad = merge(evens, low);  // Compile error!
 // error[E0277]: the trait bound `Even: ComplementOf<LowHalf>` is not satisfied
 ```
@@ -129,7 +131,7 @@ Consider this function:
 
 ```rust
 pub fn butterfly_sum(data: [i32; 32]) -> i32 {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
 
     let data = PerLane(data);
     let data = data + warp.shuffle_xor(data, 16);
@@ -449,7 +451,7 @@ The library can wrap existing CUDA code:
 ```rust
 // Wrap unsafe CUDA code with typed interface
 pub fn safe_butterfly(data: PerLane<i32>) -> Uniform<i32> {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
     // ... typed operations ...
 }
 ```

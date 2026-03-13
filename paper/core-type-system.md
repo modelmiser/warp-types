@@ -141,7 +141,7 @@ A fresh warp starts with all lanes active:
 
 ```
 ─────────────────────────
-Γ ⊢ Warp::new() : Warp<All>
+Γ ⊢ Warp::kernel_entry() : Warp<All>
 ```
 
 ### DIVERGE

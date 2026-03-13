@@ -476,7 +476,7 @@ A fresh warp starts with all lanes active:
 
 ```
 ─────────────────────────
-Γ ⊢ Warp::new() : Warp<All>
+Γ ⊢ Warp::kernel_entry() : Warp<All>
 ```
 
 ### DIVERGE
@@ -1358,7 +1358,7 @@ Descend tracks ownership and borrowing for GPU memory. We can layer divergence t
 let data: PerLane<Owned<i32>> = allocate_per_lane();
 
 // Our system: warp with active set
-let warp: Warp<All> = Warp::new();
+let warp: Warp<All> = Warp::kernel_entry();
 
 // Combined: shuffle requires active lanes AND ownership
 let result = warp.shuffle_xor(data, 1);
@@ -1527,11 +1527,15 @@ where
 Attempting to merge non-complements fails at compile time:
 
 ```rust
-let evens: Warp<Even> = Warp::new();
-let low: Warp<LowHalf> = Warp::new();
+let w1: Warp<All> = Warp::kernel_entry();
+let (evens, _) = w1.diverge_even_odd();
+let w2: Warp<All> = Warp::kernel_entry();
+let (low, _) = w2.diverge_halves();
 let bad = merge(evens, low);  // Compile error!
 // error[E0277]: the trait bound `Even: ComplementOf<LowHalf>` is not satisfied
 ```
+
+Note that `Warp::kernel_entry()` is the only public constructor—sub-warps can only be obtained via `diverge_*()` methods, preventing forgery of arbitrary active sets.
 
 ### Method Availability via Inherent Impls
 
@@ -1567,7 +1571,7 @@ Consider this function:
 
 ```rust
 pub fn butterfly_sum(data: [i32; 32]) -> i32 {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
 
     let data = PerLane(data);
     let data = data + warp.shuffle_xor(data, 16);
@@ -1887,7 +1891,7 @@ The library can wrap existing CUDA code:
 ```rust
 // Wrap unsafe CUDA code with typed interface
 pub fn safe_butterfly(data: PerLane<i32>) -> Uniform<i32> {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
     // ... typed operations ...
 }
 ```
