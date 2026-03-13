@@ -124,3 +124,21 @@ The mm-super audit found evidentiary claims were Plateau-RESIDUAL (0/4 ADMITTED 
 4. **Demonstrate the compile_fail** -- both as a doctest and as a comment-in-code pattern showing the exact error message.
 
 The design principle: each example is a standalone proof artifact. A reviewer can `cargo test --example picongpu_2514` and see the type system work without understanding the full crate.
+
+---
+
+## mm-xtal-stem Audit: Copy Derive Soundness Gap (2026-03-13)
+
+### The Audit Found a Real Bug
+
+Running mm-xtal-stem:audit on the paper surfaced 11 implicit assumptions. The most critical: `Warp<S>` derives `Copy+Clone`, which breaks the soundness proof's linearity requirement (Lemmas 4.8-4.9). This isn't a paper weakness — it's a real implementation bug. A user can `let w = Warp::<All>::new(); let (e,o) = w.diverge_even_odd(); w.shuffle_xor(data, 1);` — using the warp after diverge because Copy gives them a copy.
+
+The ghost assumption: "Rust's ownership prevents warp reuse." It doesn't, because Copy overrides move semantics. Three of four independent audit agents found this from different analytical angles (boundary analysis, assumption inventory, conservation mapping).
+
+### Cross-Agent Convergence as Signal
+
+When 3-4 independent agents flag the same issue from different methodological angles, it's a strong signal that the finding is real, not an artifact of any single analysis frame. The linearity violation was found by: (1) Agent 2 via the affine-vs-linear regime boundary, (2) Agent 3 via the linearity assumption category check, (3) Agent 4 via conservation law analysis (linearity conservation broken). Three independent paths to the same bug.
+
+### STEM Audit on a PL Paper
+
+The mm-xtal-stem methodology (confidence hierarchy, 10 assumption categories, ghost assumptions) transfers to PL/type-theory papers with minimal adaptation. The 10 categories mapped as: linearity→linearity, independence→type parameter correlations, equilibrium→execution model dynamics, continuity→abstraction gap, isotropy→directionality, stationarity→architecture evolution, reversibility→control flow irreversibility, determinism→non-deterministic scheduling, scale invariance→nesting depth scaling, completeness→GPU feature coverage. Every category produced at least a "not-applicable" assessment, and 7 of 10 produced substantive findings.
