@@ -1,0 +1,10 @@
+name = "WarpTypes"
+version = "0.1.0"
+defaultTargets = ["warptypes"]
+
+[[lean_lib]]
+name = "WarpTypes"
+
+[[lean_exe]]
+name = "warptypes"
+root = "Main"
