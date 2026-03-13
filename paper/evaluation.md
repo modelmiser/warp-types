@@ -128,7 +128,7 @@ The alternative to compile-time safety is runtime mask checking—verifying at e
 | Approach | Overhead | Coverage | Feedback |
 |----------|----------|----------|----------|
 | `__shfl_sync` only (no verification) | 0% | None | Silent UB |
-| Runtime sanitizer | 10x+ | Executed paths only | At test time |
+| Runtime sanitizer | Significant | Executed paths only | At test time |
 | Our type system | 0% | All paths | At compile time |
 
 Our approach provides strictly more coverage at strictly less cost.

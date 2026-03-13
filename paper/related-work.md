@@ -42,7 +42,7 @@ NVIDIA provides sanitizers (compute-sanitizer) for detecting GPU errors at runti
 **Relationship to our work**: Sanitizers are *dynamic* analysis:
 - Catch bugs during testing, not compilation
 - Only find bugs in executed paths
-- Significant runtime overhead (10x or more)
+- Significant runtime overhead (significant [NVIDIA Compute Sanitizer documentation])
 
 Our approach catches bugs at compile time, before any execution.
 

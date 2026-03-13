@@ -2040,7 +2040,7 @@ The alternative to compile-time safety is runtime mask checking—verifying at e
 | Approach | Overhead | Coverage | Feedback |
 |----------|----------|----------|----------|
 | `__shfl_sync` only (no verification) | 0% | None | Silent UB |
-| Runtime sanitizer | 10x+ | Executed paths only | At test time |
+| Runtime sanitizer | Significant | Executed paths only | At test time |
 | Our type system | 0% | All paths | At compile time |
 
 Our approach provides strictly more coverage at strictly less cost.
@@ -2158,7 +2158,7 @@ NVIDIA provides sanitizers (compute-sanitizer) for detecting GPU errors at runti
 **Relationship to our work**: Sanitizers are *dynamic* analysis:
 - Catch bugs during testing, not compilation
 - Only find bugs in executed paths
-- Significant runtime overhead (10x or more)
+- Significant runtime overhead (significant [NVIDIA Compute Sanitizer documentation])
 
 Our approach catches bugs at compile time, before any execution.
 
@@ -2408,6 +2408,8 @@ Several limitations remain:
 - Compilation overhead at scale (untested on large codebases)
 - Data-dependent active sets (requires dependent types)
 - Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
+- **Tensor core and async operations**: Warp matrix operations (WMMA/MMA) distribute matrix fragments across lanes; a diverged warp using tensor cores produces incorrect fragments—the same bug class as shuffle-from-inactive-lane, but at the matrix fragment level. Async copy operations (cp.async, TMA) have analogous divergence issues. Our type system's `Warp<All>` requirement would correctly force all lanes active before these operations, but we have not modeled the operations' internal lane-to-fragment mappings.
+- **Cross-vendor portability**: Our implementation uses `u32` masks (32-lane NVIDIA). AMD RDNA supports dual Wave32/Wave64 modes on the same GPU; Intel Xe subgroups vary from 8 to 32 lanes. The const-generic warp-size approach explored in `warp_size.rs` addresses the parameterization, but the core API has not been ported. Vulkan subgroup operations provide a vendor-neutral target.
 
 # 10. Conclusion
 
