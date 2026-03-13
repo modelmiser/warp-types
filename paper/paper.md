@@ -2006,7 +2006,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 7 compile-fail doctests across 34 modules covering the full type system. The tests exercise:
+Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) across 34 modules covering the full type system. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2075,7 +2075,7 @@ The annotation overhead is modest. Divergence points require one `diverge` call 
 
 ### Limitations
 
-Three patterns are not fully expressible in our current system:
+Four patterns are not fully expressible in our current system:
 
 1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, our static types cannot verify it. This requires dependent types (§9).
 
@@ -2083,7 +2083,11 @@ Three patterns are not fully expressible in our current system:
 
 3. **Cross-function active set polymorphism**: Functions that are generic over the active set require explicit trait bounds, increasing annotation burden at API boundaries.
 
-These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system.
+4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern: lanes that finish early spin until all lanes agree to exit, maintaining a full warp throughout. `DynWarp` (§9.4) provides a runtime escape for patterns where static exit tracking is too restrictive.
+
+These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows necessarily from the linearity discipline that makes the type system sound.
+
+**Scope clarification**: Our type system guarantees source-level safety—well-typed programs cannot express shuffle-from-inactive-lane at the source level. This guarantee does not extend to compiler transformations (Bug 4/LLVM#155682 demonstrates that compilers can introduce the bug from well-typed source) or to hardware scheduling (Volta's independent thread scheduling may change which lanes are physically converged). Source-level safety is the appropriate guarantee for a type system; compiler correctness and hardware conformance are separate concerns.
 
 ## 7.4 Threats to Validity
 
@@ -2098,7 +2102,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Metric | Result |
 |--------|--------|
 | Real bugs modeled | 5 (4 caught, 1 partial) |
-| Type system tests | 216 unit + 7 compile-fail |
+| Type system tests | 242 unit + 21 example + 8 compile-fail |
 | Runtime overhead | 0% (by construction) |
 | Uniform programs | Zero annotation overhead |
 | Lane-heterogeneous programs | ~3 lines per divergence point |
@@ -2164,6 +2168,12 @@ CURD [Zheng et al. 2014] detects warp-level data races using static analysis.
 
 **Relationship to our work**: CURD focuses on data races (concurrent conflicting accesses), not divergence bugs (reading from inactive lanes). These are related but distinct bug classes.
 
+### LLVM Uniformity and Divergence Analysis
+
+LLVM implements uniformity analysis that determines whether SSA values are uniform (same across all threads in a warp) or divergent. This analysis propagates divergence along def-use chains and control dependencies, supporting irreducible control flow.
+
+**Relationship to our work**: LLVM's divergence analysis and our type system track related information—which program points have non-uniform behavior—but differ fundamentally in mechanism and guarantee. LLVM's analysis is: (1) a compiler pass, not a source-level type system; (2) intraprocedural and best-effort; (3) focused on optimization (avoiding unnecessary predication), not safety. Our type system is: (1) source-level with programmer annotations; (2) modular across function boundaries; (3) focused on safety (preventing inactive-lane reads). The question "why not extend LLVM's analysis to catch shuffle bugs?" has a precise answer: LLVM's analysis identifies *which* values are divergent but does not track *which lanes are active*. A value known to be divergent might still be shuffled safely if all lanes happen to be active. Our active-set types capture exactly this distinction. Additionally, Bug 4 (LLVM#155682) demonstrates that LLVM's own optimizations can *cause* the bug class we prevent—the compiler and the type system are at different levels of abstraction.
+
 ## 8.2 Session Types
 
 ### Binary Session Types
@@ -2188,7 +2198,19 @@ Honda, Yoshida, and Carbone [2008] extended session types to multiple parties. E
 
 Gradual session types [Igarashi et al. 2017] allow mixing static and dynamic typing for sessions. Unknown types are checked at runtime.
 
-**Relationship to our work**: Our Layer 4 (existential types, §5.2) is similar—a fallback when static types are too restrictive. The difference is our focus on lane sets rather than general protocol conformance.
+**Relationship to our work**: Our Layer 4 (existential types, §5.2) and `DynWarp` gradual typing bridge (§9.4) are directly inspired by this work. The difference is our focus on lane sets rather than general protocol conformance. In particular, our `ascribe()` operation—promoting a runtime-checked `DynWarp` to a compile-time `Warp<S>`—corresponds to the cast at the gradual typing boundary.
+
+### Fault-Tolerant Multiparty Session Types
+
+Recent work extends MPST to handle participant failures: crash-stop failures [Adameit et al. 2022], fault-tolerant event-driven programming [Viering et al. 2021], and mixed static/dynamic verification of global protocols under failures.
+
+**Relationship to our work**: Fault-tolerant MPST models *permanent* participant failure (crash-stop). GPU divergence involves *temporary* quiescence—lanes go inactive and later resume at a merge point. This is a crucial distinction: crash-stop requires protocol recovery or timeout; quiescence requires complement proof for reconvergence. Our quiescence model is optimistic (all parties resume), while crash-stop is pessimistic (some parties never resume). The two extensions are complementary—combining them could model GPU scenarios where threads genuinely trap or exit.
+
+### Session Types Embedded in Rust (Ferrite)
+
+Ferrite [Chen et al. 2022] is a judgmental embedding of session types in Rust using PhantomData, zero-sized types, and type-level programming—the same encoding techniques we use.
+
+**Relationship to our work**: Ferrite and session-typed divergence share an encoding strategy (phantom types in Rust) but model different domains. Ferrite models inter-process communication channels where parties send and receive messages. We model intra-warp lane communication where parties go quiescent. Key differences: (1) Ferrite's channels carry data; our warps share a register file. (2) Ferrite uses linear channels; we use linear warp handles. (3) Ferrite's session types describe message sequences; ours describe active-set evolution. The shared encoding technique validates our claim that Rust's type system is expressive enough for session-type embeddings.
 
 ### Session Types for Concurrent Objects
 

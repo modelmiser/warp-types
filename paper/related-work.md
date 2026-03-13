@@ -52,6 +52,12 @@ CURD [Zheng et al. 2014] detects warp-level data races using static analysis.
 
 **Relationship to our work**: CURD focuses on data races (concurrent conflicting accesses), not divergence bugs (reading from inactive lanes). These are related but distinct bug classes.
 
+### LLVM Uniformity and Divergence Analysis
+
+LLVM implements uniformity analysis that determines whether SSA values are uniform (same across all threads in a warp) or divergent. This analysis propagates divergence along def-use chains and control dependencies, supporting irreducible control flow.
+
+**Relationship to our work**: LLVM's divergence analysis and our type system track related information but differ fundamentally. LLVM's analysis is a compiler pass—intraprocedural, best-effort, focused on optimization (avoiding unnecessary predication). Our type system is source-level, modular across function boundaries, and focused on safety. LLVM's analysis identifies *which* values are divergent but does not track *which lanes are active*. Our active-set types capture exactly this distinction. Bug 4 (LLVM#155682) demonstrates that LLVM's own optimizations can cause the bug class we prevent.
+
 ## 8.2 Session Types
 
 ### Binary Session Types
@@ -76,7 +82,19 @@ Honda, Yoshida, and Carbone [2008] extended session types to multiple parties. E
 
 Gradual session types [Igarashi et al. 2017] allow mixing static and dynamic typing for sessions. Unknown types are checked at runtime.
 
-**Relationship to our work**: Our Layer 4 (existential types, §5.2) is similar—a fallback when static types are too restrictive. The difference is our focus on lane sets rather than general protocol conformance.
+**Relationship to our work**: Our Layer 4 (existential types, §5.2) and `DynWarp` gradual typing bridge (§9.4) are directly inspired by this work. Our `ascribe()` operation corresponds to the cast at the gradual typing boundary.
+
+### Fault-Tolerant Multiparty Session Types
+
+Recent work extends MPST to handle participant failures: crash-stop failures [Adameit et al. 2022] and fault-tolerant event-driven programming [Viering et al. 2021].
+
+**Relationship to our work**: Fault-tolerant MPST models *permanent* failure (crash-stop). GPU divergence involves *temporary* quiescence—lanes go inactive and resume at merge. Crash-stop requires protocol recovery; quiescence requires complement proof. The two extensions are complementary.
+
+### Session Types Embedded in Rust (Ferrite)
+
+Ferrite [Chen et al. 2022] embeds session types in Rust using PhantomData, zero-sized types, and type-level programming—the same encoding techniques we use.
+
+**Relationship to our work**: Ferrite models inter-process communication channels; we model intra-warp lane communication with quiescence. Key differences: Ferrite's channels carry data (ours share a register file), Ferrite's session types describe message sequences (ours describe active-set evolution). The shared encoding validates that Rust's type system is expressive enough for session-type embeddings.
 
 ### Session Types for Concurrent Objects
 

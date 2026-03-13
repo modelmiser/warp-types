@@ -218,6 +218,13 @@ impl DynWarp {
     ///
     /// This is the runtime equivalent of `merge(a, b)` which requires
     /// `ComplementOf` at compile time. Here we check disjointness at runtime.
+    ///
+    /// **Invariant difference from static path**: The static `merge()` requires
+    /// `ComplementOf<S1, S2>` which checks BOTH disjointness AND covering
+    /// (S1 ∪ S2 = All). `DynWarp::merge` only checks disjointness — it cannot
+    /// check covering because it doesn't track the parent set. Two small disjoint
+    /// DynWarps can merge without recovering All. Use `ascribe::<All>()` after
+    /// merge to verify the result covers all lanes.
     pub fn merge(self, other: DynWarp) -> Result<DynWarp, WarpError> {
         let overlap = self.active_mask & other.active_mask;
         if overlap != 0 {

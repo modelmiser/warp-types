@@ -94,7 +94,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 7 compile-fail doctests across 34 modules covering the full type system. The tests exercise:
+Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) across 34 modules covering the full type system. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
