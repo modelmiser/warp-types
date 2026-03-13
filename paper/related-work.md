@@ -46,11 +46,11 @@ NVIDIA provides sanitizers (compute-sanitizer) for detecting GPU errors at runti
 
 Our approach catches bugs at compile time, before any execution.
 
-### CURD
+### GPU Race Detection
 
-CURD [Zheng et al. 2014] detects warp-level data races using static analysis.
+GMRace [Zheng et al. 2014] and CURD [Peng et al. 2018] detect warp-level data races using static analysis and dynamic instrumentation, respectively.
 
-**Relationship to our work**: CURD focuses on data races (concurrent conflicting accesses), not divergence bugs (reading from inactive lanes). These are related but distinct bug classes.
+**Relationship to our work**: Race detection focuses on data races (concurrent conflicting accesses to shared memory), not divergence bugs (reading from inactive lanes via shuffle). These are related but distinct bug classes.
 
 ### LLVM Uniformity and Divergence Analysis
 

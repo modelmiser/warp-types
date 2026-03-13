@@ -1338,7 +1338,7 @@ The same principles apply: shuffle requires all lanes active, diverge produces c
 
 ## 5.5 Memory Safety Integration
 
-Our type system focuses on divergence safety. It composes with memory safety systems like Descend [Steffen et al. 2024].
+Our type system focuses on divergence safety. It composes with memory safety systems like Descend [Kopcke et al. 2024].
 
 ### Descend Integration
 
@@ -2098,7 +2098,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 | Metric | Result |
 |--------|--------|
-| Real bugs modeled | 5 (4 caught, 1 partial) |
+| Real bugs modeled | 4 (3 caught, 1 partial) + 1 vendor acknowledgment |
 | Type system tests | 242 unit + 21 example + 8 compile-fail |
 | Runtime overhead | 0% (by construction) |
 | Uniform programs | Zero annotation overhead |
@@ -2119,7 +2119,7 @@ Session-typed divergence draws on and differs from work in GPU verification, ses
 
 ### Descend (PLDI 2024)
 
-Descend [Steffen et al. 2024] brings Rust-style ownership and borrowing to GPU programming. It prevents data races and use-after-free in GPU code.
+Descend [Kopcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming. It prevents data races and use-after-free in GPU code.
 
 **Relationship to our work**: Descend and session-typed divergence are *orthogonal* and *composable*:
 - Descend: memory safety (ownership, borrowing, lifetimes)
@@ -2159,11 +2159,11 @@ NVIDIA provides sanitizers (compute-sanitizer) for detecting GPU errors at runti
 
 Our approach catches bugs at compile time, before any execution.
 
-### CURD
+### GPU Race Detection
 
-CURD [Zheng et al. 2014] detects warp-level data races using static analysis.
+GMRace [Zheng et al. 2014] and CURD [Peng et al. 2018] detect warp-level data races using static analysis and dynamic instrumentation, respectively.
 
-**Relationship to our work**: CURD focuses on data races (concurrent conflicting accesses), not divergence bugs (reading from inactive lanes). These are related but distinct bug classes.
+**Relationship to our work**: Race detection focuses on data races (concurrent conflicting accesses to shared memory), not divergence bugs (reading from inactive lanes via shuffle). These are related but distinct bug classes: a race involves two threads accessing the same location; a divergence bug involves one thread reading stale register data from an inactive lane.
 
 ### LLVM Uniformity and Divergence Analysis
 
@@ -2437,21 +2437,29 @@ The author used Claude (Anthropic, claude-sonnet-4-6, 2026) extensively in the d
 [References would be formatted according to venue style. Key citations include:]
 
 - Betts et al. 2012. "GPUVerify: A Verifier for GPU Kernels" (OOPSLA)
+- Adameit et al. 2022. "Generalised Multiparty Session Types with Crash-Stop Failures" (CONCUR)
 - Bocchino et al. 2009. "A Type and Effect System for Deterministic Parallel Java" (OOPSLA)
 - Caires and Pfenning 2010. "Session Types as Intuitionistic Linear Propositions" (CONCUR)
+- Chen et al. 2022. "Ferrite: A Judgmental Embedding of Session Types in Rust" (ECOOP)
 - Hazy Research 2025. "Look Ma, No Bubbles! Megakernel for Llama-1B" (Stanford Blog)
 - Honda 1993. "Types for Dyadic Interaction" (CONCUR)
 - Honda, Yoshida, Carbone 2008. "Multiparty Asynchronous Session Types" (POPL)
 - Henriksen et al. 2017. "Futhark: Purely Functional GPU-Programming" (PLDI)
+- Igarashi et al. 2017. "Gradual Session Types" (ICFP)
+- Kopcke et al. 2024. "Descend: A Safe GPU Systems Programming Language" (PLDI)
+- Lange and Yoshida 2016. "On the Undecidability of Asynchronous Session Subtyping" (FoSSaCS)
+- LLVM. "Convergence And Uniformity" (LLVM Documentation)
+- LLVM#155682: shfl_sync causes branch elimination
 - NVIDIA 2017. "Cooperative Groups: Flexible Thread Synchronization" (GTC)
 - NVIDIA 2017. CUDA Programming Guide §10.22: Warp Shuffle Functions (deprecation notice)
 - NVIDIA 2017. Tesla V100 Architecture Whitepaper: Independent Thread Scheduling
 - NVIDIA cuda-samples#398: Wrong ballot mask in reference reduction
 - NVIDIA CCCL#854: Compiler predicates off mask initialization in CUB WarpScanShfl
+- Peng et al. 2018. "CURD: A Dynamic CUDA Race Detector" (PLDI)
 - PIConGPU#2514: Hardcoded full mask in divergent branch
-- LLVM#155682: shfl_sync causes branch elimination
-- Steffen et al. 2024. "Descend: Safe GPU Systems Programming" (PLDI)
+- Viering et al. 2021. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming" (OOPSLA)
 - Wadler 2012. "Propositions as Sessions" (ICFP)
 - Wright and Felleisen 1994. "A Syntactic Approach to Type Soundness" (IC)
+- Zheng et al. 2014. "GMRace: Detecting Data Races in GPU Programs via a Low-Overhead Scheme" (IEEE TPDS)
 - Anthropic. (2026). Claude Sonnet 4.6 [Large language model]. https://www.anthropic.com
 
