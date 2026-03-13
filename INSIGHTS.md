@@ -109,3 +109,18 @@ The topology map didn't just confirm the thesis -- it produced specific rewrites
 2. **activemask() argument** is the distinguisher that defeated the adversarial's "vacuous" conclusion: `__activemask()` returns hardware-correct masks that encode wrong intent -- a residual bug class neither `__shfl_sync` nor performance discipline catches.
 
 3. **Performance motivation acknowledgment** preempts the adversarial's strongest surviving component (ADMITTED deep): practitioners avoid divergence for SIMD throughput, not just safety. Ignoring this looks naive to GPU reviewers.
+
+---
+
+## Per-Bug Worked Examples as Evidentiary Upgrade (2026-03-13)
+
+### Self-Contained Examples Address Plateau-RESIDUAL
+
+The mm-super audit found evidentiary claims were Plateau-RESIDUAL (0/4 ADMITTED at CL-3/CL-4). Each bug needed a worked example showing the exact type error. The 3 new examples (picongpu_2514.rs, cub_cccl_854.rs, llvm_155682.rs) each:
+
+1. **Redefine the minimal type system needed** -- self-contained, no crate dependency. Reviewers read one file, understand one bug.
+2. **Model the exact CUDA bug pattern** -- not abstract, but the real code translated to the type system.
+3. **Include "Why __shfl_sync doesn't help"** -- the key addition from the audit. Each explains the specific mechanism by which the runtime mask fails to catch this particular bug class.
+4. **Demonstrate the compile_fail** -- both as a doctest and as a comment-in-code pattern showing the exact error message.
+
+The design principle: each example is a standalone proof artifact. A reviewer can `cargo test --example picongpu_2514` and see the type system work without understanding the full crate.

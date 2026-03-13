@@ -14,9 +14,9 @@ We identified four documented shuffle-from-inactive-lane issues in production GP
 | Issue | Source | Nature | Type system prevents source pattern? |
 |-------|--------|--------|--------------------------------------|
 | Wrong ballot mask in reduction | cuda-samples#398 | Confirmed UB, silent wrong sum | Yes — modeled in code |
-| Compiler predicates off mask init | CCCL#854 | Suspected UB, reporter later uncertain† | Yes — pattern is ill-typed |
-| Hardcoded full mask in divergent branch | PIConGPU#2514 | Confirmed UB, no wrong output observed‡ | Yes — pattern is ill-typed |
-| shfl_sync causes branch elimination | LLVM#155682 | Semantic gap, closed as "not a bug"§ | Partial |
+| Compiler predicates off mask init | CCCL#854 | Suspected UB, reporter later uncertain† | Yes — modeled in code |
+| Hardcoded full mask in divergent branch | PIConGPU#2514 | Confirmed UB, no wrong output observed‡ | Yes — modeled in code |
+| shfl_sync causes branch elimination | LLVM#155682 | Semantic gap, closed as "not a bug"§ | Partial — modeled in code |
 | Deprecated `__shfl` API family | CUDA 9.0 | Vendor acknowledgment of bug class | N/A |
 
 †CCCL#854: The reporter initially detected this via `cuda-memcheck --tool synccheck` but later noted it "may have been a false positive" and could not reproduce. The issue remains open but unconfirmed.
@@ -56,6 +56,16 @@ The example includes two correct fixes:
 
 Both fixes type-check because they ensure all lanes participate before shuffling.
 
+### Concrete Demonstrations: Remaining Bugs
+
+Each remaining documented bug has a self-contained worked example demonstrating the exact type error our system produces and why `__shfl_sync`'s runtime mask does not catch the bug.
+
+**PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, the warp handle becomes `Warp<Active>`. Calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`. The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask because `0xFFFFFFFF` is a valid `u32`, regardless of how many lanes were actually active.
+
+**CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The source-level mask was correct; the compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register and no initialization. The compiler cannot optimize away something that doesn't exist at runtime. `shuffle_up()` on `Warp<SubWarp16>` is a type error.
+
+**LLVM #155682** (`examples/llvm_155682.rs`): After `if (laneId == 0)`, lane 0 has `Warp<Lane0>`. Calling `shuffle_broadcast()` on `Warp<Lane0>` is a type error. The fix—merging back to `Warp<All>` via `merge(lane0, rest)`—forces both sides to provide data, eliminating the uninitialized value that triggered LLVM's UB-based branch elimination.
+
 ### Hardware Reproduction
 
 We reproduced the cuda-samples#398 bug on an NVIDIA RTX 4000 SFF Ada (compute 8.9, Ada Lovelace architecture) using CUDA 12.0. With `block_size=32`, the buggy `reduce7` kernel consistently returns `sum = 1` instead of `sum = 32` (the correct value). The result is deterministic across 10 runs—not intermittent. The bug also manifests at `block_size=256`: the kernel returns `sum = 32` instead of `sum = 256`, because `blockDim.x / warpSize = 8` means only 8 lanes enter the final reduction, producing a partial ballot mask (`0xFF`). The `__shfl_down_sync` with offset 16 reads from lanes outside this mask.
@@ -84,7 +94,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 216 unit tests and 7 compile-fail doctests across 34 modules covering the full type system. The tests exercise:
+Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 7 compile-fail doctests across 34 modules covering the full type system. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
