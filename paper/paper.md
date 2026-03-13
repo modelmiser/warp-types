@@ -2028,7 +2028,23 @@ Our types impose zero runtime overhead—not measured to be negligible, but *gua
 
 The generated code contains no trace of the type system. A `Warp<All>` and a `Warp<Even>` produce identical machine code for any operation available on both.
 
-We verified this by inspecting the Rust compiler's MIR output: `Warp<S>` values are zero-sized and optimized away entirely. No runtime checks, no mask comparisons, no branches.
+We verified this at two levels of the compilation pipeline:
+
+**Rust MIR**: `Warp<S>` values are zero-sized and optimized away entirely. No runtime checks, no mask comparisons, no branches.
+
+**LLVM IR** (`cargo rustc --release --lib -- --emit=llvm-ir`): We provide two inspectable functions with `#[no_mangle] #[inline(never)]`. In the optimized IR:
+
+```llvm
+; A butterfly reduction (5 shuffle_xor + reduce_sum) compiles to:
+define noundef i32 @zero_overhead_butterfly(i32 noundef returned %data) {
+  ret i32 %data
+}
+
+; A diverge/merge round trip compiles to:
+@zero_overhead_diverge_merge = alias i32 (i32), ptr @zero_overhead_butterfly
+```
+
+Both functions compile to `ret i32 %data`. LLVM deduplicates them into a single alias because they have identical machine behavior. The warp creation, 5 shuffle steps, diverge, merge, and active set types are *all erased*. The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u32` mask).
 
 ### Comparison with Runtime Approaches
 

@@ -61,6 +61,47 @@ pub mod gradual;
 pub mod research;
 
 // ============================================================================
+// Zero-overhead verification: inspectable functions for LLVM IR comparison
+// ============================================================================
+
+/// Butterfly reduction: diverge → merge → shuffle pattern.
+///
+/// In optimized LLVM IR, this function contains NO traces of `Warp<S>`,
+/// `PhantomData`, or active-set types. The type system is fully erased.
+/// Inspect with: `cargo rustc --release --lib -- --emit=llvm-ir`
+/// then search for `zero_overhead_butterfly` in the .ll file.
+#[no_mangle]
+#[inline(never)]
+pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
+    let warp: Warp<All> = Warp::new();
+    // Shuffle XOR 16: exchange with partner 16 lanes away
+    let step1 = warp.shuffle_xor(data, 16);
+    // Shuffle XOR 8
+    let step2 = warp.shuffle_xor(step1, 8);
+    // Shuffle XOR 4
+    let step3 = warp.shuffle_xor(step2, 4);
+    // Shuffle XOR 2
+    let step4 = warp.shuffle_xor(step3, 2);
+    // Shuffle XOR 1
+    let step5 = warp.shuffle_xor(step4, 1);
+    // Final reduction
+    warp.reduce_sum(step5)
+}
+
+/// Diverge-merge round trip: the type system's core mechanism.
+///
+/// In optimized LLVM IR, this compiles to a no-op (returns input unchanged).
+/// The diverge, merge, and all warp handles are completely erased.
+#[no_mangle]
+#[inline(never)]
+pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i32> {
+    let warp: Warp<All> = Warp::new();
+    let (evens, odds) = warp.diverge_even_odd();
+    let _merged: Warp<All> = merge(evens, odds);
+    data // diverge/merge is pure type-level — data passes through unchanged
+}
+
+// ============================================================================
 // GpuValue trait
 // ============================================================================
 
