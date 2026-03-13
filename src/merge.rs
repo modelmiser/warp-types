@@ -12,8 +12,10 @@
 //! use warp_types::*;
 //!
 //! fn buggy_merge() {
-//!     let evens: Warp<Even> = Warp::new();
-//!     let low: Warp<LowHalf> = Warp::new();
+//!     let warp: Warp<All> = Warp::kernel_entry();
+//!     let (evens, _odds) = warp.diverge_even_odd();
+//!     let warp2: Warp<All> = Warp::kernel_entry();
+//!     let (low, _high) = warp2.diverge_halves();
 //!     // BUG: Even and LowHalf are not complements (they overlap)
 //!     let _ = merge(evens, low);
 //! }
@@ -25,8 +27,10 @@
 //! use warp_types::*;
 //!
 //! fn buggy_merge_same() {
-//!     let evens1: Warp<Even> = Warp::new();
-//!     let evens2: Warp<Even> = Warp::new();
+//!     let w1: Warp<All> = Warp::kernel_entry();
+//!     let (evens1, _odds1) = w1.diverge_even_odd();
+//!     let w2: Warp<All> = Warp::kernel_entry();
+//!     let (evens2, _odds2) = w2.diverge_even_odd();
 //!     // BUG: Can't merge Even with Even
 //!     let _ = merge(evens1, evens2);
 //! }
@@ -45,7 +49,7 @@ use crate::active_set::*;
 /// ```
 /// use warp_types::*;
 ///
-/// let all: Warp<All> = Warp::new();
+/// let all: Warp<All> = Warp::kernel_entry();
 /// let (evens, odds) = all.diverge_even_odd();
 /// let merged: Warp<All> = merge(evens, odds);
 /// assert_eq!(merged.active_mask(), 0xFFFFFFFF);

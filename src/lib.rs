@@ -8,7 +8,7 @@
 //! ```
 //! use warp_types::*;
 //!
-//! let warp: Warp<All> = Warp::new();
+//! let warp: Warp<All> = Warp::kernel_entry();
 //! let data = data::PerLane::new(42i32);
 //!
 //! // OK: shuffle on full warp
@@ -73,7 +73,7 @@ pub mod research;
 #[no_mangle]
 #[inline(never)]
 pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
     // Shuffle XOR 16: exchange with partner 16 lanes away
     let step1 = warp.shuffle_xor(data, 16);
     // Shuffle XOR 8
@@ -95,7 +95,7 @@ pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i32> {
-    let warp: Warp<All> = Warp::new();
+    let warp: Warp<All> = Warp::kernel_entry();
     let (evens, odds) = warp.diverge_even_odd();
     let _merged: Warp<All> = merge(evens, odds);
     data // diverge/merge is pure type-level — data passes through unchanged

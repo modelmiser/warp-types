@@ -10,7 +10,7 @@
 //! use warp_types::*;
 //!
 //! fn use_after_diverge() {
-//!     let warp: Warp<All> = Warp::new();
+//!     let warp: Warp<All> = Warp::kernel_entry();
 //!     let data = data::PerLane::new(42i32);
 //!     let (_evens, _odds) = warp.diverge_even_odd(); // consumes warp
 //!     let _ = warp.shuffle_xor(data, 1); // ERROR: use of moved value: `warp`
@@ -35,9 +35,24 @@ pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
 
+impl Warp<crate::active_set::All> {
+    /// The only public entry point: get a warp with all lanes active.
+    ///
+    /// In real GPU code, this corresponds to kernel entry — the point
+    /// where all 32 lanes are guaranteed active. Sub-warps are created
+    /// only via `diverge_*()` methods, which consume the parent.
+    pub fn kernel_entry() -> Self {
+        Warp { _phantom: PhantomData }
+    }
+}
+
 impl<S: ActiveSet> Warp<S> {
-    /// Create a new warp with the given active set.
-    pub fn new() -> Self {
+    /// Create a warp with any active set (crate-internal only).
+    ///
+    /// External code must use `Warp::kernel_entry()` to get a `Warp<All>`,
+    /// then `diverge_*()` to get sub-warps. This prevents forging arbitrary
+    /// warp handles that don't correspond to actual lane states.
+    pub(crate) fn new() -> Self {
         Warp { _phantom: PhantomData }
     }
 
@@ -65,9 +80,9 @@ impl<S: ActiveSet> Warp<S> {
     }
 }
 
-impl<S: ActiveSet> Default for Warp<S> {
+impl Default for Warp<crate::active_set::All> {
     fn default() -> Self {
-        Self::new()
+        Self::kernel_entry()
     }
 }
 

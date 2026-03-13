@@ -16,7 +16,7 @@
 //! use warp_types::*;
 //!
 //! fn buggy_shuffle() {
-//!     let warp: Warp<All> = Warp::new();
+//!     let warp: Warp<All> = Warp::kernel_entry();
 //!     let (evens, _odds) = warp.diverge_even_odd();
 //!     let data = data::PerLane::new(42i32);
 //!     // BUG: shuffle_xor doesn't exist on Warp<Even>
