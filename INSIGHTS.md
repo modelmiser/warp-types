@@ -159,3 +159,7 @@ The mm-xtal-stem:compare methodology (mechanism/scale/coupling) distinguishes ge
 - Database/proof: Mechanism diverges fundamentally. "Active subset selection" is structural resemblance, not shared failure mode. No communication between filtered rows analogous to shuffle.
 
 The key principle: **transfer fidelity correlates with mechanism match, not structural similarity**. Two systems can satisfy the same abstract pattern (active subset changes during execution) while having completely different failure modes. The paper now grades each claim explicitly rather than listing all four at the same confidence level.
+
+### Citation Consistency as Late-Stage Pass
+
+After multiple rounds of paper edits across sessions, internal consistency drifts silently. The Descend author attribution was wrong in paper.md (Steffen) but correct in the standalone files (Kopcke) — different sessions edited different files. The CURD/GMRace conflation (two papers attributed to one) survived multiple editing passes because it was plausible. A final grep-based consistency pass (`grep "et al"`, `grep "10x"`, etc.) catches cross-file divergences that no single edit would notice. This pass also found 8 references that were cited in the body but missing from the references section.
