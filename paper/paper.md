@@ -1022,7 +1022,16 @@ fn diverge_complement_lemma() {
 }
 ```
 
-A full mechanization in Lean 4 is planned. Lean 4 is chosen for two reasons: (1) Aeneas, a production-grade toolchain (used by Microsoft for SymCrypt verification), translates Rust programs to Lean, enabling direct verification of our implementation; (2) prior work on GPU program verification (MCL framework) was built in Lean. The Coq alternative (`coq-of-rust`) is less mature, and no Coq-native GPU verification framework is comparable.
+We have begun mechanizing the core theorems in Lean 4 (`lean/WarpTypes/Basic.lean`). The formalization uses `BitVec 32` for active sets and an inductive typing judgement with linear context threading. Six theorems are fully machine-checked (zero `sorry`):
+
+1. `diverge_partition`: S∩P and S∩¬P are disjoint and cover S
+2. `shuffle_requires_all`: shuffle typing demands Warp\<All\>
+3. `complement_symmetric`: the complement relation is symmetric
+4. `even_odd_complement`: Even and Odd are complements (concrete instance)
+5. `lowHalf_highHalf_complement`: LowHalf and HighHalf are complements
+6. `progress_values`: well-typed values are terminal
+
+Full mechanization of progress and preservation requires defining a small-step reduction relation, which is ongoing. Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs; (2) prior work on GPU program verification (MCL framework) was built in Lean.
 
 
 ---
@@ -2360,8 +2369,8 @@ The macro would track diverge/merge pairing at compile time and insert runtime m
 
 ## 9.2 Formal Mechanization
 
-Our soundness proof (§4) is on paper. We plan to mechanize it in Lean 4 using Aeneas, which translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs:
-- Machine-checked progress and preservation (Lean 4)
+Our core theorems are partially mechanized in Lean 4 (§4.8). Remaining future work:
+- Machine-checked progress and preservation (requires small-step semantics)
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 
