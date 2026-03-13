@@ -160,6 +160,18 @@ The mm-xtal-stem:compare methodology (mechanism/scale/coupling) distinguishes ge
 
 The key principle: **transfer fidelity correlates with mechanism match, not structural similarity**. Two systems can satisfy the same abstract pattern (active subset changes during execution) while having completely different failure modes. The paper now grades each claim explicitly rather than listing all four at the same confidence level.
 
+### LLVM IR as Zero-Overhead Proof Artifact
+
+The optimized LLVM IR provides concrete evidence that MIR inspection alone cannot. `zero_overhead_butterfly` (5 shuffle_xor + reduce_sum) compiles to `ret i32 %data`. `zero_overhead_diverge_merge` (diverge + merge round trip) is *aliased* to butterfly by LLVM (recognized as identical machine behavior). The only Warp-containing symbols in the entire optimized IR are error message strings and DynWarp functions. This confirms erasure survives the full Rust→LLVM compilation pipeline.
+
+### BitVec 32 for Active Sets in Lean 4
+
+Using `Fin (2^32)` was the wrong Lean encoding — it represents a number in range, not a bitvector. `BitVec 32` gives native `&&&`, `|||`, `~~~`, and bit-level extensionality. The key proof technique: `ext i; simp_all` reduces bitvector identities to propositional logic, then case-split on `s[i]` for covering proofs. The `decide` tactic handles concrete instances (Even/Odd) because BitVec 32 has decidable equality. The `diverge_partition` proof — arguably the most important theorem — required 4 lines.
+
+### kernel_entry() Prevents Warp Forgery
+
+Making `Warp::new()` `pub(crate)` and adding `Warp::kernel_entry() -> Warp<All>` as the sole public constructor prevents external code from forging `Warp<Even>` handles. Sub-warps are obtainable only via diverge, which consumes the parent — completing the linearity story. Internal code (diverge returning `Warp::new()`, ascribe creating `Warp::new()`) still works because `pub(crate)` grants access within the crate.
+
 ### Citation Consistency as Late-Stage Pass
 
 After multiple rounds of paper edits across sessions, internal consistency drifts silently. The Descend author attribution was wrong in paper.md (Steffen) but correct in the standalone files (Kopcke) — different sessions edited different files. The CURD/GMRace conflation (two papers attributed to one) survived multiple editing passes because it was plausible. A final grep-based consistency pass (`grep "et al"`, `grep "10x"`, etc.) catches cross-file divergences that no single edit would notice. This pass also found 8 references that were cited in the body but missing from the references section.
