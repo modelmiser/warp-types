@@ -58,17 +58,13 @@ Remaining future work:
 
 ## 9.5 Beyond SIMT
 
-The core idea—session types with quiescent participants—applies beyond GPUs:
+The core idea—session types with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
 
-**FPGA**: We have demonstrated this direction with a prototype (§9.6): session-typed crossbar communication on a 16-tile pipelined crossbar, where the stale-pipeline-register bug class mirrors shuffle-from-inactive-lane exactly.
+**FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.6). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
 
-**Distributed systems**: Nodes may disconnect and reconnect. Session types with quiescence model this.
+**Distributed systems** (partial transfer): Node quiescence maps to lane inactivity, and multiparty session types already model distributed communication. However, the domains diverge on three axes: (1) distributed systems have genuine failure modes (Byzantine, crash-stop, network partition) that GPU warps lack; (2) SIMT divergence is deterministic (predicate-based) while distributed failure is non-deterministic; (3) SIMT guarantees eventual reconvergence at a merge point while distributed systems may not reconverge. The quiescence model is complementary to fault-tolerant MPST (§8.2) but not a direct replacement.
 
-**Database queries**: Rows filtered by predicates. The active "participants" are the matching rows.
-
-**Proof search**: Case splits create sub-goals. Some cases may be unsatisfiable (quiescent).
-
-We believe session-typed divergence is a general pattern worth exploring.
+**Database queries and proof search** (structural similarity only): Predicate filtering in databases and case splits in proof search share the abstract shape of "active subset selection," but the mechanism diverges fundamentally. Database rows are independent data items, not lock-step execution units sharing an instruction stream—there is no "communication between filtered rows" analogous to shuffle. Proof sub-goals interact via shared logical context, not register exchange. We note the structural parallel but do not claim actionable type-system transfer to these domains.
 
 ## 9.6 Hardware Crossbar Protocols
 
@@ -107,7 +103,7 @@ The key insight is that GPU divergence fits the session type model: diverging is
 
 Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
 
-Session-typed divergence is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. This pattern appears in distributed systems, FPGAs, databases, and theorem provers. We hope our work illuminates these connections.
+Session-typed divergence is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
 
 **The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
 

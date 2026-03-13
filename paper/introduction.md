@@ -100,13 +100,6 @@ This paper makes the following contributions:
 
 ## 1.3 The Bigger Picture
 
-Session-typed divergence is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. This pattern appears in:
-
-- **Distributed systems**, where nodes may fail or disconnect
-- **FPGA synthesis**, where signals take different paths through routing
-- **Database queries**, where predicate pushdown filters rows
-- **Proof search**, where case splits create sub-goals
-
-Our type system for GPU warps may illuminate these other domains. We return to this in §9.
+Session-typed divergence is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
 
 The remainder of this paper is organized as follows. §2 provides background on GPU execution and session types. §3 presents our core type system. §4 proves soundness. §5 extends the system to handle loops and arbitrary predicates. §6 describes our implementation. §7 evaluates bug detection and performance. §8 discusses related work. §9 sketches future directions and §10 concludes.
