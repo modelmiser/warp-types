@@ -3,6 +3,19 @@
 //! `Warp<S>` is a zero-cost wrapper that carries active-set information in
 //! the type parameter `S`. Operations that require specific lane configurations
 //! (like shuffle requiring all lanes) are only implemented for the matching type.
+//!
+//! ## Linearity: use-after-diverge is a compile error
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//!
+//! fn use_after_diverge() {
+//!     let warp: Warp<All> = Warp::new();
+//!     let data = data::PerLane::new(42i32);
+//!     let (_evens, _odds) = warp.diverge_even_odd(); // consumes warp
+//!     let _ = warp.shuffle_xor(data, 1); // ERROR: use of moved value: `warp`
+//! }
+//! ```
 
 use std::marker::PhantomData;
 use crate::active_set::ActiveSet;
@@ -15,7 +28,9 @@ use crate::active_set::ActiveSet;
 /// - `merge(Warp<Even>, Warp<Odd>)` → `Warp<All>` (complement verified)
 ///
 /// Zero-cost: `Warp<S>` is zero-sized. The active set exists only in the type system.
-#[derive(Copy, Clone)]
+/// Warp handles are linear — diverge consumes the parent warp, preventing
+/// use-after-diverge. This is load-bearing for soundness: without linearity,
+/// a user could retain Warp<All> after diverging and shuffle on stale lanes.
 pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
