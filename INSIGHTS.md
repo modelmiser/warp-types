@@ -211,3 +211,21 @@ The `GpuShuffle` trait bridges the type system and hardware. On `nvptx64`, `gpu_
 ### cudarc 0.19 API: Context + Stream Architecture (2026-03-13)
 
 cudarc 0.19 uses `CudaContext::new(0)` → `ctx.default_stream()` → `stream.memcpy_stod()` / `stream.memcpy_dtov()` for transfers, and `stream.launch_builder(&func).arg(&slice).launch(config)` for kernel dispatch. Module loading: `ctx.load_module(Ptx::from_src(ptx_string))` → `module.load_function("kernel_name")`. Key: `LaunchConfig { grid_dim: (1,1,1), block_dim: (32,1,1), shared_mem_bytes: 0 }` for single-warp kernels. Deprecated methods: `memcpy_stod` → `clone_htod`, `memcpy_dtov` → `clone_dtoh`.
+
+## Month 2 — Cargo-Integrated GPU Pipeline (2026-03-13)
+
+### Conditional no_std for Dual-Target Crates (2026-03-13)
+
+`#![cfg_attr(target_arch = "nvptx64", no_std)]` lets the same crate compile for both x86_64 (with std, tests, research modules) and nvptx64 (core-only, GPU kernels). The research/proof modules are host-only and get gated out with `#[cfg(not(target_arch = "nvptx64"))]`. This is the same pattern rust-gpu uses — the shader crate is dual-target, with host-side utilities excluded on the GPU target. Key: all core modules already use `core::marker::PhantomData`, `core::fmt`, etc. — the no_std migration from Month 1 made this possible.
+
+### cargo rustc --emit=asm for PTX Extraction (2026-03-13)
+
+`cargo build` for a lib crate on nvptx64 produces `.rlib` (archive containing compiled objects) but no standalone PTX file. `cargo rustc -- --emit=asm` tells the Rust compiler to additionally emit the assembly file (`.s`), which for the nvptx64 target IS valid PTX source text. The `.s` file can be loaded directly by cudarc's `Ptx::from_src()`. The output lands in `target/nvptx64-nvidia-cuda/release/deps/` with a hash suffix (e.g., `my_kernels-5c006b3372e23a50.s`).
+
+### Build Script Toolchain Isolation (2026-03-13)
+
+When cargo runs a build script, it exports `RUSTC=/absolute/path/to/stable/rustc`. Child processes (including inner cargo invocations) inherit this, so even setting `RUSTUP_TOOLCHAIN=nightly` doesn't help — the inner cargo uses the parent's `RUSTC` path directly, bypassing rustup's proxy. The fix: `cmd.env_remove("RUSTC")` before invoking the inner cargo. This is the same solution that spirv-builder (rust-gpu) uses. The `+nightly` cargo syntax also doesn't work inside build scripts because it requires rustup's proxy binary, not cargo directly.
+
+### End-to-End Pipeline Architecture (2026-03-13)
+
+The cargo-integrated GPU pipeline has three layers: (1) `warp-types-kernel` proc macro — `#[warp_kernel]` transforms functions to `extern "ptx-kernel"` with `#[no_mangle]`; (2) `warp-types-builder` — build-time library that invokes `cargo rustc --target nvptx64-nvidia-cuda -Z build-std=core -- --emit=asm`, finds the generated `.s` file, copies it to `OUT_DIR`, and generates a Rust module with `include_str!` for the PTX; (3) host code uses `include!` to embed the PTX constant and cudarc to load+launch. User experience: `cargo run` goes from Rust source to GPU execution. Three kernel entry points (butterfly_reduce, diverge_merge_reduce, reduce_n) all produce correct results on RTX 4000 Ada.
