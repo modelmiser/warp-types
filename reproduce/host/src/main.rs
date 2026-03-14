@@ -131,5 +131,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // =========================================================================
+    // cuda-samples #398 DEMO: typed catches the bug, untyped doesn't
+    // =========================================================================
+    println!();
+    println!("================================================================");
+    println!("cuda-samples #398: The Killer Demo");
+    println!("================================================================");
+    println!();
+
+    // Load reduce7 PTX
+    let reduce7_ptx = std::fs::read_to_string("../reduce7_typed.ptx")?;
+    let reduce7_mod = ctx.load_module(nvrtc::Ptx::from_src(reduce7_ptx))?;
+    let buggy_fn = reduce7_mod.load_function("reduce7_untyped_buggy")?;
+    let fixed_fn = reduce7_mod.load_function("reduce7_typed_fixed")?;
+
+    // Test: sum of 32 ones. Expected = 32.
+    let input: Vec<i32> = vec![1; WARP_SIZE];
+    let n: u32 = WARP_SIZE as u32;
+
+    println!("=== Untyped (buggy): CUDA's reduce7 pattern ===");
+    {
+        let dev_in = stream.memcpy_stod(&input)?;
+        let dev_out = stream.memcpy_stod(&[0i32])?;
+
+        unsafe {
+            stream.launch_builder(&buggy_fn)
+                .arg(&dev_in)
+                .arg(&dev_out)
+                .arg(&n)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let result = stream.memcpy_dtov(&dev_out)?;
+        println!("  Input:    [1; 32]");
+        println!("  Expected: 32");
+        println!("  Got:      {}", result[0]);
+        println!("  Result:   {}", if result[0] == 32 { "correct (lucky)" } else { "WRONG (bug!)" });
+    }
+    println!();
+
+    println!("=== Typed (fixed): Warp<All> enforced before shuffle ===");
+    {
+        let dev_in = stream.memcpy_stod(&input)?;
+        let dev_out = stream.memcpy_stod(&[0i32])?;
+
+        unsafe {
+            stream.launch_builder(&fixed_fn)
+                .arg(&dev_in)
+                .arg(&dev_out)
+                .arg(&n)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let result = stream.memcpy_dtov(&dev_out)?;
+        println!("  Input:    [1; 32]");
+        println!("  Expected: 32");
+        println!("  Got:      {}", result[0]);
+        println!("  Result:   {}", if result[0] == 32 { "CORRECT" } else { "wrong" });
+    }
+    println!();
+
+    println!("=== The point ===");
+    println!("The buggy pattern (shfl_down with partial mask) is a COMPILE ERROR");
+    println!("in our type system: Warp<Lane0> has no shfl_down method.");
+    println!("The fix (all lanes participate) is the ONLY version that type-checks.");
+    println!("Same GPU. Same algorithm. Type system prevents the bug.");
+
     Ok(())
 }
