@@ -233,3 +233,9 @@ The cargo-integrated GPU pipeline has three layers: (1) `warp-types-kernel` proc
 ### Generated Kernels Struct — PTX Entry Point Parsing (2026-03-13)
 
 The builder parses `.visible .entry <name>(` lines from the generated PTX to discover kernel entry points. It then generates a `Kernels` struct with named `CudaFunction` fields and a `load(&Arc<CudaContext>)` method that calls `ctx.load_module(ptx)` + `module.load_function("name")` for each. Key API detail: cudarc 0.19's `CudaContext::load_module` takes `self: &Arc<Self>`, not `&self`, so the generated code must accept `&Arc<CudaContext>`. The `warp_kernel` macro is re-exported from warp-types itself, so kernel crates need only `warp-types = "0.1"` as a dependency.
+
+## AMD Groundwork (2026-03-13)
+
+### u64 Mask Width — Forward-Compatible Type System (2026-03-13)
+
+`ActiveSet::MASK` widened from `u32` to `u64`. This is the deepest 32-vs-64 assumption in the type system — it was hardcoded into the core trait, the proc macro, DynWarp, and all error types. The change is backwards-compatible (32-bit masks fit in u64) and forward-compatible (64-bit AMD wavefront masks work directly). PTX intrinsics still take u32 — the narrowing happens at the instruction boundary in `gpu.rs`, not in the type system. The `warp_sets!` macro's ComplementOf check was changed from `parent_mask == 0xFFFFFFFF` (width-dependent) to `parent_str == "All"` (name-based, width-agnostic). AMD DPP intrinsic stubs are in place, gated behind `cfg(target_arch = "amdgcn")`, ready for implementation when amdgcn inline asm is stable in Rust nightly.
