@@ -1,0 +1,11 @@
+[package]
+name = "gpu-project-example"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cudarc = { version = "0.19", features = ["driver", "cuda-12000"] }
+
+[build-dependencies]
+warp-types-builder = { path = "../../warp-types-builder" }

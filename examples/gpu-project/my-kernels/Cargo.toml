@@ -1,0 +1,8 @@
+[package]
+name = "my-kernels"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+warp-types = { path = "../../.." }
+warp-types-kernel = { path = "../../../warp-types-kernel" }
