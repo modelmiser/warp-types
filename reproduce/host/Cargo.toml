@@ -1,0 +1,12 @@
+[package]
+name = "warp-types-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "run-kernel"
+path = "src/main.rs"
+
+[dependencies]
+cudarc = { version = "0.19", features = ["driver", "cuda-12000"] }
