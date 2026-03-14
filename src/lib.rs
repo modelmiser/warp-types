@@ -59,6 +59,7 @@ pub mod warp_size;
 pub mod gradual;
 pub mod gpu;
 pub mod cub;
+pub mod sort;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)

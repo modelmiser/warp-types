@@ -117,6 +117,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // === Test 4: bitonic_sort_i32 ===
+    println!("=== Test 4: bitonic_sort_i32 (reverse → sorted) ===");
+    {
+        // Input: 32 values in reverse order [31, 30, 29, ..., 1, 0]
+        let input: Vec<i32> = (0..WARP_SIZE as i32).rev().collect();
+        let dev_data = stream.memcpy_stod(&input)?;
+
+        unsafe {
+            stream
+                .launch_builder(&k.bitonic_sort_i32)
+                .arg(&dev_data)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let result = stream.memcpy_dtov(&dev_data)?;
+        let expected: Vec<i32> = (0..WARP_SIZE as i32).collect();
+        let correct = result == expected;
+        println!("  Input:    [31, 30, 29, ..., 1, 0]");
+        println!("  Expected: [0, 1, 2, ..., 30, 31]");
+        println!("  Got:      [{}, {}, {}, ..., {}, {}]",
+                 result[0], result[1], result[2], result[30], result[31]);
+        println!("  Result:   {}", if correct { "PASS" } else { "FAIL" });
+        if !correct {
+            println!("  Full:     {:?}", &result);
+        }
+    }
+    println!();
+
     println!("All kernels compiled from cargo, type-checked at build time,");
     println!("and executed on real GPU hardware with correct results.");
 
