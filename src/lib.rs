@@ -60,6 +60,7 @@ pub mod gradual;
 pub mod gpu;
 pub mod cub;
 pub mod sort;
+pub mod tile;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)
