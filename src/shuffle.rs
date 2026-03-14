@@ -7,7 +7,7 @@
 //! 2. **Warp<All>-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use crate::GpuValue;
 use crate::data::{LaneId, Uniform, PerLane, SingleLane};
 use crate::warp::Warp;
@@ -95,7 +95,7 @@ impl Warp<All> {
     }
 
     /// Sum reduction across all lanes.
-    pub fn reduce_sum<T: GpuValue + std::ops::Add<Output = T>>(&self, data: PerLane<T>) -> T {
+    pub fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(&self, data: PerLane<T>) -> T {
         data.get()
     }
 

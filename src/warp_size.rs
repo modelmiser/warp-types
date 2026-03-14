@@ -25,7 +25,7 @@
 //! 2. **Type Alias**: `type NvidiaWarp = Warp<All, 32>; type AmdWarp = Warp<All, 64>`
 //! 3. **Trait Abstraction**: `Platform` trait with associated const
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 // ============================================================================
 // APPROACH 1: CONST GENERIC SIZE
@@ -143,7 +143,7 @@ pub mod platform_trait {
     /// Platform abstraction for different GPU architectures
     pub trait Platform {
         const WARP_SIZE: usize;
-        type Mask: Copy + Default + std::fmt::Debug;
+        type Mask: Copy + Default + core::fmt::Debug;
 
         fn full_mask() -> Self::Mask;
         fn ballot(pred: &[bool]) -> Self::Mask;

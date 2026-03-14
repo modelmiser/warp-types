@@ -71,7 +71,7 @@ pub trait Platform: Copy + 'static {
     // === Reductions ===
 
     /// Sum all lanes, result available in all lanes (uniform)
-    fn reduce_sum<T: GpuValue + std::ops::Add<Output = T>>(values: Self::Vector<T>) -> T;
+    fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(values: Self::Vector<T>) -> T;
 
     /// Maximum across all lanes
     fn reduce_max<T: GpuValue + Ord>(values: Self::Vector<T>) -> T;
@@ -175,7 +175,7 @@ where
         result
     }
 
-    fn reduce_sum<T: GpuValue + std::ops::Add<Output = T>>(values: Self::Vector<T>) -> T {
+    fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(values: Self::Vector<T>) -> T {
         values.data.into_iter().reduce(|a, b| a + b).unwrap()
     }
 
@@ -252,7 +252,7 @@ impl Platform for GpuWarp32 {
         CpuSimd::<32>::shuffle_xor(source, mask)
     }
 
-    fn reduce_sum<T: GpuValue + std::ops::Add<Output = T>>(values: Self::Vector<T>) -> T {
+    fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(values: Self::Vector<T>) -> T {
         CpuSimd::<32>::reduce_sum(values)
     }
 
@@ -294,7 +294,7 @@ pub fn butterfly_reduce_sum<const WIDTH: usize, T>(
     values: PortableVector<T, WIDTH>,
 ) -> T
 where
-    T: GpuValue + std::ops::Add<Output = T>,
+    T: GpuValue + core::ops::Add<Output = T>,
 {
     let mut v = values;
     let mut stride = 1;
@@ -318,7 +318,7 @@ pub fn prefix_sum<const WIDTH: usize, T>(
     values: PortableVector<T, WIDTH>,
 ) -> PortableVector<T, WIDTH>
 where
-    T: GpuValue + std::ops::Add<Output = T>,
+    T: GpuValue + core::ops::Add<Output = T>,
 {
     let mut v = values;
     let mut stride = 1;

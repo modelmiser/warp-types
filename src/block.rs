@@ -7,7 +7,7 @@
 //!
 //! This module provides typed abstractions for the block and grid levels.
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use crate::GpuValue;
 use crate::data::Role;
 

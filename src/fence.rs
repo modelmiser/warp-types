@@ -16,7 +16,7 @@
 //!
 //! This turns a memory ordering bug into a type error.
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use crate::active_set::{ActiveSet, ComplementOf};
 use crate::warp::Warp;
 

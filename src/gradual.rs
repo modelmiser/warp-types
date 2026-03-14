@@ -54,8 +54,8 @@ pub struct WarpError {
     pub actual_mask: u32,
 }
 
-impl std::fmt::Display for WarpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for WarpError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{}: expected mask 0x{:08X}, got 0x{:08X}",
@@ -72,8 +72,8 @@ pub struct AscribeError {
     pub actual_mask: u32,
 }
 
-impl std::fmt::Display for AscribeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for AscribeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "ascribe to {}: expected mask 0x{:08X}, got 0x{:08X}",

@@ -49,6 +49,7 @@ pub mod merge;
 pub mod shuffle;
 pub mod fence;
 pub mod block;
+#[cfg(any(test, feature = "formal-proof"))]
 pub mod proof;
 pub mod platform;
 pub mod warp_size;

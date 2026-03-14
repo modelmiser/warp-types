@@ -17,7 +17,7 @@
 //! }
 //! ```
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use crate::active_set::ActiveSet;
 
 /// A warp with compile-time tracked active lanes.
@@ -86,8 +86,8 @@ impl Default for Warp<crate::active_set::All> {
     }
 }
 
-impl<S: ActiveSet> std::fmt::Debug for Warp<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<S: ActiveSet> core::fmt::Debug for Warp<S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Warp<{}>(mask={:08X})", S::NAME, S::MASK)
     }
 }

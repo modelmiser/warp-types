@@ -5,7 +5,7 @@
 //! a large class of bugs (reading reduction results from wrong lanes,
 //! passing divergent data where uniform is expected, etc.).
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use crate::GpuValue;
 
 /// A lane identifier (0..31 for NVIDIA, 0..63 for AMD).
