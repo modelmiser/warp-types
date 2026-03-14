@@ -2067,7 +2067,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 242 unit tests, 50 example tests across 8 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) covering the full type system. The tests exercise:
+Our prototype includes 250 unit tests, 50 example tests across 8 worked bug examples, and 15 doc tests (8 compile-fail including linearity enforcement, 7 doc examples) covering the full type system. The CUB-equivalent warp primitives (§6.10) add 8 unit tests verifying typed reduce, scan, and broadcast operations. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2218,7 +2218,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Type system tests | 242 unit + 50 example + 8 compile-fail |
+| Type system tests | 250 unit + 50 example + 15 doc (8 compile-fail) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
@@ -2528,7 +2528,7 @@ Several limitations remain:
 - Data-dependent active sets (requires dependent types)
 - Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
 - **Tensor core and async operations**: Warp matrix operations (WMMA/MMA) distribute matrix fragments across lanes; a diverged warp using tensor cores produces incorrect fragments—the same bug class as shuffle-from-inactive-lane, but at the matrix fragment level. Async copy operations (cp.async, TMA) have analogous divergence issues. Our type system's `Warp<All>` requirement would correctly force all lanes active before these operations, but we have not modeled the operations' internal lane-to-fragment mappings.
-- **Cross-vendor portability**: Our implementation uses `u32` masks (32-lane NVIDIA). AMD RDNA supports dual Wave32/Wave64 modes on the same GPU; Intel Xe subgroups vary from 8 to 32 lanes. The const-generic warp-size approach explored in `warp_size.rs` addresses the parameterization, but the core API has not been ported. Vulkan subgroup operations provide a vendor-neutral target.
+- **Cross-vendor portability**: Our core `ActiveSet::MASK` uses `u64`, supporting both 32-lane NVIDIA warps and 64-lane AMD wavefronts. AMD GPU intrinsic stubs (`amdgpu` target) are in place but untested without hardware. AMD RDNA supports dual Wave32/Wave64 modes; Intel Xe subgroups vary from 8 to 32 lanes. The `WarpBuilder` accepts a `GpuTarget` enum (Nvidia/Amd) for cross-compilation. Vulkan subgroup operations provide a vendor-neutral target.
 
 # 10. Conclusion
 

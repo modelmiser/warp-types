@@ -1,0 +1,30 @@
+{
+  "title": "warp-types: Session-Typed GPU Divergence",
+  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps literally cannot call shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution confirmed on NVIDIA RTX 4000 Ada.",
+  "creators": [
+    {
+      "name": "Aldreda, Chad"
+    }
+  ],
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "keywords": [
+    "session types",
+    "GPU programming",
+    "warp divergence",
+    "type safety",
+    "CUDA",
+    "SIMT",
+    "Rust",
+    "compile-time verification",
+    "zero overhead abstraction"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "identifier": "https://github.com/modelmiser/warp-types"
+    }
+  ],
+  "notes": "Includes: Rust implementation (250 unit + 50 example + 15 doc tests), Lean 4 formalization (17 theorems), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
+}
