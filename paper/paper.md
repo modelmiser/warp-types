@@ -2546,7 +2546,7 @@ Session-typed divergence is not just a solution for GPU programming. It is an in
 
 ## Acknowledgments
 
-The author used Claude (Anthropic, claude-sonnet-4-6, 2026) extensively in the drafting and editing of this manuscript.
+The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the drafting and editing of this manuscript.
 
 ## References
 
@@ -2577,5 +2577,5 @@ The author used Claude (Anthropic, claude-sonnet-4-6, 2026) extensively in the d
 - Wadler 2012. "Propositions as Sessions" (ICFP)
 - Wright and Felleisen 1994. "A Syntactic Approach to Type Soundness" (IC)
 - Zheng et al. 2014. "GMRace: Detecting Data Races in GPU Programs via a Low-Overhead Scheme" (IEEE TPDS)
-- Anthropic. (2026). Claude Sonnet 4.6 [Large language model]. https://www.anthropic.com
+- Anthropic. (2026). Claude Opus 4.6 [Large language model]. https://www.anthropic.com
 
