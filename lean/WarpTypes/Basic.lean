@@ -55,6 +55,7 @@ inductive Ty
   | warp (s : ActiveSet)
   | perLane
   | unit
+  | pair (a b : Ty)      -- Product type for diverge results
 
 inductive Expr
   | warpVal (s : ActiveSet)
@@ -65,6 +66,9 @@ inductive Expr
   | merge (w1 w2 : Expr)
   | shuffle (w data : Expr)
   | letBind (name : String) (val body : Expr)
+  | pairVal (a b : Expr)  -- Pair constructor
+  | fst (e : Expr)        -- First projection
+  | snd (e : Expr)        -- Second projection
 
 -- ============================================================================
 -- Typing Context (linear)
@@ -95,7 +99,8 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       HasType ctx (.var name) t (ctx.remove name)
   | diverge (ctx ctx' : Ctx) (w : Expr) (s pred : ActiveSet) :
       HasType ctx w (.warp s) ctx' →
-      HasType ctx (.diverge w pred) (.warp (s &&& pred)) ctx'
+      HasType ctx (.diverge w pred)
+        (.pair (.warp (s &&& pred)) (.warp (s &&& ~~~pred))) ctx'
   | merge (ctx ctx' ctx'' : Ctx) (w1 w2 : Expr) (s1 s2 : ActiveSet) :
       HasType ctx w1 (.warp s1) ctx' →
       HasType ctx' w2 (.warp s2) ctx'' →
@@ -105,6 +110,20 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       HasType ctx w (.warp ActiveSet.all) ctx' →
       HasType ctx' data .perLane ctx'' →
       HasType ctx (.shuffle w data) .perLane ctx''
+  | letBind (ctx ctx' ctx'' : Ctx) (name : String) (val body : Expr) (t1 t2 : Ty) :
+      HasType ctx val t1 ctx' →
+      HasType ((name, t1) :: ctx') body t2 ctx'' →
+      HasType ctx (.letBind name val body) t2 ctx''
+  | pairVal (ctx ctx' ctx'' : Ctx) (a b : Expr) (t1 t2 : Ty) :
+      HasType ctx a t1 ctx' →
+      HasType ctx' b t2 ctx'' →
+      HasType ctx (.pairVal a b) (.pair t1 t2) ctx''
+  | fstE (ctx ctx' : Ctx) (e : Expr) (t1 t2 : Ty) :
+      HasType ctx e (.pair t1 t2) ctx' →
+      HasType ctx (.fst e) t1 ctx'
+  | sndE (ctx ctx' : Ctx) (e : Expr) (t1 t2 : Ty) :
+      HasType ctx e (.pair t1 t2) ctx' →
+      HasType ctx (.snd e) t2 ctx'
 
 -- ============================================================================
 -- Theorem 4.1: Diverge Partition
@@ -162,14 +181,19 @@ theorem lowHalf_highHalf_complement :
   constructor <;> decide
 
 -- ============================================================================
--- Progress (value case)
+-- Values
 -- ============================================================================
 
 def isValue : Expr → Bool
   | .warpVal _ => true
   | .perLaneVal => true
   | .unitVal => true
+  | .pairVal a b => isValue a && isValue b
   | _ => false
+
+-- ============================================================================
+-- Progress (value case) — original theorem preserved
+-- ============================================================================
 
 theorem progress_values (e : Expr) (t : Ty) (ctx' : Ctx) :
     HasType [] e t ctx' →
