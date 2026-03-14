@@ -41,7 +41,17 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 name = "warp-types"
 version = "0.1.0"
 dependencies = [
+ "warp-types-kernel",
  "warp-types-macros",
+]
+
+[[package]]
+name = "warp-types-kernel"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

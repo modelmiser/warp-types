@@ -1938,13 +1938,14 @@ Programmers must call `diverge` and `merge` explicitly. Automatic insertion base
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that session-typed divergence can be embedded in an existing systems language with:
-- **Zero runtime overhead**: Types are erased
+- **Zero runtime overhead**: Types are erased at MIR, LLVM IR, and PTX levels
 - **Good error messages**: Rust's diagnostics explain what's wrong
 - **Familiar syntax**: Looks like normal Rust code
 - **Easy adoption**: Wrap existing code incrementally
 - **Platform portability**: Same algorithms run on CPU and GPU via the `Platform` trait
+- **Cargo integration**: A `#[warp_kernel]` proc macro and `WarpBuilder` build-time library enable end-to-end GPU kernel development from `cargo run` — kernel crates use `warp_types::*`, cross-compile to PTX automatically via `build.rs`, and load via a generated `Kernels` struct with named function handles
 
-The key insight: Rust's type system is expressive enough to encode our safety properties without runtime cost. The `Platform` abstraction further demonstrates that the type discipline is not GPU-specific — it applies uniformly to any SIMT-like execution model.
+The key insight: Rust's type system is expressive enough to encode our safety properties without runtime cost. The cargo-integrated pipeline further demonstrates practical usability — type-safe kernels that compile to real PTX with real shuffle instructions, verified on NVIDIA RTX 4000 Ada hardware.
 
 
 ---
@@ -2438,9 +2439,15 @@ The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread 
 
 Session-typed divergence opens several research directions.
 
-## 9.1 Proc Macro for Data-Dependent Predicates
+## 9.1 Proc Macros and Tooling
 
-Our `warp_sets!` proc macro (§6.1) already generates the static active set hierarchy with compile-time validation of disjoint/covering invariants. A `#[warp_typed]` proc macro could further extend coverage to data-dependent predicates:
+Our tooling stack includes two implemented proc macros and a build-time library:
+
+1. **`warp_sets!`** (§6.1) generates the static active set hierarchy with compile-time validation of disjoint/covering invariants.
+2. **`#[warp_kernel]`** transforms kernel functions into `extern "ptx-kernel"` entry points with `#[no_mangle]`, validating that parameters are GPU-compatible types (raw pointers or scalars).
+3. **`WarpBuilder`** cross-compiles kernel crates to PTX via `cargo rustc --target nvptx64-nvidia-cuda -Z build-std=core`, finds the generated `.s` file, and produces a Rust module with a `Kernels` struct providing named `CudaFunction` handles.
+
+A future `#[warp_typed]` proc macro could further extend coverage to data-dependent predicates:
 
 ```rust
 #[warp_typed]

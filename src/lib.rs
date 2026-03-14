@@ -144,3 +144,4 @@ pub use shuffle::{
 pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteState};
 pub use block::{SharedRegion, BlockId, ThreadId};
 pub use platform::{Platform, CpuSimd, GpuWarp32, SimdVector};
+pub use warp_types_kernel::warp_kernel;

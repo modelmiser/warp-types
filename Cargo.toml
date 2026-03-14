@@ -15,5 +15,6 @@ formal-proof = [] # Enable proof module (requires std)
 
 [dependencies]
 warp-types-macros = { path = "warp-types-macros" }
+warp-types-kernel = { path = "warp-types-kernel" }
 
 [dev-dependencies]

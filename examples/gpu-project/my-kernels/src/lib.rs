@@ -12,8 +12,7 @@ use core::panic::PanicInfo;
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! { loop {} }
 
-use warp_types::*;
-use warp_types_kernel::warp_kernel;
+use warp_types::*; // includes warp_kernel via re-export
 
 // ============================================================================
 // Kernel 1: Butterfly reduction (all ones → 32)
