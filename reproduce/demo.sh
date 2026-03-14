@@ -1,10 +1,10 @@
 #!/bin/bash
-# demo.sh — The full warp-types demonstration
+# demo.sh — The complete warp-types demonstration
 #
-# Runs three things side by side:
-#   1. Original CUDA reduce7 (buggy) — wrong results
-#   2. Original CUDA reduce7 (fixed) — correct results
-#   3. Typed Rust reduce7 on GPU — correct results, bug is compile error
+# Three beats:
+#   1. THE BUG:   Run buggy CUDA code → wrong answer
+#   2. THE ERROR: Try the buggy pattern in Rust → compiler rejects it
+#   3. THE FIX:   Run typed Rust code on GPU → correct answer
 #
 # Usage: bash reproduce/demo.sh
 
@@ -12,52 +12,127 @@ set -e
 cd "$(dirname "$0")"
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  Session-Typed Divergence: The Complete Demo            ║"
-echo "║  Same bug. Same GPU. Type system prevents it.           ║"
+echo "║  warp-types: Session-Typed GPU Divergence               ║"
+echo "║  Same bug. Same GPU. The type system prevents it.       ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Step 1: Compile the CUDA version
-echo "▸ Compiling CUDA reduce7 (buggy + fixed)..."
-nvcc -O2 -o /tmp/reduce7_cuda reduce7_bug.cu 2>/dev/null
-echo "  Done."
+# ================================================================
+# Beat 1: THE BUG
+# ================================================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Beat 1: THE BUG"
+echo "CUDA compiles the buggy pattern. GPU produces wrong answer."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  Pattern: diverge to lane 0, then shuffle_down."
+echo "  Lane 0 reads from lane 16 — but lane 16 didn't participate."
+echo "  Its register value is whatever was there. Undefined behavior."
+echo ""
 
-# Step 2: Compile the Rust PTX
+if command -v nvcc &>/dev/null; then
+    echo "▸ Compiling CUDA reduce7 (buggy + fixed)..."
+    nvcc -O2 -o /tmp/reduce7_cuda reduce7_bug.cu 2>/dev/null
+    echo ""
+    /tmp/reduce7_cuda
+else
+    echo "  [nvcc not found — showing expected output]"
+    echo ""
+    echo "  === Buggy reduce7 (CUDA, partial mask) ==="
+    echo "    Input:    [1, 1, 1, ..., 1]  (32 ones)"
+    echo "    Expected: 32"
+    echo "    Got:      1"
+    echo "    Result:   WRONG"
+    echo ""
+    echo "  === Fixed reduce7 (CUDA, full mask) ==="
+    echo "    Input:    [1, 1, 1, ..., 1]  (32 ones)"
+    echo "    Expected: 32"
+    echo "    Got:      32"
+    echo "    Result:   correct"
+fi
+echo ""
+
+# ================================================================
+# Beat 2: THE ERROR (the centerpiece)
+# ================================================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Beat 2: THE COMPILER ERROR"
+echo "The same pattern in Rust. The compiler catches it."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  Code:"
+echo ""
+echo "    let warp: Warp<All> = Warp::kernel_entry();"
+echo "    let (evens, _odds) = warp.diverge_even_odd();"
+echo "    evens.shuffle_xor(data, 1);  // <-- the bug"
+echo ""
+echo "  Compiler output:"
+echo ""
+
+# Actually compile it and capture the error
+cd "$(dirname "$0")/.."
+cp reproduce/buggy_pattern.rs examples/buggy_pattern.rs 2>/dev/null || true
+COMPILE_OUTPUT=$(cargo check --example buggy_pattern 2>&1 || true)
+rm -f examples/buggy_pattern.rs
+cd reproduce
+
+# Show just the relevant error
+echo "$COMPILE_OUTPUT" | grep -A5 "no method named" | head -8 | sed 's/^/    /'
+echo ""
+echo "  The method was found for Warp<All> — not Warp<Even>."
+echo "  The buggy pattern is not checked at runtime."
+echo "  It does not exist in the type system."
+echo ""
+
+# ================================================================
+# Beat 3: THE FIX
+# ================================================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Beat 3: THE FIX"
+echo "Typed Rust kernels on real GPU. Correct results."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Build and run the typed GPU kernels
 echo "▸ Compiling typed Rust kernels to PTX..."
-rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O \
-    --edition 2021 reduce7_typed.rs -o reduce7_typed.ptx 2>/dev/null
-echo "  Done."
+cd "$(dirname "$0")/.."
 
-# Step 3: Build the host runner (if needed)
-echo "▸ Building host runner..."
-(cd host && cargo build --release 2>/dev/null)
-echo "  Done."
+# Check if gpu-project can run
+if command -v nvidia-smi &>/dev/null; then
+    cd examples/gpu-project
+    cargo run --release 2>&1 | grep -E "GPU:|Result:|Input:|Expected:|Got:" | sed 's/^/  /'
+    cd ../..
+else
+    echo "  [No GPU detected — showing expected output]"
+    echo "  GPU: NVIDIA RTX 4000 SFF Ada Generation"
+    echo ""
+    echo "  Test 1: butterfly_reduce     → PASS (32)"
+    echo "  Test 2: diverge_merge_reduce → PASS (496)"
+    echo "  Test 3: reduce_n             → PASS (32)"
+    echo "  Test 4: bitonic_sort_i32     → PASS ([0,1,...,31])"
+fi
+
+cd reproduce 2>/dev/null || true
 echo ""
 
-# Run CUDA version
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Part 1: CUDA (no type system)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-/tmp/reduce7_cuda
-echo ""
-
-# Run Rust typed version
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Part 2: Rust with session-typed divergence"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-(cd host && cargo run --release 2>&1 | grep -v "warning\|^  -->\|^   =\|^   |$\|^   [0-9]\|Compiling\|Finished\|Running" | grep -v "^$")
-echo ""
-
+# ================================================================
+# Summary
+# ================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Summary"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  CUDA (buggy):  sum = 1   ← silent wrong answer"
-echo "  CUDA (fixed):  sum = 32  ← correct, but no compile-time safety"
-echo "  Rust (typed):  sum = 32  ← correct, AND the bug is a compile error"
+echo "  CUDA:                Compiles the bug. Produces wrong answer."
+echo "  Rust (warp-types):   Rejects the bug. Produces correct answer."
 echo ""
-echo "  The buggy pattern literally cannot be expressed in the type system."
-echo "  Warp<Lane0> has no shuffle_down method. It doesn't exist."
+echo "  The type system:"
+echo "    ✓ Catches shuffle-from-inactive-lane at compile time"
+echo "    ✓ Zero runtime overhead (PhantomData erasure)"
+echo "    ✓ Verified at MIR, LLVM IR, and PTX levels"
+echo "    ✓ Real GPU execution on NVIDIA RTX 4000 Ada"
 echo ""
-echo "  NVIDIA deprecated __shfl because of this bug class."
-echo "  We eliminate it at compile time with zero runtime overhead."
+echo "  21 documented bugs across 16 real-world projects."
+echo "  17 Lean theorems. 285 Rust tests. One type system."
+echo ""
+echo "  github.com/modelmiser/warp-types"
+echo ""
