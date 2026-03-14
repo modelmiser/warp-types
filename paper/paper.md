@@ -2068,7 +2068,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 266 unit tests, 50 example tests across 8 worked bug examples, and 19 doc tests (8 compile-fail including linearity enforcement, 11 doc examples) covering the full type system (335 total). The tests exercise:
+Our prototype includes 272 unit tests, 50 example tests across 8 worked bug examples, and 23 doc tests (8 compile-fail including linearity enforcement, 15 doc examples) covering the full type system (345 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2170,7 +2170,7 @@ The annotation overhead is modest. Divergence points require one `diverge` call 
 | Adaptive sort | Yes | diverge/merge per partition |
 | Warp-level work stealing | Yes | dynamic role assignment |
 | Cooperative group with sub-warp | Yes | existential types (§5) |
-| Data-dependent shuffle mask | Partial | Requires dependent types (future) |
+| Data-dependent shuffle mask | Yes | `diverge_dynamic(mask)` with structural complement guarantees |
 
 ### Annotation Burden
 
@@ -2191,13 +2191,11 @@ The annotations are: `warp: Warp<All>` function parameters (5 occurrences), `div
 
 ### Limitations
 
-Four patterns are not fully expressible in our current system:
+Two patterns require special handling:
 
-1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, our static types cannot verify it. This requires dependent types (§9).
+1. **Data-dependent divergence**: When the active set depends on runtime data (e.g., `data[lane] > threshold`), our static marker types do not apply. Instead, `diverge_dynamic(mask)` returns a `DynDiverge` with structural complement guarantees — the mask is runtime, but the pairing ensures both branches must merge before shuffle. No dependent types needed.
 
-2. **Arbitrary runtime predicates**: Our marker types cover common patterns (Even, Odd, LowHalf, HighHalf). Predicates not matching these markers require existential types, which add a runtime check.
-
-3. **Cross-function active set polymorphism**: Functions that are generic over the active set require explicit trait bounds, increasing annotation burden at API boundaries.
+2. **Cross-function active set polymorphism**: Functions generic over the active set use Rust's standard trait bounds (`fn foo<S: ActiveSet>(warp: Warp<S>)`). The type parameter `S` is inferred at call sites. This is idiomatic Rust — not a limitation of the type system, but a language property.
 
 4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern: lanes that finish early spin until all lanes agree to exit, maintaining a full warp throughout. `DynWarp` (§9.4) provides a runtime escape for patterns where static exit tracking is too restrictive.
 
@@ -2219,12 +2217,12 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Type system tests | 266 unit + 50 example + 19 doc (335 total) |
+| Type system tests | 272 unit + 50 example + 23 doc (345 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
 | Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
-| Limitations | Data-dependent masks, cross-function polymorphism |
+| Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
@@ -2448,26 +2446,18 @@ Our tooling stack includes two implemented proc macros and a build-time library:
 2. **`#[warp_kernel]`** transforms kernel functions into `extern "ptx-kernel"` entry points with `#[no_mangle]`, validating that parameters are GPU-compatible types (raw pointers or scalars).
 3. **`WarpBuilder`** cross-compiles kernel crates to PTX via `cargo rustc --target nvptx64-nvidia-cuda -Z build-std=core`, finds the generated `.s` file, and produces a Rust module with a `Kernels` struct providing named `CudaFunction` handles.
 
-A future `#[warp_typed]` proc macro could further extend coverage to data-dependent predicates:
+Data-dependent predicates (e.g., `data[lane] > threshold`) are supported via `diverge_dynamic(mask)`, which returns a `DynDiverge` — a paired divergence where the mask is runtime but the complement is structural. Both branches must merge to recover `Warp<All>`:
 
 ```rust
-#[warp_typed]
-fn adaptive_sort(warp: Warp<All>, data: PerLane<i32>) -> PerLane<i32> {
-    let pivot = warp.reduce_median(data);
-    let (low, high) = warp.diverge(|lane| data[lane] < pivot);
-
-    // Macro generates: DynSet<"below_pivot"> and DynSet<"at_or_above_pivot">
-    // with runtime complement assertion in debug builds
-
-    let sorted_low = sort_within(low, data);
-    let sorted_high = sort_within(high, data);
-
-    let warp = merge(low, high);  // Complement verified at runtime
-    merge_data(sorted_low, sorted_high)
-}
+let warp: Warp<All> = Warp::kernel_entry();
+let mask = ballot_result;  // runtime predicate
+let diverged = warp.diverge_dynamic(mask);
+// Can't shuffle on either branch — complement guaranteed by construction
+let warp: Warp<All> = diverged.merge();
+warp.shuffle_xor(data, 1);  // OK — all lanes active
 ```
 
-The macro would track diverge/merge pairing at compile time and insert runtime mask assertions for data-dependent splits, bridging Layers 4-5 (§5.2) without requiring dependent types.
+A future `#[warp_typed]` proc macro could further optimize this by automatically inserting `diverge_dynamic` calls and tracking merge pairing, reducing boilerplate for complex data-dependent algorithms.
 
 ## 9.2 Formal Mechanization
 
@@ -2526,7 +2516,6 @@ Future work extends toward hardware synthesis proper:
 Several limitations remain:
 - Higher-order protocols (protocols parameterized by protocols)
 - Compilation overhead at scale (untested on large codebases)
-- Data-dependent active sets (requires dependent types)
 - Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
 - **Tensor core and async operations**: Warp matrix operations (WMMA/MMA) distribute matrix fragments across lanes; a diverged warp using tensor cores produces incorrect fragments—the same bug class as shuffle-from-inactive-lane, but at the matrix fragment level. Async copy operations (cp.async, TMA) have analogous divergence issues. Our type system's `Warp<All>` requirement would correctly force all lanes active before these operations, but we have not modeled the operations' internal lane-to-fragment mappings.
 - **Cross-vendor portability**: Our core `ActiveSet::MASK` uses `u64`, supporting both 32-lane NVIDIA warps and 64-lane AMD wavefronts. AMD GPU intrinsic stubs (`amdgpu` target) are in place but untested without hardware. AMD RDNA supports dual Wave32/Wave64 modes; Intel Xe subgroups vary from 8 to 32 lanes. The `WarpBuilder` accepts a `GpuTarget` enum (Nvidia/Amd) for cross-compilation. Vulkan subgroup operations provide a vendor-neutral target.

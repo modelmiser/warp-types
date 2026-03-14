@@ -2,7 +2,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 266 unit + 50 example + 19 doc tests (335 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
+**Status:** Research prototype with real GPU execution. 272 unit + 50 example + 23 doc tests (345 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
 
 ## The Problem
 
@@ -65,7 +65,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 266 unit + 19 doc tests
+cargo test                                    # 272 unit + 23 doc tests
 cargo test --examples                         # 50 tests across 8 real-bug examples
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -125,7 +125,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32/64 lanes) | u64 masks, AMD stubs, GpuTarget enum | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (14 tests) | `cargo test gradual` |
-| All claims | Full test suite (335 tests) | `cargo test && cargo test --examples` |
+| All claims | Full test suite (345 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 

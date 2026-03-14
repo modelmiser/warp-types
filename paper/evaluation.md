@@ -97,7 +97,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 266 unit tests, 50 example tests across 8 worked bug examples, and 19 doc tests (8 compile-fail including linearity enforcement, 11 doc examples) covering the full type system (335 total). The tests exercise:
+Our prototype includes 272 unit tests, 50 example tests across 8 worked bug examples, and 23 doc tests (8 compile-fail including linearity enforcement, 15 doc examples) covering the full type system (345 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -164,13 +164,13 @@ The annotation overhead is modest. Divergence points require one `diverge` call 
 | Adaptive sort | Yes | diverge/merge per partition |
 | Warp-level work stealing | Yes | dynamic role assignment |
 | Cooperative group with sub-warp | Yes | existential types (§5) |
-| Data-dependent shuffle mask | Partial | Requires dependent types (future) |
+| Data-dependent shuffle mask | Yes | `diverge_dynamic(mask)` with structural complement guarantees |
 
 ### Limitations
 
 Four patterns are not fully expressible in our current system:
 
-1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, our static types cannot verify it. This requires dependent types (§9).
+1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, `diverge_dynamic(mask)` provides runtime masks with structural complement guarantees. The mask is dynamic but the pairing is static — both branches must merge before shuffle.
 
 2. **Arbitrary runtime predicates**: Our marker types cover common patterns (Even, Odd, LowHalf, HighHalf). Predicates not matching these markers require existential types, which add a runtime check.
 
@@ -197,11 +197,11 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` — `cargo run` from source to GPU |
-| Type system tests | 266 unit + 50 example + 19 doc (335 total) |
+| Type system tests | 272 unit + 50 example + 23 doc (345 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
-| Limitations | Data-dependent masks, cross-function polymorphism |
+| Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 

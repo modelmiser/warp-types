@@ -2,28 +2,20 @@
 
 Session-typed divergence opens several research directions.
 
-## 9.1 Proc Macro for Data-Dependent Predicates
+## 9.1 Data-Dependent Divergence (Implemented)
 
-Our current Rust crate handles static active sets (Even, Odd, LowHalf). A `#[warp_typed]` proc macro could extend coverage to data-dependent predicates:
+Data-dependent predicates (e.g., `data[lane] > threshold`) are now supported via `diverge_dynamic(mask)`, which returns a `DynDiverge` — a paired divergence where the mask is runtime but the complement is structural. Both branches must merge to recover `Warp<All>`. No dependent types are required.
 
 ```rust
-#[warp_typed]
-fn adaptive_sort(warp: Warp<All>, data: PerLane<i32>) -> PerLane<i32> {
-    let pivot = warp.reduce_median(data);
-    let (low, high) = warp.diverge(|lane| data[lane] < pivot);
-
-    // Macro generates: DynSet<"below_pivot"> and DynSet<"at_or_above_pivot">
-    // with runtime complement assertion in debug builds
-
-    let sorted_low = sort_within(low, data);
-    let sorted_high = sort_within(high, data);
-
-    let warp = merge(low, high);  // Complement verified at runtime
-    merge_data(sorted_low, sorted_high)
-}
+let warp: Warp<All> = Warp::kernel_entry();
+let mask = ballot_result;  // runtime predicate
+let diverged = warp.diverge_dynamic(mask);
+// Can't shuffle on either branch
+let warp: Warp<All> = diverged.merge();  // complement guaranteed by construction
+warp.shuffle_xor(data, 1);  // OK — all lanes active
 ```
 
-The macro would track diverge/merge pairing at compile time and insert runtime mask assertions for data-dependent splits, bridging Layers 4-5 (§5.2) without requiring dependent types.
+A future `#[warp_typed]` proc macro could further optimize this pattern by automatically inserting `diverge_dynamic` calls and tracking merge pairing at compile time, reducing boilerplate for complex data-dependent algorithms.
 
 ## 9.2 Formal Mechanization
 
@@ -82,7 +74,6 @@ Future work extends toward hardware synthesis proper:
 Several limitations remain:
 - Higher-order protocols (protocols parameterized by protocols)
 - Compilation overhead at scale (untested on large codebases)
-- Data-dependent active sets (requires dependent types)
 - Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
 
 # 10. Conclusion
