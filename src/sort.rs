@@ -49,12 +49,11 @@ use crate::active_set::All;
 ///
 /// On CPU emulation: shuffle_xor returns self, so my == partner → no swap (correct).
 /// On GPU: actual cross-lane compare-and-swap via `shfl.sync.bfly.b32`.
-#[inline(always)]
 fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
     warp: &Warp<All>,
     val: PerLane<T>,
     xor_mask: u32,
-    stage_mask: u32,
+    _stage_mask: u32,
 ) -> PerLane<T> {
     let partner_val = warp.shuffle_xor(val, xor_mask);
     let my = val.get();

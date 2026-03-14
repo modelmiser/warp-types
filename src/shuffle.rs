@@ -260,6 +260,31 @@ mod tests {
     }
 
     #[test]
+    fn test_shuffle_64bit_types() {
+        let all: Warp<All> = Warp::new();
+
+        // i64: two-pass shuffle on GPU, identity on CPU
+        let data_i64 = PerLane::new(0x0000_0001_0000_0002_i64);
+        let shuffled_i64 = all.shuffle_xor(data_i64, 1);
+        assert_eq!(shuffled_i64.get(), 0x0000_0001_0000_0002_i64);
+
+        // u64
+        let data_u64 = PerLane::new(u64::MAX);
+        let shuffled_u64 = all.shuffle_xor(data_u64, 1);
+        assert_eq!(shuffled_u64.get(), u64::MAX);
+
+        // f64: bit-preserving two-pass
+        let data_f64 = PerLane::new(3.14159_f64);
+        let shuffled_f64 = all.shuffle_xor(data_f64, 1);
+        assert_eq!(shuffled_f64.get(), 3.14159_f64);
+
+        // Reduction works on 64-bit
+        let ones_i64 = PerLane::new(1_i64);
+        let sum = all.reduce_sum(ones_i64);
+        assert_eq!(sum, 32_i64); // 1 + 1 + ... (5 XOR stages)
+    }
+
+    #[test]
     fn test_xor_self_dual() {
         assert!(Xor::<5>::is_self_dual());
         for mask in 0..32u32 {

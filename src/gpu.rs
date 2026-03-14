@@ -269,6 +269,87 @@ impl GpuShuffle for u32 {
     }
 }
 
+// ============================================================================
+// 64-bit types: two-pass shuffle (split into high/low 32-bit halves)
+//
+// GPU shuffle instructions are 32-bit. For i64/f64/u64, we split into
+// two 32-bit halves, shuffle each independently, and reassemble.
+// The type system ensures both halves are shuffled together — you can't
+// accidentally shuffle only the low half and leave the high half stale.
+// ============================================================================
+
+#[cfg(target_arch = "nvptx64")]
+impl GpuShuffle for i64 {
+    #[inline(always)]
+    fn gpu_shfl_xor(self, xor_mask: u32) -> Self {
+        let bits = self as u64;
+        let lo = shfl_sync_bfly_i32(0xFFFFFFFF, bits as i32, xor_mask) as u32;
+        let hi = shfl_sync_bfly_i32(0xFFFFFFFF, (bits >> 32) as i32, xor_mask) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+    #[inline(always)]
+    fn gpu_shfl_down(self, delta: u32) -> Self {
+        let bits = self as u64;
+        let lo = shfl_sync_down_i32(0xFFFFFFFF, bits as i32, delta) as u32;
+        let hi = shfl_sync_down_i32(0xFFFFFFFF, (bits >> 32) as i32, delta) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+    #[inline(always)]
+    fn gpu_shfl_up(self, delta: u32) -> Self {
+        let bits = self as u64;
+        let lo = shfl_sync_up_i32(0xFFFFFFFF, bits as i32, delta) as u32;
+        let hi = shfl_sync_up_i32(0xFFFFFFFF, (bits >> 32) as i32, delta) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+    #[inline(always)]
+    fn gpu_shfl_idx(self, src_lane: u32) -> Self {
+        let bits = self as u64;
+        let lo = shfl_sync_idx_i32(0xFFFFFFFF, bits as i32, src_lane) as u32;
+        let hi = shfl_sync_idx_i32(0xFFFFFFFF, (bits >> 32) as i32, src_lane) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+}
+
+#[cfg(target_arch = "nvptx64")]
+impl GpuShuffle for u64 {
+    #[inline(always)]
+    fn gpu_shfl_xor(self, xor_mask: u32) -> Self {
+        (self as i64).gpu_shfl_xor(xor_mask) as u64
+    }
+    #[inline(always)]
+    fn gpu_shfl_down(self, delta: u32) -> Self {
+        (self as i64).gpu_shfl_down(delta) as u64
+    }
+    #[inline(always)]
+    fn gpu_shfl_up(self, delta: u32) -> Self {
+        (self as i64).gpu_shfl_up(delta) as u64
+    }
+    #[inline(always)]
+    fn gpu_shfl_idx(self, src_lane: u32) -> Self {
+        (self as i64).gpu_shfl_idx(src_lane) as u64
+    }
+}
+
+#[cfg(target_arch = "nvptx64")]
+impl GpuShuffle for f64 {
+    #[inline(always)]
+    fn gpu_shfl_xor(self, xor_mask: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_xor(xor_mask) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_down(self, delta: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_down(delta) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_up(self, delta: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_up(delta) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_idx(self, src_lane: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_idx(src_lane) as u64)
+    }
+}
+
 // CPU fallback: single-thread, shuffle returns own value (identity)
 #[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
 impl GpuShuffle for i32 {
@@ -288,6 +369,30 @@ impl GpuShuffle for f32 {
 
 #[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
 impl GpuShuffle for u32 {
+    fn gpu_shfl_xor(self, _: u32) -> Self { self }
+    fn gpu_shfl_down(self, _: u32) -> Self { self }
+    fn gpu_shfl_up(self, _: u32) -> Self { self }
+    fn gpu_shfl_idx(self, _: u32) -> Self { self }
+}
+
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
+impl GpuShuffle for i64 {
+    fn gpu_shfl_xor(self, _: u32) -> Self { self }
+    fn gpu_shfl_down(self, _: u32) -> Self { self }
+    fn gpu_shfl_up(self, _: u32) -> Self { self }
+    fn gpu_shfl_idx(self, _: u32) -> Self { self }
+}
+
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
+impl GpuShuffle for u64 {
+    fn gpu_shfl_xor(self, _: u32) -> Self { self }
+    fn gpu_shfl_down(self, _: u32) -> Self { self }
+    fn gpu_shfl_up(self, _: u32) -> Self { self }
+    fn gpu_shfl_idx(self, _: u32) -> Self { self }
+}
+
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
+impl GpuShuffle for f64 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }
     fn gpu_shfl_up(self, _: u32) -> Self { self }
