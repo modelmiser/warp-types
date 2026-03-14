@@ -2,7 +2,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype. Zero dependencies. 242 unit tests + 11 doc tests. Zero runtime overhead.
+**Status:** Research prototype with real GPU execution. 250 unit + 50 example + 15 doc tests. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
 
 ## The Problem
 
@@ -17,41 +17,95 @@ if (participate) {
 
 This compiles without warnings, may appear to work, and fails silently. NVIDIA's own cuda-samples contains this bug ([#398](https://github.com/NVIDIA/cuda-samples/issues/398)). Their core library CUB contains a variant ([CCCL#854](https://github.com/NVIDIA/cccl/issues/854)). The PIConGPU plasma physics simulation ran for months with undefined behavior in a divergent branch, undetected because pre-Volta hardware masked the violation ([#2514](https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514)). NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0 to address the bug class.
 
-State-of-the-art persistent thread programs (e.g., the [Hazy megakernel](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles)) avoid the problem by maintaining warp-uniform execution.
+We survey 21 documented bugs across 16 real-world projects. State-of-the-art persistent thread programs (e.g., the [Hazy megakernel](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles)) avoid the problem by maintaining warp-uniform execution.
 
 ## The Solution
 
 Track which lanes are active in the type system. Shuffle only exists on fully-active warps:
 
 ```rust
-let (active, inactive) = warp.diverge(|lane| participate[lane]);
+use warp_types::*;
 
-// This is a compile error — not a runtime check, but a type-level absence:
-// active.shuffle_xor(data, 1);
-// ERROR: no method `shuffle_xor` found for `Warp<Active>`
+let warp: Warp<All> = Warp::kernel_entry();
 
-// Fix: merge back to Warp<All> first
-let warp: Warp<All> = merge(active, inactive);
-let partner = warp.shuffle_xor(data, 1);  // OK
+// After diverge, shuffle is gone from the type:
+let (evens, odds) = warp.diverge_even_odd();
+// evens.shuffle_xor(data, 1);  // COMPILE ERROR — method not found
+let merged: Warp<All> = merge(evens, odds);
+let partner = merged.shuffle_xor(data, 1);  // OK
 ```
 
 The type system is **strictly more permissive** than current best practice (which prohibits divergence) while being **strictly safer** than the CUDA status quo (which allows it unchecked).
 
 ## Key Ideas
 
-1. **`Warp<S>`** — Warps carry active set types. `Warp<All>` = all 32 lanes active.
+1. **`Warp<S>`** — Warps carry active set types. `Warp<All>` = all lanes active.
 2. **Diverge produces complements** — `diverge` splits a warp into two sub-warps with disjoint active sets.
 3. **Merge requires complements** — Reconvergence is verified at compile time via `ComplementOf<T>` trait bounds.
 4. **Method availability = safety** — `shuffle_xor` only exists on `Warp<All>`. Not checked — *absent*.
 5. **Zero overhead** — `Warp<S>` contains only `PhantomData<S>`. Types are erased completely.
 
+## The Killer Demo
+
+cuda-samples #398 on the same GPU (RTX 4000 Ada):
+
+```
+Untyped (buggy): sum = 1   ← silent wrong answer
+Typed (fixed):   sum = 32  ← correct, AND the bug is a compile error
+```
+
+The buggy pattern literally cannot be expressed. `Warp<Lane0>` has no `shfl_down` method.
+
+```bash
+bash reproduce/demo.sh  # The entire pitch in one terminal
+```
+
 ## Quick Start
 
 ```bash
-cargo test                                    # All 242 unit tests + 12 doc tests
-cargo test --examples                         # 21 tests across 5 real-bug examples
+cargo test                                    # 250 unit + 15 doc tests
+cargo test --examples                         # 50 tests across 8 real-bug examples
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
-cargo run --example demo_bug_that_types_catch # Core safety demonstration
+```
+
+### Write GPU Kernels
+
+```rust
+// my-kernels/src/lib.rs
+use warp_types::*;
+
+#[warp_kernel]
+pub fn butterfly_reduce(data: *mut i32) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let mut val = unsafe { *data.add(tid as usize) };
+
+    // Type system guarantees: warp is Warp<All>, so shuffle is available
+    let d = data::PerLane::new(val);
+    val += warp.shuffle_xor(d, 16).get();
+    // ... butterfly stages ...
+    unsafe { *data.add(tid as usize) = val; }
+}
+```
+
+```rust
+// build.rs
+fn main() {
+    warp_types_builder::WarpBuilder::new("my-kernels")
+        .build()
+        .expect("Failed to compile GPU kernels");
+}
+```
+
+```rust
+// src/main.rs
+mod kernels { include!(concat!(env!("OUT_DIR"), "/kernels.rs")); }
+
+fn main() {
+    let ctx = cudarc::driver::CudaContext::new(0).unwrap();
+    let k = kernels::Kernels::load(&ctx).unwrap();
+    // k.butterfly_reduce — ready to launch
+}
 ```
 
 ## Claims and Evidence
@@ -59,72 +113,62 @@ cargo run --example demo_bug_that_types_catch # Core safety demonstration
 | Claim | Evidence | Command |
 |-------|----------|---------|
 | Shuffle safety (diverged warp can't shuffle) | 8 compile-fail doctests | `cargo test --doc` |
-| Real bug caught at compile time | NVIDIA cuda-samples #398 modeled | `cargo test --example nvidia_cuda_samples_398` |
-| Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `cd reproduce && ./run.sh` |
-| Soundness (progress + preservation) | 9 tests encoding proof steps | `cargo test proof` |
+| Real bug caught at compile time | 8 worked bug examples (21 bugs surveyed) | `cargo test --examples` |
+| Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
+| Real GPU execution | 3 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
+| Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
+| Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
+| Soundness (progress + preservation) | 17 Lean theorems (zero sorry on progress) | `cd lean && lake build` |
+| CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
-| Nested divergence (depth 3+) | Active set lattice tests | `cargo test nested_diverge` |
-| Zero overhead | `PhantomData<S>` erasure — inspect MIR | `cargo test static_verify` |
-| Platform portability (32/64 lanes) | Warp-size-generic algorithms | `cargo test warp_size` |
-| Hardware crossbar mapping | Session-typed 16-tile crossbar (12 tests) | `cargo test crossbar` |
+| Platform portability (32/64 lanes) | u64 masks, AMD stubs, GpuTarget enum | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (14 tests) | `cargo test gradual` |
-| All claims | Full test suite (242 + 11) | `cargo test` |
+| All claims | Full test suite (315 tests) | `cargo test` |
 
 ## Project Structure
 
 ```
 warp-types/
 ├── src/
-│   ├── lib.rs              # Core exports + GpuValue trait
-│   ├── active_set.rs       # Marker types: All, Even, Odd, LowHalf, ...
+│   ├── lib.rs              # Core exports + GpuValue trait + warp_kernel re-export
+│   ├── active_set.rs       # Marker types: All, Even, Odd, LowHalf, ... (u64 masks)
 │   ├── warp.rs             # Warp<S> — the core parameterized type
 │   ├── data.rs             # PerLane<T>, Uniform<T>, SingleLane<T, N>
 │   ├── diverge.rs          # Split warps by predicate
 │   ├── merge.rs            # Rejoin complementary sub-warps
-│   ├── shuffle.rs          # Shuffle/ballot/reduce (Warp<All> only)
-│   ├── fence.rs            # Fence-divergence type-state machine (§5.6)
+│   ├── shuffle.rs          # Shuffle/ballot/reduce (Warp<All> only) + permutation algebra
+│   ├── cub.rs              # CUB-equivalent typed warp primitives
+│   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
+│   ├── fence.rs            # Fence-divergence type-state machine
 │   ├── block.rs            # Block-level shared memory + reductions
 │   ├── proof.rs            # Executable soundness sketch (9 lemmas)
-│   ├── platform.rs         # CpuSimd<N> / GpuWarp32 dual-mode (§6.6)
+│   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
 │   ├── warp_size.rs        # Const-generic warp size portability
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge
 │   └── research/           # 24 research exploration modules
-│       ├── mod.rs
-│       ├── protocol_inference.rs   # 5 inference approaches (14 tests)
-│       ├── nested_diverge.rs       # Active set lattice (9 tests)
-│       ├── shuffle_duality.rs      # Permutation algebra (9 tests)
-│       ├── work_stealing.rs        # Ballot-based load balancing
-│       ├── crossbar_protocol.rs    # FPGA crossbar session types (§9.6)
-│       └── ...                     # 24 research modules
+├── warp-types-macros/      # warp_sets! proc macro (active set hierarchy generation)
+├── warp-types-kernel/      # #[warp_kernel] proc macro (GPU kernel entry points)
+├── warp-types-builder/     # WarpBuilder (build.rs cross-compilation to PTX)
 ├── examples/
 │   ├── nvidia_cuda_samples_398.rs  # Real NVIDIA bug, caught by types
-│   └── demo_bug_that_types_catch.rs
+│   ├── opencv_12320.rs            # OpenCV warpScanInclusive deadlock
+│   ├── pytorch_98157.rs           # PyTorch __activemask() misuse
+│   ├── tvm_17307.rs               # TVM LowerThreadAllreduce H100 crash
+│   └── gpu-project/               # End-to-end cargo→GPU example
 ├── reproduce/
-│   ├── reduce7_bug.cu      # Hardware reproduction (RTX 4000 Ada)
-│   └── run.sh              # Build and run instructions
-└── paper/                   # Preprint (markdown)
-    ├── paper.md             # Full assembled paper
-    ├── empirical-evidence.md
-    └── *.md                 # Section files
+│   ├── demo.sh             # Full demonstration script
+│   ├── host/               # cudarc host runner for real GPU execution
+│   └── *.rs, *.cu          # PTX comparison + hardware reproduction
+├── lean/                   # Lean 4 formalization (17 theorems)
+└── paper/                  # Preprint (markdown)
 ```
-
-## Paper
-
-**"Session Types for SIMT Divergence: Type-Safe GPU Warp Programming"**
-
-The `paper/` directory contains the full preprint. Key sections:
-
-- **Empirical evidence** — 4 documented bugs in NVIDIA cuda-samples, CUB, PIConGPU, and LLVM
-- **Core type system** — formal typing rules for diverge, merge, shuffle
-- **Metatheory** — progress and preservation proofs
-- **Evaluation** — bug detection, zero-overhead argument, expressiveness analysis
 
 ## Limitations
 
-- **No GPU code generation.** This is a type system prototype running on CPU. PTX/SPIR-V generation is future work.
-- **No hardware benchmarks.** Zero overhead is by construction (PhantomData erasure), not by measurement.
 - **Marker types only.** Common predicates (Even, Odd, LowHalf) are covered; fully data-dependent predicates require dependent types.
 - **No cross-function inference.** Active set types must be annotated at function boundaries.
+- **AMD untested.** u64 masks and `amdgpu` stubs are in place but require AMD hardware for validation.
+- **Nightly required for GPU.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features.
 
 ## License
 
