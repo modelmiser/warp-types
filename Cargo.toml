@@ -13,5 +13,6 @@ nvidia = []  # Use NVIDIA 32-lane warps
 amd = []     # Use AMD 64-lane wavefronts
 
 [dependencies]
+warp-types-macros = { path = "warp-types-macros" }
 
 [dev-dependencies]

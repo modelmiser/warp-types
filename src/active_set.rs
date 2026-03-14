@@ -51,19 +51,7 @@ pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: ActiveSet +
     fn diverge(warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<TrueBranch>, crate::warp::Warp<FalseBranch>);
 }
 
-// ============================================================================
-// Concrete active set types
-// ============================================================================
-
-/// All 32 lanes active.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct All;
-impl ActiveSet for All {
-    const MASK: u32 = 0xFFFFFFFF;
-    const NAME: &'static str = "All";
-}
-
-/// No lanes active (degenerate).
+/// No lanes active (degenerate). Not part of the diverge hierarchy.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct None;
 impl ActiveSet for None {
@@ -71,167 +59,50 @@ impl ActiveSet for None {
     const NAME: &'static str = "None";
 }
 
-/// Even lanes: 0, 2, 4, ..., 30.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Even;
-impl ActiveSet for Even {
-    const MASK: u32 = 0x55555555;
-    const NAME: &'static str = "Even";
-}
-
-/// Odd lanes: 1, 3, 5, ..., 31.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Odd;
-impl ActiveSet for Odd {
-    const MASK: u32 = 0xAAAAAAAA;
-    const NAME: &'static str = "Odd";
-}
-
-/// Lower half: lanes 0–15.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct LowHalf;
-impl ActiveSet for LowHalf {
-    const MASK: u32 = 0x0000FFFF;
-    const NAME: &'static str = "LowHalf";
-}
-
-/// Upper half: lanes 16–31.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct HighHalf;
-impl ActiveSet for HighHalf {
-    const MASK: u32 = 0xFFFF0000;
-    const NAME: &'static str = "HighHalf";
-}
-
-/// Lane 0 only.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Lane0;
-impl ActiveSet for Lane0 {
-    const MASK: u32 = 0x00000001;
-    const NAME: &'static str = "Lane0";
-}
-
-/// All lanes except lane 0.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct NotLane0;
-impl ActiveSet for NotLane0 {
-    const MASK: u32 = 0xFFFFFFFE;
-    const NAME: &'static str = "NotLane0";
-}
-
-// Intersection types for nested divergence
-
-/// Even ∩ LowHalf = lanes 0, 2, 4, 6, 8, 10, 12, 14.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct EvenLow;
-impl ActiveSet for EvenLow {
-    const MASK: u32 = Even::MASK & LowHalf::MASK;
-    const NAME: &'static str = "EvenLow";
-}
-
-/// Even ∩ HighHalf = lanes 16, 18, 20, 22, 24, 26, 28, 30.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct EvenHigh;
-impl ActiveSet for EvenHigh {
-    const MASK: u32 = Even::MASK & HighHalf::MASK;
-    const NAME: &'static str = "EvenHigh";
-}
-
-/// Odd ∩ LowHalf = lanes 1, 3, 5, 7, 9, 11, 13, 15.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct OddLow;
-impl ActiveSet for OddLow {
-    const MASK: u32 = Odd::MASK & LowHalf::MASK;
-    const NAME: &'static str = "OddLow";
-}
-
-/// Odd ∩ HighHalf = lanes 17, 19, 21, 23, 25, 27, 29, 31.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct OddHigh;
-impl ActiveSet for OddHigh {
-    const MASK: u32 = Odd::MASK & HighHalf::MASK;
-    const NAME: &'static str = "OddHigh";
-}
-
 // ============================================================================
-// Complement relationships
+// Generated active set hierarchy
+//
+// The warp_sets! macro validates at compile time:
+//   - Each pair is disjoint (true_mask & false_mask == 0)
+//   - Each pair covers its parent (true_mask | false_mask == parent_mask)
+//   - Children are subsets of parent (child_mask & !parent_mask == 0)
+//
+// Shared types (e.g., EvenLow under both Even and LowHalf) are deduplicated.
 // ============================================================================
 
-// Top-level complements (within All)
-impl ComplementOf<Odd> for Even {}
-impl ComplementOf<Even> for Odd {}
-impl ComplementOf<HighHalf> for LowHalf {}
-impl ComplementOf<LowHalf> for HighHalf {}
-impl ComplementOf<NotLane0> for Lane0 {}
-impl ComplementOf<Lane0> for NotLane0 {}
+warp_types_macros::warp_sets! {
+    All = 0xFFFFFFFF {
+        Even = 0x55555555 / Odd = 0xAAAAAAAA,
+        LowHalf = 0x0000FFFF / HighHalf = 0xFFFF0000,
+        Lane0 = 0x00000001 / NotLane0 = 0xFFFFFFFE,
+    }
+    Even = 0x55555555 {
+        EvenLow = 0x00005555 / EvenHigh = 0x55550000,
+    }
+    Odd = 0xAAAAAAAA {
+        OddLow = 0x0000AAAA / OddHigh = 0xAAAA0000,
+    }
+    LowHalf = 0x0000FFFF {
+        EvenLow = 0x00005555 / OddLow = 0x0000AAAA,
+    }
+    HighHalf = 0xFFFF0000 {
+        EvenHigh = 0x55550000 / OddHigh = 0xAAAA0000,
+    }
+}
+
+// None/All complement pair — None isn't produced by any diverge,
+// so it's not part of the generated hierarchy
 impl ComplementOf<None> for All {}
 impl ComplementOf<All> for None {}
+
+// EvenLow/EvenHigh: strictly, these are complements within Even (not All).
+// ComplementOf's docstring says "covering all 32 lanes" which is false here
+// (EvenLow | EvenHigh = 0x55555555 = Even, not 0xFFFFFFFF = All).
+// These impls exist because merge_writes in fence.rs uses ComplementOf
+// for nested fence patterns. The proper fix is making merge_writes generic
+// over parent set via ComplementWithin. TODO: clean up.
 impl ComplementOf<EvenHigh> for EvenLow {}
 impl ComplementOf<EvenLow> for EvenHigh {}
-
-// ComplementWithin relationships (for nested merges)
-
-// Within All
-impl ComplementWithin<Odd, All> for Even {}
-impl ComplementWithin<Even, All> for Odd {}
-impl ComplementWithin<HighHalf, All> for LowHalf {}
-impl ComplementWithin<LowHalf, All> for HighHalf {}
-
-// Within Even
-impl ComplementWithin<EvenHigh, Even> for EvenLow {}
-impl ComplementWithin<EvenLow, Even> for EvenHigh {}
-
-// Within Odd
-impl ComplementWithin<OddHigh, Odd> for OddLow {}
-impl ComplementWithin<OddLow, Odd> for OddHigh {}
-
-// Within LowHalf
-impl ComplementWithin<OddLow, LowHalf> for EvenLow {}
-impl ComplementWithin<EvenLow, LowHalf> for OddLow {}
-
-// Within HighHalf
-impl ComplementWithin<OddHigh, HighHalf> for EvenHigh {}
-impl ComplementWithin<EvenHigh, HighHalf> for OddHigh {}
-
-// ============================================================================
-// CanDiverge implementations
-// ============================================================================
-
-impl CanDiverge<Even, Odd> for All {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<Even>, crate::warp::Warp<Odd>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
-
-impl CanDiverge<LowHalf, HighHalf> for All {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<LowHalf>, crate::warp::Warp<HighHalf>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
-
-impl CanDiverge<EvenLow, EvenHigh> for Even {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<EvenLow>, crate::warp::Warp<EvenHigh>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
-
-impl CanDiverge<OddLow, OddHigh> for Odd {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<OddLow>, crate::warp::Warp<OddHigh>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
-
-impl CanDiverge<EvenLow, OddLow> for LowHalf {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<EvenLow>, crate::warp::Warp<OddLow>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
-
-impl CanDiverge<EvenHigh, OddHigh> for HighHalf {
-    fn diverge(_warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<EvenHigh>, crate::warp::Warp<OddHigh>) {
-        (crate::warp::Warp::new(), crate::warp::Warp::new())
-    }
-}
 
 #[cfg(test)]
 mod tests {
