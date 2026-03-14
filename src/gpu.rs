@@ -1,8 +1,23 @@
-//! GPU intrinsics for nvptx64 targets.
+//! GPU intrinsics for nvptx64 and amdgpu targets.
 //!
-//! Provides actual PTX instructions for shuffle, ballot, and sync operations.
-//! Gated behind `#[cfg(target_arch = "nvptx64")]` — on other targets, these
-//! are not available and the CPU emulation in `shuffle.rs` is used instead.
+//! Provides actual PTX/GCN instructions for shuffle, ballot, and sync operations.
+//! Gated behind `#[cfg(target_arch = "nvptx64")]` or `#[cfg(target_arch = "amdgpu")]`.
+//!
+//! # Platform Dispatch (Crystal Facet: PlatformDispatch)
+//!
+//! Three compilation targets with different shuffle semantics:
+//!
+//! | Target | Shuffle behavior | Mask width | Status |
+//! |--------|-----------------|------------|--------|
+//! | nvptx64 | Real `shfl.sync.*` instructions | 32-bit | Implemented |
+//! | amdgpu | DPP row_xmask / ds_bpermute | 64-bit | Stubbed |
+//! | CPU | Identity (returns own value) | N/A | Emulation |
+//!
+//! **CPU emulation caveat:** Shuffle-XOR returns `self` on CPU, which makes
+//! `reduce_sum` accidentally correct (1+1+1...=32 via butterfly doubling)
+//! but makes `inclusive_sum` incorrect (produces reduce result, not prefix).
+//! Tests that rely on scan semantics must be gated behind `#[cfg(target_arch)]`
+//! or use a multi-lane CPU emulator.
 //!
 //! Requires nightly Rust with `#![feature(asm_experimental_arch)]`.
 

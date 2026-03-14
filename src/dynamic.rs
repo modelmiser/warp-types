@@ -126,6 +126,14 @@ impl Warp<All> {
     /// The mask is runtime. The complement guarantee is structural.
     pub fn diverge_dynamic(self, predicate_mask: u64) -> DynDiverge {
         let all_mask = self.active_mask();
+        // Reject masks with bits outside the warp's active lanes.
+        // Clamping is correct (we AND with all_mask), but stray bits
+        // suggest the caller misunderstands the warp width.
+        debug_assert!(
+            predicate_mask & !all_mask == 0,
+            "diverge_dynamic: predicate_mask 0x{:016X} has bits outside warp mask 0x{:016X}",
+            predicate_mask, all_mask,
+        );
         DynDiverge {
             true_mask: all_mask & predicate_mask,
             false_mask: all_mask & !predicate_mask,
