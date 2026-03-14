@@ -199,3 +199,15 @@ The `nvptx64-nvidia-cuda` target in Rust nightly compiles actual type system cod
 ### Mechanized Untypability: Bugs Have No Derivation
 
 Five theorems in Lean prove that each documented bug pattern has NO typing derivation. The proof structure: (1) `shuffle_requires_all` gives us that shuffle's warp argument must have type `Warp<All>`; (2) `fst_diverge_warpval_type` gives us that `fst(diverge(warpVal(all), pred))` has type `Warp<all ∧ pred>`; (3) injecting `Ty.warp.injEq` gives `all = all ∧ pred`, which `decide` refutes for any non-trivial predicate. This is unusual for PL papers — most prove soundness (well-typed programs don't go wrong) but not the converse (specific bug patterns are rejected).
+
+### GpuShuffle Trait: Target-Conditional Dispatch (2026-03-13)
+
+The `GpuShuffle` trait bridges the type system and hardware. On `nvptx64`, `gpu_shfl_xor(self, mask)` emits `shfl.sync.bfly.b32` via `core::arch::asm!` with `#![feature(asm_experimental_arch)]`. On CPU, it returns `self` (identity — single-thread emulation). The trait is implemented for `i32`, `f32`, `u32`; f32 reinterprets bits through i32 (`to_bits`/`from_bits`). `Warp<All>::shuffle_xor` dispatches through `data.get().gpu_shfl_xor(mask)`, so the same Rust source compiles to real GPU shuffles OR CPU stubs depending on the target triple. Zero overhead on both paths — PhantomData erased, trait dispatch monomorphized away.
+
+### The Killer Demo: 1 vs 32 (2026-03-13)
+
+`bash reproduce/demo.sh` runs the complete pitch in one terminal. CUDA reduce7 buggy: sum=1 (WRONG, reads from inactive lane 16). Typed Rust fixed: sum=32 (CORRECT, Warp<All> enforced). The buggy pattern — `shfl_down_sync` with `mask=1` — is a compile error in the type system because `Warp<Lane0>` has no `shfl_down` method. It literally cannot be written. The fixed version is the ONLY code that type-checks. Same GPU (RTX 4000 Ada), same algorithm, deterministically wrong vs deterministically correct.
+
+### cudarc 0.19 API: Context + Stream Architecture (2026-03-13)
+
+cudarc 0.19 uses `CudaContext::new(0)` → `ctx.default_stream()` → `stream.memcpy_stod()` / `stream.memcpy_dtov()` for transfers, and `stream.launch_builder(&func).arg(&slice).launch(config)` for kernel dispatch. Module loading: `ctx.load_module(Ptx::from_src(ptx_string))` → `module.load_function("kernel_name")`. Key: `LaunchConfig { grid_dim: (1,1,1), block_dim: (32,1,1), shared_mem_bytes: 0 }` for single-warp kernels. Deprecated methods: `memcpy_stod` → `clone_htod`, `memcpy_dtov` → `clone_dtoh`.
