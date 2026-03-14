@@ -54,6 +54,7 @@ pub mod proof;
 pub mod platform;
 pub mod warp_size;
 pub mod gradual;
+pub mod gpu;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)

@@ -85,18 +85,39 @@ impl Warp<All> {
     /// Shuffle XOR: each lane exchanges with lane (id ^ mask).
     ///
     /// **ONLY AVAILABLE ON Warp<All>** — diverged warps cannot shuffle.
-    pub fn shuffle_xor<T: GpuValue>(&self, data: PerLane<T>, _mask: u32) -> PerLane<T> {
-        data
+    ///
+    /// On GPU: emits `shfl.sync.bfly.b32` via inline assembly.
+    /// On CPU: returns the input value (single-thread identity).
+    pub fn shuffle_xor<T: GpuValue + crate::gpu::GpuShuffle>(
+        &self, data: PerLane<T>, mask: u32,
+    ) -> PerLane<T> {
+        PerLane::new(data.get().gpu_shfl_xor(mask))
     }
 
     /// Shuffle down: lane[i] reads from lane[i+delta].
-    pub fn shuffle_down<T: GpuValue>(&self, data: PerLane<T>, _delta: u32) -> PerLane<T> {
-        data
+    ///
+    /// On GPU: emits `shfl.sync.down.b32`.
+    /// On CPU: returns input (identity).
+    pub fn shuffle_down<T: GpuValue + crate::gpu::GpuShuffle>(
+        &self, data: PerLane<T>, delta: u32,
+    ) -> PerLane<T> {
+        PerLane::new(data.get().gpu_shfl_down(delta))
     }
 
     /// Sum reduction across all lanes.
-    pub fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(&self, data: PerLane<T>) -> T {
-        data.get()
+    ///
+    /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
+    /// On CPU: returns the single thread's value.
+    pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
+        &self, data: PerLane<T>,
+    ) -> T {
+        let mut val = data.get();
+        val = val + val.gpu_shfl_xor(16);
+        val = val + val.gpu_shfl_xor(8);
+        val = val + val.gpu_shfl_xor(4);
+        val = val + val.gpu_shfl_xor(2);
+        val = val + val.gpu_shfl_xor(1);
+        val
     }
 
     /// Broadcast: all lanes get the same value.
