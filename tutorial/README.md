@@ -239,6 +239,25 @@ let partner = warp.shuffle_xor(data, 1);  // Two shfl.sync calls, zero overhead
 
 Both halves are always shuffled together — you can't accidentally shuffle only the low 32 bits.
 
+### Data-Dependent Divergence
+
+When the active set depends on runtime data (not a fixed pattern like Even/Odd), use `diverge_dynamic`:
+
+```rust
+let warp: Warp<All> = Warp::kernel_entry();
+
+// Mask determined at runtime (e.g., from ballot or data comparison)
+let runtime_mask: u64 = 0x0000FFFF;
+let diverged = warp.diverge_dynamic(runtime_mask);
+
+// Can't shuffle on either branch — they're partial warps
+// Must merge to recover Warp<All>
+let warp: Warp<All> = diverged.merge();
+let _result = warp.shuffle_xor(data, 1);  // OK
+```
+
+The mask is dynamic but the complement is structural — `DynDiverge` guarantees that `true_mask | false_mask == all_mask` by construction. No dependent types needed.
+
 ## 8. What's Next
 
 ### For Users

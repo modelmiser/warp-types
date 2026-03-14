@@ -115,6 +115,7 @@ We also implemented:
 - **CUB-equivalent primitives** — typed reduce, scan, broadcast
 - **Cooperative groups** — thread block tiles with typed safety
 - **64-bit shuffles** — automatic two-pass for i64/f64/u64
+- **Data-dependent divergence** — `diverge_dynamic(mask)` handles runtime predicates with structural complement guarantees, no dependent types needed
 
 ## Why This Matters
 

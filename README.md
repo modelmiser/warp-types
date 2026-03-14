@@ -44,6 +44,8 @@ The type system is **strictly more permissive** than current best practice (whic
 3. **Merge requires complements** — Reconvergence is verified at compile time via `ComplementOf<T>` trait bounds.
 4. **Method availability = safety** — `shuffle_xor` only exists on `Warp<All>`. Not checked — *absent*.
 5. **Zero overhead** — `Warp<S>` contains only `PhantomData<S>`. Types are erased completely.
+6. **Data-dependent divergence** — `diverge_dynamic(mask)` handles runtime predicates. The mask is dynamic, but the complement is structural — both branches must merge before shuffle.
+7. **Cross-function inference** — Generic functions take `Warp<S>` with `S: ActiveSet`. Rust infers `S` at call sites.
 
 ## The Killer Demo
 
@@ -138,6 +140,7 @@ warp-types/
 │   ├── merge.rs            # Rejoin complementary sub-warps
 │   ├── shuffle.rs          # Shuffle/ballot/reduce (Warp<All> only) + permutation algebra
 │   ├── cub.rs              # CUB-equivalent typed warp primitives
+│   ├── dynamic.rs          # Data-dependent divergence (DynDiverge)
 │   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
 │   ├── fence.rs            # Fence-divergence type-state machine
 │   ├── block.rs            # Block-level shared memory + reductions
