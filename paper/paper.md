@@ -2067,7 +2067,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 250 unit tests, 50 example tests across 8 worked bug examples, and 15 doc tests (8 compile-fail including linearity enforcement, 7 doc examples) covering the full type system. The CUB-equivalent warp primitives (§6.10) add 8 unit tests verifying typed reduce, scan, and broadcast operations. The tests exercise:
+Our prototype includes 266 unit tests, 50 example tests across 8 worked bug examples, and 19 doc tests (8 compile-fail including linearity enforcement, 11 doc examples) covering the full type system (335 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2218,7 +2218,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Type system tests | 250 unit + 50 example + 15 doc (8 compile-fail) |
+| Type system tests | 266 unit + 50 example + 19 doc (335 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |

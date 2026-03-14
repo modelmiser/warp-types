@@ -242,7 +242,7 @@ Both halves are always shuffled together — you can't accidentally shuffle only
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test` (284 tests)
+- Clone the repo and run `cargo test` (266 unit + 19 doc = 285, plus 50 example)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`

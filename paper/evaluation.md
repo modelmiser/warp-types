@@ -96,7 +96,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 250 unit tests, 50 example tests across 8 worked bug examples, and 15 doc tests (8 compile-fail including linearity enforcement, 7 doc examples) covering the full type system. The tests exercise:
+Our prototype includes 266 unit tests, 50 example tests across 8 worked bug examples, and 19 doc tests (8 compile-fail including linearity enforcement, 11 doc examples) covering the full type system (335 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -196,7 +196,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` — `cargo run` from source to GPU |
-| Type system tests | 250 unit + 50 example + 15 doc (8 compile-fail) |
+| Type system tests | 266 unit + 50 example + 19 doc (335 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Lean mechanization | 17 theorems (progress, preservation, 5 untypability proofs) |

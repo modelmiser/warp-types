@@ -126,7 +126,7 @@ The core insight is transferable to any language with phantom types or zero-cost
 
 ## The Artifact
 
-- 284 tests (266 unit + 18 doc)
+- 335 tests (266 unit + 19 doc + 50 example)
 - 17 Lean 4 theorems (progress: zero `sorry`)
 - 21 documented bugs across 16 real-world projects
 - Real GPU execution on NVIDIA RTX 4000 Ada

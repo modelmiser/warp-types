@@ -9,7 +9,12 @@
 # Usage: bash reproduce/demo.sh
 
 set -e
-cd "$(dirname "$0")"
+
+# Resolve paths once at the top
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+cd "$SCRIPT_DIR"
 
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║  warp-types: Session-Typed GPU Divergence               ║"
@@ -32,7 +37,7 @@ echo ""
 
 if command -v nvcc &>/dev/null; then
     echo "▸ Compiling CUDA reduce7 (buggy + fixed)..."
-    nvcc -O2 -o /tmp/reduce7_cuda reduce7_bug.cu 2>/dev/null
+    nvcc -O2 -o /tmp/reduce7_cuda "$SCRIPT_DIR/reduce7_bug.cu" 2>/dev/null
     echo ""
     /tmp/reduce7_cuda
 else
@@ -70,11 +75,9 @@ echo "  Compiler output:"
 echo ""
 
 # Actually compile it and capture the error
-cd "$(dirname "$0")/.."
-cp reproduce/buggy_pattern.rs examples/buggy_pattern.rs 2>/dev/null || true
-COMPILE_OUTPUT=$(cargo check --example buggy_pattern 2>&1 || true)
-rm -f examples/buggy_pattern.rs
-cd reproduce
+cp "$SCRIPT_DIR/buggy_pattern.rs" "$PROJECT_ROOT/examples/buggy_pattern.rs" 2>/dev/null || true
+COMPILE_OUTPUT=$(cd "$PROJECT_ROOT" && cargo check --example buggy_pattern 2>&1 || true)
+rm -f "$PROJECT_ROOT/examples/buggy_pattern.rs"
 
 # Show just the relevant error
 echo "$COMPILE_OUTPUT" | grep -A5 "no method named" | head -8 | sed 's/^/    /'
@@ -93,15 +96,10 @@ echo "Typed Rust kernels on real GPU. Correct results."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Build and run the typed GPU kernels
-echo "▸ Compiling typed Rust kernels to PTX..."
-cd "$(dirname "$0")/.."
-
-# Check if gpu-project can run
 if command -v nvidia-smi &>/dev/null; then
-    cd examples/gpu-project
+    echo "▸ Compiling typed Rust kernels to PTX..."
+    cd "$PROJECT_ROOT/examples/gpu-project"
     cargo run --release 2>&1 | grep -E "GPU:|Result:|Input:|Expected:|Got:" | sed 's/^/  /'
-    cd ../..
 else
     echo "  [No GPU detected — showing expected output]"
     echo "  GPU: NVIDIA RTX 4000 SFF Ada Generation"
@@ -111,8 +109,6 @@ else
     echo "  Test 3: reduce_n             → PASS (32)"
     echo "  Test 4: bitonic_sort_i32     → PASS ([0,1,...,31])"
 fi
-
-cd reproduce 2>/dev/null || true
 echo ""
 
 # ================================================================
@@ -132,7 +128,7 @@ echo "    ✓ Verified at MIR, LLVM IR, and PTX levels"
 echo "    ✓ Real GPU execution on NVIDIA RTX 4000 Ada"
 echo ""
 echo "  21 documented bugs across 16 real-world projects."
-echo "  17 Lean theorems. 285 Rust tests. One type system."
+echo "  17 Lean theorems. 335 Rust tests. One type system."
 echo ""
 echo "  github.com/modelmiser/warp-types"
 echo ""
