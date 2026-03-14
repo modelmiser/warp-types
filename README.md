@@ -117,7 +117,7 @@ fn main() {
 | Shuffle safety (diverged warp can't shuffle) | 8 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 8 worked bug examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
-| Real GPU execution | 3 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
+| Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
 | Soundness (progress + preservation) | 17 Lean theorems (zero sorry on progress) | `cd lean && lake build` |
