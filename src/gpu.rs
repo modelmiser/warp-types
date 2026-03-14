@@ -154,7 +154,7 @@ pub fn threadfence() {
 
 /// AMD DPP row XOR: each lane exchanges with lane (lane_id XOR mask).
 /// Equivalent to NVIDIA's shfl.sync.bfly — butterfly pattern.
-#[cfg(target_arch = "amdgcn")]
+#[cfg(target_arch = "amdgpu")]
 #[inline(always)]
 pub fn dpp_row_xor_i32(val: i32, xor_mask: u32) -> i32 {
     // TODO: implement via inline asm when amdgcn asm support is stable
@@ -165,7 +165,7 @@ pub fn dpp_row_xor_i32(val: i32, xor_mask: u32) -> i32 {
 
 /// AMD ds_bpermute: lane[i] reads from lane[src_lane].
 /// Equivalent to NVIDIA's shfl.sync.idx.
-#[cfg(target_arch = "amdgcn")]
+#[cfg(target_arch = "amdgpu")]
 #[inline(always)]
 pub fn ds_bpermute_i32(val: i32, src_lane_x4: u32) -> i32 {
     // ds_bpermute_b32 uses byte offset (lane * 4)
@@ -174,7 +174,7 @@ pub fn ds_bpermute_i32(val: i32, src_lane_x4: u32) -> i32 {
 }
 
 /// AMD exec mask: 64-bit mask of active lanes.
-#[cfg(target_arch = "amdgcn")]
+#[cfg(target_arch = "amdgpu")]
 #[inline(always)]
 pub fn exec_mask() -> u64 {
     0xFFFFFFFFFFFFFFFF // placeholder
@@ -187,8 +187,13 @@ pub fn exec_mask() -> u64 {
 /// Trait for types that can be shuffled via GPU intrinsics.
 ///
 /// On nvptx64: maps to actual `shfl.sync.*.b32` instructions.
-/// On amdgcn: will map to DPP row_xmask / ds_bpermute (not yet implemented).
+/// On amdgpu: will map to DPP row_xmask / ds_bpermute (not yet implemented).
 /// On other targets: provides CPU emulation (identity for single-thread).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be shuffled across GPU lanes",
+    label = "GpuShuffle is implemented for i32, u32, f32 — use one of these types",
+    note = "larger types (i64, f64) require two shuffles; implement GpuShuffle manually for custom types"
+)]
 pub trait GpuShuffle: Copy + 'static {
     /// Butterfly shuffle: exchange with lane (lane_id XOR mask).
     fn gpu_shfl_xor(self, xor_mask: u32) -> Self;
@@ -265,7 +270,7 @@ impl GpuShuffle for u32 {
 }
 
 // CPU fallback: single-thread, shuffle returns own value (identity)
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
 impl GpuShuffle for i32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }
@@ -273,7 +278,7 @@ impl GpuShuffle for i32 {
     fn gpu_shfl_idx(self, _: u32) -> Self { self }
 }
 
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
 impl GpuShuffle for f32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }
@@ -281,7 +286,7 @@ impl GpuShuffle for f32 {
     fn gpu_shfl_idx(self, _: u32) -> Self { self }
 }
 
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
 impl GpuShuffle for u32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }

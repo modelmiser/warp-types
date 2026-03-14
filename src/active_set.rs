@@ -32,10 +32,15 @@ pub trait ActiveSet: Copy + 'static {
     const NAME: &'static str;
 }
 
-/// Proof that `Self` and `Other` are complements: disjoint AND covering all 32 lanes.
+/// Proof that `Self` and `Other` are complements: disjoint AND covering all lanes.
 ///
 /// This is THE key safety trait. `merge(a, b)` requires `A: ComplementOf<B>`.
 /// Only implemented for valid complement pairs — the compiler rejects invalid merges.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not the complement of `{Other}` — cannot merge these sub-warps",
+    label = "merge requires complementary active sets (e.g., Even + Odd, LowHalf + HighHalf)",
+    note = "use `diverge_even_odd()` or `diverge_low_high()` to create valid complement pairs, then merge them"
+)]
 pub trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 
 /// Proof that `Self` and `Other` are complements within a parent set `P`.
@@ -47,6 +52,11 @@ pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: ActiveSet {}
 /// Proof that an active set can be split into two disjoint subsets.
 ///
 /// Implemented for each valid diverge pattern (e.g., `All` → `Even` + `Odd`).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be split into `{TrueBranch}` + `{FalseBranch}`",
+    label = "this diverge pattern is not defined in the active set hierarchy",
+    note = "valid diverge patterns: All → Even/Odd, All → LowHalf/HighHalf, Even → EvenLow/EvenHigh, etc."
+)]
 pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: ActiveSet + Sized {
     fn diverge(warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<TrueBranch>, crate::warp::Warp<FalseBranch>);
 }
