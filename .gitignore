@@ -2,3 +2,6 @@
 __pycache__
 *.pyc
 reproduce/reduce7_bug
+.crystal/
+.crystal-stem/
+INSIGHTS.md
