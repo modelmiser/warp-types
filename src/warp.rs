@@ -61,8 +61,8 @@ impl<S: ActiveSet> Warp<S> {
         S::NAME
     }
 
-    /// Bitmask of active lanes.
-    pub fn active_mask(&self) -> u32 {
+    /// Bitmask of active lanes (u64 for AMD 64-lane wavefront support).
+    pub fn active_mask(&self) -> u64 {
         S::MASK
     }
 
@@ -88,7 +88,7 @@ impl Default for Warp<crate::active_set::All> {
 
 impl<S: ActiveSet> core::fmt::Debug for Warp<S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Warp<{}>(mask={:08X})", S::NAME, S::MASK)
+        write!(f, "Warp<{}>(mask={:016X})", S::NAME, S::MASK)
     }
 }
 

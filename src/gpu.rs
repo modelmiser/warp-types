@@ -138,12 +138,56 @@ pub fn threadfence() {
 }
 
 // ============================================================================
+// AMD GCN intrinsics (amdgcn target)
+// ============================================================================
+
+// AMD GPUs use DPP (Data-Parallel Primitives) for intra-wavefront communication.
+// Key instructions:
+//   - ds_permute_b32 / ds_bpermute_b32: arbitrary lane permutation via LDS
+//   - v_mov_b32 with DPP modifiers: for regular patterns (row_shl, row_xmask, etc.)
+//   - v_readlane_b32 / v_writelane_b32: scalar ↔ vector lane access
+//
+// AMD wavefronts are 64 lanes (CDNA) or 32/64 (RDNA wave32/wave64 mode).
+// The exec mask is 64-bit (s[exec_lo:exec_hi]).
+//
+// These stubs will be filled when amdgcn target support is available in Rust.
+
+/// AMD DPP row XOR: each lane exchanges with lane (lane_id XOR mask).
+/// Equivalent to NVIDIA's shfl.sync.bfly — butterfly pattern.
+#[cfg(target_arch = "amdgcn")]
+#[inline(always)]
+pub fn dpp_row_xor_i32(val: i32, xor_mask: u32) -> i32 {
+    // TODO: implement via inline asm when amdgcn asm support is stable
+    // v_mov_b32 with DPP modifier row_xmask:<mask>
+    let _ = xor_mask;
+    val // placeholder
+}
+
+/// AMD ds_bpermute: lane[i] reads from lane[src_lane].
+/// Equivalent to NVIDIA's shfl.sync.idx.
+#[cfg(target_arch = "amdgcn")]
+#[inline(always)]
+pub fn ds_bpermute_i32(val: i32, src_lane_x4: u32) -> i32 {
+    // ds_bpermute_b32 uses byte offset (lane * 4)
+    let _ = src_lane_x4;
+    val // placeholder
+}
+
+/// AMD exec mask: 64-bit mask of active lanes.
+#[cfg(target_arch = "amdgcn")]
+#[inline(always)]
+pub fn exec_mask() -> u64 {
+    0xFFFFFFFFFFFFFFFF // placeholder
+}
+
+// ============================================================================
 // GpuShuffle trait — type-safe dispatch for shuffle intrinsics
 // ============================================================================
 
-/// Trait for types that can be shuffled via PTX intrinsics.
+/// Trait for types that can be shuffled via GPU intrinsics.
 ///
 /// On nvptx64: maps to actual `shfl.sync.*.b32` instructions.
+/// On amdgcn: will map to DPP row_xmask / ds_bpermute (not yet implemented).
 /// On other targets: provides CPU emulation (identity for single-thread).
 pub trait GpuShuffle: Copy + 'static {
     /// Butterfly shuffle: exchange with lane (lane_id XOR mask).
@@ -221,7 +265,7 @@ impl GpuShuffle for u32 {
 }
 
 // CPU fallback: single-thread, shuffle returns own value (identity)
-#[cfg(not(target_arch = "nvptx64"))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
 impl GpuShuffle for i32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }
@@ -229,7 +273,7 @@ impl GpuShuffle for i32 {
     fn gpu_shfl_idx(self, _: u32) -> Self { self }
 }
 
-#[cfg(not(target_arch = "nvptx64"))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
 impl GpuShuffle for f32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }
@@ -237,7 +281,7 @@ impl GpuShuffle for f32 {
     fn gpu_shfl_idx(self, _: u32) -> Self { self }
 }
 
-#[cfg(not(target_arch = "nvptx64"))]
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgcn")))]
 impl GpuShuffle for u32 {
     fn gpu_shfl_xor(self, _: u32) -> Self { self }
     fn gpu_shfl_down(self, _: u32) -> Self { self }

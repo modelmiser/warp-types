@@ -50,8 +50,8 @@ use crate::warp::Warp;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WarpError {
     pub operation: &'static str,
-    pub expected_mask: u32,
-    pub actual_mask: u32,
+    pub expected_mask: u64,
+    pub actual_mask: u64,
 }
 
 impl core::fmt::Display for WarpError {
@@ -68,8 +68,8 @@ impl core::fmt::Display for WarpError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AscribeError {
     pub expected_name: &'static str,
-    pub expected_mask: u32,
-    pub actual_mask: u32,
+    pub expected_mask: u64,
+    pub actual_mask: u64,
 }
 
 impl core::fmt::Display for AscribeError {
@@ -96,7 +96,7 @@ impl core::fmt::Display for AscribeError {
 /// Use `DynWarp::from_static()` to demote `Warp<S>` to `DynWarp`.
 #[derive(Clone, Debug)]
 pub struct DynWarp {
-    active_mask: u32,
+    active_mask: u64,
 }
 
 impl DynWarp {
@@ -106,7 +106,7 @@ impl DynWarp {
     }
 
     /// Create from a specific mask.
-    pub fn from_mask(mask: u32) -> Self {
+    pub fn from_mask(mask: u64) -> Self {
         DynWarp { active_mask: mask }
     }
 
@@ -149,7 +149,7 @@ impl DynWarp {
     }
 
     /// Current active lane mask.
-    pub fn active_mask(&self) -> u32 {
+    pub fn active_mask(&self) -> u64 {
         self.active_mask
     }
 
@@ -205,7 +205,7 @@ impl DynWarp {
     ///
     /// Returns two `DynWarp`s with disjoint masks that together cover
     /// the original. This is the runtime equivalent of `warp.diverge()`.
-    pub fn diverge(self, predicate_mask: u32) -> (DynWarp, DynWarp) {
+    pub fn diverge(self, predicate_mask: u64) -> (DynWarp, DynWarp) {
         let true_mask = self.active_mask & predicate_mask;
         let false_mask = self.active_mask & !predicate_mask;
         (

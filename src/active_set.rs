@@ -27,7 +27,7 @@
 /// compile-time tracking.
 pub trait ActiveSet: Copy + 'static {
     /// Bitmask of active lanes (for runtime debugging/verification).
-    const MASK: u32;
+    const MASK: u64;
     /// Human-readable name.
     const NAME: &'static str;
 }
@@ -55,7 +55,7 @@ pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: ActiveSet +
 #[derive(Copy, Clone, Debug, Default)]
 pub struct None;
 impl ActiveSet for None {
-    const MASK: u32 = 0x00000000;
+    const MASK: u64 = 0;
     const NAME: &'static str = "None";
 }
 

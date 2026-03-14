@@ -33,7 +33,32 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Builder for cross-compiling kernel crates to PTX.
+/// GPU target for cross-compilation.
+#[derive(Clone, Debug)]
+pub enum GpuTarget {
+    /// NVIDIA nvptx64 (32-lane warps, PTX output)
+    Nvidia,
+    /// AMD amdgcn (64-lane wavefronts, AMDGPU output)
+    Amd,
+}
+
+impl GpuTarget {
+    fn triple(&self) -> &str {
+        match self {
+            GpuTarget::Nvidia => "nvptx64-nvidia-cuda",
+            GpuTarget::Amd => "amdgcn-amd-amdhsa",
+        }
+    }
+
+    fn asm_extension(&self) -> &str {
+        match self {
+            GpuTarget::Nvidia => "s", // PTX assembly
+            GpuTarget::Amd => "s",    // GCN assembly
+        }
+    }
+}
+
+/// Builder for cross-compiling kernel crates to GPU assembly.
 pub struct WarpBuilder {
     /// Path to the kernel crate (relative to the manifest dir).
     kernel_crate: PathBuf,
@@ -43,6 +68,8 @@ pub struct WarpBuilder {
     release: bool,
     /// Feature flags to pass to the kernel crate.
     features: Vec<String>,
+    /// GPU target (default: NVIDIA).
+    target: GpuTarget,
 }
 
 impl WarpBuilder {
@@ -56,6 +83,7 @@ impl WarpBuilder {
             toolchain: "nightly".to_string(),
             release: true,
             features: Vec::new(),
+            target: GpuTarget::Nvidia,
         }
     }
 
@@ -68,6 +96,12 @@ impl WarpBuilder {
     /// Disable release mode (compile in debug mode).
     pub fn debug(mut self) -> Self {
         self.release = false;
+        self
+    }
+
+    /// Set the GPU target (default: NVIDIA).
+    pub fn target(mut self, target: GpuTarget) -> Self {
+        self.target = target;
         self
     }
 
@@ -106,7 +140,7 @@ impl WarpBuilder {
         let mut cmd = Command::new("cargo");
         cmd.arg("rustc")
             .arg("--target")
-            .arg("nvptx64-nvidia-cuda")
+            .arg(self.target.triple())
             .arg("-Z")
             .arg("build-std=core")
             .current_dir(&kernel_dir);
@@ -144,7 +178,7 @@ impl WarpBuilder {
         let profile = if self.release { "release" } else { "debug" };
         let target_dir = kernel_dir
             .join("target")
-            .join("nvptx64-nvidia-cuda")
+            .join(self.target.triple())
             .join(profile);
 
         let ptx_path = find_ptx_file(&target_dir, &kernel_dir)?;

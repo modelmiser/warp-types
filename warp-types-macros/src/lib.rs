@@ -19,7 +19,7 @@ use syn::{braced, Ident, LitInt, Result, Token};
 /// A single set definition: `Name = 0xMASK` or just `Name` (reference)
 struct SetDef {
     name: Ident,
-    mask: Option<u32>,
+    mask: Option<u64>,
 }
 
 impl Parse for SetDef {
@@ -28,7 +28,7 @@ impl Parse for SetDef {
         let mask = if input.peek(Token![=]) {
             input.parse::<Token![=]>()?;
             let lit: LitInt = input.parse()?;
-            Some(lit.base10_parse::<u64>()? as u32)
+            Some(lit.base10_parse::<u64>()?)
         } else {
             None
         };
@@ -57,7 +57,7 @@ impl Parse for DivergePair {
 /// A parent block: `Parent = 0xMASK { pair, pair, ... }` or `Parent { pair, ... }`
 struct ParentBlock {
     name: Ident,
-    mask: Option<u32>,
+    mask: Option<u64>,
     pairs: Vec<DivergePair>,
 }
 
@@ -67,7 +67,7 @@ impl Parse for ParentBlock {
         let mask = if input.peek(Token![=]) {
             input.parse::<Token![=]>()?;
             let lit: LitInt = input.parse()?;
-            Some(lit.base10_parse::<u64>()? as u32)
+            Some(lit.base10_parse::<u64>()?)
         } else {
             None
         };
@@ -108,12 +108,12 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as WarpSetsInput);
 
     // Phase 1: Collect all set names → masks
-    let mut masks: HashMap<String, u32> = HashMap::new();
+    let mut masks: HashMap<String, u64> = HashMap::new();
     let mut emitted: HashSet<String> = HashSet::new();
     let mut output = TokenStream2::new();
 
     // Collect masks from all blocks, checking for conflicts
-    let insert_mask = |name: &Ident, m: u32, masks: &mut HashMap<String, u32>| -> std::result::Result<(), TokenStream> {
+    let insert_mask = |name: &Ident, m: u64, masks: &mut HashMap<String, u64>| -> std::result::Result<(), TokenStream> {
         let key = name.to_string();
         if let Some(&existing) = masks.get(&key) {
             if existing != m {
@@ -170,7 +170,7 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                 #[derive(Copy, Clone, Debug, Default)]
                 pub struct #parent_name;
                 impl ActiveSet for #parent_name {
-                    const MASK: u32 = #mask_lit;
+                    const MASK: u64 = #mask_lit;
                     const NAME: &'static str = #name_str;
                 }
             });
@@ -247,7 +247,7 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #true_name;
                     impl ActiveSet for #true_name {
-                        const MASK: u32 = #true_mask;
+                        const MASK: u64 = #true_mask;
                         const NAME: &'static str = #name_str_t;
                     }
                 });
@@ -258,14 +258,14 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #false_name;
                     impl ActiveSet for #false_name {
-                        const MASK: u32 = #false_mask;
+                        const MASK: u64 = #false_mask;
                         const NAME: &'static str = #name_str_f;
                     }
                 });
             }
 
             // Emit ComplementOf (symmetric)
-            if parent_mask == 0xFFFFFFFF {
+            if parent_str == "All" {
                 // Top-level: ComplementOf
                 output.extend(quote! {
                     impl ComplementOf<#false_name> for #true_name {}
