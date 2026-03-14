@@ -229,3 +229,7 @@ When cargo runs a build script, it exports `RUSTC=/absolute/path/to/stable/rustc
 ### End-to-End Pipeline Architecture (2026-03-13)
 
 The cargo-integrated GPU pipeline has three layers: (1) `warp-types-kernel` proc macro — `#[warp_kernel]` transforms functions to `extern "ptx-kernel"` with `#[no_mangle]`; (2) `warp-types-builder` — build-time library that invokes `cargo rustc --target nvptx64-nvidia-cuda -Z build-std=core -- --emit=asm`, finds the generated `.s` file, copies it to `OUT_DIR`, and generates a Rust module with `include_str!` for the PTX; (3) host code uses `include!` to embed the PTX constant and cudarc to load+launch. User experience: `cargo run` goes from Rust source to GPU execution. Three kernel entry points (butterfly_reduce, diverge_merge_reduce, reduce_n) all produce correct results on RTX 4000 Ada.
+
+### Generated Kernels Struct — PTX Entry Point Parsing (2026-03-13)
+
+The builder parses `.visible .entry <name>(` lines from the generated PTX to discover kernel entry points. It then generates a `Kernels` struct with named `CudaFunction` fields and a `load(&Arc<CudaContext>)` method that calls `ctx.load_module(ptx)` + `module.load_function("name")` for each. Key API detail: cudarc 0.19's `CudaContext::load_module` takes `self: &Arc<Self>`, not `&self`, so the generated code must accept `&Arc<CudaContext>`. The `warp_kernel` macro is re-exported from warp-types itself, so kernel crates need only `warp-types = "0.1"` as a dependency.
