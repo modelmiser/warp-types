@@ -1,0 +1,9 @@
+[package]
+name = "warp-types-builder"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chad Aldreda"]
+description = "Build-time PTX compilation for warp-types GPU kernels"
+license = "MIT"
+
+[dependencies]
