@@ -12,6 +12,8 @@
 //!   - PTX compiled via: rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O \
 //!       --edition 2021 ../typed_butterfly_kernel.rs -o ../typed_butterfly_kernel.ptx
 
+#![allow(deprecated, unused_imports)]
+
 use cudarc::driver::*;
 use cudarc::nvrtc;
 use std::sync::Arc;
