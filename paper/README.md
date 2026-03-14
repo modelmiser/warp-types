@@ -72,8 +72,6 @@ let partner = active.shuffle_xor(data, 1);
 
 ## Related Files
 
-- [../PAPER-OUTLINE.md](../PAPER-OUTLINE.md) — Original outline with detailed structure
-- [../VISION.md](../VISION.md) — Demo scenarios and benchmark ideas
-- [../src/soundness.rs](../src/soundness.rs) — Executable proof sketch (9 tests)
-- [../knowledge/](../knowledge/) — YAML knowledge base for emergence engine
+- [../src/proof.rs](../src/proof.rs) — Executable proof sketch (9 tests)
+- [../lean/](../lean/) — Lean 4 formalization (17 theorems)
 

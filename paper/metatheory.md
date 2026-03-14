@@ -269,7 +269,7 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have implemented an executable proof sketch in Rust (see `src/soundness.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
+We have implemented an executable proof sketch in Rust (see `src/proof.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
 
 ```rust
 #[test]

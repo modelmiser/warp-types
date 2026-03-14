@@ -9,7 +9,7 @@ We evaluate session-typed divergence on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Five are modeled as self-contained Rust examples; sixteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, and 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation. See §7.1 of the full paper for the complete table.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. See §7.1 of the full paper for the complete table.
 
 **Modeled bugs** (with worked Rust examples):
 
@@ -91,6 +91,7 @@ Our implementation includes eight compile-fail doctests that serve as machine-ch
 5. `shuffle_xor` on `Warp<LowHalf>` — rejected (§3)
 6. `reduce_sum` on `Warp<Even>` — rejected (§3)
 7. `merge` of non-complements within nested divergence — rejected (§3)
+8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (§3)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
@@ -199,7 +200,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Type system tests | 266 unit + 50 example + 19 doc (335 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
-| Lean mechanization | 17 theorems (progress, preservation, 5 untypability proofs) |
+| Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
 | Limitations | Data-dependent masks, cross-function polymorphism |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

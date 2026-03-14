@@ -1002,7 +1002,7 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have implemented an executable proof sketch in Rust (see `src/soundness.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
+We have implemented an executable proof sketch in Rust (see `src/proof.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
 
 ```rust
 #[test]
@@ -2062,6 +2062,7 @@ Our implementation includes eight compile-fail doctests that serve as machine-ch
 5. `shuffle_xor` on `Warp<LowHalf>` — rejected (§3)
 6. `reduce_sum` on `Warp<Even>` — rejected (§3)
 7. `merge` of non-complements within nested divergence — rejected (§3)
+8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (§3)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
