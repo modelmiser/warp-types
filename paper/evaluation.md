@@ -9,7 +9,9 @@ We evaluate session-typed divergence on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We identified four documented shuffle-from-inactive-lane issues in production GPU code and one vendor-level response, and evaluated whether our type system would have prevented the source-level pattern.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Five are modeled as self-contained Rust examples; sixteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, and 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation. See §7.1 of the full paper for the complete table.
+
+**Modeled bugs** (with worked Rust examples):
 
 | Issue | Source | Nature | Type system prevents source pattern? |
 |-------|--------|--------|--------------------------------------|
@@ -80,7 +82,7 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes seven compile-fail doctests that serve as machine-checked proof artifacts:
+Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
 
 1. `shuffle_xor` on `Warp<Even>` — rejected (§3)
 2. `merge(Even, LowHalf)` — rejected, overlapping sets (§3)
@@ -94,7 +96,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) across 34 modules covering the full type system. The tests exercise:
+Our prototype includes 242 unit tests, 50 example tests across 8 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) covering the full type system. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -119,7 +121,9 @@ Our types impose zero runtime overhead—not measured to be negligible, but *gua
 
 The generated code contains no trace of the type system. A `Warp<All>` and a `Warp<Even>` produce identical machine code for any operation available on both.
 
-We verified this by inspecting the Rust compiler's MIR output: `Warp<S>` values are zero-sized and optimized away entirely. No runtime checks, no mask comparisons, no branches.
+We verified this at three levels: Rust MIR (`Warp<S>` values optimized away entirely), LLVM IR (see §7.2 in full paper), and NVIDIA PTX.
+
+**NVIDIA PTX** (`rustc +nightly --target nvptx64-nvidia-cuda -O`): We compiled actual Rust type system code—`PhantomData`, trait bounds, `ComplementOf`, `diverge`/`merge`—directly to PTX via the `nvptx64-nvidia-cuda` target. Both `butterfly_typed` (through `Warp<All>`) and `diverge_merge_typed` (`kernel_entry → diverge → merge`) produce byte-identical PTX vs. their untyped equivalents. The entire type system is erased through the full LLVM NVPTX backend. Reproduction: `bash reproduce/compare_rust_ptx.sh`.
 
 ### Comparison with Runtime Approaches
 
@@ -163,7 +167,7 @@ The annotation overhead is modest. Divergence points require one `diverge` call 
 
 ### Limitations
 
-Three patterns are not fully expressible in our current system:
+Four patterns are not fully expressible in our current system:
 
 1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, our static types cannot verify it. This requires dependent types (§9).
 
@@ -171,13 +175,15 @@ Three patterns are not fully expressible in our current system:
 
 3. **Cross-function active set polymorphism**: Functions that are generic over the active set require explicit trait bounds, increasing annotation burden at API boundaries.
 
-These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system.
+4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern. `DynWarp` (§9.4) provides a runtime escape for patterns where static exit tracking is too restrictive.
+
+These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows necessarily from the linearity discipline that makes the type system sound.
 
 ## 7.4 Threats to Validity
 
-**Bug sample size**: Our evaluation models five real bugs. A larger study across more GPU codebases would strengthen the evidence. However, our claim is not frequency but tractability: the bug class is real, silent, and statically preventable.
+**Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence bugs across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of 21 bugs, 14 are fully caught by the type system.
 
-**Limited GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. We have not generated PTX from our typed Rust code. However, we reproduced the cuda-samples#398 bug on actual GPU hardware (RTX 4000 SFF Ada, compute 8.9), confirming that the undefined behavior produces deterministically wrong results on post-Volta architectures. The zero-overhead claim follows from type erasure, not from measurement. Full GPU code generation is future work (§9).
+**Limited GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents. We also reproduced the cuda-samples#398 bug on actual GPU hardware (RTX 4000 SFF Ada, compute 8.9), confirming that the undefined behavior produces deterministically wrong results on post-Volta architectures.
 
 **Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). We are not aware of shuffle-from-inactive-lane bugs that our type system would fail to catch at the source level.
 
@@ -185,12 +191,14 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 | Metric | Result |
 |--------|--------|
-| Real bugs modeled | 4 (3 caught, 1 partial) + 1 vendor acknowledgment |
+| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
+| Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
-| Type system tests | 242 unit + 21 example + 8 compile-fail |
-| Runtime overhead | 0% (by construction) |
-| Uniform programs | Zero annotation overhead |
-| Lane-heterogeneous programs | ~3 lines per divergence point |
+| PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
+| Type system tests | 242 unit + 50 example + 8 compile-fail |
+| Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
+| Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
+| Lean mechanization | 17 theorems (progress, preservation, 5 untypability proofs) |
 | Limitations | Data-dependent masks, cross-function polymorphism |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

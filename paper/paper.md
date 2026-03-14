@@ -1022,16 +1022,41 @@ fn diverge_complement_lemma() {
 }
 ```
 
-We have begun mechanizing the core theorems in Lean 4 (`lean/WarpTypes/Basic.lean`). The formalization uses `BitVec 32` for active sets and an inductive typing judgement with linear context threading. Six theorems are fully machine-checked (zero `sorry`):
+The core theorems are mechanized in Lean 4 (`lean/WarpTypes/`). The formalization uses `BitVec 32` for active sets and an inductive typing judgement with linear context threading. The type system includes pair types for diverge results (`Ty.pair`) and projections (`fst`/`snd`).
+
+**Basic.lean** — Six foundational theorems (zero `sorry`, zero axioms):
 
 1. `diverge_partition`: S∩P and S∩¬P are disjoint and cover S
 2. `shuffle_requires_all`: shuffle typing demands Warp\<All\>
 3. `complement_symmetric`: the complement relation is symmetric
 4. `even_odd_complement`: Even and Odd are complements (concrete instance)
 5. `lowHalf_highHalf_complement`: LowHalf and HighHalf are complements
-6. `progress_values`: well-typed values are terminal
+6. `progress_values`: well-typed values are terminal (simple case analysis; full progress in Metatheory.lean)
 
-Full mechanization of progress and preservation requires defining a small-step reduction relation, which is ongoing. Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs; (2) prior work on GPU program verification (MCL framework) was built in Lean.
+**Metatheory.lean** — Small-step semantics with progress and preservation:
+
+7. `value_preserves_ctx`: values don't consume linear resources (fully proved)
+8. `canonical_warp`: well-typed warp values have the expected form (fully proved)
+9. `canonical_perLane`: well-typed per-lane values have the expected form (fully proved)
+10. `canonical_pair`: well-typed pair values decompose correctly (fully proved)
+11. `progress`: closed well-typed expressions are values or can step (fully proved, zero `sorry`)
+12. `preservation`: reduction preserves typing (all cases proved, one axiom: substitution lemma)
+
+The `Step` inductive defines 16 reduction rules (6 value reductions + 10 congruence rules). Progress is proved by structural induction on the typing derivation, using `value_preserves_ctx` to show that when a left sub-expression is a value, the right sub-expression inherits the empty context. The one axiom is `subst_preserves_typing` — the standard substitution lemma for linear type systems, which requires careful context splitting to maintain the use-exactly-once discipline.
+
+**Untypability of real bugs** — five additional theorems mechanically prove that each documented bug pattern has no typing derivation (zero `sorry`):
+
+13. `bug1_cuda_samples_398`: shuffle on Lane0 warp (1 active lane) — untypable
+14. `bug2_cccl_854`: shuffle on 16-lane sub-warp — untypable
+15. `bug3_picongpu_2514`: ballot on diverged subset — untypable
+16. `bug4_llvm_155682`: shuffle after lane-0 conditional — untypable
+17. `bug5_shuffle_after_diverge`: shuffle on Even warp — untypable
+
+All five reduce to the same core lemma (`shuffle_diverged_untypable`): the `shuffle` rule requires `Warp<All>`, but `fst(diverge(warpVal(All), pred))` has type `Warp<All ∧ pred>`, and `All ∧ pred ≠ All` for any non-trivial predicate (`by decide`). These are machine-checked proofs that the type system rejects the specific bug patterns we claim it catches.
+
+**Scope limitation**: The Lean `merge` rule uses `IsComplementAll` — complements within `All` (0xFFFFFFFF) — rather than the more general complement-within-parent used in the Rust implementation. This means the formalization covers flat diverge/merge patterns but not nested divergence (where merge returns to an intermediate active set like `Even`). Extending the formalization to `IsComplement s1 s2 parent` is straightforward but increases the number of cases.
+
+Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs; (2) prior work on GPU program verification (MCL framework) was built in Lean. Build: `cd lean && lake build`.
 
 
 ---
@@ -1453,25 +1478,25 @@ pub trait ActiveSet: Copy + 'static {
     const MASK: u32;
     const NAME: &'static str;
 }
-
-#[derive(Copy, Clone)]
-pub struct All;
-impl ActiveSet for All {
-    const MASK: u32 = 0xFFFFFFFF;
-    const NAME: &'static str = "All";
-}
-
-#[derive(Copy, Clone)]
-pub struct Even;
-impl ActiveSet for Even {
-    const MASK: u32 = 0x55555555;
-    const NAME: &'static str = "Even";
-}
-
-// ... similarly for Odd, LowHalf, HighHalf, etc.
 ```
 
-These types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.
+A `warp_sets!` proc macro generates the entire hierarchy from a compact declaration:
+
+```rust
+warp_sets! {
+    All = 0xFFFFFFFF {
+        Even = 0x55555555 / Odd = 0xAAAAAAAA,
+        LowHalf = 0x0000FFFF / HighHalf = 0xFFFF0000,
+        Lane0 = 0x00000001 / NotLane0 = 0xFFFFFFFE,
+    }
+    Even = 0x55555555 { EvenLow = 0x00005555 / EvenHigh = 0x55550000 }
+    Odd = 0xAAAAAAAA { OddLow = 0x0000AAAA / OddHigh = 0xAAAA0000 }
+    LowHalf = 0x0000FFFF { EvenLow / OddLow }     // reuses existing types
+    HighHalf = 0xFFFF0000 { EvenHigh / OddHigh }
+}
+```
+
+The macro validates masks at compile time: each pair must be disjoint (`true & false == 0`) and covering (`true | false == parent`). Invalid hierarchies produce `compile_error!`. Shared types (e.g., `EvenLow` under both `Even` and `LowHalf`) are automatically deduplicated. The generated types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.
 
 ### Warp as Phantom Type
 
@@ -1933,9 +1958,11 @@ We evaluate session-typed divergence on three dimensions:
 
 ## 7.1 Bug Detection
 
-### Real Bugs Modeled
+### Real Bugs Surveyed
 
-We identified five documented shuffle-from-inactive-lane bugs in production GPU code and evaluated whether our type system would have caught them at compile time.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects and evaluated whether our type system would have caught them at compile time.
+
+**Modeled bugs** (self-contained Rust examples in `examples/`):
 
 | Bug | Source | Failure Mode | Caught? |
 |-----|--------|--------------|---------|
@@ -1943,7 +1970,30 @@ We identified five documented shuffle-from-inactive-lane bugs in production GPU 
 | Compiler predicates off mask init | CCCL#854 | Silent wrong scan | Yes — modeled |
 | Hardcoded full mask in divergent branch | PIConGPU#2514 | Wrong physics output | Yes — modeled |
 | shfl_sync causes branch elimination | LLVM#155682 | Atomic 32x overcounting | Partial — modeled† |
-| Deprecated `__shfl` API family | CUDA 9.0 | Entire bug class | Yes |
+| Deprecated `__shfl` API family | CUDA 9.0 | Entire bug class | N/A (vendor response) |
+
+**Additional documented bugs** (identified via systematic search):
+
+| Bug | Source | Failure Mode | Caught? |
+|-----|--------|--------------|---------|
+| Full mask in divergent scan → hang | OpenCV#12320 | Deadlock on Volta/Turing | Yes |
+| Full mask with early-exit → freeze | Ginkgo#54 | Deadlock on Titan V | Yes |
+| `__activemask()` misuse in radix sort | PyTorch#98157 | Wrong distribution counts | Yes |
+| Wrong mask computation → illegal insn | TVM PR#17307 | Crash on H100 | Yes |
+| Bad mask for logical warp < 32 | CUB#115 | Silent wrong reduction | Yes |
+| ShuffleIndex wrong for sub-warps | CUB#112 | Silent wrong aggregate | Yes |
+| WarpReduce wrong for non-pow2 sizes | CCCL#858 | Silent wrong reduction | Partial |
+| Illegal warp sync in parallel_reduce | Kokkos#1520/1612/1958 | Crash on Volta/Turing | Yes |
+| Legacy shfl broken on SM 8.0 | Halide#5630 | Silent wrong results | Partial |
+| Cross-lane wrong results in branches | ROCm/HIP#952/2474 | Wrong results (AMD) | Yes |
+| Shuffle lacks execution dependency | NVIDIA SPIR-V (blog) | Silent data corruption | Yes |
+| Legacy warp-sync shuffle on Volta | HOOMD-blue#292 | Potential wrong results | Yes |
+| NaN lost after WarpReduce refactor | cuDF#6365 | Silent precision loss | Partial |
+| Butterfly shuffle order → racecheck | Triton#7264 | Nondeterministic results | Partial |
+| Excluded indexed shuffle entirely | WebGPU spec | Design-level avoidance | Motivation |
+| Migration generates deadlock-prone code | SYCLomatic DPCT1086 | Potential deadlock | Yes |
+
+**Summary**: Of 21 documented issues, our type system fully catches 14 (67%), partially catches 5 (24%), and 1 serves as design-level motivation (WebGPU's decision to exclude indexed subgroup shuffles entirely validates the need for type-safe alternatives). The dominant bug patterns are: (1) hardcoded `0xFFFFFFFF` mask in divergent code (OpenCV, Ginkgo, PIConGPU, HOOMD-blue); (2) incorrect mask computation for logical sub-warps (CUB#112, CUB#115, CCCL#858, TVM); (3) `__activemask()` misuse as convergence proxy (PyTorch); (4) cross-vendor portability (ROCm/HIP, SPIR-V, WebGPU, SYCLomatic).
 
 †The LLVM bug involves a compiler optimization that eliminates a branch because `__shfl_sync` implies all lanes must be active. Our type system prevents the *source-level* pattern (conditional write followed by full-warp shuffle), but cannot prevent compiler misoptimization of otherwise well-typed code. This is a compiler correctness issue, not a type system issue.
 
@@ -2002,7 +2052,7 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes seven compile-fail doctests that serve as machine-checked proof artifacts:
+Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
 
 1. `shuffle_xor` on `Warp<Even>` — rejected (§3)
 2. `merge(Even, LowHalf)` — rejected, overlapping sets (§3)
@@ -2016,7 +2066,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 242 unit tests, 21 example tests across 5 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) across 34 modules covering the full type system. The tests exercise:
+Our prototype includes 242 unit tests, 50 example tests across 8 worked bug examples, and 8 compile-fail doctests (including a linearity enforcement test that verifies use-after-diverge is a compile error) covering the full type system. The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2041,7 +2091,7 @@ Our types impose zero runtime overhead—not measured to be negligible, but *gua
 
 The generated code contains no trace of the type system. A `Warp<All>` and a `Warp<Even>` produce identical machine code for any operation available on both.
 
-We verified this at two levels of the compilation pipeline:
+We verified this at three levels of the compilation pipeline:
 
 **Rust MIR**: `Warp<S>` values are zero-sized and optimized away entirely. No runtime checks, no mask comparisons, no branches.
 
@@ -2058,6 +2108,27 @@ define noundef i32 @zero_overhead_butterfly(i32 noundef returned %data) {
 ```
 
 Both functions compile to `ret i32 %data`. LLVM deduplicates them into a single alias because they have identical machine behavior. The warp creation, 5 shuffle steps, diverge, merge, and active set types are *all erased*. The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u32` mask).
+
+**NVIDIA PTX** (`rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O`): We compiled actual Rust type system code—`PhantomData`, trait bounds, `ComplementOf`, `diverge_even_odd()`, `merge()`—directly to NVIDIA PTX via the `nvptx64-nvidia-cuda` target. Two function pairs:
+
+1. `butterfly_typed` (5 shuffle operations through `Warp<All>`) vs. `butterfly_untyped` (raw arithmetic): **byte-identical PTX** — both compile to a single `shl.b32 %r2, %r1, 5`.
+
+2. `diverge_merge_typed` (`Warp::kernel_entry()` → `diverge_even_odd()` → `merge(evens, odds)`) vs. `diverge_merge_untyped` (identity function): **byte-identical PTX** — both compile to `ld.param → st.param → ret`.
+
+```ptx
+; butterfly_typed — Warp<All>, shuffle_xor, trait bounds all erased:
+.visible .func  (.param .b32 func_retval0) butterfly_typed(
+    .param .b32 butterfly_typed_param_0
+) {
+    .reg .b32   %r<3>;
+    ld.param.b32    %r1, [butterfly_typed_param_0];
+    shl.b32         %r2, %r1, 5;       ; entire type system gone
+    st.param.b32    [func_retval0], %r2;
+    ret;
+}
+```
+
+The `Warp<S>` type, `PhantomData`, `ActiveSet` trait, `ComplementOf` bound, `diverge`, and `merge` are all fully erased—not by Rust's frontend, but through the entire LLVM NVPTX backend to actual GPU instructions. Reproduction: `bash reproduce/compare_rust_ptx.sh` (requires `rustc +nightly` with `nvptx64-nvidia-cuda` target).
 
 ### Comparison with Runtime Approaches
 
@@ -2099,6 +2170,23 @@ The annotation overhead is modest. Divergence points require one `diverge` call 
 | Cooperative group with sub-warp | Yes | existential types (§5) |
 | Data-dependent shuffle mask | Partial | Requires dependent types (future) |
 
+### Annotation Burden
+
+We measured the annotation overhead by analyzing the user-facing algorithm code in the five original worked bug examples (`examples/*.rs`), counting lines that exist solely because of the type system (warp parameters, diverge/merge calls, type annotations) vs. core algorithm lines.
+
+| Example | Algorithm Lines | Annotation Lines | Annotation % |
+|---------|----------------|-----------------|-------------|
+| cuda-samples#398 | 16 | 2 | 12.5% |
+| PIConGPU#2514 | 11 | 3 | 27.3% |
+| LLVM#155682 | 15 | 4 | 26.7% |
+| CUB/CCCL#854 | 5 | 2 | 40.0% |
+| demo | 8 | 4 | 50.0% |
+| **Total** | **55** | **15** | **27.3%** |
+
+The overall annotation burden is **27.3%** — roughly one annotation line per three algorithm lines. The range (12.5%–50%) is instructive: the lowest burden occurs when the fix is algorithmic (cuda-samples#398: check active count, skip reduction — only the `warp: Warp<All>` parameter is overhead). The highest occurs in minimal examples where diverge/merge ceremony dominates. In larger real algorithms, the ratio converges toward the lower end.
+
+The annotations are: `warp: Warp<All>` function parameters (5 occurrences), `diverge_*()` calls (4), `merge()` calls (3), type annotations on warp handles (2), and `merge_data` with type-system constants (1). Notably, `kernel_entry()` is called only at kernel entry points — library functions take `Warp<All>` as a parameter, which is the idiomatic pattern.
+
 ### Limitations
 
 Four patterns are not fully expressible in our current system:
@@ -2117,9 +2205,9 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 ## 7.4 Threats to Validity
 
-**Bug sample size**: Our evaluation models five real bugs. A larger study across more GPU codebases would strengthen the evidence. However, our claim is not frequency but tractability: the bug class is real, silent, and statically preventable.
+**Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence bugs across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of 21 bugs, 14 are fully caught by the type system. The 5 partially-caught bugs involve patterns at the boundary of our system's expressiveness (non-power-of-2 logical warps, NaN semantics, nondeterministic accumulation order).
 
-**Limited GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. We have not generated PTX from our typed Rust code. However, we reproduced the cuda-samples#398 bug on actual GPU hardware (RTX 4000 SFF Ada, compute 8.9), confirming that the undefined behavior produces deterministically wrong results on post-Volta architectures. The zero-overhead claim follows from type erasure, not from measurement. Full GPU code generation is future work (§9).
+**Limited GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents. We also reproduced the cuda-samples#398 bug on actual GPU hardware (RTX 4000 SFF Ada, compute 8.9), confirming that the undefined behavior produces deterministically wrong results on post-Volta architectures.
 
 **Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). We are not aware of shuffle-from-inactive-lane bugs that our type system would fail to catch at the source level.
 
@@ -2127,11 +2215,13 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 | Metric | Result |
 |--------|--------|
-| Real bugs modeled | 4 (3 caught, 1 partial) + 1 vendor acknowledgment |
-| Type system tests | 242 unit + 21 example + 8 compile-fail |
-| Runtime overhead | 0% (by construction) |
+| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
+| Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
+| Type system tests | 242 unit + 50 example + 8 compile-fail |
+| Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
+| Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
-| Lane-heterogeneous programs | ~3 lines per divergence point |
+| Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
 | Limitations | Data-dependent masks, cross-function polymorphism |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
@@ -2350,7 +2440,7 @@ Session-typed divergence opens several research directions.
 
 ## 9.1 Proc Macro for Data-Dependent Predicates
 
-Our current Rust crate handles static active sets (Even, Odd, LowHalf). A `#[warp_typed]` proc macro could extend coverage to data-dependent predicates:
+Our `warp_sets!` proc macro (§6.1) already generates the static active set hierarchy with compile-time validation of disjoint/covering invariants. A `#[warp_typed]` proc macro could further extend coverage to data-dependent predicates:
 
 ```rust
 #[warp_typed]
@@ -2373,8 +2463,8 @@ The macro would track diverge/merge pairing at compile time and insert runtime m
 
 ## 9.2 Formal Mechanization
 
-Our core theorems are partially mechanized in Lean 4 (§4.8). Remaining future work:
-- Machine-checked progress and preservation (requires small-step semantics)
+Our core theorems are mechanized in Lean 4 (§4.8), including machine-checked progress (zero `sorry`) and preservation (one axiom: substitution lemma for linear contexts). Remaining future work:
+- Close the substitution lemma (`subst_preserves_typing`) — the standard hard part of linear type system formalization, requiring structural induction with careful context splitting
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 

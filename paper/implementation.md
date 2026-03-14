@@ -15,25 +15,23 @@ pub trait ActiveSet: Copy + 'static {
     const MASK: u32;
     const NAME: &'static str;
 }
-
-#[derive(Copy, Clone)]
-pub struct All;
-impl ActiveSet for All {
-    const MASK: u32 = 0xFFFFFFFF;
-    const NAME: &'static str = "All";
-}
-
-#[derive(Copy, Clone)]
-pub struct Even;
-impl ActiveSet for Even {
-    const MASK: u32 = 0x55555555;
-    const NAME: &'static str = "Even";
-}
-
-// ... similarly for Odd, LowHalf, HighHalf, etc.
 ```
 
-These types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.
+A `warp_sets!` proc macro generates the entire hierarchy from a compact declaration, validating masks at compile time (disjoint, covering, subset):
+
+```rust
+warp_sets! {
+    All = 0xFFFFFFFF {
+        Even = 0x55555555 / Odd = 0xAAAAAAAA,
+        LowHalf = 0x0000FFFF / HighHalf = 0xFFFF0000,
+        Lane0 = 0x00000001 / NotLane0 = 0xFFFFFFFE,
+    }
+    Even = 0x55555555 { EvenLow = 0x00005555 / EvenHigh = 0x55550000 }
+    // ... nested levels for Odd, LowHalf, HighHalf
+}
+```
+
+The generated types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.
 
 ### Warp as Phantom Type
 

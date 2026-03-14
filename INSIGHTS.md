@@ -175,3 +175,27 @@ Making `Warp::new()` `pub(crate)` and adding `Warp::kernel_entry() -> Warp<All>`
 ### Citation Consistency as Late-Stage Pass
 
 After multiple rounds of paper edits across sessions, internal consistency drifts silently. The Descend author attribution was wrong in paper.md (Steffen) but correct in the standalone files (Kopcke) — different sessions edited different files. The CURD/GMRace conflation (two papers attributed to one) survived multiple editing passes because it was plausible. A final grep-based consistency pass (`grep "et al"`, `grep "10x"`, etc.) catches cross-file divergences that no single edit would notice. This pass also found 8 references that were cited in the body but missing from the references section.
+
+---
+
+## Three Paper-Differentiating Additions (2026-03-13)
+
+### PTX Zero-Overhead: Closing the GPU Backend Gap
+
+The LLVM IR evidence proved type erasure at the Rust→LLVM boundary. But PLDI reviewers ask about the GPU backend. Compiling typed vs untyped butterfly reductions to PTX via `nvcc -ptx -arch=sm_89 -O2` shows byte-identical output after name normalization: same 5× `shfl.sync.bfly.b32` + 5× `add.s32`, same registers (5 predicates, 19 b32). The `__noinline__` attribute is critical — without it nvcc inlines both functions, leaving no distinct bodies to compare. The PTX extraction script needs to match `.func` (not `.visible`) since device-only functions aren't `.entry` kernels.
+
+### value_preserves_ctx: The Key to Linear Progress
+
+The standard challenge in proving progress for linear type systems: sub-expressions of binary forms (merge, shuffle, pair) have non-empty input contexts, but progress is stated for closed terms (empty context). The breakthrough is `value_preserves_ctx`: if `HasType ctx v t ctx'` and `isValue v = true`, then `ctx = ctx'`. This lets progress recurse into the second sub-expression — when the first is a value, its output context equals its input, so the second starts from `[]`. This theorem is fully proved by case analysis on typing derivations (values are warpVal/perLaneVal/unitVal/pairVal, all of which preserve context). The one remaining axiom is `subst_preserves_typing` — the substitution lemma for linear contexts, which requires structural induction with careful context splitting.
+
+### warp_sets! Macro: Compile-Time Hierarchy Validation
+
+The proc macro replaces ~180 lines of repetitive struct+impl code with a ~15-line hierarchy declaration. Key design decisions: (1) validate disjoint/covering/subset properties at macro expansion time via `compile_error!`, not at runtime; (2) deduplicate shared types via `HashSet<String>` — EvenLow appears under both Even and LowHalf but is emitted once; (3) separate `ComplementOf` (top-level, where `parent == 0xFFFFFFFF`) from `ComplementWithin` (always emitted); (4) None/All complement pair is manual (None isn't produced by diverge). The macro also generates `CanDiverge` impls with the trivial `Warp::new()` body, since diverge is a pure type-level operation.
+
+### Rust-to-PTX: Definitive Zero-Overhead Evidence
+
+The `nvptx64-nvidia-cuda` target in Rust nightly compiles actual type system code (PhantomData, trait bounds, ComplementOf, diverge/merge) directly to NVIDIA PTX. Two function pairs produce byte-identical PTX: (1) `butterfly_typed` (through `Warp<All>::shuffle_xor`) vs `butterfly_untyped` (raw arithmetic) — both compile to `shl.b32 %r2, %r1, 5`; (2) `diverge_merge_typed` (`kernel_entry → diverge → merge`) vs `diverge_merge_untyped` (identity) — both compile to `ld.param → st.param → ret`. This is the evidence the cold reviewer identified as the key gap: actual Rust type machinery erased through the full LLVM NVPTX backend, not just "comments don't affect codegen."
+
+### Mechanized Untypability: Bugs Have No Derivation
+
+Five theorems in Lean prove that each documented bug pattern has NO typing derivation. The proof structure: (1) `shuffle_requires_all` gives us that shuffle's warp argument must have type `Warp<All>`; (2) `fst_diverge_warpval_type` gives us that `fst(diverge(warpVal(all), pred))` has type `Warp<all ∧ pred>`; (3) injecting `Ty.warp.injEq` gives `all = all ∧ pred`, which `decide` refutes for any non-trivial predicate. This is unusual for PL papers — most prove soundness (well-typed programs don't go wrong) but not the converse (specific bug patterns are rejected).
