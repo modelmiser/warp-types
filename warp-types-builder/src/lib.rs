@@ -18,8 +18,15 @@
 //!
 //! ```rust,ignore
 //! // src/main.rs
-//! include!(concat!(env!("OUT_DIR"), "/kernels.rs"));
-//! // Now you have: const KERNEL_PTX: &str = "...";
+//! mod kernels {
+//!     include!(concat!(env!("OUT_DIR"), "/kernels.rs"));
+//! }
+//!
+//! fn main() {
+//!     let ctx = cudarc::driver::CudaContext::new(0).unwrap();
+//!     let k = kernels::Kernels::load(&ctx).unwrap();
+//!     // k.butterfly_reduce — CudaFunction handle ready for launch
+//! }
 //! ```
 
 use std::env;
@@ -34,6 +41,8 @@ pub struct WarpBuilder {
     toolchain: String,
     /// Release mode (default: true).
     release: bool,
+    /// Feature flags to pass to the kernel crate.
+    features: Vec<String>,
 }
 
 impl WarpBuilder {
@@ -46,6 +55,7 @@ impl WarpBuilder {
             kernel_crate: kernel_crate_path.into(),
             toolchain: "nightly".to_string(),
             release: true,
+            features: Vec::new(),
         }
     }
 
@@ -61,13 +71,20 @@ impl WarpBuilder {
         self
     }
 
+    /// Enable a feature flag on the kernel crate.
+    pub fn feature(mut self, feature: impl Into<String>) -> Self {
+        self.features.push(feature.into());
+        self
+    }
+
     /// Build the kernel crate, producing PTX and generating a Rust module.
     ///
-    /// On success, writes two files to `OUT_DIR`:
+    /// On success, writes to `OUT_DIR`:
     /// - `kernels.ptx` — the raw PTX assembly
-    /// - `kernels.rs` — a Rust module with `const KERNEL_PTX: &str`
+    /// - `kernels.rs` — a Rust module with `KERNEL_PTX` constant and a `Kernels` struct
+    ///   that provides named `CudaFunction` handles for each kernel entry point
     ///
-    /// Also prints `cargo:rerun-if-changed` for the kernel crate's source files.
+    /// Also prints `cargo:rerun-if-changed` for all kernel source files (recursive).
     pub fn build(self) -> Result<BuildResult, BuildError> {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR")
             .map_err(|_| BuildError::NotInBuildScript)?;
@@ -79,12 +96,8 @@ impl WarpBuilder {
             return Err(BuildError::KernelCrateNotFound(kernel_dir));
         }
 
-        // Tell cargo to rerun if kernel sources change
-        let kernel_src = kernel_dir.join("src");
-        if kernel_src.exists() {
-            println!("cargo:rerun-if-changed={}", kernel_src.display());
-        }
-        println!("cargo:rerun-if-changed={}", kernel_dir.join("Cargo.toml").display());
+        // Tell cargo to rerun if ANY kernel source file changes (recursive)
+        emit_rerun_if_changed(&kernel_dir);
 
         // Invoke cargo rustc for nvptx64 with --emit=asm to get PTX output.
         // Use RUSTUP_TOOLCHAIN env var instead of +nightly syntax, because
@@ -100,6 +113,11 @@ impl WarpBuilder {
 
         if self.release {
             cmd.arg("--release");
+        }
+
+        // Pass feature flags to the kernel crate
+        for feat in &self.features {
+            cmd.arg("--features").arg(feat);
         }
 
         // After `--`, pass rustc flags: emit assembly (PTX for nvptx64)
@@ -129,32 +147,30 @@ impl WarpBuilder {
             .join("nvptx64-nvidia-cuda")
             .join(profile);
 
-        // The PTX file is either .s or in deps/
         let ptx_path = find_ptx_file(&target_dir, &kernel_dir)?;
 
         // Read PTX content
         let ptx_content = std::fs::read_to_string(&ptx_path)
             .map_err(|e| BuildError::PtxReadFailed(format!("{}: {}", ptx_path.display(), e)))?;
 
+        // Parse kernel entry points from PTX
+        let kernels = parse_kernel_entries(&ptx_content);
+
         // Write PTX to OUT_DIR
         let out_ptx = Path::new(&out_dir).join("kernels.ptx");
         std::fs::write(&out_ptx, &ptx_content)
             .map_err(|e| BuildError::WriteFailed(format!("{}: {}", out_ptx.display(), e)))?;
 
-        // Generate Rust module with include_str!
+        // Generate Rust module with Kernels struct
         let out_rs = Path::new(&out_dir).join("kernels.rs");
-        let rs_content = format!(
-            "/// Auto-generated PTX for warp-types kernels.\n\
-             /// Built from: {kernel_crate}\n\
-             pub const KERNEL_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/kernels.ptx\"));\n",
-            kernel_crate = self.kernel_crate.display(),
-        );
-        std::fs::write(&out_rs, rs_content)
+        let rs_content = generate_rust_module(&self.kernel_crate, &kernels);
+        std::fs::write(&out_rs, &rs_content)
             .map_err(|e| BuildError::WriteFailed(format!("{}: {}", out_rs.display(), e)))?;
 
         Ok(BuildResult {
             ptx_path: out_ptx,
             module_path: out_rs,
+            kernel_names: kernels,
         })
     }
 }
@@ -165,6 +181,8 @@ pub struct BuildResult {
     pub ptx_path: PathBuf,
     /// Path to the generated Rust module in OUT_DIR.
     pub module_path: PathBuf,
+    /// Names of kernel entry points found in the PTX.
+    pub kernel_names: Vec<String>,
 }
 
 /// Errors that can occur during kernel compilation.
@@ -202,6 +220,138 @@ impl std::fmt::Display for BuildError {
 
 impl std::error::Error for BuildError {}
 
+// ============================================================================
+// PTX parsing
+// ============================================================================
+
+/// Parse `.visible .entry <name>(` lines from PTX to find kernel entry points.
+fn parse_kernel_entries(ptx: &str) -> Vec<String> {
+    ptx.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with(".visible .entry ") {
+                // Format: .visible .entry kernel_name(
+                let rest = trimmed.strip_prefix(".visible .entry ")?;
+                let name = rest.split('(').next()?.trim();
+                if !name.is_empty() {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// ============================================================================
+// Code generation
+// ============================================================================
+
+/// Generate a Rust module with PTX constant and Kernels struct.
+fn generate_rust_module(kernel_crate: &Path, kernels: &[String]) -> String {
+    let mut code = String::new();
+
+    // Header
+    code.push_str(&format!(
+        "// Auto-generated by warp-types-builder. Do not edit.\n\
+         // Kernel crate: {}\n\
+         // Kernel count: {}\n\n",
+        kernel_crate.display(),
+        kernels.len(),
+    ));
+
+    // PTX constant
+    code.push_str(
+        "/// Raw PTX assembly for all kernels in this module.\n\
+         pub const KERNEL_PTX: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/kernels.ptx\"));\n\n"
+    );
+
+    // Kernels struct
+    code.push_str(
+        "/// Loaded GPU kernel functions.\n\
+         ///\n\
+         /// Created by [`Kernels::load`], which parses the PTX and extracts\n\
+         /// each kernel entry point as a ready-to-launch [`CudaFunction`].\n\
+         ///\n\
+         /// # Available kernels\n"
+    );
+    for name in kernels {
+        code.push_str(&format!("/// - `{}` \n", name));
+    }
+    code.push_str(
+        "pub struct Kernels {\n\
+         _module: ::std::sync::Arc<::cudarc::driver::CudaModule>,\n"
+    );
+    for name in kernels {
+        code.push_str(&format!(
+            "    /// Kernel: `{name}`\n\
+                 pub {name}: ::cudarc::driver::CudaFunction,\n",
+            name = name,
+        ));
+    }
+    code.push_str("}\n\n");
+
+    // Kernels::load impl
+    code.push_str(
+        "impl Kernels {\n\
+         /// Load all kernels from the compiled PTX.\n\
+         ///\n\
+         /// Parses the embedded PTX assembly, loads it as a CUDA module,\n\
+         /// and extracts each kernel entry point by name.\n\
+         pub fn load(ctx: &::std::sync::Arc<::cudarc::driver::CudaContext>) -> \
+             ::std::result::Result<Self, Box<dyn ::std::error::Error>> {\n\
+             let ptx = ::cudarc::nvrtc::Ptx::from_src(KERNEL_PTX.to_string());\n\
+             let module = ctx.load_module(ptx)?;\n"
+    );
+    for name in kernels {
+        code.push_str(&format!(
+            "        let {name} = module.load_function(\"{name}\")?;\n",
+            name = name,
+        ));
+    }
+    code.push_str("        let _module = module;\n");
+    code.push_str("        Ok(Kernels {\n            _module,\n");
+    for name in kernels {
+        code.push_str(&format!("            {},\n", name));
+    }
+    code.push_str("        })\n    }\n}\n");
+
+    code
+}
+
+// ============================================================================
+// File watching
+// ============================================================================
+
+/// Emit `cargo:rerun-if-changed` for all files in the kernel crate recursively.
+fn emit_rerun_if_changed(kernel_dir: &Path) {
+    println!("cargo:rerun-if-changed={}", kernel_dir.join("Cargo.toml").display());
+
+    let src_dir = kernel_dir.join("src");
+    if src_dir.exists() {
+        emit_rerun_recursive(&src_dir);
+    }
+}
+
+fn emit_rerun_recursive(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                emit_rerun_recursive(&path);
+            } else {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+}
+
+// ============================================================================
+// PTX file discovery
+// ============================================================================
+
 /// Search for the PTX (.s) file in the target directory.
 fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildError> {
     // Get the crate name from Cargo.toml
@@ -237,32 +387,46 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         }
     }
 
-    // Fallback: find any .s file in the directory
-    if let Ok(entries) = std::fs::read_dir(target_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().map_or(false, |e| e == "s") {
-                return Ok(p);
-            }
-        }
-    }
-
-    // Also check deps/
+    // Fallback: search deps/ for .s files matching the crate name pattern
     let deps = target_dir.join("deps");
     if let Ok(entries) = std::fs::read_dir(&deps) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "s")
-                && !p.file_name().map_or(false, |n| n.to_string_lossy().starts_with("core-"))
-            {
-                return Ok(p);
+            if p.extension().map_or(false, |e| e == "s") {
+                let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                // Match crate_name-HASH.s pattern, skip core/compiler_builtins
+                if fname.starts_with(&crate_name)
+                    && !fname.starts_with("core-")
+                    && !fname.starts_with("compiler_builtins-")
+                {
+                    return Ok(p);
+                }
+            }
+        }
+    }
+
+    // Last resort: any non-core .s file in deps/
+    if let Ok(entries) = std::fs::read_dir(&deps) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map_or(false, |e| e == "s") {
+                let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if !fname.starts_with("core-")
+                    && !fname.starts_with("compiler_builtins-")
+                    && !fname.starts_with("warp_types-")
+                {
+                    return Ok(p);
+                }
             }
         }
     }
 
     Err(BuildError::PtxNotFound(format!(
-        "No .s/.ptx file found in {}. Checked: {:?}",
+        "No .s/.ptx file found in {}. Crate name: '{}'. Checked: {:?}",
         target_dir.display(),
+        crate_name,
         candidates.iter().map(|c| c.display().to_string()).collect::<Vec<_>>()
     )))
 }

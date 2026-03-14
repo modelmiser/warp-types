@@ -3,18 +3,18 @@
 //! This demonstrates the Month 2 workflow:
 //!   1. Write kernels using warp-types in my-kernels/ crate
 //!   2. build.rs compiles them to PTX automatically
-//!   3. Host code loads PTX and launches kernels via cudarc
+//!   3. Host code loads PTX via generated Kernels struct
 //!
-//! Usage: cd examples/gpu-project && cargo run
+//! Usage: cd examples/gpu-project && cargo run --release
 
 #![allow(deprecated, unused_imports)]
 
-// Pull in the generated PTX constant
-include!(concat!(env!("OUT_DIR"), "/kernels.rs"));
+// Pull in the generated kernels module (PTX + Kernels struct)
+mod kernels {
+    include!(concat!(env!("OUT_DIR"), "/kernels.rs"));
+}
 
 use cudarc::driver::*;
-use cudarc::nvrtc;
-use std::sync::Arc;
 
 const WARP_SIZE: usize = 32;
 
@@ -31,20 +31,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("GPU: {}", ctx.name()?);
     println!();
 
-    // Load the auto-compiled PTX
-    let ptx = nvrtc::Ptx::from_src(KERNEL_PTX.to_string());
-    let module = ctx.load_module(ptx)?;
+    // Load all kernels at once via generated struct
+    let k = kernels::Kernels::load(&ctx)?;
 
     // === Test 1: butterfly_reduce ===
     println!("=== Test 1: butterfly_reduce (all ones) ===");
     {
-        let butterfly_fn = module.load_function("butterfly_reduce")?;
         let input: Vec<i32> = vec![1; WARP_SIZE];
         let dev_data = stream.memcpy_stod(&input)?;
 
         unsafe {
             stream
-                .launch_builder(&butterfly_fn)
+                .launch_builder(&k.butterfly_reduce)
                 .arg(&dev_data)
                 .launch(LaunchConfig {
                     grid_dim: (1, 1, 1),
@@ -66,13 +64,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // === Test 2: diverge_merge_reduce ===
     println!("=== Test 2: diverge_merge_reduce (sequential) ===");
     {
-        let diverge_fn = module.load_function("diverge_merge_reduce")?;
         let input: Vec<i32> = (0..WARP_SIZE as i32).collect();
         let dev_data = stream.memcpy_stod(&input)?;
 
         unsafe {
             stream
-                .launch_builder(&diverge_fn)
+                .launch_builder(&k.diverge_merge_reduce)
                 .arg(&dev_data)
                 .launch(LaunchConfig {
                     grid_dim: (1, 1, 1),
@@ -94,7 +91,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // === Test 3: reduce_n ===
     println!("=== Test 3: reduce_n (with scalar param) ===");
     {
-        let reduce_fn = module.load_function("reduce_n")?;
         let input: Vec<i32> = vec![1; WARP_SIZE];
         let n: u32 = WARP_SIZE as u32;
         let dev_in = stream.memcpy_stod(&input)?;
@@ -102,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         unsafe {
             stream
-                .launch_builder(&reduce_fn)
+                .launch_builder(&k.reduce_n)
                 .arg(&dev_in)
                 .arg(&dev_out)
                 .arg(&n)
