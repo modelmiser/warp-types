@@ -259,10 +259,8 @@ Both halves are always shuffled together — you can't accidentally shuffle only
 - The `ComplementOf` pattern (compile-time proof of set complement) is reusable
 
 ### Known Limitations
-- Data-dependent predicates use `diverge_dynamic(mask)` with runtime masks and structural complement guarantees (no dependent types needed)
-- Cross-function active sets use Rust generics (`<S: ActiveSet>`) — inferred at call sites
-- AMD GPU intrinsics are stubbed but untested (no hardware)
-- Nightly Rust required for GPU compilation (`abi_ptx`, `asm_experimental_arch`)
+- AMD GPU intrinsics are stubbed but untested (no hardware available)
+- Nightly Rust required for GPU kernel compilation (`abi_ptx`, `asm_experimental_arch`); the type system itself works on stable
 
 ---
 
