@@ -148,3 +148,26 @@ pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteS
 pub use block::{SharedRegion, BlockId, ThreadId};
 pub use platform::{Platform, CpuSimd, GpuWarp32, SimdVector};
 pub use warp_types_kernel::warp_kernel;
+
+/// Convenience prelude — import everything needed for typical usage.
+///
+/// ```rust
+/// use warp_types::prelude::*;
+///
+/// let warp: Warp<All> = Warp::kernel_entry();
+/// let (evens, odds) = warp.diverge_even_odd();
+/// let merged: Warp<All> = merge(evens, odds);
+/// ```
+pub mod prelude {
+    pub use crate::{
+        Warp, GpuValue,
+        All, None, Even, Odd, LowHalf, HighHalf,
+        Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
+        ActiveSet, ComplementOf, CanDiverge,
+        PerLane, Uniform, SingleLane,
+        merge, merge_within,
+    };
+    pub use crate::data;
+    pub use crate::gpu::GpuShuffle;
+    pub use crate::tile::Tile;
+}
