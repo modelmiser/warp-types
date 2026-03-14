@@ -61,6 +61,7 @@ pub mod gpu;
 pub mod cub;
 pub mod sort;
 pub mod tile;
+pub mod dynamic;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)

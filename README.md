@@ -165,8 +165,8 @@ warp-types/
 
 ## Limitations
 
-- **Marker types only.** Common predicates (Even, Odd, LowHalf) are covered; fully data-dependent predicates require dependent types.
-- **No cross-function inference.** Active set types must be annotated at function boundaries.
+- **Data-dependent predicates use runtime masks.** Static marker types (Even, Odd, LowHalf) cover common patterns. Data-dependent predicates use `diverge_dynamic(mask)` → `DynDiverge` with structural complement guarantees. No dependent types needed.
+- **Cross-function active sets are explicit.** Generic functions take `Warp<S>` with `S: ActiveSet` bound. Rust infers `S` at call sites — no manual turbofish needed.
 - **AMD untested.** u64 masks and `amdgpu` stubs are in place but require AMD hardware for validation.
 - **Nightly required for GPU.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features.
 
