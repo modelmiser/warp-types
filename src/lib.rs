@@ -35,6 +35,9 @@
 //! - [`warp_size`] — Const-generic warp size portability
 //! - [`gradual`] — `DynWarp` ↔ `Warp<S>` bridge for gradual typing (§9.4)
 
+#![cfg_attr(target_arch = "nvptx64", no_std)]
+#![cfg_attr(target_arch = "nvptx64", no_main)]
+#![cfg_attr(target_arch = "nvptx64", feature(abi_ptx, asm_experimental_arch))]
 #![allow(dead_code)]
 
 // ============================================================================
@@ -60,6 +63,7 @@ pub mod gpu;
 // Research explorations (compiled, not re-exported)
 // ============================================================================
 
+#[cfg(not(target_arch = "nvptx64"))]
 pub mod research;
 
 // ============================================================================
