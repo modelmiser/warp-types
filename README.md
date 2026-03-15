@@ -120,7 +120,7 @@ fn main() {
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | 17 Lean theorems (zero sorry on progress) | `cd lean && lake build` |
+| Soundness (progress + preservation) | 11 Lean 4 theorems, zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32/64 lanes) | u64 masks, AMD stubs, GpuTarget enum | `cargo test warp_size` |
@@ -162,7 +162,7 @@ warp-types/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (17 theorems)
+├── lean/                   # Lean 4 formalization (11 theorems, zero sorry)
 └── paper/                  # Preprint (markdown)
 ```
 

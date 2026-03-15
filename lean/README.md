@@ -72,15 +72,15 @@ lean/
 
 ## Provenance
 
-Developed independently by Chris Ball, outside academic or institutional affiliation. Proof exploration was AI-assisted using Claude (Anthropic).
+Developed independently by Chad Aldreda, outside academic or institutional affiliation. Proof exploration was AI-assisted using Claude (Anthropic).
 
 ## Citation
 
 ```bibtex
-@software{ball2025warptypes,
-  author    = {Ball, Chris},
+@software{aldreda2025warptypes,
+  author    = {Aldreda, Chad},
   title     = {Session-Typed Divergence: Lean 4 Formalization},
   year      = {2025},
-  url       = {https://github.com/cjball/warp-types}
+  url       = {https://github.com/modelmiser/warp-types}
 }
 ```

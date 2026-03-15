@@ -1,13 +1,20 @@
-name: Lean Action CI
+name: Lean 4 Formalization
 
 on:
   push:
+    paths:
+      - 'lean/**'
   pull_request:
+    paths:
+      - 'lean/**'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lean
 
     steps:
       - uses: actions/checkout@v5
