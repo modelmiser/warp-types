@@ -2,7 +2,7 @@
 
 A mechanized proof of type safety for a linear type system that prevents GPU warp divergence bugs at compile time.
 
-Warp-level shuffle operations on diverged (partially active) warps are a class of undefined behavior in CUDA/GPU programming that existing tools cannot catch statically. This formalization proves that a session-typed approach makes such programs untypable.
+Warp-level shuffle operations on diverged (partially active) warps are a class of undefined behavior in CUDA/GPU programming that no existing type system catches. This formalization proves that a session-typed approach makes such programs untypable.
 
 ## What This Formalizes
 
@@ -43,7 +43,7 @@ This linearity condition was introduced to fix a soundness bug discovered during
 
 ## Build
 
-Requires Lean 4.28.0. No external dependencies.
+Requires Lean 4.28.0. No external Lake dependencies (uses only Lean's bundled Std library for `BVDecide`).
 
 ```
 lake build
@@ -57,16 +57,18 @@ The build completes with zero errors, zero sorry, zero axioms. Warnings are limi
 lean/
   lakefile.toml          Build configuration
   lean-toolchain         Lean version (v4.28.0)
+  Main.lean              Entry point (build verification)
+  WarpTypes.lean         Module root
   WarpTypes/
     Basic.lean           Type system: active sets, types, expressions,
                          typing rules, diverge/complement/shuffle theorems,
                          value predicate (208 lines)
     Metatheory.lean      Metatheory: substitution, reduction, canonical
                          forms, progress, preservation, context lemmas,
-                         substitution lemma, 5 bug proofs (701 lines)
+                         substitution lemma, 5 bug proofs (702 lines)
 ```
 
-909 lines of Lean 4 total.
+910 lines across the two core files.
 
 ## Provenance
 
