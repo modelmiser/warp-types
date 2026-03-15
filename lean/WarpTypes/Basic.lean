@@ -12,7 +12,6 @@ import Std.Tactic.BVDecide
   3. shuffle_requires_all: shuffle typing requires Warp<All>
   4. even_odd_complement: Even ∧ Odd are complements
   5. lowHalf_highHalf_complement: LowHalf ∧ HighHalf are complements
-  6. progress_values: well-typed values are terminal
 -/
 
 -- ============================================================================
@@ -193,16 +192,3 @@ def isValue : Expr → Bool
   | .pairVal a b => isValue a && isValue b
   | _ => false
 
--- ============================================================================
--- Progress (value case) — original theorem preserved
--- ============================================================================
-
-theorem progress_values (e : Expr) (t : Ty) (ctx' : Ctx) :
-    HasType [] e t ctx' →
-    isValue e = true ∨ ∃ _ : Expr, True := by
-  intro h
-  cases h with
-  | warpVal _ _ => left; rfl
-  | perLaneVal _ => left; rfl
-  | unitVal _ => left; rfl
-  | _ => right; exact ⟨.unitVal, trivial⟩

@@ -62,13 +62,13 @@ lean/
   WarpTypes/
     Basic.lean           Type system: active sets, types, expressions,
                          typing rules, diverge/complement/shuffle theorems,
-                         value predicate (208 lines)
+                         value predicate (194 lines)
     Metatheory.lean      Metatheory: substitution, reduction, canonical
                          forms, progress, preservation, context lemmas,
                          substitution lemma, 5 bug proofs (702 lines)
 ```
 
-910 lines across the two core files.
+896 lines across the two core files.
 
 ## Provenance
 

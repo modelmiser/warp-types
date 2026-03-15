@@ -6,8 +6,9 @@ import WarpTypes.Basic
   - Capture-avoiding substitution
   - Small-step reduction (Step)
   - Canonical forms lemmas
-  - Progress theorem (zero sorry)
+  - Progress theorem
   - Preservation theorem (substitution lemma proved via context removal)
+  - Untypability proofs for 5 documented GPU bugs
 -/
 
 -- ============================================================================
@@ -138,7 +139,7 @@ theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
 
 -- ============================================================================
--- Progress (zero sorry)
+-- Progress
 -- ============================================================================
 
 /-- Progress: A closed well-typed expression is either a value or can step. -/
