@@ -325,6 +325,12 @@ theorem remove_cons_ne {name name' : String} (hne : name ≠ name') (t : Ty) (ct
   have : ((name', t).1 != name) = true := by simp [bne_iff_ne, ne_eq]; exact Ne.symm hne
   simp [this]
 
+/-- Remove commutes: order of removal doesn't matter. -/
+theorem remove_comm (ctx : Ctx) (a b : String) :
+    Ctx.remove (Ctx.remove ctx a) b = Ctx.remove (Ctx.remove ctx b) a := by
+  simp only [Ctx.remove, List.filter_filter]
+  congr 1; ext p; simp [Bool.and_comm]
+
 -- ============================================================================
 -- Values can be typed in any context
 -- ============================================================================
@@ -408,6 +414,34 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
 -- Generalized Substitution Lemma
 -- ============================================================================
 
+/-- Substitution for the var case (extracted to avoid scoping issues). -/
+private theorem subst_typing_var
+    {nm : String} {t_v : Ty} {v : Expr}
+    (hv : isValue v = true)
+    (ht_v : ∀ ctx₂, HasType ctx₂ v t_v ctx₂)
+    {ctx₀ : Ctx} {name' : String} {t' : Ty}
+    (hlook : ctx₀.lookup name' = some t')
+    (hname : ∀ t'', ctx₀.lookup nm = some t'' → t'' = t_v) :
+    HasType (ctx₀.remove nm) (subst (.var name') nm v) t'
+            (Ctx.remove (ctx₀.remove name') nm) := by
+  simp only [subst]
+  by_cases hxn : name' = nm
+  · -- name' = nm: substitute with v
+    have hbeq : (name' == nm) = true := by simp [beq_iff_eq, hxn]
+    simp only [hbeq]
+    have hlook_nm : ctx₀.lookup nm = some t' := hxn ▸ hlook
+    have : t' = t_v := hname t' hlook_nm; subst this
+    rw [hxn, remove_of_lookup_none (remove_lookup_self ctx₀ nm)]
+    exact ht_v _
+  · -- name' ≠ nm: no substitution, just adjust contexts
+    have hbeq : (name' == nm) = false := by simp [beq_iff_eq, hxn]
+    simp only [hbeq]
+    have hlook' : (ctx₀.remove nm).lookup name' = some t' := by
+      rw [remove_lookup_ne (Ne.symm hxn)]; exact hlook
+    have hgoal := HasType.var (ctx₀.remove nm) name' t' hlook'
+    rw [remove_comm] at hgoal
+    exact hgoal
+
 /-- Core substitution theorem: substituting a value for a name removes that
     name's binding from both input and output contexts.
 
@@ -426,7 +460,7 @@ theorem subst_typing
   | .warpVal _ s => by simp [subst]; exact HasType.warpVal _ s
   | .perLaneVal _ => by simp [subst]; exact HasType.perLaneVal _
   | .unitVal _ => by simp [subst]; exact HasType.unitVal _
-  | .var _ _ _ _ => sorry
+  | .var _ _ _ hlook => subst_typing_var hv ht_v hlook hname
   | .diverge _ _ _ _ _ hw => by
     simp [subst]
     exact HasType.diverge _ _ _ _ _ (subst_typing hv ht_v hw hname)
@@ -442,8 +476,32 @@ theorem subst_typing
       intro t' hl; exact hname t' (output_binding_from_input hw hl)
     exact HasType.shuffle _ _ _ _ _
       (subst_typing hv ht_v hw hname) (subst_typing hv ht_v hd hname_mid)
-  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => by
-    sorry -- letBind case: most complex
+  | .letBind _ ctx_mid ctx_body name' _ _ t1 _ hval hfresh hbody hconsumed => by
+    simp only [subst]
+    by_cases hxn : name' = nm
+    · -- name' = nm: body NOT substituted (shadowing)
+      simp [show (name' == nm) = true from by simp [beq_iff_eq, hxn]]
+      have hfresh_nm : ctx_mid.lookup nm = none := hxn ▸ hfresh
+      have hconsumed_nm : ctx_body.lookup nm = none := hxn ▸ hconsumed
+      have hval' := subst_typing hv ht_v hval hname
+      rw [remove_of_lookup_none hfresh_nm] at hval'
+      rw [remove_of_lookup_none hconsumed_nm]
+      exact HasType.letBind _ _ _ _ _ _ _ _ hval' hfresh hbody hconsumed
+    · -- name' ≠ nm: both val and body substituted
+      simp [show (name' == nm) = false from by simp [beq_iff_eq, hxn]]
+      have hval' := subst_typing hv ht_v hval hname
+      have hfresh' : (ctx_mid.remove nm).lookup name' = none := by
+        rw [remove_lookup_ne (Ne.symm hxn)]; exact hfresh
+      have hname_body : ∀ t', Ctx.lookup ((name', t1) :: ctx_mid) nm = some t' → t' = t_v := by
+        intro t' hl
+        have : Ctx.lookup ctx_mid nm = some t' := by
+          rwa [lookup_cons_ne hxn] at hl
+        exact hname t' (output_binding_from_input hval this)
+      have hbody' := subst_typing hv ht_v hbody hname_body
+      rw [remove_cons_ne (Ne.symm hxn)] at hbody'
+      have hconsumed' : (ctx_body.remove nm).lookup name' = none := by
+        rw [remove_lookup_ne (Ne.symm hxn)]; exact hconsumed
+      exact HasType.letBind _ _ _ _ _ _ _ _ hval' hfresh' hbody' hconsumed'
   | .pairVal _ ctx_mid _ _ _ _ _ ha hb => by
     simp [subst]
     have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
