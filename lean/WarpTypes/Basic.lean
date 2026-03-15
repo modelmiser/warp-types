@@ -112,7 +112,9 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       HasType ctx (.shuffle w data) .perLane ctx''
   | letBind (ctx ctx' ctx'' : Ctx) (name : String) (val body : Expr) (t1 t2 : Ty) :
       HasType ctx val t1 ctx' →
+      ctx'.lookup name = none →          -- freshness: no shadowing
       HasType ((name, t1) :: ctx') body t2 ctx'' →
+      ctx''.lookup name = none →         -- linearity: binding was consumed
       HasType ctx (.letBind name val body) t2 ctx''
   | pairVal (ctx ctx' ctx'' : Ctx) (a b : Expr) (t1 t2 : Ty) :
       HasType ctx a t1 ctx' →

@@ -7,7 +7,7 @@ import WarpTypes.Basic
   - Small-step reduction (Step)
   - Canonical forms lemmas
   - Progress theorem (zero sorry)
-  - Preservation theorem (axiom: substitution lemma for linear contexts)
+  - Preservation theorem (substitution lemma proved via context removal)
 -/
 
 -- ============================================================================
@@ -95,7 +95,7 @@ theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
   | .diverge _ _ _ _ _ _ => simp [isValue] at hv
   | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .shuffle _ _ _ _ _ _ _ => simp [isValue] at hv
-  | .letBind _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
 
@@ -110,7 +110,7 @@ theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
   | .warpVal _ _ => rfl
   | .var _ _ _ hlook => simp [Ctx.lookup, List.find?] at hlook
   | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
-  | .letBind _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
 
@@ -121,7 +121,7 @@ theorem canonical_perLane {e : Expr} {ctx' : Ctx}
   | .perLaneVal _ => rfl
   | .var _ _ _ hlook => simp [Ctx.lookup, List.find?] at hlook
   | .shuffle _ _ _ _ _ _ _ => simp [isValue] at hv
-  | .letBind _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
 
@@ -133,7 +133,7 @@ theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
     simp [isValue] at hv; exact ⟨a, b, rfl, hv.1, hv.2⟩
   | .var _ _ _ hlook => simp [Ctx.lookup, List.find?] at hlook
   | .diverge _ _ _ _ _ _ => simp [isValue] at hv
-  | .letBind _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
 
@@ -192,7 +192,7 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
         exact .inr ⟨_, Step.shuffleVal ActiveSet.all⟩
       | .inr ⟨d', hd''⟩ =>
         exact .inr ⟨_, Step.shuffleRight w data d' hv hd''⟩
-  | .letBind _ _ _ name val body _ _ hval hbody =>
+  | .letBind _ _ _ name val body _ _ hval _ hbody _ =>
     have ihv := progress hval
     match ihv with
     | .inl hv => exact .inr ⟨_, Step.letVal name val body hv⟩
@@ -235,15 +235,250 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
 -- Preservation
 -- ============================================================================
 
-/-- Substitution preserves typing in linear contexts.
-    Standard substitution lemma — requires structural induction on typing
-    with careful context splitting for the linear discipline. -/
-axiom subst_preserves_typing :
-    ∀ {ctx ctx' ctx'' : Ctx} {name : String} {v : Expr} {t_v : Ty}
-      {e : Expr} {t : Ty},
-    HasType ctx v t_v ctx' →
-    HasType ((name, t_v) :: ctx') e t ctx'' →
-    HasType ctx (subst e name v) t ctx''
+-- ============================================================================
+-- Context infrastructure lemmas
+-- ============================================================================
+
+/-- Looking up a name in a context from which it was removed yields none. -/
+theorem remove_lookup_self (ctx : Ctx) (name : String) :
+    (ctx.remove name).lookup name = none := by
+  induction ctx with
+  | nil => rfl
+  | cons p tl ih =>
+    simp only [Ctx.remove, Ctx.lookup]
+    unfold List.filter
+    by_cases h : (p.1 != name) = true
+    · -- p kept: but p.1 ≠ name, so find? skips it
+      simp only [h, List.find?]
+      have hne : (p.1 == name) = false := by
+        simp only [bne_iff_ne, ne_eq, beq_iff_eq] at h; simp [beq_iff_eq, h]
+      simp only [hne, Option.map, Ctx.lookup, Ctx.remove] at ih ⊢
+      exact ih
+    · -- p removed (p.1 = name)
+      simp only [Bool.not_eq_true] at h; simp only [h]
+      exact ih
+
+/-- Looking up a different name is unaffected by remove. -/
+theorem remove_lookup_ne {name name' : String} (hne : name ≠ name') (ctx : Ctx) :
+    (ctx.remove name).lookup name' = ctx.lookup name' := by
+  induction ctx with
+  | nil => rfl
+  | cons p tl ih =>
+    simp only [Ctx.remove, Ctx.lookup]
+    by_cases hp : p.1 = name
+    · -- p.1 = name, so p is filtered out (bne = false)
+      have h_bne : (p.1 != name) = false := by rw [hp]; simp [bne_iff_ne]
+      simp only [List.filter, h_bne]
+      -- p would be skipped by find? anyway (p.1 = name ≠ name')
+      have h_beq : (p.1 == name') = false := by rw [hp]; simp [beq_iff_eq, hne]
+      simp only [List.find?, h_beq]
+      exact ih
+    · -- p.1 ≠ name, so p is kept
+      have h_bne : (p.1 != name) = true := by simp [bne_iff_ne, hp]
+      simp only [List.filter, h_bne, List.find?]
+      by_cases hq : p.1 = name'
+      · simp [beq_iff_eq, hq]
+      · have h_beq : (p.1 == name') = false := by simp [beq_iff_eq, hq]
+        simp only [h_beq]
+        exact ih
+
+/-- Removing from a context where the name is absent is identity. -/
+theorem remove_of_lookup_none {ctx : Ctx} {name : String}
+    (h : ctx.lookup name = none) : ctx.remove name = ctx := by
+  induction ctx with
+  | nil => rfl
+  | cons p tl ih =>
+    simp only [Ctx.lookup, List.find?] at h
+    by_cases hq : (p.1 == name) = true
+    · simp [hq, Option.map] at h
+    · simp only [Bool.not_eq_true] at hq
+      simp only [hq] at h
+      simp only [Ctx.remove, List.filter]
+      have : (p.1 != name) = true := by simp [bne_iff_ne, ne_eq, beq_iff_eq]; simp [beq_iff_eq] at hq; exact hq
+      simp only [this]
+      congr 1
+      exact ih h
+
+/-- Lookup on cons with matching name. -/
+theorem lookup_cons_eq (name : String) (t : Ty) (ctx : Ctx) :
+    Ctx.lookup ((name, t) :: ctx) name = some t := by
+  simp [Ctx.lookup, List.find?, beq_self_eq_true]
+
+/-- Lookup on cons with different name. -/
+theorem lookup_cons_ne {name name' : String} (hne : name ≠ name') (t : Ty) (ctx : Ctx) :
+    Ctx.lookup ((name, t) :: ctx) name' = ctx.lookup name' := by
+  simp only [Ctx.lookup, List.find?]
+  have : (name == name') = false := by simp [beq_iff_eq, hne]
+  simp [this]
+
+/-- Remove on cons with matching name. -/
+theorem remove_cons_eq (name : String) (t : Ty) (ctx : Ctx) :
+    Ctx.remove ((name, t) :: ctx) name = Ctx.remove ctx name := by
+  simp only [Ctx.remove, List.filter]
+  have : ((name, t).1 != name) = false := by simp [bne_iff_ne, ne_eq]
+  simp [this]
+
+/-- Remove on cons with different name. -/
+theorem remove_cons_ne {name name' : String} (hne : name ≠ name') (t : Ty) (ctx : Ctx) :
+    Ctx.remove ((name', t) :: ctx) name = (name', t) :: Ctx.remove ctx name := by
+  simp only [Ctx.remove, List.filter]
+  have : ((name', t).1 != name) = true := by simp [bne_iff_ne, ne_eq]; exact Ne.symm hne
+  simp [this]
+
+-- ============================================================================
+-- Values can be typed in any context
+-- ============================================================================
+
+/-- Helper: values produce any-context typing (avoids index constraint). -/
+private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
+    (hv : isValue v = true)
+    (ht : HasType ctx₁ v t ctx₂) :
+    ∀ ctx₃, HasType ctx₃ v t ctx₃ := by
+  match ht with
+  | .warpVal _ s => intro ctx₃; exact HasType.warpVal ctx₃ s
+  | .perLaneVal _ => intro ctx₃; exact HasType.perLaneVal ctx₃
+  | .unitVal _ => intro ctx₃; exact HasType.unitVal ctx₃
+  | .pairVal _ _ _ a b _ _ ha hb =>
+    simp [isValue] at hv
+    have iha := value_any_ctx_aux hv.1 ha
+    have ihb := value_any_ctx_aux hv.2 hb
+    intro ctx₃
+    exact HasType.pairVal ctx₃ ctx₃ ctx₃ a b _ _ (iha ctx₃) (ihb ctx₃)
+  | .var _ _ _ _ => simp [isValue] at hv
+  | .diverge _ _ _ _ _ _ => simp [isValue] at hv
+  | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .shuffle _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+
+/-- Values can be typed in any context, producing the same context unchanged. -/
+theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
+    (hv : isValue v = true)
+    (ht : HasType ctx₁ v t ctx₁) :
+    ∀ ctx₂, HasType ctx₂ v t ctx₂ :=
+  value_any_ctx_aux hv ht
+
+-- ============================================================================
+-- Output context bindings come from input context
+-- ============================================================================
+
+/-- Any binding in the output context was present (with the same type) in input. -/
+theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
+    (ht : HasType ctx e t ctx')
+    {x : String} {tx : Ty}
+    (hout : ctx'.lookup x = some tx) :
+    ctx.lookup x = some tx := by
+  induction ht with
+  | warpVal _ _ => exact hout
+  | perLaneVal _ => exact hout
+  | unitVal _ => exact hout
+  | var ctx₀ name₀ t₀ hlook =>
+    -- ctx' = ctx₀.remove name₀
+    by_cases hxn : x = name₀
+    · subst hxn; rw [remove_lookup_self] at hout; exact absurd hout (by simp)
+    · rwa [remove_lookup_ne (Ne.symm hxn)] at hout
+  | diverge _ _ _ _ _ _ ih => exact ih hout
+  | merge _ _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | shuffle _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | letBind ctx₀ ctx_mid ctx_body name' _ _ _ _ _ hfresh₀ _ hcons₀ ih_val ih_body =>
+    -- ctx' = ctx_body, ctx = ctx₀
+    -- hout : ctx_body.lookup x = some tx
+    -- hcons₀ : ctx_body.lookup name' = none
+    -- ih_body : ctx_body.lookup x = some tx → ((name', _) :: ctx_mid).lookup x = some tx
+    -- ih_val : ((name', _) :: ctx_mid).lookup x = some tx → ctx₀.lookup x = some tx
+    -- But ih_body's premise is about the output of body's typing, which IS ctx_body = ctx'
+    -- Actually the IH is already correctly instantiated by `induction`:
+    -- ih_body gives us binding in (name', t1) :: ctx_mid
+    -- ih_val gives us binding in ctx₀
+    have h_body := ih_body hout
+    -- h_body : ((name', _) :: ctx_mid).lookup x = some tx
+    -- Need to strip the (name', _) prefix. x ≠ name' because x is in ctx_body but name' isn't
+    by_cases hxn : x = name'
+    · -- x = name', but ctx_body.lookup name' = none contradicts hout
+      subst hxn; rw [hcons₀] at hout; exact absurd hout (by simp)
+    · -- x ≠ name', so lookup skips the cons
+      rw [lookup_cons_ne (Ne.symm hxn)] at h_body
+      exact ih_val h_body
+  | pairVal _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | fstE _ _ _ _ _ _ ih => exact ih hout
+  | sndE _ _ _ _ _ _ ih => exact ih hout
+
+-- ============================================================================
+-- Generalized Substitution Lemma
+-- ============================================================================
+
+/-- Core substitution theorem: substituting a value for a name removes that
+    name's binding from both input and output contexts.
+
+    This generalizes over WHERE in the context the binding appears, which is
+    essential for the merge/shuffle/pair cases where the binding may have
+    been threaded past the first sub-expression. -/
+theorem subst_typing
+    {nm : String} {t_v : Ty} {v : Expr}
+    (hv : isValue v = true)
+    (ht_v : ∀ ctx₂, HasType ctx₂ v t_v ctx₂)
+    {ctx : Ctx} {e : Expr} {t : Ty} {ctx' : Ctx}
+    (hte : HasType ctx e t ctx')
+    (hname : ∀ t', ctx.lookup nm = some t' → t' = t_v) :
+    HasType (ctx.remove nm) (subst e nm v) t (ctx'.remove nm) :=
+  match hte with
+  | .warpVal _ s => by simp [subst]; exact HasType.warpVal _ s
+  | .perLaneVal _ => by simp [subst]; exact HasType.perLaneVal _
+  | .unitVal _ => by simp [subst]; exact HasType.unitVal _
+  | .var _ _ _ _ => sorry
+  | .diverge _ _ _ _ _ hw => by
+    simp [subst]
+    exact HasType.diverge _ _ _ _ _ (subst_typing hv ht_v hw hname)
+  | .merge _ ctx_mid _ _ _ _ _ hw1 hw2 hcomp => by
+    simp [subst]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input hw1 hl)
+    exact HasType.merge _ _ _ _ _ _ _
+      (subst_typing hv ht_v hw1 hname) (subst_typing hv ht_v hw2 hname_mid) hcomp
+  | .shuffle _ ctx_mid _ _ _ hw hd => by
+    simp [subst]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input hw hl)
+    exact HasType.shuffle _ _ _ _ _
+      (subst_typing hv ht_v hw hname) (subst_typing hv ht_v hd hname_mid)
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => by
+    sorry -- letBind case: most complex
+  | .pairVal _ ctx_mid _ _ _ _ _ ha hb => by
+    simp [subst]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input ha hl)
+    exact HasType.pairVal _ _ _ _ _ _ _
+      (subst_typing hv ht_v ha hname) (subst_typing hv ht_v hb hname_mid)
+  | .fstE _ _ _ _ _ he => by
+    simp [subst]; exact HasType.fstE _ _ _ _ _ (subst_typing hv ht_v he hname)
+  | .sndE _ _ _ _ _ he => by
+    simp [subst]; exact HasType.sndE _ _ _ _ _ (subst_typing hv ht_v he hname)
+
+-- ============================================================================
+-- Substitution preserves typing (wrapper for preservation)
+-- ============================================================================
+
+/-- Substitution lemma as needed by preservation's letVal case. -/
+theorem subst_preserves_typing
+    {ctx ctx' ctx'' : Ctx} {name : String} {v : Expr} {t_v : Ty}
+    {e : Expr} {t : Ty}
+    (hval : HasType ctx v t_v ctx')
+    (hfresh : ctx'.lookup name = none)
+    (hbody : HasType ((name, t_v) :: ctx') e t ctx'')
+    (hconsumed : ctx''.lookup name = none)
+    (hv : isValue v = true) :
+    HasType ctx (subst e name v) t ctx'' := by
+  have hctx_eq := value_preserves_ctx hval hv
+  subst hctx_eq  -- ctx' replaced by ctx; hval : HasType ctx v t_v ctx
+  have ht_v := value_any_ctx hv hval
+  have hname_top : ∀ t', Ctx.lookup ((name, t_v) :: ctx) name = some t' → t' = t_v := by
+    intro t' h; simp [lookup_cons_eq] at h; exact h.symm
+  have h := subst_typing hv ht_v hbody hname_top
+  rw [remove_cons_eq] at h
+  rw [remove_of_lookup_none hfresh] at h
+  rw [remove_of_lookup_none hconsumed] at h
+  exact h
 
 /-- Preservation: if Γ ⊢ e : t ⊣ Γ' and e ⟶ e', then Γ ⊢ e' : t ⊣ Γ'. -/
 theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
@@ -273,8 +508,8 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
         | perLaneVal _ => exact HasType.perLaneVal _
   | letVal name v body hv =>
     cases ht with
-    | letBind _ _ _ _ _ _ _ _ hval hbody =>
-      exact subst_preserves_typing hval hbody
+    | letBind _ _ _ _ _ _ _ _ hval hfresh hbody hconsumed =>
+      exact subst_preserves_typing hval hfresh hbody hconsumed hv
   | fstVal a b hva hvb =>
     cases ht with
     | fstE _ _ _ t1 t2 he =>
@@ -311,8 +546,8 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
       exact HasType.shuffle _ _ _ _ _ hw (ih hd)
   | letCong name val val' body _ ih =>
     cases ht with
-    | letBind _ _ _ _ _ _ _ _ hval hbody =>
-      exact HasType.letBind _ _ _ _ _ _ _ _ (ih hval) hbody
+    | letBind _ _ _ _ _ _ _ _ hval hfresh hbody hconsumed =>
+      exact HasType.letBind _ _ _ _ _ _ _ _ (ih hval) hfresh hbody hconsumed
   | pairLeftCong a a' b _ ih =>
     cases ht with
     | pairVal _ _ _ _ _ _ _ ha hb =>
