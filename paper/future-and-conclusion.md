@@ -2,7 +2,13 @@
 
 Session-typed divergence opens several research directions.
 
-## 9.1 Data-Dependent Divergence (Implemented)
+## 9.1 Tooling and Data-Dependent Divergence
+
+Our tooling stack includes two implemented proc macros and a build-time library:
+
+1. **`warp_sets!`** (§6.1) generates the static active set hierarchy with compile-time validation of disjoint/covering invariants.
+2. **`#[warp_kernel]`** transforms kernel functions into `extern "ptx-kernel"` entry points with `#[no_mangle]`, validating that parameters are GPU-compatible types (raw pointers or scalars).
+3. **`WarpBuilder`** cross-compiles kernel crates to PTX via `cargo rustc --target nvptx64-nvidia-cuda -Z build-std=core`, finds the generated `.s` file, and produces a Rust module with a `Kernels` struct providing named `CudaFunction` handles.
 
 Data-dependent predicates (e.g., `data[lane] > threshold`) are now supported via `diverge_dynamic(mask)`, which returns a `DynDiverge` — a paired divergence where the mask is runtime but the complement is structural. Both branches must merge to recover `Warp<All>`. No dependent types are required.
 
@@ -19,8 +25,9 @@ A future `#[warp_typed]` proc macro could further optimize this pattern by autom
 
 ## 9.2 Formal Mechanization
 
-Our soundness proof (§4) is on paper. We plan to mechanize it in Lean 4 using Aeneas, which translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs:
-- Machine-checked progress and preservation (Lean 4)
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Remaining future work:
+- Extend mechanization to nested divergence (generalize `IsComplementAll` to `IsComplement s1 s2 parent`)
+- Mechanize the loop typing rules (§5.1) and set-preserving shuffle (§4.6)
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 
@@ -34,9 +41,9 @@ Rich IDE support would enhance usability:
 
 ## 9.4 Protocol Inference and Gradual Typing
 
-Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 13 tests across five approaches (`src/research/protocol_inference.rs`).
+Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`).
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 14 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 18 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof

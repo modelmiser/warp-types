@@ -16,13 +16,13 @@ Types τ ::= Warp<S>           -- Warp with active set S
           | ...               -- Standard types (int, bool, etc.)
 ```
 
-### Warp<S>
+### `Warp<S>`
 
 The central type is `Warp<S>`, representing a warp whose active lanes are described by the active set `S`. This type is a *capability*: possession of a `Warp<S>` value grants permission to perform operations on lanes in `S`.
 
 Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
 
-### PerLane<T>
+### `PerLane<T>`
 
 `PerLane<T>` represents a value of type `T` that may differ across lanes. This is the natural type for most GPU data—each lane has its own value.
 
@@ -30,7 +30,7 @@ Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded
 let data: PerLane<i32> = load_per_lane(ptr);  // Each lane loads from ptr + lane_id
 ```
 
-### Uniform<T>
+### `Uniform<T>`
 
 `Uniform<T>` represents a value guaranteed to be identical across all active lanes. This is important for warp-uniform operations like branch conditions:
 

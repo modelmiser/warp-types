@@ -2,6 +2,7 @@
 name = "warp-types-macros"
 version = "0.1.0"
 edition = "2021"
+authors = ["Chad Aldreda"]
 description = "Proc macro for generating active set hierarchies"
 license = "MIT"
 

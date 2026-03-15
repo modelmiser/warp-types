@@ -25,9 +25,56 @@ But what are `S` and `S'`? They depend on runtime values.
 
 ### Solution: Layered Approach
 
-We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants:
+We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants via four typing rules.
 
-**Pattern 1: Uniform Loop (all lanes iterate together)**
+### Typing Rules
+
+**LOOP-UNIFORM**: All lanes iterate together; warp operations permitted in body.
+
+```
+Γ ⊢ n : Uniform<Int>    Γ, w : Warp<S> ⊢ e : Warp<S>
+─────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_uniform(n, e) : Warp<S>
+```
+
+The loop count `n` must be uniform (same across all lanes). The body preserves the active set `S`, so warp operations on `Warp<S>` are safe at every iteration. This covers butterfly reductions, Kogge-Stone scans, and any pattern where all lanes step together.
+
+**LOOP-CONVERGENT**: Exit only when a collective predicate holds; warp operations permitted in body.
+
+```
+Γ, w : Warp<S> ⊢ e : Warp<S>    Γ ⊢ p : Warp<S> → Bool
+p uses collective (ballot/all/any)
+─────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ loop_until(p, e) : Warp<S>
+```
+
+The exit predicate `p` is a collective operation (e.g., `warp.all(...)`) that evaluates identically across all active lanes. Because all lanes exit simultaneously, the active set is preserved.
+
+**LOOP-VARYING**: Per-lane iteration counts; no warp operations in body.
+
+```
+Γ ⊢ e : PerLane<T> → PerLane<T>    e contains no warp operations
+──────────────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_varying(e) : Warp<S>
+```
+
+The body operates on per-lane data without touching the warp handle. The warp is syntactically absent from `e`, so varying trip counts cannot introduce divergence bugs. The warp passes through unchanged.
+
+**LOOP-PHASED**: Alternating uniform and varying phases; warp operations only in uniform phases.
+
+```
+Γ ⊢ n : Uniform<Int>
+Γ, w : Warp<S> ⊢ e₁ : Warp<S>           (uniform phase, warp ops permitted)
+Γ ⊢ e₂ : PerLane<T> → PerLane<T>         (varying phase, no warp ops)
+──────────────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_phased(n, e₁, e₂) : Warp<S>
+```
+
+Each iteration has two sub-expressions: `e₁` (uniform, may use warp) and `e₂` (varying, warp-free). The uniform count `n` ensures all lanes execute the same number of rounds, even though per-lane work within `e₂` may vary.
+
+### Examples
+
+**Pattern 1: Uniform Loop (LOOP-UNIFORM)**
 ```rust
 fn uniform_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     let limit = warp.ballot_any(|lane| data[lane] > 0);  // Uniform count
@@ -44,7 +91,7 @@ fn uniform_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. The invariant is that all lanes iterate together.
 
-**Pattern 2: Convergent Loop (exit when all agree)**
+**Pattern 2: Convergent Loop (LOOP-CONVERGENT)**
 ```rust
 fn convergent_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     loop {
@@ -60,7 +107,7 @@ fn convergent_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. The loop exits only when all lanes satisfy the predicate.
 
-**Pattern 3: Varying Loop (no warp ops in body)**
+**Pattern 3: Varying Loop (LOOP-VARYING)**
 ```rust
 fn varying_loop(warp: Warp<All>, mut data: PerLane<i32>) -> (Warp<All>, PerLane<i32>) {
     // Per-lane accumulation - no warp operations needed
@@ -76,7 +123,7 @@ fn varying_loop(warp: Warp<All>, mut data: PerLane<i32>) -> (Warp<All>, PerLane<
 
 Type: `Warp<All> → Warp<All>`. The warp is not used inside the loop, so varying iteration is safe.
 
-**Pattern 4: Phased Loop (warp ops only in uniform phases)**
+**Pattern 4: Phased Loop (LOOP-PHASED)**
 ```rust
 fn phased_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     for round in 0..MAX_ROUNDS {

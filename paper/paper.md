@@ -31,7 +31,7 @@ __device__ int conditional_exchange(int data, bool participate) {
 
 This code compiles without warnings and may appear to work correctly in testing. But it contains undefined behavior: the shuffle operation reads values from *all* lanes, including those where `participate` is false. Those threads are inactive—their registers may contain stale data, garbage, or trap values. The result is non-deterministic: sometimes correct, sometimes wrong, sometimes a crash.
 
-This bug pattern is not hypothetical. NVIDIA's own `cuda-samples` repository contains a shuffle-mask bug in its reference parallel reduction (`reduce7`): when launched with one block of 32 threads, only lane 0 enters the final reduction, but `__shfl_down_sync` reads from lane 16, which is inactive [cuda-samples#398]. The result is a silently wrong sum—no crash, no error—at a configuration most test suites skip. NVIDIA's core reduction library CUB contains a similar bug where compiler optimizations can predicate off mask initialization, producing wrong scan results in sub-warp configurations [CCCL#854]. The PIConGPU plasma physics simulation ran for months on K80 GPUs with `__ballot_sync(0xFFFFFFFF, ...)` inside a divergent branch, producing plausible but mathematically wrong results [PIConGPU#2514]. An LLVM bug shows the problem extends into compiler optimization: `__shfl_sync` after a conditional causes the compiler to eliminate the branch entirely, running a lane-0-only atomic on all 32 lanes [LLVM#155682].
+This bug pattern is not hypothetical. NVIDIA's own `cuda-samples` repository contains a shuffle-mask bug in its reference parallel reduction (`reduce7`): when launched with one block of 32 threads, only lane 0 enters the final reduction, but `__shfl_down_sync` reads from lane 16, which is inactive [cuda-samples#398]. The result is a silently wrong sum—no crash, no error—at a configuration most test suites skip. NVIDIA's core primitives library CUB has an open issue suggesting compiler optimizations may predicate off mask initialization in sub-warp configurations [CCCL#854] — the reporter later noted it may have been a false positive, but the source-level pattern is ill-typed in our system regardless. The PIConGPU plasma physics simulation ran for months on K80 GPUs with `__ballot_sync(0xFFFFFFFF, ...)` inside a divergent branch — real undefined behavior that went undetected because pre-Volta hardware enforced warp-level convergence, masking the violation [PIConGPU#2514]. An LLVM bug shows the problem extends into compiler optimization: `__shfl_sync` after a conditional causes the compiler to eliminate the branch entirely, running a lane-0-only atomic on all 32 lanes [LLVM#155682].
 
 The bug class is severe enough that NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0, replacing it with `__shfl_sync` which requires an explicit mask parameter [CUDA Programming Guide §10.22]. But the mask is still a runtime value—and as the bugs above demonstrate, programmers get it wrong. Volta's independent thread scheduling made the situation worse: code that was latent undefined behavior on Pascal became observable bugs when threads within a warp could genuinely interleave.
 
@@ -351,13 +351,13 @@ Types τ ::= Warp<S>           -- Warp with active set S
           | ...               -- Standard types (int, bool, etc.)
 ```
 
-### Warp<S>
+### `Warp<S>`
 
 The central type is `Warp<S>`, representing a warp whose active lanes are described by the active set `S`. This type is a *capability*: possession of a `Warp<S>` value grants permission to perform operations on lanes in `S`.
 
 Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
 
-### PerLane<T>
+### `PerLane<T>`
 
 `PerLane<T>` represents a value of type `T` that may differ across lanes. This is the natural type for most GPU data—each lane has its own value.
 
@@ -365,7 +365,7 @@ Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded
 let data: PerLane<i32> = load_per_lane(ptr);  // Each lane loads from ptr + lane_id
 ```
 
-### Uniform<T>
+### `Uniform<T>`
 
 `Uniform<T>` represents a value guaranteed to be identical across all active lanes. This is important for warp-uniform operations like branch conditions:
 
@@ -1002,61 +1002,43 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have implemented an executable proof sketch in Rust (see `src/proof.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
+We have mechanized the full core metatheory in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
 
-```rust
-#[test]
-fn diverge_complement_lemma() {
-    for parent_mask in [ALL, EVEN, ODD, LOW_HALF, HIGH_HALF] {
-        for pred_mask in 0..=0xFFFFFFFF_u32 {
-            let left = parent_mask & pred_mask;
-            let right = parent_mask & !pred_mask;
+### Scope
 
-            // Disjoint
-            assert_eq!(left & right, 0);
+The mechanization covers two files totaling 896 lines of Lean:
 
-            // Covering
-            assert_eq!(left | right, parent_mask);
-        }
-    }
-}
-```
+**Core type system properties** (`Basic.lean`):
+- `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
+- `shuffle_requires_all`: Shuffle typing requires `Warp<All>` (Lemma 4.7). Proved by case analysis on the typing derivation.
+- `complement_symmetric`: Complement relation is symmetric. Proved by commutativity of bitwise AND/OR.
+- `even_odd_complement`, `lowHalf_highHalf_complement`: Concrete complement instances. Proved by `decide` (BitVec 32 is decidable).
 
-The core theorems are mechanized in Lean 4 (`lean/WarpTypes/`). The formalization uses `BitVec 32` for active sets and an inductive typing judgement with linear context threading. The type system includes pair types for diverge results (`Ty.pair`) and projections (`fst`/`snd`).
+**Full metatheory** (`Metatheory.lean`):
+- **Progress** (Theorem 4.1): A closed well-typed expression is either a value or can step. Proved by induction on the typing derivation, using canonical forms lemmas for each type constructor.
+- **Preservation** (Theorem 4.2): If `Γ ⊢ e : τ ⊣ Γ'` and `e ⟶ e'`, then `Γ ⊢ e' : τ ⊣ Γ'`. Proved by induction on the step relation, with case analysis on typing. The critical `letVal` case uses the substitution lemma below.
+- **Substitution lemma** (`subst_typing`): Substituting a value for a linear binding removes that binding from both input and output contexts. This is the key lemma enabling preservation for `let`-bindings in a linear type system. Proved directly (~90 lines) via induction on the typing derivation, with explicit context threading through merge, shuffle, and pair sub-expressions.
 
-**Basic.lean** — Six foundational theorems (zero `sorry`, zero axioms):
+**Untypability proofs** (5 documented GPU bugs):
+- `bug1_cuda_samples_398`: Shuffle after extracting lane 0 — untypable.
+- `bug2_cccl_854`: Shuffle on 16-lane sub-warp — untypable.
+- `bug3_picongpu_2514`: Ballot on diverged subset — untypable.
+- `bug4_llvm_155682`: Shuffle after lane-0 conditional — untypable.
+- `bug5_shuffle_after_diverge`: Shuffle after even/odd divergence — untypable.
 
-1. `diverge_partition`: S∩P and S∩¬P are disjoint and cover S
-2. `shuffle_requires_all`: shuffle typing demands Warp\<All\>
-3. `complement_symmetric`: the complement relation is symmetric
-4. `even_odd_complement`: Even and Odd are complements (concrete instance)
-5. `lowHalf_highHalf_complement`: LowHalf and HighHalf are complements
-6. `progress_values`: well-typed values are terminal (simple case analysis; full progress in Metatheory.lean)
+Each untypability proof factors through a single lemma (`shuffle_diverged_untypable`) that shows: if the active set after diverge is not `All`, no typing derivation exists for a shuffle on that sub-warp. The concrete bugs instantiate this with specific masks and close via `decide`.
 
-**Metatheory.lean** — Small-step semantics with progress and preservation:
+**Supporting infrastructure** (14 lemmas): canonical forms for `Warp`, `PerLane`, and `Pair` types; `value_preserves_ctx` (values don't consume linear resources); `value_any_ctx` (values can be typed in any context); `output_binding_from_input` (output context bindings originate from input); context algebra (`remove_comm`, `remove_lookup_self`, `remove_lookup_ne`, etc.).
 
-7. `value_preserves_ctx`: values don't consume linear resources (fully proved)
-8. `canonical_warp`: well-typed warp values have the expected form (fully proved)
-9. `canonical_perLane`: well-typed per-lane values have the expected form (fully proved)
-10. `canonical_pair`: well-typed pair values decompose correctly (fully proved)
-11. `progress`: closed well-typed expressions are values or can step (fully proved, zero `sorry`)
-12. `preservation`: reduction preserves typing (all cases proved, one axiom: substitution lemma)
+### Design Choices
 
-The `Step` inductive defines 16 reduction rules (6 value reductions + 10 congruence rules). Progress is proved by structural induction on the typing derivation, using `value_preserves_ctx` to show that when a left sub-expression is a value, the right sub-expression inherits the empty context. The one axiom is `subst_preserves_typing` — the standard substitution lemma for linear type systems, which requires careful context splitting to maintain the use-exactly-once discipline.
+The formalization models active sets as `BitVec 32` (Lean's built-in bitvector type), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks which bindings remain after evaluation — this directly encodes the consumption semantics that Rust enforces via move. The substitution lemma is proved directly rather than axiomatized, which required explicit context infrastructure but yields a stronger result: the mechanization has no trusted assumptions beyond Lean's kernel.
 
-**Untypability of real bugs** — five additional theorems mechanically prove that each documented bug pattern has no typing derivation (zero `sorry`):
+Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to Lean verification; (2) prior work on GPU verification (MCL framework) was built in Lean.
 
-13. `bug1_cuda_samples_398`: shuffle on Lane0 warp (1 active lane) — untypable
-14. `bug2_cccl_854`: shuffle on 16-lane sub-warp — untypable
-15. `bug3_picongpu_2514`: ballot on diverged subset — untypable
-16. `bug4_llvm_155682`: shuffle after lane-0 conditional — untypable
-17. `bug5_shuffle_after_diverge`: shuffle on Even warp — untypable
+### What Is Not Mechanized
 
-All five reduce to the same core lemma (`shuffle_diverged_untypable`): the `shuffle` rule requires `Warp<All>`, but `fst(diverge(warpVal(All), pred))` has type `Warp<All ∧ pred>`, and `All ∧ pred ≠ All` for any non-trivial predicate (`by decide`). These are machine-checked proofs that the type system rejects the specific bug patterns we claim it catches.
-
-**Scope limitation**: The Lean `merge` rule uses `IsComplementAll` — complements within `All` (0xFFFFFFFF) — rather than the more general complement-within-parent used in the Rust implementation. This means the formalization covers flat diverge/merge patterns but not nested divergence (where merge returns to an intermediate active set like `Even`). Extending the formalization to `IsComplement s1 s2 parent` is straightforward but increases the number of cases.
-
-Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to machine-checked proofs; (2) prior work on GPU program verification (MCL framework) was built in Lean. Build: `cd lean && lake build`.
+The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
 
 
 ---
@@ -1088,9 +1070,56 @@ But what are `S` and `S'`? They depend on runtime values.
 
 ### Solution: Layered Approach
 
-We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants:
+We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants via four typing rules.
 
-**Pattern 1: Uniform Loop (all lanes iterate together)**
+### Typing Rules
+
+**LOOP-UNIFORM**: All lanes iterate together; warp operations permitted in body.
+
+```
+Γ ⊢ n : Uniform<Int>    Γ, w : Warp<S> ⊢ e : Warp<S>
+─────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_uniform(n, e) : Warp<S>
+```
+
+The loop count `n` must be uniform (same across all lanes). The body preserves the active set `S`, so warp operations on `Warp<S>` are safe at every iteration. This covers butterfly reductions, Kogge-Stone scans, and any pattern where all lanes step together.
+
+**LOOP-CONVERGENT**: Exit only when a collective predicate holds; warp operations permitted in body.
+
+```
+Γ, w : Warp<S> ⊢ e : Warp<S>    Γ ⊢ p : Warp<S> → Bool
+p uses collective (ballot/all/any)
+─────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ loop_until(p, e) : Warp<S>
+```
+
+The exit predicate `p` is a collective operation (e.g., `warp.all(...)`) that evaluates identically across all active lanes. Because all lanes exit simultaneously, the active set is preserved.
+
+**LOOP-VARYING**: Per-lane iteration counts; no warp operations in body.
+
+```
+Γ ⊢ e : PerLane<T> → PerLane<T>    e contains no warp operations
+──────────────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_varying(e) : Warp<S>
+```
+
+The body operates on per-lane data without touching the warp handle. The warp is syntactically absent from `e`, so varying trip counts cannot introduce divergence bugs. The warp passes through unchanged.
+
+**LOOP-PHASED**: Alternating uniform and varying phases; warp operations only in uniform phases.
+
+```
+Γ ⊢ n : Uniform<Int>
+Γ, w : Warp<S> ⊢ e₁ : Warp<S>           (uniform phase, warp ops permitted)
+Γ ⊢ e₂ : PerLane<T> → PerLane<T>         (varying phase, no warp ops)
+──────────────────────────────────────────────────────────────────
+Γ, w : Warp<S> ⊢ for_phased(n, e₁, e₂) : Warp<S>
+```
+
+Each iteration has two sub-expressions: `e₁` (uniform, may use warp) and `e₂` (varying, warp-free). The uniform count `n` ensures all lanes execute the same number of rounds, even though per-lane work within `e₂` may vary.
+
+### Examples
+
+**Pattern 1: Uniform Loop (LOOP-UNIFORM)**
 ```rust
 fn uniform_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     let limit = warp.ballot_any(|lane| data[lane] > 0);  // Uniform count
@@ -1107,7 +1136,7 @@ fn uniform_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. The invariant is that all lanes iterate together.
 
-**Pattern 2: Convergent Loop (exit when all agree)**
+**Pattern 2: Convergent Loop (LOOP-CONVERGENT)**
 ```rust
 fn convergent_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     loop {
@@ -1123,7 +1152,7 @@ fn convergent_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. The loop exits only when all lanes satisfy the predicate.
 
-**Pattern 3: Varying Loop (no warp ops in body)**
+**Pattern 3: Varying Loop (LOOP-VARYING)**
 ```rust
 fn varying_loop(warp: Warp<All>, mut data: PerLane<i32>) -> (Warp<All>, PerLane<i32>) {
     // Per-lane accumulation - no warp operations needed
@@ -1139,7 +1168,7 @@ fn varying_loop(warp: Warp<All>, mut data: PerLane<i32>) -> (Warp<All>, PerLane<
 
 Type: `Warp<All> → Warp<All>`. The warp is not used inside the loop, so varying iteration is safe.
 
-**Pattern 4: Phased Loop (warp ops only in uniform phases)**
+**Pattern 4: Phased Loop (LOOP-PHASED)**
 ```rust
 fn phased_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
     for round in 0..MAX_ROUNDS {
@@ -1649,7 +1678,7 @@ Our approach has the lowest overhead because the types *are* the verification.
 
 ## 6.3 Data Types
 
-### PerLane<T>
+### `PerLane<T>`
 
 Per-lane data is stored as an array:
 
@@ -1674,7 +1703,7 @@ impl<T: Copy> PerLane<T> {
 
 On GPU, this maps to registers. Each lane accesses its own element.
 
-### Uniform<T>
+### `Uniform<T>`
 
 Uniform values are guaranteed identical across lanes:
 
@@ -1969,9 +1998,11 @@ We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects
 |-----|--------|--------------|---------|
 | Wrong ballot mask in reduction | cuda-samples#398 | Silent wrong sum | Yes — modeled |
 | Compiler predicates off mask init | CCCL#854 | Silent wrong scan | Yes — modeled |
-| Hardcoded full mask in divergent branch | PIConGPU#2514 | Wrong physics output | Yes — modeled |
+| Hardcoded full mask in divergent branch | PIConGPU#2514 | Confirmed UB, no wrong output observed‡ | Yes — modeled |
 | shfl_sync causes branch elimination | LLVM#155682 | Atomic 32x overcounting | Partial — modeled† |
 | Deprecated `__shfl` API family | CUDA 9.0 | Entire bug class | N/A (vendor response) |
+
+‡PIConGPU#2514: The undefined behavior is real (`__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch violates the CUDA spec). However, a contributor tested on K80 with CUDA 8 and 9 and observed no errors — pre-Volta hardware enforced convergence at warp level, masking the UB. The fix (PR #2600) was preventive, targeting Volta's independent thread scheduling. We do not claim wrong output was observed.
 
 **Additional documented bugs** (identified via systematic search):
 
@@ -2055,14 +2086,14 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
 
-1. `shuffle_xor` on `Warp<Even>` — rejected (§3)
-2. `merge(Even, LowHalf)` — rejected, overlapping sets (§3)
-3. `merge(Even, Even)` — rejected, same set (§3)
-4. `merge(EvenLow, OddHigh)` — rejected, non-covering sets (§3)
-5. `shuffle_xor` on `Warp<LowHalf>` — rejected (§3)
-6. `reduce_sum` on `Warp<Even>` — rejected (§3)
-7. `merge` of non-complements within nested divergence — rejected (§3)
-8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (§3)
+1. `shuffle_xor` on `Warp<Even>` — rejected, method absent (`diverge.rs`)
+2. `merge(Even, LowHalf)` — rejected, non-complements (`merge.rs`)
+3. `merge(Even, Even)` — rejected, same set (`merge.rs`)
+4. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
+5. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
+6. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
+7. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
+8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
@@ -2191,11 +2222,13 @@ The annotations are: `warp: Warp<All>` function parameters (5 occurrences), `div
 
 ### Limitations
 
-Two patterns require special handling:
+Four patterns require special handling:
 
 1. **Data-dependent divergence**: When the active set depends on runtime data (e.g., `data[lane] > threshold`), our static marker types do not apply. Instead, `diverge_dynamic(mask)` returns a `DynDiverge` with structural complement guarantees — the mask is runtime, but the pairing ensures both branches must merge before shuffle. No dependent types needed.
 
-2. **Cross-function active set polymorphism**: Functions generic over the active set use Rust's standard trait bounds (`fn foo<S: ActiveSet>(warp: Warp<S>)`). The type parameter `S` is inferred at call sites. This is idiomatic Rust — not a limitation of the type system, but a language property.
+2. **Arbitrary runtime predicates**: Our marker types cover common patterns (Even, Odd, LowHalf, HighHalf). Predicates not matching these markers require existential types, which add a runtime check.
+
+3. **Cross-function active set polymorphism**: Functions generic over the active set use Rust's standard trait bounds (`fn foo<S: ActiveSet>(warp: Warp<S>)`). The type parameter `S` is inferred at call sites. This is idiomatic Rust — not a limitation of the type system, but a language property.
 
 4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern: lanes that finish early spin until all lanes agree to exit, maintaining a full warp throughout. `DynWarp` (§9.4) provides a runtime escape for patterns where static exit tracking is too restrictive.
 
@@ -2221,7 +2254,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
-| Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 theorems total (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
@@ -2438,7 +2471,7 @@ The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread 
 
 Session-typed divergence opens several research directions.
 
-## 9.1 Proc Macros and Tooling
+## 9.1 Tooling and Data-Dependent Divergence
 
 Our tooling stack includes two implemented proc macros and a build-time library:
 
@@ -2461,8 +2494,9 @@ A future `#[warp_typed]` proc macro could further optimize this by automatically
 
 ## 9.2 Formal Mechanization
 
-Our core theorems are mechanized in Lean 4 (§4.8), including machine-checked progress (zero `sorry`) and preservation (one axiom: substitution lemma for linear contexts). Remaining future work:
-- Close the substitution lemma (`subst_preserves_typing`) — the standard hard part of linear type system formalization, requiring structural induction with careful context splitting
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Remaining future work:
+- Extend mechanization to nested divergence (generalize `IsComplementAll` to `IsComplement s1 s2 parent`)
+- Mechanize the loop typing rules (§5.1) and set-preserving shuffle (§4.6)
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 
@@ -2476,9 +2510,9 @@ Rich IDE support would enhance usability:
 
 ## 9.4 Protocol Inference and Gradual Typing
 
-Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 13 tests across five approaches (`src/research/protocol_inference.rs`).
+Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`).
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 14 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 18 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -2522,7 +2556,7 @@ Several limitations remain:
 
 # 10. Conclusion
 
-GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with silently wrong output. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs prohibit lane-level divergence entirely rather than manage it.
+GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with undefined behavior undetected on pre-Volta hardware. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs prohibit lane-level divergence entirely rather than manage it.
 
 We presented **session-typed divergence**, a type system that makes lane-level divergence safe rather than forbidden:
 

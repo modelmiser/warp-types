@@ -1,5 +1,7 @@
 # warp-types: Session-Typed GPU Divergence
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19040616.svg)](https://doi.org/10.5281/zenodo.19040616)
+
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
 **Status:** Research prototype with real GPU execution. 272 unit + 50 example + 23 doc tests (345 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
@@ -120,11 +122,11 @@ fn main() {
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | 11 Lean 4 theorems, zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Full Lean 4 mechanization (28 theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32/64 lanes) | u64 masks, AMD stubs, GpuTarget enum | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (14 tests) | `cargo test gradual` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (18 tests) | `cargo test gradual` |
 | All claims | Full test suite (345 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
@@ -140,6 +142,8 @@ warp-types/
 │   ├── merge.rs            # Rejoin complementary sub-warps
 │   ├── shuffle.rs          # Shuffle/ballot/reduce (Warp<All> only) + permutation algebra
 │   ├── cub.rs              # CUB-equivalent typed warp primitives
+│   ├── sort.rs             # Bitonic sort (typed warp primitives)
+│   ├── tile.rs             # Tile-level warp partitioning
 │   ├── dynamic.rs          # Data-dependent divergence (DynDiverge)
 │   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
 │   ├── fence.rs            # Fence-divergence type-state machine
@@ -154,16 +158,23 @@ warp-types/
 ├── warp-types-builder/     # WarpBuilder (build.rs cross-compilation to PTX)
 ├── examples/
 │   ├── nvidia_cuda_samples_398.rs  # Real NVIDIA bug, caught by types
+│   ├── cub_cccl_854.rs            # CUB/CCCL sub-warp shuffle bug
+│   ├── picongpu_2514.rs           # PIConGPU months of silent UB
+│   ├── llvm_155682.rs             # LLVM lane-0 conditional shuffle
 │   ├── opencv_12320.rs            # OpenCV warpScanInclusive deadlock
 │   ├── pytorch_98157.rs           # PyTorch __activemask() misuse
 │   ├── tvm_17307.rs               # TVM LowerThreadAllreduce H100 crash
+│   ├── demo_bug_that_types_catch.rs  # Synthetic demonstration
 │   └── gpu-project/               # End-to-end cargo→GPU example
 ├── reproduce/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (11 theorems, zero sorry)
-└── paper/                  # Preprint (markdown)
+├── lean/                   # Lean 4 formalization (28 theorems, zero sorry)
+├── paper/                  # Preprint (markdown)
+├── tutorial/               # Step-by-step tutorial
+├── blog/                   # Blog post draft
+└── INTEGRATION.md          # Sol integration guide
 ```
 
 ## Limitations

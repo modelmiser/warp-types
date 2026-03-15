@@ -1,6 +1,6 @@
 # The Worst Kind of GPU Bug (And How Types Fix It)
 
-There's a class of GPU bug that compiles cleanly, passes most tests, and produces silently wrong results. Not crashes. Not NaN. Just... wrong numbers. The kind of wrong that a plasma physics simulation runs with for months before anyone notices.
+There's a class of GPU bug that compiles cleanly, passes most tests, and produces undefined behavior. Not crashes. Not obvious failures. Silent, spec-violating operations that hardware may or may not mask. The kind of bug that a plasma physics simulation runs with for months — undetected because pre-Volta GPUs enforced convergence that the spec never guaranteed.
 
 This post is about that bug, and a type system that makes it impossible.
 
@@ -35,8 +35,8 @@ The result: your reduction produces 17 instead of 32. Your sort puts elements in
 We surveyed 21 documented instances across 16 real-world projects:
 
 - **NVIDIA cuda-samples #398** — their own reference reduction. Wrong results for certain input sizes.
-- **NVIDIA CUB (CCCL#854)** — the standard GPU primitives library. Warp-level segmented reduction uses wrong mask.
-- **PIConGPU #2514** — plasma physics simulation. Ran for months with divergent branch containing shuffle. Pre-Volta hardware masked the bug; post-Volta made it fail.
+- **NVIDIA CUB (CCCL#854)** — the standard GPU primitives library. Warp-level scan (WarpScanShfl) suspected of wrong mask in sub-warp configurations.
+- **PIConGPU #2514** — plasma physics simulation. Ran for months with divergent branch containing ballot. Pre-Volta hardware masked the UB; the fix was preventive, targeting Volta's independent thread scheduling.
 - **PyTorch #98157** — `__activemask()` misuse in radix sort.
 - **OpenCV #12320** — warpScanInclusive deadlock on Volta from hardcoded mask.
 - **TVM #17307** — sub-mask triggers illegal instruction on H100.
@@ -128,7 +128,7 @@ The core insight is transferable to any language with phantom types or zero-cost
 ## The Artifact
 
 - 345 tests (272 unit + 23 doc + 50 example)
-- 17 Lean 4 theorems (progress: zero `sorry`)
+- 28 Lean 4 theorems (progress + preservation: zero `sorry`, zero axioms)
 - 21 documented bugs across 16 real-world projects
 - Real GPU execution on NVIDIA RTX 4000 Ada
 - Cargo-integrated pipeline: `cargo run` from source to GPU

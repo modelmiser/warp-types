@@ -269,25 +269,41 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have implemented an executable proof sketch in Rust (see `src/proof.rs`). The key lemmas are encoded as tests that verify the properties for all concrete active sets:
+We have mechanized the full core metatheory in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
 
-```rust
-#[test]
-fn diverge_complement_lemma() {
-    for parent_mask in [ALL, EVEN, ODD, LOW_HALF, HIGH_HALF] {
-        for pred_mask in 0..=0xFFFFFFFF_u32 {
-            let left = parent_mask & pred_mask;
-            let right = parent_mask & !pred_mask;
+### Scope
 
-            // Disjoint
-            assert_eq!(left & right, 0);
+The mechanization covers two files totaling 896 lines of Lean:
 
-            // Covering
-            assert_eq!(left | right, parent_mask);
-        }
-    }
-}
-```
+**Core type system properties** (`Basic.lean`):
+- `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
+- `shuffle_requires_all`: Shuffle typing requires `Warp<All>` (Lemma 4.7). Proved by case analysis on the typing derivation.
+- `complement_symmetric`: Complement relation is symmetric. Proved by commutativity of bitwise AND/OR.
+- `even_odd_complement`, `lowHalf_highHalf_complement`: Concrete complement instances. Proved by `decide` (BitVec 32 is decidable).
 
-We have begun mechanizing the core theorems in Lean 4 (`lean/WarpTypes/Basic.lean`). Six theorems are fully machine-checked (zero `sorry`): diverge partition, shuffle requires All, complement symmetry, Even/Odd complement, LowHalf/HighHalf complement, and progress for values. Full mechanization of progress and preservation requires defining a small-step reduction relation, which is ongoing. Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation; (2) prior work on GPU verification (MCL framework) was built in Lean.
+**Full metatheory** (`Metatheory.lean`):
+- **Progress** (Theorem 4.1): A closed well-typed expression is either a value or can step. Proved by induction on the typing derivation, using canonical forms lemmas for each type constructor.
+- **Preservation** (Theorem 4.2): If `Γ ⊢ e : τ ⊣ Γ'` and `e ⟶ e'`, then `Γ ⊢ e' : τ ⊣ Γ'`. Proved by induction on the step relation, with case analysis on typing. The critical `letVal` case uses the substitution lemma below.
+- **Substitution lemma** (`subst_typing`): Substituting a value for a linear binding removes that binding from both input and output contexts. This is the key lemma enabling preservation for `let`-bindings in a linear type system. Proved directly (~90 lines) via induction on the typing derivation, with explicit context threading through merge, shuffle, and pair sub-expressions.
+
+**Untypability proofs** (5 documented GPU bugs):
+- `bug1_cuda_samples_398`: Shuffle after extracting lane 0 — untypable.
+- `bug2_cccl_854`: Shuffle on 16-lane sub-warp — untypable.
+- `bug3_picongpu_2514`: Ballot on diverged subset — untypable.
+- `bug4_llvm_155682`: Shuffle after lane-0 conditional — untypable.
+- `bug5_shuffle_after_diverge`: Shuffle after even/odd divergence — untypable.
+
+Each untypability proof factors through a single lemma (`shuffle_diverged_untypable`) that shows: if the active set after diverge is not `All`, no typing derivation exists for a shuffle on that sub-warp. The concrete bugs instantiate this with specific masks and close via `decide`.
+
+**Supporting infrastructure** (14 lemmas): canonical forms for `Warp`, `PerLane`, and `Pair` types; `value_preserves_ctx` (values don't consume linear resources); `value_any_ctx` (values can be typed in any context); `output_binding_from_input` (output context bindings originate from input); context algebra (`remove_comm`, `remove_lookup_self`, `remove_lookup_ne`, etc.).
+
+### Design Choices
+
+The formalization models active sets as `BitVec 32` (Lean's built-in bitvector type), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks which bindings remain after evaluation — this directly encodes the consumption semantics that Rust enforces via move. The substitution lemma is proved directly rather than axiomatized, which required explicit context infrastructure but yields a stronger result: the mechanization has no trusted assumptions beyond Lean's kernel.
+
+Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to Lean verification; (2) prior work on GPU verification (MCL framework) was built in Lean.
+
+### What Is Not Mechanized
+
+The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
 

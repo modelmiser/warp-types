@@ -84,14 +84,14 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
 
-1. `shuffle_xor` on `Warp<Even>` — rejected (§3)
-2. `merge(Even, LowHalf)` — rejected, overlapping sets (§3)
-3. `merge(Even, Even)` — rejected, same set (§3)
-4. `merge(EvenLow, OddHigh)` — rejected, non-covering sets (§3)
-5. `shuffle_xor` on `Warp<LowHalf>` — rejected (§3)
-6. `reduce_sum` on `Warp<Even>` — rejected (§3)
-7. `merge` of non-complements within nested divergence — rejected (§3)
-8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (§3)
+1. `shuffle_xor` on `Warp<Even>` — rejected, method absent (`diverge.rs`)
+2. `merge(Even, LowHalf)` — rejected, non-complements (`merge.rs`)
+3. `merge(Even, Even)` — rejected, same set (`merge.rs`)
+4. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
+5. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
+6. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
+7. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
+8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
@@ -200,7 +200,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Type system tests | 272 unit + 50 example + 23 doc (345 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
-| Lean mechanization | 17 theorems (progress zero-sorry, preservation 1 axiom, 5 untypability proofs) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 theorems total (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

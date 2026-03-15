@@ -182,7 +182,7 @@ Our approach has the lowest overhead because the types *are* the verification.
 
 ## 6.3 Data Types
 
-### PerLane<T>
+### `PerLane<T>`
 
 Per-lane data is stored as an array:
 
@@ -207,7 +207,7 @@ impl<T: Copy> PerLane<T> {
 
 On GPU, this maps to registers. Each lane accesses its own element.
 
-### Uniform<T>
+### `Uniform<T>`
 
 Uniform values are guaranteed identical across lanes:
 

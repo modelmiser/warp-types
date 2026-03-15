@@ -25,7 +25,7 @@
 //!
 //! **Failure mode:** Undefined behavior. Ran for months on K80 GPUs (pre-Volta)
 //! where lockstep execution masked the bug. Discovered during CUDA 9 migration.
-//! Produces plausible but mathematically wrong plasma simulation results.
+//! No wrong output was observed — pre-Volta hardware masked the violation. Fix was preventive.
 //!
 //! **Source:** <https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514>
 //!

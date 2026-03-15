@@ -267,7 +267,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 - Read the paper in `paper/paper.md`
 
 ### For Researchers
-- The Lean 4 formalization is in `lean/` (17 theorems, progress has zero `sorry`)
+- The Lean 4 formalization is in `lean/` (28 theorems, all zero `sorry`, zero axioms — including progress, preservation, and 5 bug untypability proofs)
 - Active set masks are `u64` — ready for AMD 64-lane wavefronts
 - The `GpuTarget` enum in the builder supports future backends
 - The tile system opens cooperative groups to formal typing
