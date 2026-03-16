@@ -467,7 +467,7 @@ pub mod hybrid_shape {
 }
 
 // ============================================================================
-// APPROACH 5: DEPENDENT TYPES (What Sol could do)
+// APPROACH 5: DEPENDENT TYPES (What a host language could do)
 // ============================================================================
 
 /// With full dependent types, we could write:
@@ -498,7 +498,7 @@ pub mod dependent_sketch {
     // 2. Type equality can require proofs
     // 3. Refinements can express arbitrary predicates
     //
-    // For Sol:
+    // For a language with dependent types:
     // - Extend session types with lane predicates
     // - Use SMT solver for predicate satisfiability
     // - Allow runtime fallback for undecidable cases

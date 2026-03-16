@@ -174,7 +174,7 @@ warp-types/
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft
-└── INTEGRATION.md          # Sol integration guide
+└── INTEGRATION.md          # Integration guide
 ```
 
 ## Limitations

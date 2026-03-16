@@ -422,7 +422,7 @@ pub mod recursive_session {
 // SUMMARY: PRACTICAL RECOMMENDATIONS
 // ============================================================================
 //
-// For Sol research, recommend a LAYERED approach:
+// For practical use, we recommend a LAYERED approach:
 //
 // LAYER 1: Uniform loops (Approach B)
 // - Same trip count for all lanes (computed via reduce_min beforehand)

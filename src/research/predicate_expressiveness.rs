@@ -342,6 +342,6 @@ mod tests {
 /// | Level 1-3 | Medium | Moderate |
 /// | Full dependent | High | Significant |
 ///
-/// For Sol, the goal is PRACTICAL GPU programming, not theorem proving.
+/// The goal is PRACTICAL GPU programming, not theorem proving.
 /// Level 1-2 with escape hatches is the sweet spot.
 pub const _ERGONOMICS: () = ();

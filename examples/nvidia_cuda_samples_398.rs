@@ -271,7 +271,7 @@ fn main() {
     println!("  only lane 0 is active. __shfl_down_sync(mask=1, val, 16)");
     println!("  reads from lane 16, which is inactive. Undefined result.\n");
 
-    println!("Sol's Type System:");
+    println!("warp-types' Type System:");
     println!("  After extract_lane0(), you have Warp<Lane0>.");
     println!("  shuffle_down() does not exist on Warp<Lane0>.");
     println!("  Compile error: no method named `shuffle_down`\n");

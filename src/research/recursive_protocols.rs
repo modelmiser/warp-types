@@ -591,14 +591,14 @@ pub mod summary {
 }
 
 // ============================================================================
-// INTEGRATION WITH SOL
+// INTEGRATION WITH SESSION-TYPED LANGUAGES
 // ============================================================================
 
-/// How recursive protocols fit into Sol's session types:
+/// How recursive protocols could integrate with a session-typed language:
 ///
-/// Sol already has μ-types for session recursion. The integration path:
+/// A language with μ-types for session recursion could extend them as follows:
 ///
-/// 1. Extend Sol's session types with ActiveSet parameter
+/// 1. Extend session types with ActiveSet parameter
 ///    `session WarpProto<S: ActiveSet> = μX. shuffle<S>; X`
 ///
 /// 2. Add warp primitives as session operations
@@ -610,8 +610,8 @@ pub mod summary {
 ///    - recursion preserves active set
 ///
 /// 4. Compile to GPU code with correct masking
-pub mod sol_integration {
-    /// Example Sol syntax (hypothetical):
+pub mod language_integration {
+    /// Example session-typed syntax (hypothetical):
     /// ```text
     /// session ButterflySum<S: ActiveSet> =
     ///   μX. shuffle_xor<1, S>;
@@ -626,7 +626,7 @@ pub mod sol_integration {
     ///   if N == 0 then end
     ///   else shuffle_xor<N, S>; ButterflySum<S, N/2>
     /// ```
-    pub struct SolExample;
+    pub struct Example;
 }
 
 // ============================================================================
