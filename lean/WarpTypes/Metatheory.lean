@@ -1,7 +1,7 @@
 import WarpTypes.Basic
 
 /-
-  Metatheory: Progress and Preservation for Session-Typed Divergence
+  Metatheory: Progress and Preservation for Warp Typestate
 
   - Capture-avoiding substitution
   - Small-step reduction (Step)

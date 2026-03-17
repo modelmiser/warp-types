@@ -116,7 +116,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Shuffle safety (diverged warp can't shuffle) | 8 compile-fail doctests | `cargo test --doc` |
+| Shuffle safety (diverged warp can't shuffle) | 13 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 8 worked bug examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |

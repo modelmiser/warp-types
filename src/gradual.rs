@@ -82,6 +82,12 @@ impl core::fmt::Display for AscribeError {
     }
 }
 
+#[cfg(not(target_arch = "nvptx64"))]
+impl std::error::Error for WarpError {}
+
+#[cfg(not(target_arch = "nvptx64"))]
+impl std::error::Error for AscribeError {}
+
 /// A dynamically-checked warp — runtime equivalent of `Warp<S>`.
 ///
 /// Every safety check that `Warp<S>` enforces at compile time, `DynWarp`
@@ -106,7 +112,7 @@ impl DynWarp {
     }
 
     /// Create from a specific mask.
-    pub fn from_mask(mask: u64) -> Self {
+    pub(crate) fn from_mask(mask: u64) -> Self {
         DynWarp { active_mask: mask }
     }
 

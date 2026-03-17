@@ -1,5 +1,7 @@
 //! Inter-Block Sessions: Scaling Beyond Single Warp
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! This module explores how session types can model communication between
 //! blocks in a GPU grid. This is fundamentally different from warp-level
 //! sessions because:

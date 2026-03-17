@@ -48,7 +48,7 @@ impl WarpId {
 /// You can only create `Uniform` values through operations that guarantee
 /// uniformity (broadcasts, constants, ballot results). This prevents the
 /// common bug of assuming a value is uniform when it isn't.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Uniform<T: GpuValue> {
     value: T,
 }
@@ -76,7 +76,7 @@ impl<T: GpuValue> Uniform<T> {
 /// value, and you can only access other lanes' values through explicit
 /// shuffle operations.
 #[must_use = "PerLane values carry per-lane GPU data — dropping discards computation"]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PerLane<T: GpuValue> {
     value: T,
 }
@@ -104,6 +104,7 @@ impl<T: GpuValue> PerLane<T> {
 /// Models the result of a reduction — only one lane has the answer.
 /// Prevents the common bug of reading a reduction result from all lanes
 /// (undefined behavior in CUDA).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SingleLane<T: GpuValue, const LANE: u8> {
     value: T,
     _phantom: PhantomData<()>,
@@ -165,6 +166,13 @@ mod tests {
         let lane = LaneId::new(15);
         assert_eq!(lane.get(), 15);
         assert_eq!(lane.index(), 15);
+    }
+
+    #[test]
+    fn test_lane_id_boundary_31() {
+        let lane = LaneId::new(31);
+        assert_eq!(lane.get(), 31);
+        assert_eq!(lane.index(), 31);
     }
 
     #[test]

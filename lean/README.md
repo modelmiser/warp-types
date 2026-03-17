@@ -1,4 +1,4 @@
-# Session-Typed Divergence: Lean 4 Formalization
+# Warp Typestate: Lean 4 Formalization
 
 A mechanized proof of type safety for a linear type system that prevents GPU warp divergence bugs at compile time.
 
@@ -79,7 +79,7 @@ Developed independently by Chad Aldreda, outside academic or institutional affil
 ```bibtex
 @software{aldreda2025warptypes,
   author    = {Aldreda, Chad},
-  title     = {Session-Typed Divergence: Lean 4 Formalization},
+  title     = {Warp Typestate: Lean 4 Formalization},
   year      = {2025},
   url       = {https://github.com/modelmiser/warp-types}
 }

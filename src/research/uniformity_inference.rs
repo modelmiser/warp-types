@@ -1,5 +1,7 @@
 //! Uniformity Inference
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "Can we infer uniformity or must it be annotated?"
 //!
 //! # Background

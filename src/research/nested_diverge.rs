@@ -1,5 +1,7 @@
 //! Nested Divergence: Recursive Splitting of Warps
 //!
+//! **STATUS: Superseded** — Promoted to main's `warp_sets!` macro and `merge_within`. Retained as research artifact.
+//!
 //! When you diverge within already-divergent code, you create a TREE of active sets.
 //! The type system must track:
 //! 1. Intersection types: EvenLow = Even ∩ LowHalf

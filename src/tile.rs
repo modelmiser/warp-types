@@ -81,6 +81,15 @@ impl Warp<All> {
     /// let data = data::PerLane::new(42i32);
     /// let _partner = tile.shuffle_xor(data, 1);
     /// ```
+    ///
+    /// Tiles can only be created from `Warp<All>`:
+    ///
+    /// ```compile_fail
+    /// use warp_types::prelude::*;
+    /// let warp = Warp::kernel_entry();
+    /// let (evens, _odds) = warp.diverge_even_odd();
+    /// let _tile: Tile<16> = evens.tile(); // ERROR: method not found
+    /// ```
     pub fn tile<const SIZE: usize>(&self) -> Tile<SIZE>
     where
         Tile<SIZE>: ValidTileSize,

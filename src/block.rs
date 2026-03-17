@@ -237,6 +237,21 @@ mod tests {
     }
 
     #[test]
+    fn test_work_queue_full() {
+        let coordinator = Role::lanes(0, 4, "coordinator");
+        let worker = Role::lanes(4, 32, "worker");
+        let mut queue: WorkQueue<i32, COORDINATOR, WORKER_ROLE> =
+            WorkQueue::new(coordinator, worker);
+
+        // Ring buffer of size 32 has capacity 31 (one slot reserved for full detection)
+        for i in 0..31 {
+            assert!(queue.push(i).is_ok());
+        }
+        assert!(queue.is_full());
+        assert!(queue.push(31).is_err());
+    }
+
+    #[test]
     fn test_hierarchical_reduction() {
         let session = ReductionSession::<WarpPhase>::new(42);
         let (warp_result, session) = session.warp_reduce();

@@ -1,5 +1,7 @@
 //! Divergent Values: Handling Variables in Branched Code
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "How to handle values computed in divergent code?"
 //!
 //! # Background

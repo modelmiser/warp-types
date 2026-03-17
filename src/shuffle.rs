@@ -9,28 +9,9 @@
 
 use core::marker::PhantomData;
 use crate::GpuValue;
-use crate::data::{LaneId, Uniform, PerLane, SingleLane};
+use crate::data::{LaneId, Uniform, PerLane};
 use crate::warp::Warp;
 use crate::active_set::All;
-
-// ============================================================================
-// Shuffle traits (type-safe operation signatures)
-// ============================================================================
-
-/// Shuffle trait for warp-level data exchange.
-pub trait Shuffle<T: GpuValue> {
-    fn shfl_down(self, delta: u32) -> PerLane<T>;
-    fn shfl_up(self, delta: u32) -> PerLane<T>;
-    fn shfl_xor(self, mask: u32) -> PerLane<T>;
-    fn shfl(self, source_lane: PerLane<u32>) -> PerLane<T>;
-}
-
-impl<T: GpuValue> Shuffle<T> for PerLane<T> {
-    fn shfl_down(self, _delta: u32) -> PerLane<T> { self }
-    fn shfl_up(self, _delta: u32) -> PerLane<T> { self }
-    fn shfl_xor(self, _mask: u32) -> PerLane<T> { self }
-    fn shfl(self, _source_lane: PerLane<u32>) -> PerLane<T> { self }
-}
 
 /// Result of a warp ballot operation.
 ///
@@ -56,25 +37,6 @@ impl BallotResult {
         let tz = self.mask.get().trailing_zeros();
         if tz < 32 { Some(LaneId::new(tz as u8)) } else { None }
     }
-}
-
-/// Ballot: collect a per-lane predicate into a uniform mask.
-pub trait Ballot {
-    fn ballot(predicate: PerLane<bool>) -> BallotResult;
-}
-
-/// Vote operations (warp-level predicates).
-pub trait Vote {
-    fn all(predicate: PerLane<bool>) -> Uniform<bool>;
-    fn any(predicate: PerLane<bool>) -> Uniform<bool>;
-    fn unanimous(predicate: PerLane<bool>) -> Uniform<bool>;
-}
-
-/// Warp-level reduction.
-pub trait Reduce<T: GpuValue> {
-    fn reduce_sum(values: PerLane<T>) -> SingleLane<T, 0>;
-    fn reduce_max(values: PerLane<T>) -> SingleLane<T, 0>;
-    fn reduce_min(values: PerLane<T>) -> SingleLane<T, 0>;
 }
 
 // ============================================================================
@@ -264,9 +226,9 @@ pub type FullButterfly = Compose<
 /// Apply a permutation to an array of values.
 pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32] {
     let mut result = values;
-    for i in 0..32 {
+    for (i, slot) in result.iter_mut().enumerate() {
         let src = P::inverse(i as u32) as usize;
-        result[i] = values[src];
+        *slot = values[src];
     }
     result
 }
@@ -274,6 +236,17 @@ pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ballot_result_empty_mask() {
+        let result = BallotResult {
+            mask: Uniform::from_const(0),
+        };
+        assert_eq!(result.first_lane(), None);
+        assert_eq!(result.popcount().get(), 0);
+        assert!(!result.lane_voted(LaneId::new(0)).get());
+        assert!(!result.lane_voted(LaneId::new(31)).get());
+    }
 
     #[test]
     fn test_ballot_result() {

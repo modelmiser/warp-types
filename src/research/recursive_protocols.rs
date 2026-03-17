@@ -1,5 +1,7 @@
 //! Recursive Protocols: Session Types with Loops
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! This module explores how recursive (looping) protocols interact with
 //! session-typed warp divergence.
 //!

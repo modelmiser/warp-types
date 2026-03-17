@@ -1,5 +1,7 @@
 //! Lane Predicate Expressiveness Analysis
 //!
+//! **STATUS: Validated** — Research exploration complete. See conclusions below.
+//!
 //! Research question: "How expressive do lane predicates need to be?"
 //!
 //! # Background

@@ -162,13 +162,14 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
             }
         };
 
-        // Emit parent struct + ActiveSet impl (if not already emitted)
+        // Emit parent struct + Sealed + ActiveSet impl (if not already emitted)
         if emitted.insert(parent_str.clone()) {
             let mask_lit = parent_mask;
             let name_str = &parent_str;
             output.extend(quote! {
                 #[derive(Copy, Clone, Debug, Default)]
                 pub struct #parent_name;
+                impl sealed::Sealed for #parent_name {}
                 impl ActiveSet for #parent_name {
                     const MASK: u64 = #mask_lit;
                     const NAME: &'static str = #name_str;
@@ -246,6 +247,7 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                 output.extend(quote! {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #true_name;
+                    impl sealed::Sealed for #true_name {}
                     impl ActiveSet for #true_name {
                         const MASK: u64 = #true_mask;
                         const NAME: &'static str = #name_str_t;
@@ -257,6 +259,7 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                 output.extend(quote! {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #false_name;
+                    impl sealed::Sealed for #false_name {}
                     impl ActiveSet for #false_name {
                         const MASK: u64 = #false_mask;
                         const NAME: &'static str = #name_str_f;

@@ -20,12 +20,18 @@
 //! Note: `EvenLow` appears under both `Even` and `LowHalf` — same set,
 //! reached by different diverge paths. Path independence is a key property.
 
+/// Sealed trait module — prevents external crates from implementing safety-critical traits.
+#[doc(hidden)]
+pub mod sealed {
+    pub trait Sealed {}
+}
+
 /// Marker trait for active lane set types.
 ///
 /// Each implementor is a zero-sized type encoding a specific bitmask of lanes.
 /// The `MASK` constant enables runtime debugging; the type itself provides
 /// compile-time tracking.
-pub trait ActiveSet: Copy + 'static {
+pub trait ActiveSet: sealed::Sealed + Copy + 'static {
     /// Bitmask of active lanes (for runtime debugging/verification).
     const MASK: u64;
     /// Human-readable name.
@@ -41,13 +47,13 @@ pub trait ActiveSet: Copy + 'static {
     label = "merge requires complementary active sets (e.g., Even + Odd, LowHalf + HighHalf)",
     note = "use `diverge_even_odd()` or `diverge_low_high()` to create valid complement pairs, then merge them"
 )]
-pub trait ComplementOf<Other: ActiveSet>: ActiveSet {}
+pub trait ComplementOf<Other: ActiveSet>: sealed::Sealed + ActiveSet {}
 
 /// Proof that `Self` and `Other` are complements within a parent set `P`.
 ///
 /// `S1 ∪ S2 = P` and `S1 ∩ S2 = ∅`. Used for nested divergence where
 /// merge returns to a parent set rather than `All`.
-pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: ActiveSet {}
+pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: sealed::Sealed + ActiveSet {}
 
 /// Proof that an active set can be split into two disjoint subsets.
 ///
@@ -57,16 +63,17 @@ pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: ActiveSet {}
     label = "this diverge pattern is not defined in the active set hierarchy",
     note = "valid diverge patterns: All → Even/Odd, All → LowHalf/HighHalf, Even → EvenLow/EvenHigh, etc."
 )]
-pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: ActiveSet + Sized {
+pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: sealed::Sealed + ActiveSet + Sized {
     fn diverge(warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<TrueBranch>, crate::warp::Warp<FalseBranch>);
 }
 
 /// No lanes active (degenerate). Not part of the diverge hierarchy.
 #[derive(Copy, Clone, Debug, Default)]
-pub struct None;
-impl ActiveSet for None {
+pub struct Empty;
+impl sealed::Sealed for Empty {}
+impl ActiveSet for Empty {
     const MASK: u64 = 0;
-    const NAME: &'static str = "None";
+    const NAME: &'static str = "Empty";
 }
 
 // ============================================================================
@@ -100,10 +107,10 @@ warp_types_macros::warp_sets! {
     }
 }
 
-// None/All complement pair — None isn't produced by any diverge,
+// Empty/All complement pair — Empty isn't produced by any diverge,
 // so it's not part of the generated hierarchy
-impl ComplementOf<None> for All {}
-impl ComplementOf<All> for None {}
+impl ComplementOf<Empty> for All {}
+impl ComplementOf<All> for Empty {}
 
 // NOTE: EvenLow/EvenHigh are complements within Even, NOT within All.
 // ComplementOf requires covering ALL 32 lanes, so these do NOT get ComplementOf impls.
@@ -117,7 +124,7 @@ mod tests {
     #[test]
     fn test_mask_values() {
         assert_eq!(All::MASK, 0xFFFFFFFF);
-        assert_eq!(None::MASK, 0x00000000);
+        assert_eq!(Empty::MASK, 0x00000000);
         assert_eq!(Even::MASK, 0x55555555);
         assert_eq!(Odd::MASK, 0xAAAAAAAA);
         assert_eq!(LowHalf::MASK, 0x0000FFFF);

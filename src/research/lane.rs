@@ -1,5 +1,7 @@
 //! Lane and warp topology types
 //!
+//! **STATUS: Superseded** — Promoted to `src/data.rs`. Retained as research artifact.
+//!
 //! The fundamental insight: GPU values are either uniform across all lanes
 //! or vary per-lane. Making this distinction in the type system prevents
 //! a large class of bugs.

@@ -270,15 +270,8 @@ pub mod type_aliases {
     /// AMD wavefront (64 lanes)
     pub type AmdWavefront = Warp<All, 64>;
 
-    /// Choose at compile time via feature flags
-    #[cfg(feature = "nvidia")]
+    /// Default warp type (NVIDIA 32-lane).
     pub type DefaultWarp = NvidiaWarp;
-
-    #[cfg(feature = "amd")]
-    pub type DefaultWarp = AmdWavefront;
-
-    #[cfg(not(any(feature = "nvidia", feature = "amd")))]
-    pub type DefaultWarp = NvidiaWarp;  // Default to NVIDIA
 
     #[cfg(test)]
     mod tests {

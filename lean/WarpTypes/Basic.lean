@@ -1,10 +1,10 @@
 import Std.Tactic.BVDecide
 
 /-
-  Session-Typed Divergence: Lean 4 Formalization
+  Warp Typestate: Lean 4 Formalization
 
   This file formalizes the core type system from
-  "Session Types for SIMT Divergence: Type-Safe GPU Warp Programming."
+  "Type-Safe GPU Warp Programming via Linear Typestate."
 
   Machine-checked proofs:
   1. diverge_partition: diverge produces disjoint, covering sub-sets

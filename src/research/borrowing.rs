@@ -1,5 +1,7 @@
 //! Borrowing Patterns for GPU Shared Memory
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "How to handle temporary shared access (borrowing)?"
 //!
 //! # Background

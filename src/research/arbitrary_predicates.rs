@@ -1,5 +1,7 @@
 //! Arbitrary Predicates: Beyond Marker Types
 //!
+//! **STATUS: Validated** — Research exploration complete. See conclusions below.
+//!
 //! THE LIMITATION:
 //! Our marker types (Even, Odd, LowHalf) only cover predefined patterns.
 //! What about arbitrary runtime predicates?

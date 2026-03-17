@@ -1,5 +1,7 @@
 //! Prototype: How to handle loops with varying trip counts?
 //!
+//! **STATUS: Validated** — Research exploration complete. See conclusions below.
+//!
 //! Q6: "How to handle loops (recursive protocols)?"
 //!
 //! THE HARD PROBLEM:

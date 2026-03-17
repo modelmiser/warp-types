@@ -1,5 +1,7 @@
 //! CPU-GPU Interaction as Session Types
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "How to model CPU-GPU interaction as a session?"
 //!
 //! # Background

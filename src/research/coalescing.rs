@@ -1,5 +1,7 @@
 //! Memory Coalescing Types
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "Can types verify coalescing properties?"
 //!
 //! # Background

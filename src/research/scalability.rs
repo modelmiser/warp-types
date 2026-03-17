@@ -1,5 +1,7 @@
 //! Session Type Scalability
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "Can session types scale to thousands of participants?"
 //!
 //! # Background

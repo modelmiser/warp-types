@@ -9,8 +9,6 @@ repository = "https://github.com/modelmiser/warp-types"
 
 [features]
 default = []
-nvidia = []       # Use NVIDIA 32-lane warps
-amd = []          # Use AMD 64-lane wavefronts
 formal-proof = [] # Enable proof module (requires std)
 
 [dependencies]

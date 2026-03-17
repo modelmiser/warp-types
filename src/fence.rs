@@ -28,6 +28,7 @@ use crate::warp::Warp;
 pub trait WriteState {}
 
 /// No writes have occurred.
+#[derive(Debug, Clone, Copy)]
 pub struct Unwritten;
 impl WriteState for Unwritten {}
 
@@ -38,10 +39,12 @@ pub struct PartialWrite<S: ActiveSet> {
 impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 
 /// All lanes have written (complement-verified).
+#[derive(Debug, Clone, Copy)]
 pub struct FullWrite;
 impl WriteState for FullWrite {}
 
 /// Fence has been issued after full write.
+#[derive(Debug, Clone, Copy)]
 pub struct Fenced;
 impl WriteState for Fenced {}
 
@@ -101,6 +104,23 @@ impl<S: ActiveSet> Warp<S> {
 /// Merge writes from complementary partial writes (top-level: covers All).
 ///
 /// Requires the same `ComplementOf` proof as warp merge.
+///
+/// Writing with wrong complement type fails:
+///
+/// ```compile_fail
+/// use warp_types::prelude::*;
+/// use warp_types::fence::*;
+/// let warp1 = Warp::kernel_entry();
+/// let (evens, _odds) = warp1.diverge_even_odd();
+/// let warp2 = Warp::kernel_entry();
+/// let (low, _high) = warp2.diverge_halves();
+/// let region1 = GlobalRegion::new();
+/// let region2 = GlobalRegion::new();
+/// let (_evens, partial_even) = evens.global_store(region1);
+/// let (_low, partial_low) = low.global_store(region2);
+/// // Even and LowHalf are not complements (they overlap) — compile error
+/// let _full = merge_writes(partial_even, partial_low);
+/// ```
 pub fn merge_writes<S1, S2>(
     _a: GlobalRegion<PartialWrite<S1>>,
     _b: GlobalRegion<PartialWrite<S2>>,

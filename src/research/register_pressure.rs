@@ -1,5 +1,7 @@
 //! Register Pressure Tracking
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "Can we track register pressure linearly?"
 //!
 //! # Background

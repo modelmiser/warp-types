@@ -186,6 +186,24 @@ mod tests {
     }
 
     #[test]
+    fn test_full_pipeline_nested_diverge_to_shuffle() {
+        let warp: Warp<All> = Warp::kernel_entry();
+        let (evens, odds) = warp.diverge_even_odd();
+        let (even_low, even_high) = evens.diverge_halves();
+
+        // Nested merge
+        let evens_restored: Warp<Even> = merge_within(even_low, even_high);
+        let all_restored: Warp<All> = merge(evens_restored, odds);
+
+        // Now shuffle works
+        let data = crate::data::PerLane::new(1i32);
+        let result = all_restored.shuffle_xor(data, 1);
+        assert_eq!(result.get(), 1); // CPU identity
+        let sum = all_restored.reduce_sum(data);
+        assert_eq!(sum, 32);
+    }
+
+    #[test]
     fn test_with_diverged() {
         let warp: Warp<All> = Warp::new();
         let (a, b, merged) = with_diverged::<Even, Odd, i32, _, _>(

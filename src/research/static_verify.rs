@@ -1,5 +1,7 @@
 //! Prototype: Can we verify lane masks statically?
 //!
+//! **STATUS: Superseded** — Promoted to `src/{active_set,warp,diverge,merge,shuffle}.rs`. Retained as research artifact.
+//!
 //! Q5: "Can we verify lane masks statically?"
 //!
 //! Building on Q1 (marker types work), this file demonstrates:

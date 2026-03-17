@@ -1,5 +1,7 @@
 //! Hardware Crossbar Protocols — Session Types for FPGA Communication
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: Can session types prevent communication mismatches
 //! in FPGA crossbar interconnects the same way they prevent shuffle-from-
 //! inactive-lane bugs in GPU warps?

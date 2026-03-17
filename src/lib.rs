@@ -138,14 +138,14 @@ impl GpuValue for bool {}
 
 pub use active_set::{
     ActiveSet, ComplementOf, ComplementWithin, CanDiverge,
-    All, None, Even, Odd, LowHalf, HighHalf,
+    All, Empty, Even, Odd, LowHalf, HighHalf,
     Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
 };
 pub use warp::Warp;
 pub use data::{LaneId, WarpId, Uniform, PerLane, SingleLane, Role};
 pub use merge::{merge, merge_within};
 pub use shuffle::{
-    Shuffle, Ballot, Vote, Reduce, BallotResult, ShuffleSafe,
+    BallotResult, ShuffleSafe,
     Permutation, HasDual, Xor, RotateDown, RotateUp, Identity, Compose,
 };
 pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteState};
@@ -165,7 +165,7 @@ pub use warp_types_kernel::warp_kernel;
 pub mod prelude {
     pub use crate::{
         Warp, GpuValue,
-        All, None, Even, Odd, LowHalf, HighHalf,
+        All, Empty, Even, Odd, LowHalf, HighHalf,
         Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
         ActiveSet, ComplementOf, CanDiverge,
         PerLane, Uniform, SingleLane,

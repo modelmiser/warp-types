@@ -1,5 +1,7 @@
 //! Shuffle Duality: Permutation-Group View of Warp Shuffles
 //!
+//! **STATUS: Superseded** — Promoted to `src/shuffle.rs` (Permutation algebra). Retained as research artifact.
+//!
 //! Key insight: Shuffle duality isn't session-type duality (send/recv).
 //! It's PERMUTATION duality (forward/inverse).
 //!

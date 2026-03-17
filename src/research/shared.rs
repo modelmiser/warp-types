@@ -1,5 +1,7 @@
 //! Shared memory with ownership semantics
 //!
+//! **STATUS: Superseded** — Promoted to `src/block.rs`. Retained as research artifact.
+//!
 //! GPU shared memory is a common source of race conditions.
 //! This module explores how ownership/borrowing can prevent them.
 

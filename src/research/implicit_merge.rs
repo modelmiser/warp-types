@@ -1,5 +1,7 @@
 //! Implicit vs Explicit Merge
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "Should merge be implicit at block boundaries (like ISPC)?"
 //!
 //! # Background

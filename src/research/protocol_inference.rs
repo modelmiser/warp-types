@@ -1,5 +1,7 @@
 //! Protocol Inference: Can We Infer Warp Session Types?
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! This module explores whether warp session protocols can be automatically
 //! inferred from code, or must be manually annotated.
 //!

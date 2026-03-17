@@ -1,5 +1,7 @@
 //! Work Stealing with Session Types
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research questions:
 //! - "Can session types express work-stealing efficiently?"
 //! - "Can we verify deadlock-freedom in work-stealing?"

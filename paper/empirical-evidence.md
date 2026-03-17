@@ -6,10 +6,11 @@
 
 The paper's contribution statement is:
 
-> We present a session type system for intra-warp communication that statically
-> eliminates diverged shuffle and ballot operations. Well-typed programs cannot
-> perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead
-> — enforcement is purely compile-time.
+> We present warp typestate, a linear type system that tracks which lanes are
+> active at each program point and statically eliminates diverged shuffle and
+> ballot operations. Well-typed programs cannot perform unsafe warp operations
+> on inactive lanes. The guarantee is zero-overhead — enforcement is purely
+> compile-time.
 
 This document provides the empirical grounding that reviewers will demand:
 **the bug class is real, silent, and hard to prevent manually.**

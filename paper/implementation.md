@@ -12,7 +12,7 @@ Active sets are marker types with no runtime representation:
 
 ```rust
 pub trait ActiveSet: Copy + 'static {
-    const MASK: u32;
+    const MASK: u64;  // u64 to support AMD RDNA/CDNA 64-lane wavefronts
     const NAME: &'static str;
 }
 ```
@@ -40,23 +40,29 @@ The `Warp<S>` type carries the active set as a phantom type parameter:
 ```rust
 use std::marker::PhantomData;
 
-#[derive(Copy, Clone)]
+// Deliberately NOT Copy or Clone — consuming Warp<S> on diverge is the
+// safety mechanism (affine semantics).  Rust's move semantics prevent
+// use-after-diverge: once a warp is split, the original handle is gone.
+#[must_use]
 pub struct Warp<S: ActiveSet> {
-    _marker: PhantomData<S>,
+    _phantom: PhantomData<S>,
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+    // Restricted to crate: external code enters via Warp::kernel_entry()
+    // and obtains sub-warps only through diverge, preventing forgery of
+    // arbitrary active-set handles.
+    pub(crate) fn new() -> Self {
+        Warp { _phantom: PhantomData }
     }
 
-    pub fn active_mask(&self) -> u32 {
+    pub fn active_mask(&self) -> u64 {
         S::MASK
     }
 }
 ```
 
-`PhantomData<S>` is zero-sized. A `Warp<Even>` has the same runtime representation as `()`.
+`PhantomData<S>` is zero-sized. A `Warp<Even>` has the same runtime representation as `()`. The type is deliberately move-only: `diverge` consumes `self`, so the original `Warp<All>` cannot be reused after splitting. This affine discipline is what makes the safety guarantee work — without it, a programmer could diverge a warp and then call `shuffle_xor` on the unconsumed original. `#[must_use]` warns when a sub-warp is dropped without merging (Rust is affine, not linear, so the warning is advisory — the Lean formalization models true linearity).
 
 ### Complement Relation as Trait Bound
 
@@ -102,9 +108,9 @@ The key mechanism: methods are defined only on specific types.
 ```rust
 impl Warp<All> {
     /// Only available when all lanes are active
-    pub fn shuffle_xor<T: Copy>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
-        // GPU intrinsic: __shfl_xor_sync
-        unsafe { intrinsic_shuffle_xor(data.as_ptr(), mask) }
+    pub fn shuffle_xor<T: GpuValue>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
+        // GPU intrinsic wrapping __shfl_xor_sync — see §6.5
+        // ...
     }
 
     pub fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) {
@@ -128,17 +134,17 @@ Our implementation has zero runtime overhead. The types exist only at compile ti
 Consider this function:
 
 ```rust
-pub fn butterfly_sum(data: [i32; 32]) -> i32 {
+pub fn butterfly_sum(val: i32) -> i32 {
     let warp: Warp<All> = Warp::kernel_entry();
 
-    let data = PerLane(data);
+    let data = PerLane::new(val);
     let data = data + warp.shuffle_xor(data, 16);
     let data = data + warp.shuffle_xor(data, 8);
     let data = data + warp.shuffle_xor(data, 4);
     let data = data + warp.shuffle_xor(data, 2);
     let data = data + warp.shuffle_xor(data, 1);
 
-    data.0[0]
+    data.get()
 }
 ```
 
@@ -184,28 +190,25 @@ Our approach has the lowest overhead because the types *are* the verification.
 
 ### `PerLane<T>`
 
-Per-lane data is stored as an array:
+Per-lane data wraps a single value — because on GPU, each lane IS a separate thread with its own registers:
 
 ```rust
-#[repr(C)]
-pub struct PerLane<T>([T; 32]);
+pub struct PerLane<T: GpuValue> {
+    value: T,
+}
 
-impl<T: Copy> PerLane<T> {
-    pub fn splat(value: T) -> Self {
-        PerLane([value; 32])
+impl<T: GpuValue> PerLane<T> {
+    pub fn new(value: T) -> Self {
+        PerLane { value }
     }
 
-    pub fn get(&self, lane: usize) -> T {
-        self.0[lane]
-    }
-
-    pub fn set(&mut self, lane: usize, value: T) {
-        self.0[lane] = value;
+    pub fn get(self) -> T {
+        self.value
     }
 }
 ```
 
-On GPU, this maps to registers. Each lane accesses its own element.
+The single-`T` representation reflects GPU reality: in SIMT execution, 32 lanes each run the same code with their own register file. A `PerLane<i32>` stored by lane 0 holds lane 0's value; lane 15's copy holds lane 15's value. There is no 32-element array — the parallelism is in the hardware, not the data structure. For CPU testing, shuffle operations are identity functions (returning the input value), since only one thread executes.
 
 ### `Uniform<T>`
 
@@ -224,7 +227,7 @@ impl<T: Copy> Uniform<T> {
     }
 
     pub fn broadcast(self) -> PerLane<T> {
-        PerLane::splat(self.0)
+        PerLane::new(self.0)
     }
 }
 ```
@@ -292,40 +295,20 @@ This requires type-level computation (intersection, complement), which we implem
 Merge verifies complements at compile time:
 
 ```rust
-pub fn merge<S1, S2>(left: Warp<S1>, right: Warp<S2>) -> Warp<Union<S1, S2>>
+pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
 where
     S1: ComplementOf<S2>,
     S2: ActiveSet,
-    Union<S1, S2>: ActiveSet,
 {
     Warp::new()
 }
 ```
 
-The trait bound `S1: ComplementOf<S2>` is the compile-time verification.
+The trait bound `S1: ComplementOf<S2>` is the compile-time verification. Top-level `merge` returns `Warp<All>` because `ComplementOf` is only implemented for pairs that cover all lanes. For nested divergence (e.g., merging `EvenLow` + `EvenHigh` back to `Even`), a separate `merge_within` function uses a `ComplementWithin<S2, Parent>` trait to return `Warp<Parent>`. The formal typing rule in §3.3 shows `Warp<S1 ∪ S2>`, which equals `Warp<All>` when `S1 ⊥ S2`.
 
 ### Data Merge
 
-Merging data from two branches:
-
-```rust
-pub fn merge_data<T: Copy, S1: ActiveSet, S2: ComplementOf<S1>>(
-    left: PerLane<T>,
-    right: PerLane<T>,
-) -> PerLane<T> {
-    let mut result = [T::default(); 32];
-    for lane in 0..32 {
-        if S1::MASK & (1 << lane) != 0 {
-            result[lane] = left.0[lane];
-        } else {
-            result[lane] = right.0[lane];
-        }
-    }
-    PerLane(result)
-}
-```
-
-On GPU, this is a predicated select operation.
+On GPU, merging data from two branches is a predicated select operation: each lane activates for its branch and contributes its own `PerLane<T>` value. Since each lane holds a single `T` (see §6.3), the merge is implicit in the SIMT execution model — each lane simply writes its branch result, and reconvergence makes both results available.
 
 ## 6.5 GPU Intrinsics
 
@@ -339,20 +322,21 @@ extern "C" {
 
 // High-level wrapper (safe, typed)
 impl Warp<All> {
-    pub fn shuffle_xor<T: ShufflePrimitive>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
-        let mut result = PerLane::splat(T::default());
-        for lane in 0..32 {
-            unsafe {
-                result.0[lane] = __shfl_xor_sync(0xFFFFFFFF, data.0[lane].to_bits(), mask, 32)
-                    .from_bits();
-            }
+    pub fn shuffle_xor<T: GpuValue>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
+        // On GPU: each lane calls the intrinsic with its own value.
+        // PerLane<T> holds a single T per lane — the hardware provides
+        // the 32-way parallelism.
+        unsafe {
+            PerLane::new(
+                __shfl_xor_sync(0xFFFFFFFF, data.get().to_bits(), mask, 32)
+                    .from_bits()
+            )
         }
-        result
     }
 }
 ```
 
-The safe wrapper is only available on `Warp<All>`, ensuring all lanes are active when calling the intrinsic.
+The safe wrapper is only available on `Warp<All>`, ensuring all lanes are active when calling the intrinsic. On CPU (for testing), the shuffle is an identity operation — since only one thread runs, it returns the input value.
 
 ## 6.6 Dual-Mode Platform Abstraction
 
@@ -374,7 +358,7 @@ Two implementations provide the abstraction:
 
 - **`CpuSimd<const WIDTH: usize>`**: Array-based emulation using `PortableVector<T, WIDTH>`. Shuffle operations use explicit lane indexing; reductions iterate over the array. Zero hardware dependency — runs anywhere Rust compiles.
 
-- **`GpuWarp32`**: 32-lane warp emulation (currently delegates to `CpuSimd::<32>`; production use would emit PTX intrinsics). Masks are `u32`, matching NVIDIA's active mask width.
+- **`GpuWarp32`**: 32-lane warp emulation (currently delegates to `CpuSimd::<32>`; production use would emit PTX intrinsics). Active set masks use `u64` throughout the implementation for portability across NVIDIA 32-lane warps and AMD RDNA/CDNA 64-lane wavefronts.
 
 The same algorithm runs on both platforms without modification:
 
@@ -390,7 +374,7 @@ fn butterfly_reduce_sum<P: Platform>(data: P::Vector<i32>) -> i32 {
 }
 ```
 
-Session-typed divergence applies uniformly: `CpuSimd` uses masked array operations for diverged lanes; `GpuWarp32` uses SIMT masking. The `ComplementOf` proof requirement is platform-independent — it verifies the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
+Warp typestate applies uniformly: `CpuSimd` uses masked array operations for diverged lanes; `GpuWarp32` uses SIMT masking. The `ComplementOf` proof requirement is platform-independent — it verifies the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
 
 ## 6.7 Error Messages
 

@@ -94,6 +94,16 @@ impl Warp<All> {
     /// let data = data::PerLane::new(42i32);
     /// let sorted = warp.bitonic_sort(data);
     /// ```
+    ///
+    /// Bitonic sort requires all lanes:
+    ///
+    /// ```compile_fail
+    /// use warp_types::prelude::*;
+    /// let warp = Warp::kernel_entry();
+    /// let (evens, _odds) = warp.diverge_even_odd();
+    /// let data = data::PerLane::new(42i32);
+    /// evens.bitonic_sort(data); // ERROR: method not found for Warp<Even>
+    /// ```
     pub fn bitonic_sort<T: GpuValue + GpuShuffle + Ord>(
         &self,
         data: PerLane<T>,

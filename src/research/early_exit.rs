@@ -1,5 +1,7 @@
 //! Early Exit Patterns
 //!
+//! **STATUS: Research** — Exploratory prototype, not promoted to main API.
+//!
 //! Research question: "What about asymmetric merge (some lanes early-exit)?"
 //!
 //! # Background

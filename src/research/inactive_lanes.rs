@@ -1,5 +1,7 @@
 //! Inactive Lane Handling: Preventing Reads from Masked-Off Lanes
 //!
+//! **STATUS: Validated** — Research exploration complete. See conclusions below.
+//!
 //! THE PROBLEM:
 //! When a warp diverges, inactive lanes don't execute. Their register values
 //! are stale/garbage. Reading from inactive lanes (via shuffle) is undefined.

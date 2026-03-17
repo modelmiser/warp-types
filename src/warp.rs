@@ -57,6 +57,15 @@ impl<S: ActiveSet> Warp<S> {
     /// External code must use `Warp::kernel_entry()` to get a `Warp<All>`,
     /// then `diverge_*()` to get sub-warps. This prevents forging arbitrary
     /// warp handles that don't correspond to actual lane states.
+    ///
+    /// External code cannot construct arbitrary warps:
+    ///
+    /// ```compile_fail
+    /// use warp_types::Warp;
+    /// use warp_types::active_set::Even;
+    /// // Warp::new() is pub(crate), not accessible externally
+    /// let fake: Warp<Even> = Warp::new();
+    /// ```
     pub(crate) fn new() -> Self {
         Warp { _phantom: PhantomData }
     }
