@@ -17,6 +17,10 @@ use crate::active_set::All;
 ///
 /// A ballot collects a predicate from all lanes into a bitmask.
 /// The result is Uniform because every lane gets the same bitmask.
+///
+/// **Note:** The mask is `u32`, matching NVIDIA's `__ballot_sync` return type.
+/// For AMD 64-lane wavefronts, a `BallotResult64` variant would be needed.
+/// Lanes >= 32 always return `false` from `lane_voted()`.
 #[derive(Clone, Copy, Debug)]
 pub struct BallotResult {
     mask: Uniform<u32>,
@@ -26,7 +30,13 @@ impl BallotResult {
     pub fn mask(self) -> Uniform<u32> { self.mask }
 
     pub fn lane_voted(self, lane: LaneId) -> Uniform<bool> {
-        Uniform::from_const((self.mask.get() & (1 << lane.get())) != 0)
+        let id = lane.get();
+        // Guard: u32 mask only covers lanes 0..31. Lanes >= 32 are outside
+        // the ballot scope (would need BallotResult64 for AMD wavefronts).
+        if id >= 32 {
+            return Uniform::from_const(false);
+        }
+        Uniform::from_const((self.mask.get() & (1u32 << id)) != 0)
     }
 
     pub fn popcount(self) -> Uniform<u32> {
@@ -45,9 +55,10 @@ impl BallotResult {
 
 /// Marker trait for warp types that support shuffle operations.
 ///
-/// Currently only `Warp<All>` and `Tile<N>` implement this.
-/// If you get an error mentioning this trait, it means you're trying to
-/// shuffle on a diverged warp — merge back to `Warp<All>` first.
+/// Currently only `Warp<All>` implements this. `Tile<N>` has its own shuffle
+/// methods (all tile lanes are active by construction) but does not implement
+/// this trait. If you get an error mentioning this trait, it means you're
+/// trying to shuffle on a diverged warp — merge back to `Warp<All>` first.
 #[diagnostic::on_unimplemented(
     message = "shuffle requires all lanes active, but `{Self}` may have inactive lanes",
     label = "this warp may be diverged — shuffle needs Warp<All>",

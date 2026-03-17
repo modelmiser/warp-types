@@ -33,6 +33,40 @@
 //! 2. **No shuffle on branches**: `DynDiverge` doesn't expose shuffle methods
 //! 3. **Must merge**: `DynDiverge` holds the `Warp<All>` ownership — you can't proceed without merging
 //! 4. **No mask manipulation**: Can't forge or modify masks after divergence
+//!
+//! # Cross-Function Active Set Inference
+//!
+//! Rust's generics naturally provide cross-function inference for active sets:
+//!
+//! ```
+//! use warp_types::*;
+//!
+//! // This function works on ANY warp — the active set is inferred at each call site
+//! fn count_active<S: ActiveSet>(warp: &Warp<S>) -> u32 {
+//!     warp.population()
+//! }
+//!
+//! let all: Warp<All> = Warp::kernel_entry();
+//! assert_eq!(count_active(&all), 32);
+//!
+//! let (evens, _odds) = all.diverge_even_odd();
+//! assert_eq!(count_active(&evens), 16);
+//! ```
+//!
+//! For functions that REQUIRE `Warp<All>` (because they shuffle),
+//! simply take `Warp<All>` directly:
+//!
+//! ```
+//! use warp_types::*;
+//!
+//! fn my_reduce(warp: &Warp<All>, data: data::PerLane<i32>) -> i32 {
+//!     warp.reduce_sum(data)
+//! }
+//!
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let sum = my_reduce(&warp, data::PerLane::new(1));
+//! assert_eq!(sum, 32);
+//! ```
 
 use crate::warp::Warp;
 use crate::active_set::All;
@@ -75,8 +109,12 @@ impl DynDiverge {
     /// This always succeeds because the complement is guaranteed by construction.
     /// Consumes the `DynDiverge` — you can't use the branches after merging.
     pub fn merge(self) -> Warp<All> {
-        // Safety: true_mask | false_mask == 0xFFFFFFFF (or parent mask)
-        // This is guaranteed by diverge_dynamic's construction.
+        debug_assert_eq!(
+            self.true_mask | self.false_mask, 0xFFFFFFFF,
+            "DynDiverge invariant violated: true_mask | false_mask != All \
+             (0x{:016X} | 0x{:016X} = 0x{:016X})",
+            self.true_mask, self.false_mask, self.true_mask | self.false_mask,
+        );
         Warp::new()
     }
 
@@ -146,44 +184,11 @@ impl Warp<All> {
 // Cross-function active set inference
 // ============================================================================
 
-/// Write functions generic over any active set.
-///
-/// Rust's generics already provide cross-function inference:
-///
-/// ```
-/// use warp_types::*;
-///
-/// // This function works on ANY warp — the active set is inferred at each call site
-/// fn count_active<S: ActiveSet>(warp: &Warp<S>) -> u32 {
-///     warp.population()
-/// }
-///
-/// let all: Warp<All> = Warp::kernel_entry();
-/// assert_eq!(count_active(&all), 32);
-///
-/// let (evens, _odds) = all.diverge_even_odd();
-/// assert_eq!(count_active(&evens), 16);
-/// ```
-///
-/// For functions that REQUIRE `Warp<All>` (because they shuffle),
-/// simply take `Warp<All>` directly — the type system enforces it:
-///
-/// ```
-/// use warp_types::*;
-///
-/// fn my_reduce(warp: &Warp<All>, data: data::PerLane<i32>) -> i32 {
-///     warp.reduce_sum(data)
-/// }
-///
-/// let warp: Warp<All> = Warp::kernel_entry();
-/// let sum = my_reduce(&warp, data::PerLane::new(1));
-/// assert_eq!(sum, 32);
-/// ```
-///
-/// The "limitation" in cross-function inference is really just Rust requiring
-/// explicit generic parameters in function signatures. The active set IS
-/// inferred at call sites — you never write `::<Even>` manually.
-pub const _CROSS_FUNCTION_NOTE: () = ();
+// Cross-function active set inference: Rust's generics handle this naturally.
+// Functions generic over `S: ActiveSet` work on any warp — the active set is
+// inferred at each call site. Functions that REQUIRE `Warp<All>` (because they
+// shuffle) simply take `Warp<All>` directly — the type system enforces it.
+// See the doc tests below for examples of both patterns.
 
 // ============================================================================
 // Tests

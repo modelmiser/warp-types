@@ -46,6 +46,13 @@ impl Warp<crate::active_set::All> {
     /// In real GPU code, this corresponds to kernel entry — the point
     /// where all 32 lanes are guaranteed active. Sub-warps are created
     /// only via `diverge_*()` methods, which consume the parent.
+    ///
+    /// **Limitation:** This can be called multiple times, creating independent
+    /// `Warp<All>` handles. Rust's affine type system cannot enforce that only
+    /// one exists. In real GPU code, call this once at kernel entry. Calling it
+    /// again after a diverge would bypass the typestate discipline — don't do
+    /// that. The Lean formalization models linear semantics where this is
+    /// enforced; the Rust implementation trusts the programmer here.
     pub fn kernel_entry() -> Self {
         Warp { _phantom: PhantomData }
     }

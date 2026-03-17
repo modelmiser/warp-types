@@ -1,0 +1,39 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['lean/**', '*.md', 'paper/**', 'blog/**']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['lean/**', '*.md', 'paper/**', 'blog/**']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Build
+        run: cargo build --verbose
+      - name: Unit tests
+        run: cargo test --lib --verbose
+      - name: Doc tests
+        run: cargo test --doc --verbose
+      - name: Example tests
+        run: cargo test --examples --verbose
+      - name: Formal proof module
+        run: cargo test --features formal-proof --verbose
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy -- -D warnings

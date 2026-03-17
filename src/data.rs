@@ -11,12 +11,13 @@ use crate::GpuValue;
 /// A lane identifier (0..31 for NVIDIA, 0..63 for AMD).
 ///
 /// Type-safe: you can't accidentally use an arbitrary int as a lane id.
+/// Supports up to 64 lanes to accommodate AMD wavefronts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LaneId(u8);
 
 impl LaneId {
     pub const fn new(id: u8) -> Self {
-        assert!(id < 32, "Lane ID must be < 32");
+        assert!(id < 64, "Lane ID must be < 64 (supports NVIDIA 32-lane and AMD 64-lane)");
         LaneId(id)
     }
 
@@ -129,27 +130,28 @@ impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
 /// A role within a warp (e.g., coordinator vs worker lanes).
 ///
 /// Roles enable modeling warp-level protocols where different lanes
-/// have different responsibilities.
+/// have different responsibilities. Uses `u64` mask to match
+/// `ActiveSet::MASK` width (supporting AMD 64-lane wavefronts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Role {
-    pub mask: u32,
+    pub mask: u64,
     pub name: &'static str,
 }
 
 impl Role {
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
-        assert!(start < 32 && end <= 32 && start < end);
-        let mask = ((1u32 << (end - start)) - 1) << start;
+        assert!(start < 64 && end <= 64 && start < end);
+        let mask = ((1u64 << (end - start)) - 1) << start;
         Role { mask, name }
     }
 
     pub const fn lane(id: u8, name: &'static str) -> Self {
-        assert!(id < 32);
-        Role { mask: 1u32 << id, name }
+        assert!(id < 64);
+        Role { mask: 1u64 << id, name }
     }
 
     pub const fn contains(self, lane: LaneId) -> bool {
-        (self.mask & (1u32 << lane.0)) != 0
+        (self.mask & (1u64 << lane.0)) != 0
     }
 
     pub const fn count(self) -> u32 {
@@ -176,9 +178,15 @@ mod tests {
     }
 
     #[test]
+    fn test_lane_id_boundary_63() {
+        let lane = LaneId::new(63);
+        assert_eq!(lane.get(), 63);
+    }
+
+    #[test]
     #[should_panic]
     fn test_lane_id_out_of_range() {
-        LaneId::new(32);
+        LaneId::new(64);
     }
 
     #[test]

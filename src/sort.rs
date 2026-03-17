@@ -34,21 +34,19 @@ use crate::active_set::All;
 
 /// Compare-and-swap between lanes at distance `xor_mask`.
 ///
-/// Each lane exchanges its value with the lane at `lane_id XOR xor_mask`,
-/// then keeps the min or max depending on direction.
+/// Keeps the smaller value (ascending sort). On a real GPU, a full bitonic sort
+/// requires direction-aware compare-and-swap using `(lane_id & stage_mask)` to
+/// alternate ascending/descending blocks. This implementation always sorts
+/// ascending, which is correct for the final merge network but not for the
+/// intermediate bitonic sequences.
 ///
-/// `ascending_mask` determines the sort direction: if `(lane_id & ascending_mask) == 0`,
-/// this lane keeps the minimum (ascending order in that block).
+/// **CPU emulation:** `shuffle_xor` returns self, so `my == partner` → no swap.
+/// The sort is a no-op on CPU, which is correct for type-system validation.
+///
+/// **GPU limitation:** The `stage_mask` parameter is accepted but not used.
+/// On a real GPU, this produces ascending-only sort. A production implementation
+/// would need `gpu::lane_id()` to determine sort direction per lane.
 #[inline(always)]
-/// Compare-and-swap between lanes at distance `xor_mask`.
-///
-/// Direction determined by two bits:
-/// - `stage_mask` (k): block-level sort direction (`(tid & k) == 0` → ascending)
-/// - `xor_mask` (j): lane position within pair (`(tid & j) == 0` → lower lane)
-/// - `want_min = ascending == lower` (XNOR)
-///
-/// On CPU emulation: shuffle_xor returns self, so my == partner → no swap (correct).
-/// On GPU: actual cross-lane compare-and-swap via `shfl.sync.bfly.b32`.
 fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
     warp: &Warp<All>,
     val: PerLane<T>,
@@ -60,7 +58,7 @@ fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
     let partner = partner_val.get();
 
     // CPU emulation: shuffle returns self, so my == partner → no swap
-    // GPU: actual compare-and-swap across lanes
+    // GPU: ascending-only compare-and-swap (see doc comment for limitation)
     if my <= partner {
         val
     } else {

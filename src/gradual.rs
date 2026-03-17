@@ -106,13 +106,19 @@ pub struct DynWarp {
 }
 
 impl DynWarp {
-    /// All 32 lanes active.
+    /// All 32 lanes active (NVIDIA warp size).
+    ///
+    /// For AMD 64-lane wavefronts, use `DynWarp::from_static(Warp::kernel_entry())`
+    /// or construct via `DynWarp::all_64()` (when available).
     pub fn all() -> Self {
         DynWarp { active_mask: 0xFFFFFFFF }
     }
 
     /// Create from a specific mask.
-    pub(crate) fn from_mask(mask: u64) -> Self {
+    ///
+    /// Useful for testing or constructing `DynWarp`s with known masks.
+    /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
+    pub fn from_mask(mask: u64) -> Self {
         DynWarp { active_mask: mask }
     }
 

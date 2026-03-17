@@ -425,49 +425,15 @@ pub mod active_set_portable {
 // RECOMMENDATION
 // ============================================================================
 
-/// Summary: How to handle warp size portability (32 vs 64)?
-///
-/// ## Recommended Approach: Platform Trait + Const Generics
-///
-/// Combine Platform trait for high-level abstraction with const generics
-/// for implementation details:
-///
-/// ```text
-/// trait Platform {
-///     const WARP_SIZE: usize;
-///     type Mask: ...;
-///     ...
-/// }
-///
-/// struct Warp<S: ActiveSet<P::WARP_SIZE>, P: Platform> { ... }
-/// ```
-///
-/// ## Key Design Points
-///
-/// 1. **Warp size is a platform constant**: Not a runtime variable
-/// 2. **Operations are polymorphic**: ballot(), shuffle(), reduce() work the same
-/// 3. **Active sets scale**: Even/Odd/LowHalf patterns adapt to any size
-/// 4. **Type safety preserved**: Warp<All, 32> is different from Warp<All, 64>
-///
-/// ## Implementation Strategy
-///
-/// 1. Define `Platform` trait for each backend (CUDA, ROCm, Intel)
-/// 2. Use const generics to parameterize by warp size
-/// 3. Active sets implement `ActiveSet<N>` for various N
-/// 4. Code is generic over Platform, specializes at compile time
-///
-/// ## Trade-offs
-///
-/// | Approach | Portability | Type Safety | Complexity |
-/// |----------|-------------|-------------|------------|
-/// | Const generics only | High | High | Medium |
-/// | Platform trait | High | High | Medium |
-/// | Feature flags | Low | High | Low |
-/// | Runtime detection | High | Low | High |
-///
-/// Recommendation: Use Platform trait for the public API, const generics
-/// for internal implementation. This gives best of both worlds.
-pub const _RECOMMENDATION: () = ();
+// Recommendation: Platform Trait + Const Generics
+//
+// Combine Platform trait for high-level abstraction with const generics
+// for implementation details. Warp size is a platform constant (not runtime).
+// Operations (ballot, shuffle, reduce) are polymorphic. Active sets scale
+// to any size. Type safety is preserved: Warp<All, 32> ≠ Warp<All, 64>.
+//
+// See the three approaches above. The main library currently hardcodes
+// 32-lane warps; this module explores the portability design space.
 
 #[cfg(test)]
 mod integration_tests {

@@ -98,28 +98,32 @@ impl Warp<All> {
     /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)`.
     /// Lane i gets sum of lanes 0..i (lane 0 gets `identity`).
     ///
+    /// **Limitation:** The `identity` parameter is not applied on either the
+    /// CPU emulation path or the GPU path. On CPU, `shfl_up` returns self,
+    /// so the result is the inclusive sum (wrong for exclusive). On GPU,
+    /// lane 0's `shfl_up(1)` returns its own value, not the identity.
+    /// A correct implementation requires `gpu::lane_id()` to conditionally
+    /// replace lane 0's value. This function currently demonstrates the
+    /// type-system contract only; use the real GPU kernel pattern for
+    /// correct scan semantics.
+    ///
     /// ```
     /// use warp_types::*;
     ///
     /// let warp: Warp<All> = Warp::kernel_entry();
     /// let data = data::PerLane::new(1i32);
     /// let prefix = warp.exclusive_sum(data, 0);
-    /// // On GPU: lane 0 = 0, lane 1 = 1, lane 2 = 2, ..., lane 31 = 31
+    /// // CPU emulation: NOT a correct exclusive scan (see doc)
     /// ```
     pub fn exclusive_sum<T>(&self, data: PerLane<T>, identity: T) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
     {
-        // Inclusive scan then shift down by 1, fill lane 0 with identity
+        // Inclusive scan then shift down by 1
         let inclusive = self.inclusive_sum(data);
-        // Shift: each lane reads from lane (id - 1)
         let shifted = inclusive.get().gpu_shfl_up(1);
-        // Lane 0 doesn't have a valid predecessor — use identity
-        // On real GPU, lane 0's shfl_up(1) returns its own value (no source).
-        // We handle this by returning identity for lane 0.
-        // For the CPU emulation path, shfl_up returns self, which is also wrong
-        // for exclusive scan. Both paths need a lane-id check in real GPU code.
-        // In the type system prototype, we model the correct semantics.
+        // TODO: lane 0 should get `identity`, but we lack lane_id() on CPU.
+        // On real GPU, use: if lane_id() == 0 { identity } else { shifted }
         let _ = identity;
         PerLane::new(shifted)
     }

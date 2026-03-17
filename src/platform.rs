@@ -223,7 +223,11 @@ where
 #[derive(Copy, Clone, Debug)]
 pub struct GpuWarp32;
 
-/// GPU warp platform (64 lanes for AMD)
+/// GPU warp platform (64 lanes for AMD).
+///
+/// **Placeholder:** Does not implement `Platform` yet. AMD amdgcn inline
+/// assembly support is not stable in Rust. When available, this will mirror
+/// `GpuWarp32` with `WIDTH = 64` and `Mask = u64`.
 #[derive(Copy, Clone, Debug)]
 pub struct GpuWarp64;
 

@@ -206,8 +206,8 @@ pub fn exec_mask() -> u64 {
 /// On other targets: provides CPU emulation (identity for single-thread).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be shuffled across GPU lanes",
-    label = "GpuShuffle is implemented for i32, u32, f32 — use one of these types",
-    note = "larger types (i64, f64) require two shuffles; implement GpuShuffle manually for custom types"
+    label = "GpuShuffle is implemented for i32, u32, f32, i64, u64, f64, bool — use one of these types",
+    note = "larger types require two shuffles; implement GpuShuffle manually for custom types"
 )]
 pub trait GpuShuffle: Copy + 'static {
     /// Butterfly shuffle: exchange with lane (lane_id XOR mask).
@@ -365,51 +365,47 @@ impl GpuShuffle for f64 {
     }
 }
 
-// CPU fallback: single-thread, shuffle returns own value (identity)
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for i32 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
+// CPU fallback: single-thread, shuffle returns own value (identity).
+//
+// **Caveat:** This makes reduce_sum accidentally correct (butterfly doubling)
+// but makes inclusive_sum/exclusive_sum incorrect (produces reduce result,
+// not prefix). Tests that rely on scan semantics must be gated behind
+// `#[cfg(target_arch)]` or use the Platform trait's multi-lane CpuSimd emulator.
+macro_rules! impl_cpu_gpu_shuffle {
+    ($($t:ty),+) => {
+        $(
+            #[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
+            impl GpuShuffle for $t {
+                fn gpu_shfl_xor(self, _: u32) -> Self { self }
+                fn gpu_shfl_down(self, _: u32) -> Self { self }
+                fn gpu_shfl_up(self, _: u32) -> Self { self }
+                fn gpu_shfl_idx(self, _: u32) -> Self { self }
+            }
+        )+
+    }
 }
 
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for f32 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
+impl_cpu_gpu_shuffle!(i32, f32, u32, i64, u64, f64);
+
+// bool: encode as u32 0/1 for GPU shuffle, identity on CPU.
+#[cfg(target_arch = "nvptx64")]
+impl GpuShuffle for bool {
+    #[inline(always)]
+    fn gpu_shfl_xor(self, xor_mask: u32) -> Self {
+        shfl_sync_bfly_i32(0xFFFFFFFF, self as i32, xor_mask) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_down(self, delta: u32) -> Self {
+        shfl_sync_down_i32(0xFFFFFFFF, self as i32, delta) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_up(self, delta: u32) -> Self {
+        shfl_sync_up_i32(0xFFFFFFFF, self as i32, delta) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_idx(self, src_lane: u32) -> Self {
+        shfl_sync_idx_i32(0xFFFFFFFF, self as i32, src_lane) != 0
+    }
 }
 
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for u32 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
-}
-
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for i64 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
-}
-
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for u64 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
-}
-
-#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
-impl GpuShuffle for f64 {
-    fn gpu_shfl_xor(self, _: u32) -> Self { self }
-    fn gpu_shfl_down(self, _: u32) -> Self { self }
-    fn gpu_shfl_up(self, _: u32) -> Self { self }
-    fn gpu_shfl_idx(self, _: u32) -> Self { self }
-}
+impl_cpu_gpu_shuffle!(bool);

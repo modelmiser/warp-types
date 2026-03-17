@@ -150,7 +150,10 @@ pub use shuffle::{
 };
 pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteState};
 pub use block::{SharedRegion, BlockId, ThreadId};
-pub use platform::{Platform, CpuSimd, GpuWarp32, SimdVector};
+pub use platform::{Platform, CpuSimd, GpuWarp32, GpuWarp64, SimdVector};
+pub use dynamic::DynDiverge;
+pub use gradual::DynWarp;
+pub use tile::Tile;
 pub use warp_types_kernel::warp_kernel;
 
 /// Convenience prelude — import everything needed for typical usage.
@@ -170,8 +173,8 @@ pub mod prelude {
         ActiveSet, ComplementOf, CanDiverge,
         PerLane, Uniform, SingleLane,
         merge, merge_within,
+        DynWarp, DynDiverge, Tile,
     };
     pub use crate::data;
     pub use crate::gpu::GpuShuffle;
-    pub use crate::tile::Tile;
 }
