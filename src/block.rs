@@ -19,6 +19,11 @@ use crate::data::Role;
 ///
 /// The key insight: shared memory races happen because ownership is implicit.
 /// By making ownership explicit, we prevent races at the type level.
+///
+/// `OWNER` is a type-level tag (u8 discriminator) that prevents cross-type access
+/// at compile time. The `owner` field carries the runtime lane range metadata
+/// (which lanes belong to this role). These encode different concerns: OWNER
+/// prevents mixing regions at the type level; Role describes the lane geometry.
 pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
     data: [T; 32],
     owner: Role,

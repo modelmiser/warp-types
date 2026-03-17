@@ -159,6 +159,11 @@ where S1: ComplementOf<S2>, S2: ActiveSet {
 /// Unlike `Warp<S>`, the mask is a runtime value. Every collective operation
 /// checks the mask at runtime. This catches the PyTorch bug at runtime
 /// instead of at compile time — a stepping stone toward full static typing.
+///
+/// Note: This example uses u32 masks (32-lane only). The core crate's
+/// `gradual::DynWarp` uses u64 to support both 32-lane (NVIDIA) and
+/// 64-lane (AMD) warps. This simplified version is sufficient for
+/// demonstrating the PyTorch bug pattern.
 #[derive(Clone, Debug)]
 pub struct DynWarp {
     active_mask: u32,
