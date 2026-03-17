@@ -1,6 +1,6 @@
 # Cold Review Prompt v3
 
-Paste this into a fresh session. The orchestrator spawns 3 parallel agents.
+Use `/cold-review:run github/warp-types` or paste into a fresh session.
 
 ---
 
@@ -41,6 +41,7 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - PortableVector::extract/insert use debug_assert + direct index (no % WIDTH wrapping)
 - SimWarp width-confined shuffles assert power-of-2 width in 1..=WIDTH
 - SimWarp::shuffle_idx clamps OOB src_lane (GPU semantics, not % WIDTH wrapping)
+- ValidTileSize is sealed via Sealed supertrait — external impls blocked
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
