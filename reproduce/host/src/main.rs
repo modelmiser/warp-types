@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Result:   {}", if all_correct { "PASS" } else { "FAIL" });
         println!();
         if all_correct {
-            println!("Session-typed divergence: correct results on real GPU hardware.");
+            println!("Linear typestate divergence: correct results on real GPU hardware.");
             println!("Zero type system overhead. Zero runtime cost. Zero wrong answers.");
         }
     }

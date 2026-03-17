@@ -1,0 +1,46 @@
+    Finished `release` profile [optimized] target(s) in 0.01s
+     Running `target/release/run-kernel`
+GPU: NVIDIA RTX 4000 SFF Ada Generation
+
+=== Test 1: typed_butterfly_reduce ===
+  Input:    [1; 32]
+  Expected: every lane = 32
+  Got:      lane[0]=32, lane[15]=32, lane[31]=32
+  Result:   PASS
+
+=== Test 2: typed_butterfly_reduce (sequential) ===
+  Input:    [0, 1, 2, ..., 31]
+  Expected: every lane = 496
+  Got:      lane[0]=496, lane[15]=496, lane[31]=496
+  Result:   PASS
+
+=== Test 3: typed_diverge_merge_reduce ===
+  Input:    [0, 1, 2, ..., 31]
+  Expected: every lane = 496 (diverge/merge erased)
+  Got:      lane[0]=496, lane[15]=496, lane[31]=496
+  Result:   PASS
+
+Session-typed divergence: correct results on real GPU hardware.
+Zero type system overhead. Zero runtime cost. Zero wrong answers.
+
+================================================================
+cuda-samples #398: The Killer Demo
+================================================================
+
+=== Untyped (buggy): CUDA's reduce7 pattern ===
+  Input:    [1; 32]
+  Expected: 32
+  Got:      1
+  Result:   WRONG (bug!)
+
+=== Typed (fixed): Warp<All> enforced before shuffle ===
+  Input:    [1; 32]
+  Expected: 32
+  Got:      32
+  Result:   CORRECT
+
+=== The point ===
+The buggy pattern (shfl_down with partial mask) is a COMPILE ERROR
+in our type system: Warp<Lane0> has no shfl_down method.
+The fix (all lanes participate) is the ONLY version that type-checks.
+Same GPU. Same algorithm. Type system prevents the bug.
