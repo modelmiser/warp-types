@@ -62,6 +62,8 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - with_diverged manufactures phantom warps via Warp::new() — correct, ComplementOf is sealed
 - Warp<All>::global_store → PartialWrite<All> (not FullWrite) — documented, merge_writes handles it
 - proof.rs substitute() skips capture avoidance — safe because step() only substitutes closed values
+- block.rs SharedRegion OWNER const generic vs Role runtime field — different concerns (type tag vs lane geometry), documented
+- examples/pytorch_98157.rs DynWarp uses u32 (core uses u64) — pedagogical simplification, documented
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
