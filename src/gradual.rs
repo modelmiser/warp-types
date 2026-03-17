@@ -290,6 +290,13 @@ impl DynWarp {
     /// DynWarps can merge without recovering All. Use `ascribe::<All>()` after
     /// merge to verify the result covers all lanes.
     pub fn merge(self, other: DynWarp) -> Result<DynWarp, WarpError> {
+        if self.full_mask != other.full_mask {
+            return Err(WarpError {
+                operation: "merge (full_mask mismatch)",
+                expected_mask: self.full_mask,
+                actual_mask: other.full_mask,
+            });
+        }
         let overlap = self.active_mask & other.active_mask;
         if overlap != 0 {
             return Err(WarpError {

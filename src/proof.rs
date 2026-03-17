@@ -295,6 +295,11 @@ pub fn step(expr: &Expr) -> Option<Expr> {
                 (Expr::WarpVal(s), Expr::PerLaneVal(vals)) => {
                     // Runtime check (type system should have verified All)
                     assert!(s.is_all(), "SOUNDNESS VIOLATION: shuffle on non-All warp");
+                    assert_eq!(
+                        vals.len(), WARP_SIZE as usize,
+                        "PerLaneVal must have exactly {WARP_SIZE} elements, got {}",
+                        vals.len()
+                    );
 
                     // Perform the shuffle
                     let mut result = vals.clone();

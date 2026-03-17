@@ -249,7 +249,18 @@ impl Platform for GpuWarp32 {
     }
 
     fn shuffle_down<T: GpuValue>(source: Self::Vector<T>, delta: usize) -> Self::Vector<T> {
-        CpuSimd::<32>::shuffle_down(source, delta)
+        // GPU shfl.sync.down clamps: lanes where lane + delta >= WIDTH read
+        // their own value (not wrapped).  CpuSimd wraps, so override here.
+        let mut result = PortableVector::default();
+        for i in 0..32 {
+            let src_idx = i + delta;
+            result.data[i] = if src_idx < 32 {
+                source.data[src_idx]
+            } else {
+                source.data[i]
+            };
+        }
+        result
     }
 
     fn shuffle_xor<T: GpuValue>(source: Self::Vector<T>, mask: usize) -> Self::Vector<T> {

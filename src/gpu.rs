@@ -119,10 +119,14 @@ pub fn ballot_sync(mask: u32, predicate: bool) -> u32 {
     let result: u32;
     let pred_u32 = predicate as u32;
     unsafe {
+        // vote.sync.ballot.b32 requires a predicate register (%p), not a
+        // general-purpose register (%r).  Convert via setp first.
         core::arch::asm!(
-            "vote.sync.ballot.b32 {result}, {pred}, {mask};",
+            "setp.ne.u32 {pred_p}, {pred_in}, 0;",
+            "vote.sync.ballot.b32 {result}, {pred_p}, {mask};",
+            pred_in = in(reg32) pred_u32,
+            pred_p = out(pred) _,
             result = out(reg32) result,
-            pred = in(reg32) pred_u32,
             mask = in(reg32) mask,
         );
     }

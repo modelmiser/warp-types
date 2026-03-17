@@ -140,8 +140,11 @@ where
 
     /// Inclusive prefix sum within the tile.
     ///
-    /// On CPU: returns val × SIZE (shfl_up is identity, each step doubles).
-    /// On GPU: correct Hillis-Steele scan (shfl_up returns neighbour's value).
+    /// **WARNING:** Not correct on any target. On CPU, `shfl_up` is identity,
+    /// so each stage doubles (result: val × SIZE). On GPU, lanes where
+    /// `lane_id < stride` get clamped (own value), doubling instead of
+    /// preserving. Needs `if lane_id >= stride` guard (requires `lane_id()`).
+    /// Retained for type-system demonstration.
     pub fn inclusive_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
         &self, data: PerLane<T>,
     ) -> PerLane<T> {

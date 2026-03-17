@@ -60,10 +60,17 @@ impl Warp<All> {
     /// Equivalent to `cub::WarpScan<T>::InclusiveSum(val, &sum)`.
     /// Uses Hillis-Steele parallel scan (5 stages for 32 lanes).
     ///
-    /// Lane i gets sum of lanes 0..=i.
+    /// Lane i should get sum of lanes 0..=i.
     ///
-    /// On GPU: uses shuffle-up + add at each stage.
-    /// On CPU: returns val × 32 (each step doubles because shfl_up is identity).
+    /// **WARNING:** This function does not produce a correct inclusive scan on
+    /// any target. On CPU, `shfl_up` is identity, so each stage doubles the
+    /// value (result: val × 32). On GPU, lanes where `lane_id < stride` get
+    /// their own value back from `shfl_up` (clamped), causing them to double
+    /// instead of preserving their partial sum. A correct Hillis-Steele scan
+    /// requires `if lane_id >= stride { val = val + s; }`, which needs a
+    /// `lane_id()` intrinsic this crate does not yet provide.
+    ///
+    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
     ///
     /// ```
     /// use warp_types::*;
@@ -71,7 +78,7 @@ impl Warp<All> {
     /// let warp: Warp<All> = Warp::kernel_entry();
     /// let data = data::PerLane::new(1i32);
     /// let prefix = warp.inclusive_sum(data);
-    /// // On GPU: lane 0 = 1, lane 1 = 2, ..., lane 31 = 32
+    /// // CPU emulation: NOT a correct inclusive scan (see doc)
     /// ```
     pub fn inclusive_sum<T>(&self, data: PerLane<T>) -> PerLane<T>
     where
