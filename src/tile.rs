@@ -134,6 +134,7 @@ where
     pub fn shuffle_xor<T: GpuValue + GpuShuffle>(
         &self, data: PerLane<T>, mask: u32,
     ) -> PerLane<T> {
+        debug_assert!(mask < SIZE as u32, "shuffle_xor: mask {mask} >= tile SIZE {SIZE}");
         PerLane::new(data.get().gpu_shfl_xor_width(mask, SIZE as u32))
     }
 

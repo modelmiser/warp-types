@@ -153,7 +153,14 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
     match expr {
         // Values have their literal types
         Expr::WarpVal(s) => Ok(Type::Warp(s.clone())),
-        Expr::PerLaneVal(_) => Ok(Type::PerLane),
+        Expr::PerLaneVal(vals) => {
+            if vals.len() != WARP_SIZE as usize {
+                return Err(format!(
+                    "PerLaneVal has {} elements, expected {WARP_SIZE}", vals.len()
+                ));
+            }
+            Ok(Type::PerLane)
+        }
         Expr::UnitVal => Ok(Type::Unit),
         Expr::PairVal(e1, e2) => {
             let t1 = type_check(ctx, e1)?;

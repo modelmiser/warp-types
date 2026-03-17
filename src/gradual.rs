@@ -128,6 +128,10 @@ impl DynWarp {
     /// Infers warp width from the mask: if all set bits fit in 32 bits,
     /// uses 32-lane (NVIDIA); otherwise 64-lane (AMD).
     ///
+    /// **Note:** A zero mask (`from_mask(0)`) infers 32-lane width. For an
+    /// empty 64-lane warp, use `DynWarp::all_64()` then `diverge()` with
+    /// an empty predicate, or construct with a mask that has bit 32+ set.
+    ///
     /// Useful for testing or constructing `DynWarp`s with known masks.
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
     pub fn from_mask(mask: u64) -> Self {
@@ -230,7 +234,8 @@ impl DynWarp {
                 actual_mask: self.active_mask,
             });
         }
-        // CPU single-thread: butterfly doubling gives value * warp_width
+        // CPU single-thread: butterfly doubling gives value * warp_width.
+        // wrapping_mul matches GPU hardware semantics (arithmetic wraps on overflow).
         let warp_width = full.count_ones() as i32;
         Ok(value.wrapping_mul(warp_width))
     }

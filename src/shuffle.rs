@@ -251,6 +251,10 @@ impl<P1: Permutation, P2: Permutation> Permutation for Compose<P1, P2> {
     fn inverse(i: u32) -> u32 { P1::inverse(P2::inverse(i)) }
 }
 
+impl<P1: Permutation + HasDual, P2: Permutation + HasDual> HasDual for Compose<P1, P2> {
+    type Dual = Compose<P2::Dual, P1::Dual>;
+}
+
 // Butterfly network type aliases
 pub type ButterflyStage0 = Xor<1>;
 pub type ButterflyStage1 = Xor<2>;

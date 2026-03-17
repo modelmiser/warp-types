@@ -73,6 +73,9 @@ impl<'a, T: GpuValue, const OWNER: u8> SharedView<'a, T, OWNER> {
 }
 
 /// A work queue in shared memory with typed producer/consumer roles.
+///
+/// Uses a circular buffer with 32 slots and one sentinel for full detection,
+/// giving an effective capacity of 31 items.
 pub struct WorkQueue<T: GpuValue, const PRODUCER: u8, const CONSUMER: u8> {
     tasks: SharedRegion<T, PRODUCER>,
     head: usize,
