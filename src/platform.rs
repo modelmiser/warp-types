@@ -313,6 +313,7 @@ pub fn butterfly_reduce_sum<const WIDTH: usize, T>(
 where
     T: GpuValue + core::ops::Add<Output = T>,
 {
+    const { assert!(WIDTH.is_power_of_two(), "butterfly_reduce_sum requires power-of-2 WIDTH") };
     let mut v = values;
     let mut stride = 1;
     while stride < WIDTH {

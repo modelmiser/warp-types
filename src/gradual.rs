@@ -225,8 +225,9 @@ impl DynWarp {
                 actual_mask: self.active_mask,
             });
         }
-        // CPU single-thread: butterfly doubling gives value * 32
-        Ok(value.wrapping_mul(32))
+        // CPU single-thread: butterfly doubling gives value * warp_width
+        let warp_width = full.count_ones() as i32;
+        Ok(value.wrapping_mul(warp_width))
     }
 
     /// Broadcast — runtime check for all-active.
@@ -243,8 +244,19 @@ impl DynWarp {
     }
 
     /// Ballot — runtime check for all-active.
+    ///
+    /// Only supports 32-lane warps. Returns an error for 64-lane warps
+    /// because the `[bool; 32]` input and `u32` return type cannot represent
+    /// 64 lanes. Use the static `Warp<All>` API for 64-lane ballot.
     pub fn ballot(&self, predicate: &[bool; 32]) -> Result<u32, WarpError> {
         let full = self.full_mask;
+        if full > 0xFFFFFFFF {
+            return Err(WarpError {
+                operation: "ballot (64-lane warp incompatible with u32 result)",
+                expected_mask: 0xFFFFFFFF,
+                actual_mask: full,
+            });
+        }
         if self.active_mask != full {
             return Err(WarpError {
                 operation: "ballot",
@@ -463,6 +475,48 @@ mod tests {
 
         // Now ascribe to static type
         let _warp: Warp<All> = all.ascribe().unwrap();
+    }
+
+    // --- 64-lane (AMD wavefront) ---
+
+    #[test]
+    fn dyn_warp_all_64() {
+        let w = DynWarp::all_64();
+        assert_eq!(w.active_mask(), 0xFFFFFFFFFFFFFFFF);
+        assert_eq!(w.population(), 64);
+    }
+
+    #[test]
+    fn reduce_sum_64_lane() {
+        let w = DynWarp::all_64();
+        let result = w.reduce_sum_scalar(1).unwrap();
+        assert_eq!(result, 64); // Not 32!
+    }
+
+    #[test]
+    fn ballot_64_lane_errors() {
+        let w = DynWarp::all_64();
+        let pred = [true; 32];
+        let err = w.ballot(&pred).unwrap_err();
+        assert!(err.operation.contains("64-lane"));
+    }
+
+    #[test]
+    fn shuffle_64_lane_succeeds() {
+        let w = DynWarp::all_64();
+        assert!(w.shuffle_xor_scalar(42, 1).is_ok());
+    }
+
+    #[test]
+    fn merge_mismatched_width_fails() {
+        let a = DynWarp::all();       // 32-lane
+        let b = DynWarp::all_64();    // 64-lane
+        let (a1, a2) = a.diverge(Even::MASK);
+        let (b1, _b2) = b.diverge(Even::MASK);
+        // Can't merge 32-lane and 64-lane halves
+        assert!(a1.clone().merge(b1).is_err());
+        // Can merge same-width halves
+        assert!(a1.merge(a2).is_ok());
     }
 
     #[test]

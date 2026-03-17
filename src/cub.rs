@@ -67,8 +67,9 @@ impl Warp<All> {
     /// value (result: val × 32). On GPU, lanes where `lane_id < stride` get
     /// their own value back from `shfl_up` (clamped), causing them to double
     /// instead of preserving their partial sum. A correct Hillis-Steele scan
-    /// requires `if lane_id >= stride { val = val + s; }`, which needs a
-    /// `lane_id()` intrinsic this crate does not yet provide.
+    /// requires `if lane_id >= stride { val = val + s; }`, which needs
+    /// per-lane branching not available in the single-thread CPU emulation
+    /// (the `gpu::lane_id()` intrinsic exists but returns 0 on CPU).
     ///
     /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
     ///
