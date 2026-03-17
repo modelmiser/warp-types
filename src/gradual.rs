@@ -122,12 +122,16 @@ impl DynWarp {
         DynWarp { active_mask: 0xFFFFFFFFFFFFFFFF, full_mask: 0xFFFFFFFFFFFFFFFF }
     }
 
-    /// Create from a specific mask within a 32-lane warp.
+    /// Create from a specific mask.
+    ///
+    /// Infers warp width from the mask: if all set bits fit in 32 bits,
+    /// uses 32-lane (NVIDIA); otherwise 64-lane (AMD).
     ///
     /// Useful for testing or constructing `DynWarp`s with known masks.
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
     pub fn from_mask(mask: u64) -> Self {
-        DynWarp { active_mask: mask, full_mask: 0xFFFFFFFF }
+        let full = if mask <= 0xFFFFFFFF { 0xFFFFFFFF } else { 0xFFFFFFFFFFFFFFFF };
+        DynWarp { active_mask: mask, full_mask: full }
     }
 
     /// Erase a static `Warp<S>` into a dynamic warp (always succeeds).
@@ -505,6 +509,23 @@ mod tests {
     fn shuffle_64_lane_succeeds() {
         let w = DynWarp::all_64();
         assert!(w.shuffle_xor_scalar(42, 1).is_ok());
+    }
+
+    #[test]
+    fn from_mask_infers_64_lane_width() {
+        let w = DynWarp::from_mask(0xFFFFFFFFFFFFFFFF);
+        assert_eq!(w.population(), 64);
+        // Should succeed — full_mask now auto-detected as 64-lane
+        assert!(w.shuffle_xor_scalar(42, 1).is_ok());
+    }
+
+    #[test]
+    fn from_mask_high_bits_merge_works() {
+        // Mask with bits above 31 should get 64-lane full_mask
+        let w = DynWarp::from_mask(0x1_0000_0000);
+        assert_eq!(w.full_mask, 0xFFFFFFFFFFFFFFFF);
+        // Not all lanes active, so shuffle should fail
+        assert!(w.shuffle_xor_scalar(42, 1).is_err());
     }
 
     #[test]
