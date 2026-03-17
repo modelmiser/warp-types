@@ -12,7 +12,7 @@ pub mod varying_loops;
 pub mod shuffle_duality;
 pub mod inactive_lanes;
 pub mod arbitrary_predicates;
-pub mod soundness;
+// soundness.rs removed — canonical proof lives in src/proof.rs (gated behind formal-proof feature)
 pub mod inter_block;
 pub mod recursive_protocols;
 pub mod protocol_inference;
@@ -28,3 +28,4 @@ pub mod scalability;
 pub mod cpu_gpu_session;
 pub mod predicate_expressiveness;
 pub mod crossbar_protocol;
+pub mod warp_size;

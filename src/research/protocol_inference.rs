@@ -194,6 +194,7 @@ pub mod local_inference {
                 // Compute false branch: parent - true branch
                 let true_mask = self.current_mask;
                 self.current_mask = parent_mask & !true_mask;
+                // Note: does not record else-branch transition in protocol sequence (research simplification)
             }
         }
 

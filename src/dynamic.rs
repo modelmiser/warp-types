@@ -60,7 +60,7 @@
 //! use warp_types::*;
 //!
 //! fn my_reduce(warp: &Warp<All>, data: data::PerLane<i32>) -> i32 {
-//!     warp.reduce_sum(data)
+//!     warp.reduce_sum(data).get()
 //! }
 //!
 //! let warp: Warp<All> = Warp::kernel_entry();
@@ -285,7 +285,7 @@ mod tests {
     }
 
     fn all_only_helper(warp: &Warp<All>, data: PerLane<i32>) -> i32 {
-        warp.reduce_sum(data)
+        warp.reduce_sum(data).get()
     }
 
     #[test]

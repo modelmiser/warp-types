@@ -269,7 +269,7 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have mechanized the full core metatheory in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
+We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
 
 ### Scope
 

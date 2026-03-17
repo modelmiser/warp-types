@@ -89,7 +89,7 @@ if (condition) {
     // WRONG: mask says all threads, but only some are here
     __shfl_xor_sync(0xFFFFFFFF, data, 1);
 
-    // CORRECT: use __activemask() to get actual active threads
+    // LESS WRONG: use __activemask() to get actual active threads
     __shfl_xor_sync(__activemask(), data, 1);
 }
 ```

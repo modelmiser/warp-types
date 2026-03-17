@@ -115,6 +115,15 @@ impl Warp<All> {
     /// let prefix = warp.exclusive_sum(data, 0);
     /// // CPU emulation: NOT a correct exclusive scan (see doc)
     /// ```
+    /// Exclusive prefix sum across all lanes (STUB — not yet correct).
+    ///
+    /// **WARNING:** This function does not produce a correct exclusive scan on
+    /// any target. Lane 0 should receive `identity` but gets its own value
+    /// instead, because the implementation lacks `lane_id()`. Use
+    /// `inclusive_sum` and implement the shift manually in GPU kernel code.
+    ///
+    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
+    #[deprecated(note = "produces incorrect results — use inclusive_sum and manual shift instead")]
     pub fn exclusive_sum<T>(&self, data: PerLane<T>, identity: T) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
@@ -135,7 +144,7 @@ impl Warp<All> {
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
     {
-        self.reduce_sum(data)
+        self.reduce_sum(data).get()
     }
 
     /// Reduce with maximum.

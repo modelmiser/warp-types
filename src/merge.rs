@@ -200,7 +200,7 @@ mod tests {
         let result = all_restored.shuffle_xor(data, 1);
         assert_eq!(result.get(), 1); // CPU identity
         let sum = all_restored.reduce_sum(data);
-        assert_eq!(sum, 32);
+        assert_eq!(sum.get(), 32);
     }
 
     #[test]

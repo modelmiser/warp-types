@@ -354,16 +354,18 @@ pub mod effect_system {
     // Shuffle only works with Uniform effect
     pub fn shuffle<T: Copy>(
         _warp: &Warp<All>,
-        _data: Computation<UniformEffect, T>,
+        data: Computation<UniformEffect, T>,
     ) -> Computation<UniformEffect, T> {
-        todo!()
+        // Placeholder: on CPU, shuffle is a no-op (return same value)
+        Computation { _effect: PhantomData, value: data.value }
     }
 
     // Varying loop produces Divergent effect
     pub fn varying_loop<T>(
-        _body: impl Fn() -> T,
+        body: impl Fn() -> T,
     ) -> Computation<DivergentEffect, T> {
-        todo!()
+        // Placeholder: on CPU, execute body once (no actual divergence)
+        Computation { _effect: PhantomData, value: body() }
     }
 
     // Can't compose: shuffle(varying_loop(...)) is a type error
@@ -372,9 +374,10 @@ pub mod effect_system {
     // To use shuffle after loop, must "synchronize" which consumes
     // DivergentEffect and produces UniformEffect:
     pub fn synchronize<T>(
-        _comp: Computation<DivergentEffect, T>,
+        comp: Computation<DivergentEffect, T>,
     ) -> Computation<UniformEffect, T> {
-        todo!()
+        // Placeholder: on CPU, synchronize is a no-op barrier (value passes through)
+        Computation { _effect: PhantomData, value: comp.value }
     }
 }
 

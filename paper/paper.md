@@ -213,7 +213,7 @@ if (condition) {
     // WRONG: mask says all threads, but only some are here
     __shfl_xor_sync(0xFFFFFFFF, data, 1);
 
-    // CORRECT: use __activemask() to get actual active threads
+    // LESS WRONG: use __activemask() to get actual active threads
     __shfl_xor_sync(__activemask(), data, 1);
 }
 ```
@@ -357,7 +357,7 @@ Types τ ::= Warp<S>           -- Warp with active set S
 
 The central type is `Warp<S>`, representing a warp whose active lanes are described by the active set `S`. This type is a *capability*: possession of a `Warp<S>` value grants permission to perform operations on lanes in `S`.
 
-Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
+Importantly, `Warp<S>` is a *linear* type in the formal calculus—it cannot be duplicated or discarded. The Rust implementation approximates linearity with affine types (move semantics + `#[must_use]` warnings); see §6 for the gap analysis. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
 
 ### `PerLane<T>`
 
@@ -565,7 +565,7 @@ The result is uniform because all (active) lanes see the same bitmask.
 
 ### LINEAR WARP USAGE
 
-Warps are linear—each warp value must be used exactly once:
+In the formal calculus, warps are linear—each warp value must be used exactly once. Rust enforces the no-duplication half (move semantics) but permits dropping (affine, not linear); `#[must_use]` catches accidental drops as warnings.
 
 ```
 Γ, w : Warp<S> ⊢ e : τ    w occurs exactly once in e
@@ -876,7 +876,7 @@ This lemma formalizes our key mechanism: the bug is a type error, not a runtime 
 
 ## 4.4 Linearity
 
-Warps are linear resources—they cannot be duplicated or discarded. This is essential for soundness.
+In the formal calculus, warps are linear resources—they cannot be duplicated or discarded. This is essential for soundness. The Rust implementation is affine: move semantics prevent duplication, but dropping without merge is permitted (with a `#[must_use]` warning). The Lean formalization models full linearity.
 
 ### Lemma 4.8 (No Warp Duplication)
 
@@ -1005,7 +1005,7 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have mechanized the full core metatheory in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
+We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
 
 ### Scope
 
@@ -2250,7 +2250,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 named theorems total (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

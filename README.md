@@ -122,7 +122,7 @@ fn main() {
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | Full Lean 4 mechanization (32 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Full Lean 4 mechanization (28 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
@@ -150,9 +150,8 @@ warp-types/
 │   ├── block.rs            # Block-level shared memory + reductions
 │   ├── proof.rs            # Executable soundness sketch (3 theorems, 3 lemmas)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
-│   ├── warp_size.rs        # Const-generic warp size portability
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge
-│   └── research/           # 24 research exploration modules
+│   └── research/           # 25 research exploration modules (incl. warp_size portability)
 ├── warp-types-macros/      # warp_sets! proc macro (active set hierarchy generation)
 ├── warp-types-kernel/      # #[warp_kernel] proc macro (GPU kernel entry points)
 ├── warp-types-builder/     # WarpBuilder (build.rs cross-compilation to PTX)
@@ -170,7 +169,7 @@ warp-types/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (32 named theorems, zero sorry)
+├── lean/                   # Lean 4 formalization (28 named theorems, zero sorry)
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft

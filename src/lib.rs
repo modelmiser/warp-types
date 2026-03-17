@@ -32,7 +32,6 @@
 //! - [`block`] — Block-level: shared memory ownership, inter-block sessions, reductions
 //! - [`proof`] — Soundness proof sketch (progress + preservation)
 //! - [`platform`] — CPU/GPU platform trait for dual-mode algorithms
-//! - [`warp_size`] — Const-generic warp size portability
 //! - [`gradual`] — `DynWarp` ↔ `Warp<S>` bridge for gradual typing (§9.4)
 
 #![cfg_attr(target_arch = "nvptx64", no_std)]
@@ -57,7 +56,6 @@ pub mod block;
 #[cfg(any(test, feature = "formal-proof"))]
 pub mod proof;
 pub mod platform;
-pub mod warp_size;
 pub mod gradual;
 pub mod gpu;
 pub mod cub;
@@ -98,7 +96,7 @@ pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
     // Shuffle XOR 1
     let step5 = warp.shuffle_xor(step4, 1);
     // Final reduction
-    warp.reduce_sum(step5)
+    warp.reduce_sum(step5).get()
 }
 
 /// Diverge-merge round trip: the type system's core mechanism.

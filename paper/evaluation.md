@@ -66,7 +66,7 @@ Each remaining documented bug has a self-contained worked example demonstrating 
 
 **PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, the warp handle becomes `Warp<Active>`. Calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`.¹ The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask because `0xFFFFFFFF` is a valid `u32`, regardless of how many lanes were actually active.
 
-¹The formal rule (§3.3) permits ballot on any `Warp<S>` because every active lane observes the same result. The implementation restricts ballot to `Warp<All>` as a conservative choice.
+¹The formal rule (§3.3) permits ballot on any `Warp<S>` because every active lane observes the same result. The implementation restricts ballot to `Warp<All>` as a conservative choice. The `ballot()` method is implemented on `Warp<All>` in the Rust library, matching this restriction.
 
 **CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The source-level mask was correct; the compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register and no initialization. The compiler cannot optimize away something that doesn't exist at runtime. `shuffle_up()` on `Warp<SubWarp16>` is a type error.
 
@@ -209,7 +209,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Type system tests | 268 unit + 50 example + 28 doc (346 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 named theorems total including 14 infrastructure lemmas (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

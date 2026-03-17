@@ -20,7 +20,7 @@ Types τ ::= Warp<S>           -- Warp with active set S
 
 The central type is `Warp<S>`, representing a warp whose active lanes are described by the active set `S`. This type is a *capability*: possession of a `Warp<S>` value grants permission to perform operations on lanes in `S`.
 
-Importantly, `Warp<S>` is a *linear* type—it cannot be duplicated or discarded. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
+Importantly, `Warp<S>` is treated as a *linear* type in the formal calculus—it cannot be duplicated or discarded. The Rust implementation approximates linearity with affine types (move semantics + `#[must_use]` warnings); see §6 for the gap analysis. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
 
 ### `PerLane<T>`
 
@@ -228,7 +228,7 @@ The result is uniform because all (active) lanes see the same bitmask.
 
 ### LINEAR WARP USAGE
 
-Warps are linear—each warp value must be used exactly once:
+In the formal calculus, warps are linear—each warp value must be used exactly once. Rust enforces the no-duplication half (move semantics) but permits dropping (affine, not linear); `#[must_use]` catches accidental drops as warnings.
 
 ```
 Γ, w : Warp<S> ⊢ e : τ    w occurs exactly once in e

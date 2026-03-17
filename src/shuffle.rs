@@ -27,6 +27,11 @@ pub struct BallotResult {
 }
 
 impl BallotResult {
+    /// Create a ballot result from a uniform mask.
+    pub fn from_mask(mask: Uniform<u32>) -> Self {
+        BallotResult { mask }
+    }
+
     pub fn mask(self) -> Uniform<u32> { self.mask }
 
     pub fn lane_voted(self, lane: LaneId) -> Uniform<bool> {
@@ -97,18 +102,35 @@ impl Warp<All> {
 
     /// Sum reduction across all lanes.
     ///
+    /// Returns `Uniform<T>` because a full-warp reduction produces the same
+    /// result in every lane.
+    ///
     /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
     /// On CPU: returns the single thread's value.
     pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
         &self, data: PerLane<T>,
-    ) -> T {
+    ) -> Uniform<T> {
         let mut val = data.get();
         val = val + val.gpu_shfl_xor(16);
         val = val + val.gpu_shfl_xor(8);
         val = val + val.gpu_shfl_xor(4);
         val = val + val.gpu_shfl_xor(2);
         val = val + val.gpu_shfl_xor(1);
-        val
+        Uniform::from_const(val)
+    }
+
+    /// Warp ballot: collect a predicate from all lanes into a bitmask.
+    ///
+    /// Every lane gets the same bitmask — the result is `Uniform<u32>`.
+    /// Requires `Warp<All>` because reading predicates from inactive lanes
+    /// is undefined behavior.
+    ///
+    /// On GPU: emits `__ballot_sync(0xFFFFFFFF, predicate)`.
+    /// On CPU: returns mask with bit 0 set (single-thread identity).
+    pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
+        // CPU emulation: single thread, so ballot = predicate in lane 0
+        let mask = if predicate.get() { 1u32 } else { 0u32 };
+        BallotResult::from_mask(Uniform::from_const(mask))
     }
 
     /// Broadcast: all lanes get the same value.
@@ -306,7 +328,7 @@ mod tests {
         // Reduction works on 64-bit
         let ones_i64 = PerLane::new(1_i64);
         let sum = all.reduce_sum(ones_i64);
-        assert_eq!(sum, 32_i64); // 1 + 1 + ... (5 XOR stages)
+        assert_eq!(sum.get(), 32_i64); // 1 + 1 + ... (5 XOR stages)
     }
 
     #[test]

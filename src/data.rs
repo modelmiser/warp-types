@@ -5,7 +5,6 @@
 //! a large class of bugs (reading reduction results from wrong lanes,
 //! passing divergent data where uniform is expected, etc.).
 
-use core::marker::PhantomData;
 use crate::GpuValue;
 
 /// A lane identifier (0..31 for NVIDIA, 0..63 for AMD).
@@ -115,12 +114,11 @@ impl<T: GpuValue + core::ops::Add<Output = T>> core::ops::Add for PerLane<T> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SingleLane<T: GpuValue, const LANE: u8> {
     value: T,
-    _phantom: PhantomData<()>,
 }
 
 impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
     pub fn new(value: T) -> Self {
-        SingleLane { value, _phantom: PhantomData }
+        SingleLane { value }
     }
 
     /// Read the value. Only valid in the owning lane.

@@ -99,13 +99,14 @@ pub mod intra_block {
 
     impl<T: Copy, const SIZE: usize> SharedMem<T, SIZE> {
         /// All threads in block can read (after barrier)
-        pub fn read(&self, _idx: usize) -> T {
-            unimplemented!("GPU primitive")
+        pub fn read(&self, _idx: usize) -> T where T: Default {
+            // Placeholder: CPU has no shared memory; return default value
+            T::default()
         }
 
         /// Write requires knowing no conflicts
         pub fn write(&mut self, _idx: usize, _val: T) {
-            unimplemented!("GPU primitive")
+            // Placeholder: CPU has no shared memory; write is a no-op
         }
     }
 
@@ -140,21 +141,21 @@ pub mod inter_block {
         _marker: PhantomData<T>,
     }
 
-    impl<T: Copy> GlobalMem<T> {
+    impl<T: Copy + Default> GlobalMem<T> {
         /// Read from global memory (may be stale without fence)
         pub fn read(&self, _idx: usize) -> T {
-            unimplemented!("GPU primitive")
+            T::default() // CPU placeholder
         }
 
         /// Write to global memory (may not be visible without fence)
         pub fn write(&mut self, _idx: usize, _val: T) {
-            unimplemented!("GPU primitive")
+            // CPU placeholder — no-op
         }
 
         /// Atomic add - returns old value
         pub fn atomic_add(&self, _idx: usize, _val: T) -> T
         where T: std::ops::Add<Output = T> {
-            unimplemented!("GPU primitive")
+            T::default() // CPU placeholder — returns "old value" of zero
         }
     }
 
@@ -335,7 +336,7 @@ pub mod cooperative {
 
     impl CooperativeGroup for ThreadBlockGroup {
         fn size(&self) -> u32 { self.num_threads }
-        fn thread_rank(&self) -> u32 { unimplemented!() }
+        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
         fn sync(&self) { intra_block::sync_threads(); }
     }
 
@@ -347,7 +348,7 @@ pub mod cooperative {
 
     impl CooperativeGroup for GridGroup {
         fn size(&self) -> u32 { self.num_blocks * self.threads_per_block }
-        fn thread_rank(&self) -> u32 { unimplemented!() }
+        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
         fn sync(&self) { inter_block::grid_sync(); }
     }
 
@@ -359,7 +360,7 @@ pub mod cooperative {
 
     impl CooperativeGroup for CoalescedGroup {
         fn size(&self) -> u32 { self.mask.count_ones() }
-        fn thread_rank(&self) -> u32 { unimplemented!() }
+        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
         fn sync(&self) { /* Implicit in warp execution */ }
     }
 
@@ -370,7 +371,7 @@ pub mod cooperative {
 
     impl<const SIZE: u32> CooperativeGroup for TiledPartition<SIZE> {
         fn size(&self) -> u32 { SIZE }
-        fn thread_rank(&self) -> u32 { unimplemented!() }
+        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
         fn sync(&self) { /* Implicit in warp execution for SIZE <= 32 */ }
     }
 }

@@ -37,6 +37,7 @@ impl crate::active_set::sealed::Sealed for Unwritten {}
 impl WriteState for Unwritten {}
 
 /// Partial write: only lanes in `S` have written.
+#[derive(Debug, Clone, Copy)]
 pub struct PartialWrite<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
