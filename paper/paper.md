@@ -2121,16 +2121,22 @@ We verified this at three levels of the compilation pipeline:
 **LLVM IR** (`cargo rustc --release --lib -- --emit=llvm-ir`): We provide two inspectable functions with `#[no_mangle] #[inline(never)]`. In the optimized IR:
 
 ```llvm
-; A butterfly reduction (5 shuffle_xor + reduce_sum) compiles to:
-define noundef i32 @zero_overhead_butterfly(i32 noundef returned %data) {
-  ret i32 %data
+; A butterfly reduction (5 shuffle_xor + reduce_sum): on CPU, shuffle is identity,
+; so reduce_sum computes val + val five times = val * 32 = val << 5.
+; All Warp<S>, PhantomData, trait bounds are erased — only the arithmetic remains:
+define noundef i32 @zero_overhead_butterfly(i32 noundef %data) {
+  %1 = shl i32 %data, 5
+  ret i32 %1
 }
 
-; A diverge/merge round trip compiles to:
-@zero_overhead_diverge_merge = alias i32 (i32), ptr @zero_overhead_butterfly
+; A diverge/merge round trip is pure identity — the type-level operations
+; (kernel_entry, diverge_even_odd, merge) are ALL erased to nothing:
+define noundef i32 @zero_overhead_diverge_merge(i32 noundef returned %data) {
+  ret i32 %data
+}
 ```
 
-Both functions compile to `ret i32 %data`. LLVM deduplicates them into a single alias because they have identical machine behavior. The warp creation, 5 shuffle steps, diverge, merge, and active set types are *all erased*. The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u64` mask).
+The warp creation, diverge, merge, and all active set types are *completely erased*. `zero_overhead_diverge_merge` compiles to `ret i32 %data` — the type system operations vanish entirely. `zero_overhead_butterfly` retains only the arithmetic (`shl` from the CPU shuffle-identity reduction). The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u64` mask).
 
 **NVIDIA PTX** (`rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O`): We compiled actual Rust type system code—`PhantomData`, trait bounds, `ComplementOf`, `diverge_even_odd()`, `merge()`—directly to NVIDIA PTX via the `nvptx64-nvidia-cuda` target. Two function pairs:
 
