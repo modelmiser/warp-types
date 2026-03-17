@@ -57,6 +57,11 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - examples/demo_bug shuffle_xor OOB on mask>=32 — pedagogical code, intentionally unguarded
 - warp_kernel silently drops return type — PTX kernels must be void, compile error catches mismatch
 - dynamic.rs DynDiverge::merge debug_assert is vacuously true by construction — intentional
+- GpuWarp32::shuffle clamps OOB indices (GPU semantics, not CpuSimd % WIDTH wrapping)
+- SimWarp::shuffle_down/shuffle_down_width use u64 arithmetic (32-bit overflow prevented)
+- with_diverged manufactures phantom warps via Warp::new() — correct, ComplementOf is sealed
+- Warp<All>::global_store → PartialWrite<All> (not FullWrite) — documented, merge_writes handles it
+- proof.rs substitute() skips capture avoidance — safe because step() only substitutes closed values
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
