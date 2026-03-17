@@ -3,7 +3,7 @@
 Methodology for parallel cold-agent code review. Each version reflects
 lessons from prior rounds — `git log .review/` shows the evolution.
 
-## Current: v2 (2026-03-17)
+## Current: v3 (2026-03-17)
 
 3 parallel cold agents with exclusive file assignments, code correctness only.
 
@@ -15,15 +15,26 @@ lessons from prior rounds — `git log .review/` shows the evolution.
 
 ### File Assignment
 
-Balance by **complexity**, not file count:
-- Agent 1 (CORE): unsafe, asm, FFI, critical invariants
-- Agent 2 (TYPE SYSTEM): traits, type-level encoding, macros
-- Agent 3 (SURFACE): examples, tests, research, build tooling
+Balance by **complexity**, not file count. Agent 3 was rebalanced
+in v3 — research modules are proven stable (0 findings across rounds
+13-14, 41 files each time). Runtime-checked modules moved from Agent 2
+to Agent 3 for better load distribution.
+
+- Agent 1 (CORE): unsafe, asm, FFI, critical invariants — gpu, shuffle, sort, cub, tile, platform
+- Agent 2 (TYPE SYSTEM): traits, type-level encoding, macros — lib, warp, active_set, diverge, merge, fence, proof, data, macros, kernel, builder
+- Agent 3 (RUNTIME + BOUNDARY): runtime-checked modules + cross-boundary audit — dynamic, gradual, block, simwarp, examples/\*\*, reproduce/\*\*, research/\*\* (scan-only for boundary violations)
 
 ### Known Patterns
 
 List already-fixed bug categories so agents focus on NEW issues.
 Prevents ~30% noise from re-discovery in later rounds.
+
+### Known Untested (Accepted)
+
+List UNTESTED findings from prior rounds that have been reviewed and
+accepted. Prevents re-flagging of acknowledged gaps. Distinguish:
+- **Feature gap** (not actionable as test): e.g., ballot has no GPU codepath
+- **Accepted risk** (could test but low priority): e.g., proof.rs step limit
 
 ### SimWarp Coverage
 
@@ -43,7 +54,8 @@ code NOT covered by SimWarp.
    files outside your assignment depend on
 6. **TEST COVERAGE**: Classify untested paths as:
    - UNTESTED-HARD: cfg-gated or requires hardware
-   - UNTESTED-SOFT: could have a test but doesn't
+   - UNTESTED-TEST: could have a test but doesn't (actionable)
+   - UNTESTED-FEATURE: feature gap, not a missing test (informational)
 
 ### Severity
 
@@ -57,7 +69,8 @@ code NOT covered by SimWarp.
 CLEAN: filename.rs
 BUG: filename.rs:line [CRITICAL|MODERATE|LOW] — summary
   Evidence (2-3 lines) + affected callers
-UNTESTED-SOFT: filename.rs:line — description
+UNTESTED-TEST: filename.rs:line — description
+UNTESTED-FEATURE: filename.rs:line — description (why not testable as-is)
 UNTESTED-HARD: filename.rs:line — description (why untestable)
 EXPORT: invariant description → consuming files
 ```
@@ -77,6 +90,16 @@ tracking, no known-pattern filtering.
 - Round 10: cfg-gated PTX and dynamic-mirror bugs
 - Round 11: CPU-identity-shuffle-masked GPU bugs (sort, tile, scan)
 - Round 12: bitonic sort stage_mask (correct first substage masked the bug)
+
+### v2 → v3 changes (after round 14)
+
+| v2 Problem | v3 Fix |
+|---|---|
+| Agent 3 (SURFACE) reviewed 41 files, found 0 | Retired SURFACE role; Agent 3 is now RUNTIME + BOUNDARY |
+| Research modules re-reviewed every round (0 yield) | Research is scan-only for boundary violations, not full review |
+| Agent 2 overloaded (15 files incl. runtime modules) | dynamic, gradual, block, simwarp moved to Agent 3 |
+| UNTESTED-SOFT conflated missing tests with feature gaps | Split into UNTESTED-TEST (actionable) and UNTESTED-FEATURE (informational) |
+| Accepted gaps re-flagged each round (ballot GPU path) | KNOWN UNTESTED section suppresses acknowledged gaps |
 
 ### v1 → v2 changes (after round 13)
 
