@@ -66,8 +66,8 @@ impl<const STRIDE: usize> AccessPattern for Strided<STRIDE> {
     fn name() -> &'static str { "Strided" }
     fn transactions_per_warp() -> usize {
         // Depends on cache line size and stride
-        // Rough estimate: min(32, STRIDE) transactions
-        std::cmp::min(32, STRIDE)
+        // Rough estimate: stride 0 = uniform (1 txn), otherwise min(32, STRIDE)
+        std::cmp::max(1, std::cmp::min(32, STRIDE))
     }
 }
 

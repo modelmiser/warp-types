@@ -23,9 +23,9 @@ jobs:
       - name: Format check
         run: cargo fmt --check
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --workspace --verbose
       - name: Unit tests
-        run: cargo test --lib --verbose
+        run: cargo test --workspace --lib --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests
@@ -40,4 +40,4 @@ jobs:
           toolchain: nightly-2025-04-15
           components: clippy, rustfmt
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings

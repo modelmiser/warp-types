@@ -136,6 +136,11 @@ pub mod explicit {
     }
 
     /// Example: explicit diverge/merge
+    ///
+    /// Note: In this research prototype, `Warp<S>` is `Copy`, so the merge
+    /// is not enforced by move semantics. The promoted version in `src/warp.rs`
+    /// uses non-Copy warps where `diverge` consumes the original, making
+    /// merge genuinely required.
     pub fn example_explicit() {
         let warp: Warp<All> = Warp::new();
 
@@ -146,7 +151,8 @@ pub mod explicit {
         let _ = process_even(even);
         let _ = process_odd(odd);
 
-        // Explicit merge - REQUIRED by type system
+        // Explicit merge - required by protocol (enforced via move semantics
+        // in the promoted version; here Warp is Copy so this is illustrative)
         let _merged: Warp<All> = merge(even, odd);
     }
 
@@ -300,10 +306,13 @@ pub mod scoped {
             let warp: Warp<All> = Warp::new();
             let diverged = ScopedDiverge::<Even, Odd>::new(warp);
 
+            // Note: accessing .left/.right copies the Warp<S> (which is Copy),
+            // so these are independent copies, not moves from diverged.
+            // The promoted version in src/warp.rs uses non-Copy warps.
             let _even: Warp<Even> = diverged.left;
             let _odd: Warp<Odd> = diverged.right;
 
-            // Must explicitly merge
+            // Explicit merge consumes the ScopedDiverge (which is not Copy)
             let _merged: Warp<All> = diverged.merge();
         }
     }

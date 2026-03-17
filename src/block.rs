@@ -72,7 +72,6 @@ pub struct WorkQueue<T: GpuValue, const PRODUCER: u8, const CONSUMER: u8> {
     tasks: SharedRegion<T, PRODUCER>,
     head: usize,
     tail: usize,
-    _phantom: PhantomData<()>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +83,6 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8> WorkQueue<T,
             tasks: SharedRegion::new(producer_role),
             head: 0,
             tail: 0,
-            _phantom: PhantomData,
         }
     }
 

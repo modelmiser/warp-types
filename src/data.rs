@@ -146,7 +146,8 @@ pub struct Role {
 impl Role {
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
         assert!(start < 64 && end <= 64 && start < end);
-        let mask = ((1u64 << (end - start)) - 1) << start;
+        let width = (end - start) as u64;
+        let mask = if width >= 64 { u64::MAX } else { ((1u64 << width) - 1) << start };
         Role { mask, name }
     }
 

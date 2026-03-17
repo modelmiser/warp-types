@@ -113,6 +113,9 @@ pub mod existential {
             let (c, _) = diverge_arbitrary(|lane| lane < 5);
             let (d, _) = diverge_arbitrary(|lane| lane < 10);
             assert_ne!(c.mask, d.mask, "overlapping predicates produce different masks");
+
+            // Merging non-complements must fail
+            assert!(merge_checked(c, d).is_err(), "overlapping warps should fail merge");
         }
     }
 }
@@ -387,7 +390,7 @@ pub mod hybrid_shape {
 
     /// Diverge by threshold - shape is known, mask is dynamic
     pub fn diverge_by_threshold(threshold: u32) -> (ShapedWarp, ShapedWarp) {
-        let low_mask = (1u32 << threshold.min(32)) - 1;
+        let low_mask = if threshold >= 32 { u32::MAX } else { (1u32 << threshold) - 1 };
         let high_mask = !low_mask;
 
         (

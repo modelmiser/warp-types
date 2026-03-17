@@ -133,7 +133,8 @@ impl Role {
     /// Create a role from a lane range
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
         assert!(start < 32 && end <= 32 && start < end);
-        let mask = ((1u32 << (end - start)) - 1) << start;
+        let width = (end - start) as u32;
+        let mask = if width >= 32 { u32::MAX } else { ((1u32 << width) - 1) << start };
         Role { mask, name }
     }
 

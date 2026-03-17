@@ -166,7 +166,8 @@ pub fn merge_data<T: Copy + Default, S1: ActiveSet, S2: ComplementOf<S1>>(
 /// The key insight: if you want to shuffle, you need Warp<All>.
 /// If you've diverged, you must merge back before shuffling.
 fn filtered_sum_correct(warp: Warp<All>, data: PerLane<i32>, _keep: PerLane<bool>) -> PerLane<i32> {
-    // Step 1: Diverge based on predicate
+    // Step 1: Diverge into even/odd halves (demonstrates the pattern;
+    // a real implementation would diverge based on the _keep predicate)
     let (active, inactive) = warp.diverge_even_odd();
 
     // Step 2: Prepare data for each branch

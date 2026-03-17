@@ -292,23 +292,22 @@ pub mod merge_ordering {
 // WHAT ABOUT INVALID MERGES?
 // ============================================================================
 
-// These would be compile errors:
-//
-// ```compile_fail
-// // Can't merge EvenLow with OddHigh - not complements within any parent!
-// let bad: Warp<???> = merge(even_low, odd_high);
-// ```
-//
-// EvenLow (0,2,4,6,8,10,12,14) and OddHigh (17,19,21,...,31) are:
-// - Disjoint: EvenLow ∩ OddHigh = ∅ ✓
-// - But NOT complementary within any standard parent
-// - EvenLow ∪ OddHigh ≠ Even, Odd, LowHalf, HighHalf, or All
-//
-// To merge them, you'd need a custom parent type:
-// struct EvenLowOrOddHigh;  // Mask = 0x0000555 | 0xAAAA0000
-//
-// But this isn't a "natural" split from any single diverge!
-// (No code needed — the invalid merges won't compile, which is the point.)
+/// EvenLow and OddHigh are disjoint but NOT complementary within any parent:
+/// - EvenLow ∪ OddHigh ≠ Even, Odd, LowHalf, HighHalf, or All
+/// - No `ComplementWithin` impl exists for this pair
+///
+/// ```compile_fail
+/// use warp_types::research::nested_diverge::*;
+///
+/// fn invalid_cross_merge() {
+///     let even_low: Warp<EvenLow> = Warp::new();
+///     let odd_high: Warp<OddHigh> = Warp::new();
+///
+///     // BUG: EvenLow and OddHigh are not complements within any parent
+///     let _bad: Warp<All> = merge(even_low, odd_high);
+/// }
+/// ```
+pub mod _invalid_merge_rejected {}
 
 // ============================================================================
 // CROSS-MERGE: When Different Paths Produce Same Leaves

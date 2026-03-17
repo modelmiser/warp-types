@@ -7,11 +7,9 @@
 //!
 //! ```rust,no_run
 //! // build.rs
-//! fn main() {
-//!     warp_types_builder::WarpBuilder::new("my-kernels")
-//!         .build()
-//!         .expect("Failed to compile GPU kernels");
-//! }
+//! warp_types_builder::WarpBuilder::new("my-kernels")
+//!     .build()
+//!     .expect("Failed to compile GPU kernels");
 //! ```
 //!
 //! Then in your main crate:
@@ -50,6 +48,7 @@ impl GpuTarget {
         }
     }
 
+    #[allow(dead_code)]
     fn asm_extension(&self) -> &str {
         match self {
             GpuTarget::Nvidia => "s", // PTX assembly
@@ -426,7 +425,7 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
     if let Ok(entries) = std::fs::read_dir(&deps) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "s") {
+            if p.extension().is_some_and(|e| e == "s") {
                 let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 // Match crate_name-HASH.s pattern, skip core/compiler_builtins
@@ -444,7 +443,7 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
     if let Ok(entries) = std::fs::read_dir(&deps) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "s") {
+            if p.extension().is_some_and(|e| e == "s") {
                 let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 if !fname.starts_with("core-")
