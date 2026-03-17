@@ -85,6 +85,9 @@ impl Warp<All> {
     /// On GPU: 15 `shfl.sync.bfly.b32` instructions + 15 min/max comparisons.
     /// Zero overhead from the type system.
     ///
+    /// **Limitation:** Ascending-only. A correct bitonic sort requires direction-aware
+    /// compare-and-swap using `lane_id()`. See `compare_swap` docs for details.
+    ///
     /// ```
     /// use warp_types::*;
     ///

@@ -194,7 +194,7 @@ Common CUDA patterns and their warp-types equivalents:
 |------|------------|
 | `__shfl_xor_sync(0xFFFFFFFF, val, mask)` | `warp.shuffle_xor(PerLane::new(val), mask).get()` or `warp.shuffle_xor_raw(val, mask)` |
 | `__shfl_down_sync(0xFFFFFFFF, val, delta)` | `warp.shuffle_down(PerLane::new(val), delta).get()` or `warp.shuffle_down_raw(val, delta)` |
-| `__ballot_sync(0xFFFFFFFF, pred)` | Use `Platform::ballot()` or `DynWarp::ballot()` (no direct method on `Warp<All>` yet) |
+| `__ballot_sync(0xFFFFFFFF, pred)` | `warp.ballot(PerLane::new(pred))` (returns `BallotResult`) |
 | `cub::WarpReduce<T>::Sum(val)` | `warp.reduce_sum(PerLane::new(val))` |
 | `cub::WarpScan<T>::InclusiveSum(val)` | `warp.inclusive_sum(PerLane::new(val))` |
 | `cg::tiled_partition<16>(block)` | `warp.tile::<16>()` |

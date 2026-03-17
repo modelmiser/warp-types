@@ -69,13 +69,25 @@ pub mod dynamic;
 
 #[cfg(not(target_arch = "nvptx64"))]
 #[allow(dead_code)] // Research modules contain experimental prototypes with unused code
+// Research modules: exploratory demos, not production API.
+// Suppress clippy lints inappropriate for proof-of-concept code.
+#[allow(
+    clippy::new_without_default,
+    clippy::needless_range_loop,
+    clippy::module_inception,
+    clippy::doc_markdown,
+)]
 pub mod research;
 
 // ============================================================================
 // Zero-overhead verification: inspectable functions for LLVM IR comparison
 // ============================================================================
 
-/// Butterfly reduction: diverge → merge → shuffle pattern.
+/// Zero-overhead benchmark: 5 shuffle permutations + butterfly reduction.
+///
+/// This function exercises shuffle and reduce to verify type erasure.
+/// The 5 `shuffle_xor` calls permute data; `reduce_sum` does the actual
+/// butterfly reduction (5 more shuffle-XOR + add steps). Total: 10 shuffles.
 ///
 /// In optimized LLVM IR, this function contains NO traces of `Warp<S>`,
 /// `PhantomData`, or active-set types. The type system is fully erased.

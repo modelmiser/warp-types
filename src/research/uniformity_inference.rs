@@ -235,7 +235,7 @@ pub fn infer_uniformity(expr: &Expr, env: &std::collections::HashMap<String, Uni
 ///
 /// This suggests: Uniform<T> should be Uniform<T, S> where S is the active set.
 /// A value uniform across Even lanes is not the same as uniform across All.
-
+///
 /// Uniform within a specific active set
 #[derive(Copy, Clone, Debug)]
 pub struct UniformWithin<T, S> {

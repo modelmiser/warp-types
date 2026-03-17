@@ -36,7 +36,7 @@ This bug:
 - Compiles without warnings
 - May appear to work on some GPUs
 - Produces silently wrong data on others
-- Exists in NVIDIA's own cuda-samples (#398), their CUB library (CCCL#854), and at least 19 other documented cases across PyTorch, OpenCV, TVM, and more
+- Exists in NVIDIA's own cuda-samples (#398), their CUB library (CCCL#854), and 19 other documented cases across PyTorch, OpenCV, TVM, and more
 
 NVIDIA deprecated the entire `__shfl` API family to address this bug class. Their replacement (`__shfl_sync` with explicit masks) still lets you pass the wrong mask.
 

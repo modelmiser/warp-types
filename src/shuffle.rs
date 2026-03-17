@@ -106,7 +106,7 @@ impl Warp<All> {
     /// result in every lane.
     ///
     /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
-    /// On CPU: returns the single thread's value.
+    /// On CPU: returns val × 32 (butterfly doubling via identity shuffle).
     pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
         &self, data: PerLane<T>,
     ) -> Uniform<T> {
@@ -125,8 +125,9 @@ impl Warp<All> {
     /// Requires `Warp<All>` because reading predicates from inactive lanes
     /// is undefined behavior.
     ///
-    /// On GPU: emits `__ballot_sync(0xFFFFFFFF, predicate)`.
-    /// On CPU: returns mask with bit 0 set (single-thread identity).
+    /// **Note:** Currently CPU-emulation only on all targets. A GPU codepath
+    /// using `gpu::ballot_sync` requires `#[cfg(target_arch = "nvptx64")]` gating.
+    /// On CPU: returns mask with bit 0 set if predicate is true (single-thread identity).
     pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
         // CPU emulation: single thread, so ballot = predicate in lane 0
         let mask = if predicate.get() { 1u32 } else { 0u32 };
@@ -210,13 +211,13 @@ pub struct RotateUp<const DELTA: u32>;
 impl<const DELTA: u32> Permutation for RotateDown<DELTA> {
     fn forward(i: u32) -> u32 { (i + 32 - (DELTA & 0x1F)) & 0x1F }
     fn inverse(i: u32) -> u32 { (i + (DELTA & 0x1F)) & 0x1F }
-    fn is_self_dual() -> bool { DELTA == 0 || DELTA == 16 }
+    fn is_self_dual() -> bool { (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16 }
 }
 
 impl<const DELTA: u32> Permutation for RotateUp<DELTA> {
     fn forward(i: u32) -> u32 { (i + (DELTA & 0x1F)) & 0x1F }
     fn inverse(i: u32) -> u32 { (i + 32 - (DELTA & 0x1F)) & 0x1F }
-    fn is_self_dual() -> bool { DELTA == 0 || DELTA == 16 }
+    fn is_self_dual() -> bool { (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16 }
 }
 
 impl<const DELTA: u32> HasDual for RotateDown<DELTA> {
@@ -232,8 +233,8 @@ impl<const DELTA: u32> HasDual for RotateUp<DELTA> {
 pub struct Identity;
 
 impl Permutation for Identity {
-    fn forward(i: u32) -> u32 { i }
-    fn inverse(i: u32) -> u32 { i }
+    fn forward(i: u32) -> u32 { i & 0x1F }
+    fn inverse(i: u32) -> u32 { i & 0x1F }
     fn is_self_dual() -> bool { true }
 }
 

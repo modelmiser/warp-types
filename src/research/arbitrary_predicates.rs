@@ -109,10 +109,10 @@ pub mod existential {
             // These complement
             assert!(merge_checked(a, b).is_ok());
 
-            // These don't
-            let (_c, _) = diverge_arbitrary(|lane| lane < 5);
-            let (_d, _) = diverge_arbitrary(|lane| lane < 10);
-            // c and d overlap!
+            // These overlap — different predicates, not complements
+            let (c, _) = diverge_arbitrary(|lane| lane < 5);
+            let (d, _) = diverge_arbitrary(|lane| lane < 10);
+            assert_ne!(c.mask, d.mask, "overlapping predicates produce different masks");
         }
     }
 }

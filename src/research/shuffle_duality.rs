@@ -436,12 +436,10 @@ mod tests {
 
     #[test]
     fn test_rotate_duality() {
-        // RotateDown<d> and RotateUp<d> are inverses
-        for _delta in 1..32u32 {
-            for lane in 0..32u32 {
-                let down_then_up = RotateUp::<1>::forward(RotateDown::<1>::forward(lane));
-                assert_eq!(down_then_up, lane);
-            }
+        // RotateDown<1> and RotateUp<1> are inverses
+        for lane in 0..32u32 {
+            let down_then_up = RotateUp::<1>::forward(RotateDown::<1>::forward(lane));
+            assert_eq!(down_then_up, lane);
         }
     }
 

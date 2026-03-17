@@ -62,8 +62,8 @@ impl Warp<All> {
     ///
     /// Lane i gets sum of lanes 0..=i.
     ///
-    /// On GPU: uses shuffle-down + add at each stage.
-    /// On CPU: returns input (single-thread identity).
+    /// On GPU: uses shuffle-up + add at each stage.
+    /// On CPU: returns val × 32 (each step doubles because shfl_up is identity).
     ///
     /// ```
     /// use warp_types::*;

@@ -111,7 +111,7 @@ pub fn butterfly_reduce(data: *mut i32) {
 `cargo run` compiles this to PTX and launches it on your GPU. The type system catches bugs at build time. The generated code contains real `shfl.sync.bfly.b32` instructions.
 
 We also implemented:
-- **Bitonic sort** — 15 type-safe shuffle-XOR steps, GPU-verified
+- **Bitonic sort** — 15 type-safe shuffle-XOR steps (ascending-only; directional sort requires `lane_id()`)
 - **CUB-equivalent primitives** — typed reduce, scan, broadcast
 - **Cooperative groups** — thread block tiles with typed safety
 - **64-bit shuffles** — automatic two-pass for i64/f64/u64

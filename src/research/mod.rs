@@ -3,6 +3,13 @@
 //! These modules contain prototypes, proofs-of-concept, and explorations
 //! from the development of the warp type system. They are preserved for
 //! reference but are not re-exported from the crate root.
+//!
+//! Note: Many research modules define their own local `Warp<S>`, `ActiveSet`,
+//! etc. rather than importing the core types. These local definitions may have
+//! different semantics (e.g., `Copy` vs affine). The research demos illustrate
+//! concepts but do not prove properties of the core type system — the Lean
+//! formalization in `lean/` does that.
+
 
 pub mod static_verify;
 pub mod lane;

@@ -92,9 +92,12 @@ pub struct WarpPtr<T: Copy, P: AccessPattern> {
 }
 
 impl<T: Copy, P: AccessPattern> WarpPtr<T, P> {
-    /// Create a new typed pointer
+    /// Create a new typed pointer.
     ///
-    /// Safety: Caller must ensure the access pattern is correct
+    /// # Safety
+    ///
+    /// Caller must ensure `base` is valid for the declared access pattern
+    /// and that the pointer remains valid for the lifetime of the `WarpPtr`.
     pub unsafe fn new(base: *const T) -> Self {
         WarpPtr {
             base,
@@ -123,6 +126,12 @@ pub struct WarpPtrMut<T: Copy, P: AccessPattern> {
 }
 
 impl<T: Copy, P: AccessPattern> WarpPtrMut<T, P> {
+    /// Create a new mutable typed pointer.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `base` is valid for the declared access pattern
+    /// and that the pointer remains valid for the lifetime of the `WarpPtrMut`.
     pub unsafe fn new(base: *mut T) -> Self {
         WarpPtrMut {
             base,
@@ -145,7 +154,6 @@ impl<T: Copy, P: AccessPattern> WarpPtrMut<T, P> {
 /// - Uniform + Consecutive = Consecutive
 /// - Consecutive + Strided = Strided
 /// - Anything + Random = Random
-
 pub trait WorstOf<Other: AccessPattern>: AccessPattern {
     type Result: AccessPattern;
 }

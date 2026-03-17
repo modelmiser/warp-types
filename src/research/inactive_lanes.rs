@@ -106,14 +106,14 @@ pub mod divergent_values {
         type Output = Divergent<T, All>;
     }
 
-    /// shuffle_xor(1) on Divergent<T, Even> is FORBIDDEN
-    /// (would read from odd lanes which have garbage)
+    // shuffle_xor(1) on Divergent<T, Even> is FORBIDDEN
+    // (would read from odd lanes which have garbage)
     // NO IMPL - this is a compile error!
 
-    /// shuffle_xor(2) on Divergent<T, Even> is... complicated
-    /// Lane 0 reads from lane 2 (even, valid)
-    /// Lane 2 reads from lane 0 (even, valid)
-    /// But this only works because XOR(2) stays within even lanes!
+    // shuffle_xor(2) on Divergent<T, Even> is... complicated
+    // Lane 0 reads from lane 2 (even, valid)
+    // Lane 2 reads from lane 0 (even, valid)
+    // But this only works because XOR(2) stays within even lanes!
 
     /// Safe shuffle: only when permutation stays within active set
     pub fn shuffle_within<T: Copy, S: ActiveSet, const MASK: u32>(

@@ -151,7 +151,7 @@ warp-types/
 │   ├── proof.rs            # Executable soundness sketch (3 theorems, 3 lemmas)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge
-│   └── research/           # 25 research exploration modules (incl. warp_size portability)
+│   └── research/           # 24 research exploration modules (incl. warp_size portability)
 ├── warp-types-macros/      # warp_sets! proc macro (active set hierarchy generation)
 ├── warp-types-kernel/      # #[warp_kernel] proc macro (GPU kernel entry points)
 ├── warp-types-builder/     # WarpBuilder (build.rs cross-compilation to PTX)

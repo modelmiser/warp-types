@@ -332,7 +332,7 @@ impl<S: ActiveSet> Warp<S> {
     /// The active set S tells us exactly which lanes participate.
     pub fn sync(&self) {
         // In real implementation: __syncwarp(S::MASK)
-        println!("Sync with mask {:08X} ({})", S::MASK, S::NAME);
+        // Sync with mask S::MASK — type guarantees only active lanes participate
     }
 }
 

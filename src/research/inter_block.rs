@@ -65,10 +65,10 @@ impl ThreadId {
 // COMMUNICATION PRIMITIVES BY LEVEL
 // ============================================================================
 
-/// Communication within a warp (our existing work)
+/// Communication within a warp (our existing work).
+/// Warp-level communication: shuffles, votes, ballots.
+/// All 32 lanes execute in lockstep. No memory needed.
 pub mod intra_warp {
-    //! Warp-level communication: shuffles, votes, ballots.
-    //! All 32 lanes execute in lockstep. No memory needed.
 
     /// Shuffle: direct register exchange
     pub trait ShuffleOp {
@@ -85,10 +85,10 @@ pub mod intra_warp {
     }
 }
 
-/// Communication within a block (between warps)
+/// Communication within a block (between warps).
+/// Block-level communication: shared memory, barriers.
+/// Warps in same block share SMEM. Block-wide `__syncthreads()`.
 pub mod intra_block {
-    //! Block-level communication: shared memory, barriers.
-    //! Warps in same block share SMEM. Block-wide __syncthreads().
 
     use super::*;
 
@@ -129,10 +129,10 @@ pub mod intra_block {
     }
 }
 
-/// Communication between blocks (the new frontier)
+/// Communication between blocks (the new frontier).
+/// Grid-level communication: global memory, atomics, cooperative groups.
+/// Blocks execute independently. No implicit synchronization.
 pub mod inter_block {
-    //! Grid-level communication: global memory, atomics, cooperative groups.
-    //! Blocks execute independently. No implicit synchronization.
 
     use super::*;
 
@@ -279,7 +279,7 @@ impl<State: ProtocolState, const N: usize> BlockSession<Leader, State, N> {
 impl<State: ProtocolState, const N: usize> BlockSession<Worker, State, N> {
     /// Receive broadcast data from leader
     /// State transition: Initial -> WorkDistributed
-    pub fn receive<T: Copy>(
+    pub fn receive<T: Copy + Default>(
         self,
         _global: &inter_block::GlobalMem<T>,
     ) -> (T, BlockSession<Worker, WorkDistributed, N>)
@@ -288,7 +288,7 @@ impl<State: ProtocolState, const N: usize> BlockSession<Worker, State, N> {
     {
         // Read from our global memory slot
         // In real code: let data = global.read(self.block_id.0);
-        let data: T = unsafe { std::mem::zeroed() };  // Placeholder
+        let data: T = T::default();  // Placeholder
         (data, BlockSession::new(self.block_id))
     }
 
@@ -429,27 +429,27 @@ impl SessionLevel for GridLevel {
 // COMPARISON: WARP vs INTER-BLOCK
 // ============================================================================
 
-/// Key differences between warp-level and inter-block sessions:
-///
-/// | Aspect           | Warp-Level              | Inter-Block            |
-/// |------------------|-------------------------|------------------------|
-/// | Execution model  | SIMT (lockstep)         | Independent            |
-/// | Communication    | Shuffles (registers)    | Memory (global)        |
-/// | Synchronization  | Implicit                | Explicit barriers      |
-/// | Divergence       | Yes (some lanes idle)   | N/A (blocks run fully) |
-/// | Session model    | Quiescent participants  | Traditional MPST       |
-/// | Participants     | Fixed (32/64)           | Variable (1..65535)    |
-/// | Failure modes    | Deadlock-free (SIMT)    | Deadlock possible      |
-///
-/// The warp-level "session-typed divergence" model is novel because:
-/// 1. Divergence = some participants go quiescent (not in traditional MPST)
-/// 2. Reconvergence = quiescent participants rejoin
-/// 3. Implicit sync means no deadlock (if divergence matches)
-///
-/// Inter-block is closer to traditional MPST:
-/// 1. All blocks always "active" (no quiescence)
-/// 2. Explicit message passing via memory
-/// 3. Deadlock possible if barriers misaligned
+// Key differences between warp-level and inter-block sessions:
+//
+// | Aspect           | Warp-Level              | Inter-Block            |
+// |------------------|-------------------------|------------------------|
+// | Execution model  | SIMT (lockstep)         | Independent            |
+// | Communication    | Shuffles (registers)    | Memory (global)        |
+// | Synchronization  | Implicit                | Explicit barriers      |
+// | Divergence       | Yes (some lanes idle)   | N/A (blocks run fully) |
+// | Session model    | Quiescent participants  | Traditional MPST       |
+// | Participants     | Fixed (32/64)           | Variable (1..65535)    |
+// | Failure modes    | Deadlock-free (SIMT)    | Deadlock possible      |
+//
+// The warp-level "session-typed divergence" model is novel because:
+// 1. Divergence = some participants go quiescent (not in traditional MPST)
+// 2. Reconvergence = quiescent participants rejoin
+// 3. Implicit sync means no deadlock (if divergence matches)
+//
+// Inter-block is closer to traditional MPST:
+// 1. All blocks always "active" (no quiescence)
+// 2. Explicit message passing via memory
+// 3. Deadlock possible if barriers misaligned
 
 // ============================================================================
 // CROSS-LEVEL PROTOCOLS
@@ -458,6 +458,7 @@ impl SessionLevel for GridLevel {
 /// A protocol that spans multiple levels of the hierarchy.
 ///
 /// Example: Hierarchical reduction
+///
 /// 1. Each warp reduces its 32 values (warp-level)
 /// 2. Warp 0 collects results from all warps (block-level)
 /// 3. Block 0 collects results from all blocks (grid-level)

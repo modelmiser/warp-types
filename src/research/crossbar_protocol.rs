@@ -222,12 +222,13 @@ impl TileGroup<AllTiles> {
 /// Same `ComplementOf` proof as warp `merge`. The compiler rejects merges
 /// of non-complementary tile groups — you can't claim all tiles are present
 /// when some are missing.
-pub fn merge_tiles<A: TileSet, B: TileSet>(
+pub fn merge_tiles<A, B>(
     _a: TileGroup<A>,
     _b: TileGroup<B>,
 ) -> TileGroup<AllTiles>
 where
-    A: TileComplement<B>,
+    A: TileSet + TileComplement<B>,
+    B: TileSet,
 {
     TileGroup::new()
 }
