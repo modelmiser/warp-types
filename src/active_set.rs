@@ -64,7 +64,10 @@ pub trait ComplementOf<Other: ActiveSet>: sealed::Sealed + ActiveSet {}
 ///
 /// `S1 ∪ S2 = P` and `S1 ∩ S2 = ∅`. Used for nested divergence where
 /// merge returns to a parent set rather than `All`.
-pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: sealed::Sealed + ActiveSet {}
+pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>:
+    sealed::Sealed + ActiveSet
+{
+}
 
 /// Proof that an active set can be split into two disjoint subsets.
 ///
@@ -74,8 +77,15 @@ pub trait ComplementWithin<Other: ActiveSet, Parent: ActiveSet>: sealed::Sealed 
     label = "this diverge pattern is not defined in the active set hierarchy",
     note = "valid diverge patterns: All → Even/Odd, All → LowHalf/HighHalf, Even → EvenLow/EvenHigh, etc."
 )]
-pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: sealed::Sealed + ActiveSet + Sized {
-    fn diverge(warp: crate::warp::Warp<Self>) -> (crate::warp::Warp<TrueBranch>, crate::warp::Warp<FalseBranch>);
+pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>:
+    sealed::Sealed + ActiveSet + Sized
+{
+    fn diverge(
+        warp: crate::warp::Warp<Self>,
+    ) -> (
+        crate::warp::Warp<TrueBranch>,
+        crate::warp::Warp<FalseBranch>,
+    );
 }
 
 /// No lanes active (degenerate). Not part of the diverge hierarchy.
@@ -83,7 +93,9 @@ pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: sealed::Sea
 pub struct Empty;
 #[allow(private_interfaces)]
 impl sealed::Sealed for Empty {
-    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+    fn _sealed() -> sealed::SealToken {
+        sealed::SealToken
+    }
 }
 impl ActiveSet for Empty {
     const MASK: u64 = 0;

@@ -46,7 +46,9 @@ pub trait ActiveSet: Copy + 'static {
 
 #[derive(Copy, Clone)]
 pub struct All;
-impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+}
 
 #[derive(Copy, Clone)]
 pub struct Warp<S: ActiveSet> {
@@ -55,7 +57,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -98,7 +102,7 @@ pub mod ballot_exit {
     /// Lanes that finish early just spin (waste work but safe).
     pub fn search_ballot<F>(warp: Warp<All>, mut step: F) -> (Warp<All>, PerLane<bool>)
     where
-        F: FnMut(usize) -> PerLane<bool>,  // Returns "found" per lane
+        F: FnMut(usize) -> PerLane<bool>, // Returns "found" per lane
     {
         let mut found = PerLane([false; 32]);
         let mut iter = 0;
@@ -113,7 +117,7 @@ pub mod ballot_exit {
             iter += 1;
         }
 
-        (warp, found)  // Still Warp<All>!
+        (warp, found) // Still Warp<All>!
     }
 
     #[cfg(test)]
@@ -128,7 +132,7 @@ pub mod ballot_exit {
             let (warp_out, found) = search_ballot(warp, |iter| {
                 let mut result = [false; 32];
                 for lane in 0..32 {
-                    result[lane] = iter >= lane;  // Lane 0 done at iter 0, lane 31 at iter 31
+                    result[lane] = iter >= lane; // Lane 0 done at iter 0, lane 31 at iter 31
                 }
                 PerLane(result)
             });
@@ -157,7 +161,9 @@ pub mod reducing_exit {
 
     impl ReducingWarp {
         pub fn new() -> Self {
-            ReducingWarp { active_mask: 0xFFFFFFFF }
+            ReducingWarp {
+                active_mask: 0xFFFFFFFF,
+            }
         }
 
         pub fn active_mask(&self) -> u32 {
@@ -183,7 +189,7 @@ pub mod reducing_exit {
     /// Lanes that find their answer exit. No shuffle/reduce in body!
     pub fn search_reducing<F>(mut step: F) -> PerLane<bool>
     where
-        F: FnMut(usize, u32) -> u32,  // Returns mask of lanes that found
+        F: FnMut(usize, u32) -> u32, // Returns mask of lanes that found
     {
         let mut warp = ReducingWarp::new();
         let mut found = PerLane([false; 32]);
@@ -288,7 +294,7 @@ pub mod existential_exit {
     /// A warp where we track active count at runtime
     pub struct BoundedWarp {
         active_mask: u32,
-        max_active: usize,  // Upper bound (shrinks over time)
+        max_active: usize, // Upper bound (shrinks over time)
     }
 
     impl BoundedWarp {
@@ -324,10 +330,10 @@ pub mod existential_exit {
             let mut warp = BoundedWarp::new();
             assert_eq!(warp.max_active(), 32);
 
-            warp.exit_lanes(0x0000FFFF);  // Exit 16 lanes
+            warp.exit_lanes(0x0000FFFF); // Exit 16 lanes
             assert_eq!(warp.max_active(), 16);
 
-            warp.exit_lanes(0xFFFF0000);  // Exit remaining 16
+            warp.exit_lanes(0xFFFF0000); // Exit remaining 16
             assert!(warp.all_exited());
         }
     }
@@ -360,9 +366,7 @@ mod integration_tests {
     fn test_ballot_preserves_warp_all() {
         let warp: Warp<All> = Warp::new();
 
-        let (warp_out, _) = ballot_exit::search_ballot(warp, |iter| {
-            PerLane([iter > 10; 32])
-        });
+        let (warp_out, _) = ballot_exit::search_ballot(warp, |iter| PerLane([iter > 10; 32]));
 
         // Type system confirms: still Warp<All>
         let _: Warp<All> = warp_out;
@@ -372,9 +376,8 @@ mod integration_tests {
     fn test_reducing_no_warp_type() {
         // Reducing pattern doesn't return a typed Warp
         // because the active set is runtime-dependent
-        let found = reducing_exit::search_reducing(|iter, _| {
-            if iter < 32 { 1u32 << iter } else { 0 }
-        });
+        let found =
+            reducing_exit::search_reducing(|iter, _| if iter < 32 { 1u32 << iter } else { 0 });
 
         assert!(found.0.iter().all(|&f| f));
     }

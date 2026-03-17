@@ -67,18 +67,36 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct Active;     // threads that entered the branch
-#[derive(Copy, Clone)] pub struct Inactive;   // threads that took the other path
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct Active; // threads that entered the branch
+#[derive(Copy, Clone)]
+pub struct Inactive; // threads that took the other path
 
-impl ActiveSet for All      { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for Active   { const MASK: u32 = 0x0000FFFF; const NAME: &'static str = "Active"; }
-impl ActiveSet for Inactive { const MASK: u32 = 0xFFFF0000; const NAME: &'static str = "Inactive"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for Active {
+    const MASK: u32 = 0x0000FFFF;
+    const NAME: &'static str = "Active";
+}
+impl ActiveSet for Inactive {
+    const MASK: u32 = 0xFFFF0000;
+    const NAME: &'static str = "Inactive";
+}
 
 impl ComplementOf<Inactive> for Active {}
 impl ComplementOf<Active> for Inactive {}
@@ -97,7 +115,9 @@ impl Warp<All> {
     pub fn ballot(&self, predicate: &[bool; 32]) -> u32 {
         let mut result = 0u32;
         for i in 0..32 {
-            if predicate[i] { result |= 1 << i; }
+            if predicate[i] {
+                result |= 1 << i;
+            }
         }
         result
     }
@@ -109,7 +129,10 @@ impl Warp<All> {
 }
 
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
-where S1: ComplementOf<S2>, S2: ActiveSet {
+where
+    S1: ComplementOf<S2>,
+    S2: ActiveSet,
+{
     Warp::new()
 }
 
@@ -242,5 +265,8 @@ fn main() {
 
     let warp: Warp<All> = Warp::new();
     let (mask, count) = correct_atomic_all_inc(warp);
-    println!("Correct ballot mask: 0x{:08X} ({} active lanes)", mask, count);
+    println!(
+        "Correct ballot mask: 0x{:08X} ({} active lanes)",
+        mask, count
+    );
 }

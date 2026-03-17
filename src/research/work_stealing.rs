@@ -42,7 +42,9 @@ pub trait ActiveSet: Copy + 'static {
 
 #[derive(Copy, Clone)]
 pub struct All;
-impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+}
 
 #[derive(Copy, Clone)]
 pub struct Warp<S: ActiveSet> {
@@ -51,7 +53,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -71,7 +75,10 @@ pub struct WorkItem<T: Copy> {
 
 impl<T: Copy + Default> Default for WorkItem<T> {
     fn default() -> Self {
-        WorkItem { data: T::default(), valid: false }
+        WorkItem {
+            data: T::default(),
+            valid: false,
+        }
     }
 }
 
@@ -81,7 +88,10 @@ impl<T: Copy + Default> WorkItem<T> {
     }
 
     pub fn none() -> Self {
-        WorkItem { data: T::default(), valid: false }
+        WorkItem {
+            data: T::default(),
+            valid: false,
+        }
     }
 }
 
@@ -93,7 +103,9 @@ pub struct WorkQueue<T: Copy> {
 
 impl<T: Copy + Default> WorkQueue<T> {
     pub fn new() -> Self {
-        WorkQueue { items: [WorkItem::none(); 32] }
+        WorkQueue {
+            items: [WorkItem::none(); 32],
+        }
     }
 
     pub fn has_work(&self, lane: usize) -> bool {
@@ -162,10 +174,7 @@ pub mod compaction {
     ///
     /// Type signature: Warp<All> -> WorkQueue -> WorkQueue
     /// Invariant: Work count preserved, positions changed
-    pub fn compact(
-        _warp: &Warp<All>,
-        queue: &WorkQueue<i32>,
-    ) -> WorkQueue<i32> {
+    pub fn compact(_warp: &Warp<All>, queue: &WorkQueue<i32>) -> WorkQueue<i32> {
         let mask = ballot(queue);
         let dest = prefix_popcount(mask);
 
@@ -248,8 +257,8 @@ pub mod load_balancing {
 
     /// Find lanes that need work and lanes that have excess
     pub fn find_imbalance(queue: &WorkQueue<i32>) -> (Vec<usize>, Vec<usize>) {
-        let mut needy = Vec::new();    // Lanes without work
-        let mut donors = Vec::new();   // Lanes with work
+        let mut needy = Vec::new(); // Lanes without work
+        let mut donors = Vec::new(); // Lanes with work
 
         for lane in 0..32 {
             if queue.has_work(lane) {
@@ -268,10 +277,7 @@ pub mod load_balancing {
     /// (where N = min(needy.len(), donors.len() / 2))
     ///
     /// This maintains Warp<All> - no divergence needed!
-    pub fn balance(
-        _warp: &Warp<All>,
-        queue: &mut WorkQueue<i32>,
-    ) {
+    pub fn balance(_warp: &Warp<All>, queue: &mut WorkQueue<i32>) {
         let (needy, donors) = find_imbalance(queue);
 
         // Transfer from donors to needy (take from end of donors)
@@ -332,9 +338,9 @@ pub mod dynamic_roles {
     /// Role that a lane plays in this iteration
     #[derive(Copy, Clone, Debug, PartialEq)]
     pub enum Role {
-        Producer,  // Has work to give
-        Consumer,  // Needs work
-        Idle,      // Neither (balanced)
+        Producer, // Has work to give
+        Consumer, // Needs work
+        Idle,     // Neither (balanced)
     }
 
     /// Compute role for each lane based on work state
@@ -353,9 +359,9 @@ pub mod dynamic_roles {
             let should_have_work = lane < work_count;
 
             roles[lane] = match (has_work, should_have_work) {
-                (true, false) => Role::Producer,   // Has work, shouldn't
-                (false, true) => Role::Consumer,   // No work, should
-                _ => Role::Idle,                   // Already balanced
+                (true, false) => Role::Producer, // Has work, shouldn't
+                (false, true) => Role::Consumer, // No work, should
+                _ => Role::Idle,                 // Already balanced
             };
         }
 
@@ -366,10 +372,7 @@ pub mod dynamic_roles {
     ///
     /// Session type: All lanes participate, roles determined by ballot
     /// No divergence needed - all lanes execute same code
-    pub fn redistribute_round(
-        _warp: &Warp<All>,
-        queue: &mut WorkQueue<i32>,
-    ) -> bool {
+    pub fn redistribute_round(_warp: &Warp<All>, queue: &mut WorkQueue<i32>) -> bool {
         let roles = compute_roles(queue);
 
         // Find producer-consumer pairs
@@ -396,7 +399,7 @@ pub mod dynamic_roles {
             }
         }
 
-        transfers > 0  // Return true if any work was transferred
+        transfers > 0 // Return true if any work was transferred
     }
 
     #[cfg(test)]

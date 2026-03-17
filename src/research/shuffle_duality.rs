@@ -61,7 +61,7 @@ pub struct Xor<const MASK: u32>;
 
 impl<const MASK: u32> Permutation for Xor<MASK> {
     fn forward(i: u32) -> u32 {
-        (i ^ MASK) & 0x1F  // Keep in [0, 32)
+        (i ^ MASK) & 0x1F // Keep in [0, 32)
     }
 
     fn inverse(i: u32) -> u32 {
@@ -70,12 +70,12 @@ impl<const MASK: u32> Permutation for Xor<MASK> {
     }
 
     fn is_self_dual() -> bool {
-        true  // All XOR shuffles are involutions
+        true // All XOR shuffles are involutions
     }
 }
 
 impl<const MASK: u32> HasDual for Xor<MASK> {
-    type Dual = Xor<MASK>;  // Self-dual!
+    type Dual = Xor<MASK>; // Self-dual!
 }
 
 // ============================================================================
@@ -106,7 +106,7 @@ impl<const DELTA: u32> Permutation for RotateDown<DELTA> {
     }
 
     fn is_self_dual() -> bool {
-        DELTA == 0 || DELTA == 16  // Only 0 and half-rotation are self-dual
+        DELTA == 0 || DELTA == 16 // Only 0 and half-rotation are self-dual
     }
 }
 
@@ -125,7 +125,7 @@ impl<const DELTA: u32> Permutation for RotateUp<DELTA> {
 }
 
 impl<const DELTA: u32> HasDual for RotateDown<DELTA> {
-    type Dual = RotateUp<DELTA>;  // Down and Up are duals
+    type Dual = RotateUp<DELTA>; // Down and Up are duals
 }
 
 impl<const DELTA: u32> HasDual for RotateUp<DELTA> {
@@ -141,9 +141,15 @@ impl<const DELTA: u32> HasDual for RotateUp<DELTA> {
 pub struct Identity;
 
 impl Permutation for Identity {
-    fn forward(i: u32) -> u32 { i }
-    fn inverse(i: u32) -> u32 { i }
-    fn is_self_dual() -> bool { true }
+    fn forward(i: u32) -> u32 {
+        i
+    }
+    fn inverse(i: u32) -> u32 {
+        i
+    }
+    fn is_self_dual() -> bool {
+        true
+    }
 }
 
 impl HasDual for Identity {
@@ -195,26 +201,14 @@ pub type ButterflyStage4 = Xor<16>;
 
 /// Full butterfly: all 5 stages composed
 pub type FullButterfly = Compose<
-    Compose<
-        Compose<
-            Compose<ButterflyStage0, ButterflyStage1>,
-            ButterflyStage2
-        >,
-        ButterflyStage3
-    >,
-    ButterflyStage4
+    Compose<Compose<Compose<ButterflyStage0, ButterflyStage1>, ButterflyStage2>, ButterflyStage3>,
+    ButterflyStage4,
 >;
 
 /// Inverse butterfly: reverse order (since each stage is self-dual)
 pub type InverseButterfly = Compose<
-    Compose<
-        Compose<
-            Compose<ButterflyStage4, ButterflyStage3>,
-            ButterflyStage2
-        >,
-        ButterflyStage1
-    >,
-    ButterflyStage0
+    Compose<Compose<Compose<ButterflyStage4, ButterflyStage3>, ButterflyStage2>, ButterflyStage1>,
+    ButterflyStage0,
 >;
 
 // ============================================================================
@@ -233,15 +227,15 @@ pub struct Shuffled<T, P: Permutation> {
 
 impl<T, P: Permutation> Shuffled<T, P> {
     pub fn new(data: T) -> Self {
-        Shuffled { data, _perm: PhantomData }
+        Shuffled {
+            data,
+            _perm: PhantomData,
+        }
     }
 }
 
 /// Shuffle by permutation P
-pub fn shuffle<T: Copy, P: Permutation>(
-    values: [T; 32],
-    _perm: P,
-) -> Shuffled<[T; 32], P> {
+pub fn shuffle<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> Shuffled<[T; 32], P> {
     let mut result = values;
     for i in 0..32 {
         // Lane i receives from lane P.inverse(i)
@@ -252,11 +246,9 @@ pub fn shuffle<T: Copy, P: Permutation>(
 }
 
 /// Unshuffle: apply dual permutation to recover original order
-pub fn unshuffle<T: Copy, P: HasDual>(
-    shuffled: Shuffled<[T; 32], P>,
-) -> Shuffled<[T; 32], P::Dual>
+pub fn unshuffle<T: Copy, P: HasDual>(shuffled: Shuffled<[T; 32], P>) -> Shuffled<[T; 32], P::Dual>
 where
-    P::Dual: Permutation
+    P::Dual: Permutation,
 {
     let mut result = shuffled.data;
     for i in 0..32 {
@@ -371,7 +363,6 @@ pub mod session_view {
 // ============================================================================
 
 pub mod algebra {
-    
 
     /// XOR shuffles form an abelian group isomorphic to (Z₂)⁵
     ///
@@ -505,11 +496,11 @@ mod tests {
         // Full butterfly should be a specific permutation
         // Let's trace lane 0 through all stages
         let mut lane = 0u32;
-        lane = Xor::<1>::forward(lane);   // 0 -> 1
-        lane = Xor::<2>::forward(lane);   // 1 -> 3
-        lane = Xor::<4>::forward(lane);   // 3 -> 7
-        lane = Xor::<8>::forward(lane);   // 7 -> 15
-        lane = Xor::<16>::forward(lane);  // 15 -> 31
+        lane = Xor::<1>::forward(lane); // 0 -> 1
+        lane = Xor::<2>::forward(lane); // 1 -> 3
+        lane = Xor::<4>::forward(lane); // 3 -> 7
+        lane = Xor::<8>::forward(lane); // 7 -> 15
+        lane = Xor::<16>::forward(lane); // 15 -> 31
 
         assert_eq!(lane, 31, "Full butterfly maps 0 -> 31");
 

@@ -85,21 +85,39 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct PerLane<T>(pub [T; 32]);
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct LoopActive;    // threads still in the loop
-#[derive(Copy, Clone)] pub struct LoopExited;    // threads that exited early
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct LoopActive; // threads still in the loop
+#[derive(Copy, Clone)]
+pub struct LoopExited; // threads that exited early
 
-impl ActiveSet for All        { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for LoopActive { const MASK: u32 = 0x00FFFFFF; const NAME: &'static str = "LoopActive"; }
-impl ActiveSet for LoopExited { const MASK: u32 = 0xFF000000; const NAME: &'static str = "LoopExited"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for LoopActive {
+    const MASK: u32 = 0x00FFFFFF;
+    const NAME: &'static str = "LoopActive";
+}
+impl ActiveSet for LoopExited {
+    const MASK: u32 = 0xFF000000;
+    const NAME: &'static str = "LoopExited";
+}
 
 impl ComplementOf<LoopExited> for LoopActive {}
 impl ComplementOf<LoopActive> for LoopExited {}
@@ -134,7 +152,9 @@ impl Warp<All> {
     pub fn ballot(&self, predicate: &[bool; 32]) -> u32 {
         let mut result = 0u32;
         for i in 0..32 {
-            if predicate[i] { result |= 1 << i; }
+            if predicate[i] {
+                result |= 1 << i;
+            }
         }
         result
     }
@@ -146,7 +166,10 @@ impl Warp<All> {
 }
 
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
-where S1: ComplementOf<S2>, S2: ActiveSet {
+where
+    S1: ComplementOf<S2>,
+    S2: ActiveSet,
+{
     Warp::new()
 }
 
@@ -178,16 +201,29 @@ pub struct WarpError {
 
 impl std::fmt::Display for WarpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: expected mask 0x{:08X}, got 0x{:08X}",
-               self.operation, self.expected_mask, self.actual_mask)
+        write!(
+            f,
+            "{}: expected mask 0x{:08X}, got 0x{:08X}",
+            self.operation, self.expected_mask, self.actual_mask
+        )
     }
 }
 
 impl DynWarp {
-    pub fn all() -> Self { DynWarp { active_mask: 0xFFFFFFFF } }
-    pub fn from_mask(mask: u32) -> Self { DynWarp { active_mask: mask } }
-    pub fn active_mask(&self) -> u32 { self.active_mask }
-    pub fn population(&self) -> u32 { self.active_mask.count_ones() }
+    pub fn all() -> Self {
+        DynWarp {
+            active_mask: 0xFFFFFFFF,
+        }
+    }
+    pub fn from_mask(mask: u32) -> Self {
+        DynWarp { active_mask: mask }
+    }
+    pub fn active_mask(&self) -> u32 {
+        self.active_mask
+    }
+    pub fn population(&self) -> u32 {
+        self.active_mask.count_ones()
+    }
 
     /// Ballot — runtime check for all-active.
     pub fn ballot(&self, predicate: &[bool; 32]) -> Result<u32, WarpError> {
@@ -200,7 +236,9 @@ impl DynWarp {
         }
         let mut mask = 0u32;
         for (i, &p) in predicate.iter().enumerate() {
-            if p { mask |= 1 << i; }
+            if p {
+                mask |= 1 << i;
+            }
         }
         Ok(mask)
     }
@@ -209,7 +247,10 @@ impl DynWarp {
     pub fn diverge(self, predicate_mask: u32) -> (DynWarp, DynWarp) {
         let true_mask = self.active_mask & predicate_mask;
         let false_mask = self.active_mask & !predicate_mask;
-        (DynWarp::from_mask(true_mask), DynWarp::from_mask(false_mask))
+        (
+            DynWarp::from_mask(true_mask),
+            DynWarp::from_mask(false_mask),
+        )
     }
 
     /// Merge two disjoint DynWarps.
@@ -267,11 +308,7 @@ fn activemask_ballot_buggy(
 /// The correct ballot: all 32 lanes participate.
 ///
 /// Uses `Warp<All>` — the type system guarantees convergence.
-fn ballot_correct(
-    warp: &Warp<All>,
-    data: &[u32; 32],
-    radix_pos: u32,
-) -> [u32; RADIX_SIZE] {
+fn ballot_correct(warp: &Warp<All>, data: &[u32; 32], radix_pos: u32) -> [u32; RADIX_SIZE] {
     let mut counts = [0u32; RADIX_SIZE];
 
     for bucket in 0..RADIX_SIZE {
@@ -323,11 +360,7 @@ fn _buggy_version_for_doctest() {}
 ///
 /// Merge back to `Warp<All>` before ballot. Exited lanes contribute
 /// zero-votes (their data doesn't affect the radix count).
-fn fix_static_convergence(
-    warp: Warp<All>,
-    data: &[u32; 32],
-    radix_pos: u32,
-) -> [u32; RADIX_SIZE] {
+fn fix_static_convergence(warp: Warp<All>, data: &[u32; 32], radix_pos: u32) -> [u32; RADIX_SIZE] {
     // Model the loop body where some threads exit early
     let (active, exited) = warp.diverge_loop();
 
@@ -717,7 +750,9 @@ fn main() {
     // Demonstrate the bug
     let data = {
         let mut d = [0u32; 32];
-        for i in 0..32 { d[i] = (i / 8) as u32; }
+        for i in 0..32 {
+            d[i] = (i / 8) as u32;
+        }
         d
     };
 

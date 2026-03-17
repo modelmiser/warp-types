@@ -38,19 +38,25 @@ pub mod divergent_values {
     pub struct All;
     impl ActiveSet for All {
         const MASK: u32 = 0xFFFFFFFF;
-        fn name() -> &'static str { "All" }
+        fn name() -> &'static str {
+            "All"
+        }
     }
 
     pub struct Even;
     impl ActiveSet for Even {
         const MASK: u32 = 0x55555555;
-        fn name() -> &'static str { "Even" }
+        fn name() -> &'static str {
+            "Even"
+        }
     }
 
     pub struct Odd;
     impl ActiveSet for Odd {
         const MASK: u32 = 0xAAAAAAAA;
-        fn name() -> &'static str { "Odd" }
+        fn name() -> &'static str {
+            "Odd"
+        }
     }
 
     /// A value valid only in lanes within S.
@@ -67,7 +73,10 @@ pub mod divergent_values {
     impl<T, S: ActiveSet> Divergent<T, S> {
         /// Create a divergent value (only valid in active lanes!)
         pub fn new(value: T) -> Self {
-            Divergent { value, _marker: PhantomData }
+            Divergent {
+                value,
+                _marker: PhantomData,
+            }
         }
 
         /// Read the value (caller must be in an active lane!)
@@ -119,7 +128,7 @@ pub mod divergent_values {
     pub fn shuffle_within<T: Copy, S: ActiveSet, const MASK: u32>(
         data: Divergent<T, S>,
     ) -> Divergent<T, S>
-    where
+where
         // Compile-time check: XOR(MASK) maps S to S
         // i.e., for all i in S, (i ^ MASK) is also in S
     {
@@ -152,7 +161,6 @@ pub mod divergent_values {
 /// Pro: More flexible, handles dynamic patterns
 /// Con: Runtime overhead, can't catch all bugs statically
 pub mod explicit_mask {
-    
 
     /// Per-lane value (no validity tracking)
     #[derive(Clone, Copy)]
@@ -173,7 +181,7 @@ pub mod explicit_mask {
 
         if source_valid {
             // In real GPU: __shfl_xor_sync(valid_mask, data, xor_mask)
-            data.0  // Placeholder
+            data.0 // Placeholder
         } else {
             default
         }
@@ -226,13 +234,12 @@ pub mod explicit_mask {
 /// Pro: No type complexity, works with existing code patterns
 /// Con: Runtime overhead, silent propagation
 pub mod sentinel {
-    
 
     /// A value that might be invalid (from inactive lane)
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum MaybeValid<T> {
         Valid(T),
-        Invalid,  // From inactive lane
+        Invalid, // From inactive lane
     }
 
     impl<T> MaybeValid<T> {
@@ -252,11 +259,7 @@ pub mod sentinel {
     }
 
     /// Initialize inactive lanes with Invalid sentinel
-    pub fn diverge_with_sentinel<T>(
-        value: T,
-        lane_id: u32,
-        active_mask: u32,
-    ) -> MaybeValid<T> {
+    pub fn diverge_with_sentinel<T>(value: T, lane_id: u32, active_mask: u32) -> MaybeValid<T> {
         if (active_mask >> lane_id) & 1 != 0 {
             MaybeValid::Valid(value)
         } else {
@@ -272,7 +275,7 @@ pub mod sentinel {
     ) -> MaybeValid<T> {
         // In real GPU: shuffle, then check if source was valid
         // If source had Invalid, result is Invalid
-        data  // Placeholder - would need actual shuffle
+        data // Placeholder - would need actual shuffle
     }
 
     #[cfg(test)]
@@ -314,13 +317,19 @@ pub mod warp_restricted {
     }
 
     pub struct All;
-    impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+    impl ActiveSet for All {
+        const MASK: u32 = 0xFFFFFFFF;
+    }
 
     pub struct Even;
-    impl ActiveSet for Even { const MASK: u32 = 0x55555555; }
+    impl ActiveSet for Even {
+        const MASK: u32 = 0x55555555;
+    }
 
     pub struct Odd;
-    impl ActiveSet for Odd { const MASK: u32 = 0xAAAAAAAA; }
+    impl ActiveSet for Odd {
+        const MASK: u32 = 0xAAAAAAAA;
+    }
 
     /// Warp with typed active set
     pub struct Warp<S: ActiveSet> {
@@ -329,7 +338,9 @@ pub mod warp_restricted {
 
     impl<S: ActiveSet> Warp<S> {
         pub fn new() -> Self {
-            Warp { _marker: PhantomData }
+            Warp {
+                _marker: PhantomData,
+            }
         }
     }
 
@@ -337,12 +348,12 @@ pub mod warp_restricted {
     impl Warp<All> {
         /// Any XOR shuffle is safe - all lanes valid
         pub fn shuffle_xor<T: Copy>(&self, data: T, _mask: u32) -> T {
-            data  // Placeholder
+            data // Placeholder
         }
 
         /// Any permutation shuffle is safe
         pub fn shuffle_idx<T: Copy>(&self, data: T, _source: u32) -> T {
-            data  // Placeholder
+            data // Placeholder
         }
     }
 
@@ -356,9 +367,9 @@ pub mod warp_restricted {
             // Check at runtime that mask keeps us within even lanes
             // For XOR shuffle, this means mask must be even
             if mask % 2 == 0 {
-                Some(data)  // Safe
+                Some(data) // Safe
             } else {
-                None  // Would read from odd lanes
+                None // Would read from odd lanes
             }
         }
 
@@ -373,9 +384,9 @@ pub mod warp_restricted {
         /// XOR shuffles that stay within odd lanes
         pub fn shuffle_xor_within<T: Copy>(&self, data: T, mask: u32) -> Option<T> {
             if mask % 2 == 0 {
-                Some(data)  // Safe - stays within odd lanes
+                Some(data) // Safe - stays within odd lanes
             } else {
-                None  // Would read from even lanes
+                None // Would read from even lanes
             }
         }
 
@@ -458,11 +469,15 @@ pub mod hybrid {
 
     #[derive(Copy, Clone)]
     pub struct All;
-    impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+    impl ActiveSet for All {
+        const MASK: u32 = 0xFFFFFFFF;
+    }
 
     #[derive(Copy, Clone)]
     pub struct Even;
-    impl ActiveSet for Even { const MASK: u32 = 0x55555555; }
+    impl ActiveSet for Even {
+        const MASK: u32 = 0x55555555;
+    }
 
     /// Value with both static type AND runtime mask
     #[derive(Clone, Copy)]
@@ -561,7 +576,7 @@ mod integration_tests {
         let _ = warp.shuffle_xor(data, 1);
 
         // After divergence, only restricted shuffles
-        let warp_even: Warp<Even> = Warp::new();  // Simulating diverge
+        let warp_even: Warp<Even> = Warp::new(); // Simulating diverge
         let warp_odd: Warp<Odd> = Warp::new();
 
         // warp_even.shuffle_xor(1) - doesn't compile!
@@ -569,6 +584,6 @@ mod integration_tests {
 
         // Merge restores full capability
         let warp_merged = merge(warp_even, warp_odd);
-        let _ = warp_merged.shuffle_xor(data, 1);  // Works again
+        let _ = warp_merged.shuffle_xor(data, 1); // Works again
     }
 }

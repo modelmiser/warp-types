@@ -69,25 +69,51 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PerLane<T>(pub [T; 32]);
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct SubGroup0; // lanes 0-7
-#[derive(Copy, Clone)] pub struct SubGroup1; // lanes 8-15
-#[derive(Copy, Clone)] pub struct SubGroup2; // lanes 16-23
-#[derive(Copy, Clone)] pub struct SubGroup3; // lanes 24-31
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct SubGroup0; // lanes 0-7
+#[derive(Copy, Clone)]
+pub struct SubGroup1; // lanes 8-15
+#[derive(Copy, Clone)]
+pub struct SubGroup2; // lanes 16-23
+#[derive(Copy, Clone)]
+pub struct SubGroup3; // lanes 24-31
 
-impl ActiveSet for All       { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for SubGroup0 { const MASK: u32 = 0x000000FF; const NAME: &'static str = "SubGroup0"; }
-impl ActiveSet for SubGroup1 { const MASK: u32 = 0x0000FF00; const NAME: &'static str = "SubGroup1"; }
-impl ActiveSet for SubGroup2 { const MASK: u32 = 0x00FF0000; const NAME: &'static str = "SubGroup2"; }
-impl ActiveSet for SubGroup3 { const MASK: u32 = 0xFF000000; const NAME: &'static str = "SubGroup3"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for SubGroup0 {
+    const MASK: u32 = 0x000000FF;
+    const NAME: &'static str = "SubGroup0";
+}
+impl ActiveSet for SubGroup1 {
+    const MASK: u32 = 0x0000FF00;
+    const NAME: &'static str = "SubGroup1";
+}
+impl ActiveSet for SubGroup2 {
+    const MASK: u32 = 0x00FF0000;
+    const NAME: &'static str = "SubGroup2";
+}
+impl ActiveSet for SubGroup3 {
+    const MASK: u32 = 0xFF000000;
+    const NAME: &'static str = "SubGroup3";
+}
 
 // ============================================================================
 // GATED OPERATIONS: Only Warp<All> has shuffle_down
@@ -96,8 +122,12 @@ impl ActiveSet for SubGroup3 { const MASK: u32 = 0xFF000000; const NAME: &'stati
 impl Warp<All> {
     /// Narrow the warp to a computed sub-group mask.
     /// This is what TVM's buggy code did: compute a mask for each group.
-    pub fn narrow_to_subgroup0(self) -> Warp<SubGroup0> { Warp::new() }
-    pub fn narrow_to_subgroup1(self) -> Warp<SubGroup1> { Warp::new() }
+    pub fn narrow_to_subgroup0(self) -> Warp<SubGroup0> {
+        Warp::new()
+    }
+    pub fn narrow_to_subgroup1(self) -> Warp<SubGroup1> {
+        Warp::new()
+    }
 
     /// Shuffle down with width — the correct primitive.
     ///
@@ -177,7 +207,7 @@ fn _buggy_version_for_doctest() {}
 /// the mask disagrees with reality.
 fn buggy_compute_mask(group_index: u32, reduce_extent: u32) -> u32 {
     let activemask: u32 = 0xFFFFFFFF; // all 32 lanes are alive
-    // TVM's mask computation (from lower_thread_allreduce.cc):
+                                      // TVM's mask computation (from lower_thread_allreduce.cc):
     activemask & (((1u32 << reduce_extent) - 1) << (reduce_extent * group_index))
 }
 
@@ -191,11 +221,7 @@ fn buggy_compute_mask(group_index: u32, reduce_extent: u32) -> u32 {
 /// full active mask. The `width` parameter on `shuffle_down` handles the
 /// sub-group boundary — values don't cross group boundaries because the
 /// shuffle wraps at `width`.
-fn correct_allreduce(
-    warp: Warp<All>,
-    data: &PerLane<f32>,
-    group_size: u32,
-) -> PerLane<f32> {
+fn correct_allreduce(warp: Warp<All>, data: &PerLane<f32>, group_size: u32) -> PerLane<f32> {
     // No mask narrowing. Warp<All> means all lanes participate.
     // The `group_size` parameter confines each group's reduction.
     warp.allreduce_sum(data, group_size)
@@ -228,8 +254,8 @@ mod tests {
         // But all 32 lanes are alive! The mask lies about participation.
         // Hardware expects mask == activemask when all lanes execute the
         // instruction. Mismatch triggers "CUDA illegal instruction" on H100.
-        assert_eq!(mask0.count_ones(), 8);  // claims 8 participate
-        assert_ne!(mask0, 0xFFFFFFFF);       // but 32 actually do
+        assert_eq!(mask0.count_ones(), 8); // claims 8 participate
+        assert_ne!(mask0, 0xFFFFFFFF); // but 32 actually do
     }
 
     #[test]
@@ -245,10 +271,10 @@ mod tests {
         let result = correct_allreduce(warp, &PerLane(data), 8);
 
         // Lane 0 of each group has the group sum (8.0)
-        assert_eq!(result.0[0], 8.0);   // group 0 leader
-        assert_eq!(result.0[8], 8.0);   // group 1 leader
-        assert_eq!(result.0[16], 8.0);  // group 2 leader
-        assert_eq!(result.0[24], 8.0);  // group 3 leader
+        assert_eq!(result.0[0], 8.0); // group 0 leader
+        assert_eq!(result.0[8], 8.0); // group 1 leader
+        assert_eq!(result.0[16], 8.0); // group 2 leader
+        assert_eq!(result.0[24], 8.0); // group 3 leader
     }
 
     #[test]
@@ -380,7 +406,12 @@ fn main() {
 
     for group in 0..4u32 {
         let mask = buggy_compute_mask(group, 8);
-        println!("    group {}: mask = 0x{:08X} ({} of 32 lanes)", group, mask, mask.count_ones());
+        println!(
+            "    group {}: mask = 0x{:08X} ({} of 32 lanes)",
+            group,
+            mask,
+            mask.count_ones()
+        );
     }
 
     println!("\n  All 32 lanes execute the shfl_down instruction, but the mask");

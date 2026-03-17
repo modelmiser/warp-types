@@ -16,11 +16,11 @@
 //! All methods are on `Warp<All>` — the compiler prevents calling them
 //! on diverged sub-warps. CUB's C++ API has no such protection.
 
-use crate::GpuValue;
-use crate::gpu::GpuShuffle;
-use crate::data::PerLane;
-use crate::warp::Warp;
 use crate::active_set::All;
+use crate::data::PerLane;
+use crate::gpu::GpuShuffle;
+use crate::warp::Warp;
+use crate::GpuValue;
 
 // ============================================================================
 // WarpReduce — reduction with arbitrary operator
@@ -173,7 +173,9 @@ impl Warp<All> {
     /// Equivalent to `__shfl_sync(0xFFFFFFFF, val, src_lane)`.
     /// All lanes receive the value from `src_lane`.
     pub fn broadcast_lane<T: GpuValue + GpuShuffle>(
-        &self, data: PerLane<T>, src_lane: u32,
+        &self,
+        data: PerLane<T>,
+        src_lane: u32,
     ) -> PerLane<T> {
         PerLane::new(data.get().gpu_shfl_idx(src_lane))
     }
@@ -181,9 +183,7 @@ impl Warp<All> {
     /// Warp-level shuffle up: lane\[i\] reads from lane\[i - delta\].
     ///
     /// Useful for scan-like operations. Lanes below delta get undefined values.
-    pub fn shuffle_up<T: GpuValue + GpuShuffle>(
-        &self, data: PerLane<T>, delta: u32,
-    ) -> PerLane<T> {
+    pub fn shuffle_up<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, delta: u32) -> PerLane<T> {
         PerLane::new(data.get().gpu_shfl_up(delta))
     }
 }

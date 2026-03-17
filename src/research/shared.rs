@@ -5,8 +5,8 @@
 //! GPU shared memory is a common source of race conditions.
 //! This module explores how ownership/borrowing can prevent them.
 
+use crate::{data::Role, GpuValue};
 use std::marker::PhantomData;
-use crate::{GpuValue, data::Role};
 
 /// A region of shared memory owned by a specific role
 ///
@@ -120,7 +120,9 @@ pub struct WorkQueue<T: GpuValue, const PRODUCER: u8, const CONSUMER: u8> {
     _phantom: PhantomData<()>,
 }
 
-impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8> WorkQueue<T, PRODUCER, CONSUMER> {
+impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
+    WorkQueue<T, PRODUCER, CONSUMER>
+{
     /// Create a new work queue
     pub fn new(producer_role: Role, _consumer_role: Role) -> Self {
         WorkQueue {
@@ -197,8 +199,7 @@ mod tests {
         let coordinator = Role::lanes(0, 4, "coordinator");
         let worker = Role::lanes(4, 32, "worker");
 
-        let mut queue: WorkQueue<i32, COORDINATOR, WORKER> =
-            WorkQueue::new(coordinator, worker);
+        let mut queue: WorkQueue<i32, COORDINATOR, WORKER> = WorkQueue::new(coordinator, worker);
 
         assert!(queue.is_empty());
 

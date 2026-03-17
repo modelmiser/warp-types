@@ -22,11 +22,11 @@
 //!
 //! Total: 15 compare-and-swap operations using shuffle-XOR.
 
-use crate::GpuValue;
-use crate::gpu::{self, GpuShuffle};
-use crate::data::PerLane;
-use crate::warp::Warp;
 use crate::active_set::All;
+use crate::data::PerLane;
+use crate::gpu::{self, GpuShuffle};
+use crate::warp::Warp;
+use crate::GpuValue;
 
 // ============================================================================
 // Core compare-and-swap via shuffle
@@ -63,7 +63,11 @@ fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
     let keep_smaller = ascending == is_lower;
 
     if keep_smaller {
-        if my <= partner { val } else { partner_val }
+        if my <= partner {
+            val
+        } else {
+            partner_val
+        }
     } else if my >= partner {
         val
     } else {
@@ -109,10 +113,7 @@ impl Warp<All> {
     /// let data = data::PerLane::new(42i32);
     /// evens.bitonic_sort(data); // ERROR: method not found for Warp<Even>
     /// ```
-    pub fn bitonic_sort<T: GpuValue + GpuShuffle + Ord>(
-        &self,
-        data: PerLane<T>,
-    ) -> PerLane<T> {
+    pub fn bitonic_sort<T: GpuValue + GpuShuffle + Ord>(&self, data: PerLane<T>) -> PerLane<T> {
         let mut val = data;
 
         // Stage 1: blocks of 2
@@ -147,11 +148,7 @@ impl Warp<All> {
     ///
     /// Like `bitonic_sort` but uses a user-provided comparison function
     /// instead of `Ord`. Useful for sorting by key, reverse order, etc.
-    pub fn bitonic_sort_by<T, F>(
-        &self,
-        data: PerLane<T>,
-        cmp: F,
-    ) -> PerLane<T>
+    pub fn bitonic_sort_by<T, F>(&self, data: PerLane<T>, cmp: F) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle,
         F: Fn(&T, &T) -> core::cmp::Ordering,
@@ -235,7 +232,7 @@ impl Warp<All> {
                       val: PerLane<V>,
                       xor_mask: u32,
                       stage_mask: u32|
-                      -> (PerLane<K>, PerLane<V>) {
+         -> (PerLane<K>, PerLane<V>) {
             let partner_key = warp.shuffle_xor(key, xor_mask);
             let partner_val = warp.shuffle_xor(val, xor_mask);
             let lane = gpu::lane_id();
@@ -353,20 +350,26 @@ mod tests {
         // Verify the XOR mask sequence is correct for bitonic sort.
         // Stage k (1-indexed) has substages with masks: 2^(k-1), 2^(k-2), ..., 2, 1
         let expected_masks: Vec<Vec<u32>> = vec![
-            vec![1],                  // Stage 1
-            vec![2, 1],              // Stage 2
-            vec![4, 2, 1],           // Stage 3
-            vec![8, 4, 2, 1],        // Stage 4
-            vec![16, 8, 4, 2, 1],    // Stage 5
+            vec![1],              // Stage 1
+            vec![2, 1],           // Stage 2
+            vec![4, 2, 1],        // Stage 3
+            vec![8, 4, 2, 1],     // Stage 4
+            vec![16, 8, 4, 2, 1], // Stage 5
         ];
 
         for (stage, masks) in expected_masks.iter().enumerate() {
             let k = stage + 1;
             for (substage, &mask) in masks.iter().enumerate() {
                 let j = masks.len() - substage; // j counts down from k
-                assert_eq!(mask, 1 << (j - 1),
+                assert_eq!(
+                    mask,
+                    1 << (j - 1),
                     "Stage {}, substage {}: expected mask {}, got {}",
-                    k, substage, 1u32 << (j - 1), mask);
+                    k,
+                    substage,
+                    1u32 << (j - 1),
+                    mask
+                );
             }
         }
     }

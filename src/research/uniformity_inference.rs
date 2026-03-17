@@ -56,12 +56,16 @@ pub trait Valued {
 
 impl<T> Valued for Uniform<T> {
     type Element = T;
-    fn is_uniform() -> bool { true }
+    fn is_uniform() -> bool {
+        true
+    }
 }
 
 impl<T> Valued for PerLane<T> {
     type Element = T;
-    fn is_uniform() -> bool { false }
+    fn is_uniform() -> bool {
+        false
+    }
 }
 
 // ============================================================================
@@ -91,10 +95,7 @@ pub fn add_uniform<T: std::ops::Add<Output = T> + Copy>(
 }
 
 /// Rule 4: Uniform + PerLane = PerLane (contamination)
-pub fn add_mixed<T: std::ops::Add<Output = T> + Copy>(
-    a: Uniform<T>,
-    b: PerLane<T>,
-) -> PerLane<T> {
+pub fn add_mixed<T: std::ops::Add<Output = T> + Copy>(a: Uniform<T>, b: PerLane<T>) -> PerLane<T> {
     let mut result = [a.0; 32];
     for i in 0..32 {
         result[i] = a.0 + b.0[i];
@@ -115,9 +116,7 @@ pub fn add_varying<T: std::ops::Add<Output = T> + Copy + Default>(
 }
 
 /// Rule 5: Reductions produce uniform
-pub fn reduce_sum<T: std::ops::Add<Output = T> + Copy + Default>(
-    values: PerLane<T>,
-) -> Uniform<T> {
+pub fn reduce_sum<T: std::ops::Add<Output = T> + Copy + Default>(values: PerLane<T>) -> Uniform<T> {
     let mut sum = T::default();
     for i in 0..32 {
         sum = sum + values.0[i];
@@ -172,11 +171,14 @@ pub enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     ReduceSum(Box<Expr>),
     Broadcast(Box<Expr>),
-    Load(Box<Expr>),  // Load from address
+    Load(Box<Expr>), // Load from address
 }
 
 /// Infer uniformity of an expression
-pub fn infer_uniformity(expr: &Expr, env: &std::collections::HashMap<String, Uniformity>) -> Uniformity {
+pub fn infer_uniformity(
+    expr: &Expr,
+    env: &std::collections::HashMap<String, Uniformity>,
+) -> Uniformity {
     match expr {
         // Constants are uniform
         Expr::Const(_) => Uniformity::Uniform,
@@ -254,7 +256,10 @@ impl ActiveSet for Odd {}
 
 impl<T: Copy, S: ActiveSet> UniformWithin<T, S> {
     pub fn new(value: T) -> Self {
-        UniformWithin { value, _set: PhantomData }
+        UniformWithin {
+            value,
+            _set: PhantomData,
+        }
     }
 
     pub fn get(&self) -> T {
@@ -269,7 +274,7 @@ pub fn merge_uniform<T: Copy + Default>(
 ) -> PerLane<T> {
     // Each lane gets the value from its branch
     // Result is no longer uniform!
-    PerLane([T::default(); 32])  // Placeholder
+    PerLane([T::default(); 32]) // Placeholder
 }
 
 // ============================================================================
@@ -298,20 +303,14 @@ mod tests {
     #[test]
     fn test_uniform_plus_uniform() {
         let env = HashMap::new();
-        let expr = Expr::Add(
-            Box::new(Expr::Const(1)),
-            Box::new(Expr::Const(2)),
-        );
+        let expr = Expr::Add(Box::new(Expr::Const(1)), Box::new(Expr::Const(2)));
         assert_eq!(infer_uniformity(&expr, &env), Uniformity::Uniform);
     }
 
     #[test]
     fn test_uniform_plus_varying() {
         let env = HashMap::new();
-        let expr = Expr::Add(
-            Box::new(Expr::Const(1)),
-            Box::new(Expr::LaneId),
-        );
+        let expr = Expr::Add(Box::new(Expr::Const(1)), Box::new(Expr::LaneId));
         assert_eq!(infer_uniformity(&expr, &env), Uniformity::Varying);
     }
 

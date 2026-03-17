@@ -65,21 +65,39 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct PerLane<T>(pub [T; 32]);
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct Lane0;
-#[derive(Copy, Clone)] pub struct NotLane0;
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct Lane0;
+#[derive(Copy, Clone)]
+pub struct NotLane0;
 
-impl ActiveSet for All      { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for Lane0    { const MASK: u32 = 0x00000001; const NAME: &'static str = "Lane0"; }
-impl ActiveSet for NotLane0 { const MASK: u32 = 0xFFFFFFFE; const NAME: &'static str = "NotLane0"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for Lane0 {
+    const MASK: u32 = 0x00000001;
+    const NAME: &'static str = "Lane0";
+}
+impl ActiveSet for NotLane0 {
+    const MASK: u32 = 0xFFFFFFFE;
+    const NAME: &'static str = "NotLane0";
+}
 
 impl ComplementOf<NotLane0> for Lane0 {}
 impl ComplementOf<Lane0> for NotLane0 {}
@@ -100,11 +118,7 @@ impl Warp<All> {
     }
 }
 
-pub fn merge_data(
-    _lane0_data: i32,
-    _notlane0_data: i32,
-    lane0_mask: u32,
-) -> PerLane<i32> {
+pub fn merge_data(_lane0_data: i32, _notlane0_data: i32, lane0_mask: u32) -> PerLane<i32> {
     let mut result = [_notlane0_data; 32];
     for i in 0..32 {
         if lane0_mask & (1 << i) != 0 {
@@ -115,7 +129,10 @@ pub fn merge_data(
 }
 
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
-where S1: ComplementOf<S2>, S2: ActiveSet {
+where
+    S1: ComplementOf<S2>,
+    S2: ActiveSet,
+{
     Warp::new()
 }
 
@@ -205,8 +222,8 @@ mod tests {
         assert_eq!(counter, 116);
 
         // Lane 0 got atomicAdd result (100), broadcast to all, plus lane offset
-        assert_eq!(result.0[0], 100);  // lane 0: 100 + 0
-        assert_eq!(result.0[1], 101);  // lane 1: 100 + 1
+        assert_eq!(result.0[0], 100); // lane 0: 100 + 0
+        assert_eq!(result.0[1], 101); // lane 1: 100 + 1
         assert_eq!(result.0[31], 131); // lane 31: 100 + 31
     }
 
@@ -281,6 +298,12 @@ fn main() {
     let mut counter = 0;
     let result = correct_atomic_broadcast(warp, &mut counter);
 
-    println!("Counter after one call: {} (correct: 16, buggy: 512)", counter);
-    println!("Lane results: [0]={}, [1]={}, [31]={}", result.0[0], result.0[1], result.0[31]);
+    println!(
+        "Counter after one call: {} (correct: 16, buggy: 512)",
+        counter
+    );
+    println!(
+        "Lane results: [0]={}, [1]={}, [31]={}",
+        result.0[0], result.0[1], result.0[31]
+    );
 }

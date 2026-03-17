@@ -54,25 +54,45 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct PerLane<T>(pub [T; 32]);
 
 impl PerLane<i32> {
-    pub fn new(arr: [i32; 32]) -> Self { PerLane(arr) }
+    pub fn new(arr: [i32; 32]) -> Self {
+        PerLane(arr)
+    }
 }
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct Lane0;
-#[derive(Copy, Clone)] pub struct NotLane0;
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct Lane0;
+#[derive(Copy, Clone)]
+pub struct NotLane0;
 
-impl ActiveSet for All      { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for Lane0    { const MASK: u32 = 0x00000001; const NAME: &'static str = "Lane0"; }
-impl ActiveSet for NotLane0 { const MASK: u32 = 0xFFFFFFFE; const NAME: &'static str = "NotLane0"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for Lane0 {
+    const MASK: u32 = 0x00000001;
+    const NAME: &'static str = "Lane0";
+}
+impl ActiveSet for NotLane0 {
+    const MASK: u32 = 0xFFFFFFFE;
+    const NAME: &'static str = "NotLane0";
+}
 
 impl ComplementOf<NotLane0> for Lane0 {}
 impl ComplementOf<Lane0> for NotLane0 {}

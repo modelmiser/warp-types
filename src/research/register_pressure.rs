@@ -51,7 +51,7 @@ pub type N2 = S<N1>;
 pub type N3 = S<N2>;
 pub type N4 = S<N3>;
 pub type N5 = S<N4>;
-pub type N8 = S<S<S<N5>>>;  // 5 + 3 = 8
+pub type N8 = S<S<S<N5>>>; // 5 + 3 = 8
 pub type N16 = S<S<S<S<S<S<S<S<N8>>>>>>>>; // 8 + 8 = 16
 pub type N32 = S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<N16>>>>>>>>>>>>>>>>; // 16 + 16 = 32
 
@@ -66,7 +66,9 @@ pub struct Budget<N> {
 
 impl<N> Budget<N> {
     pub fn new() -> Self {
-        Budget { _remaining: PhantomData }
+        Budget {
+            _remaining: PhantomData,
+        }
     }
 }
 
@@ -101,7 +103,10 @@ pub struct Reg<T: Copy, R> {
 impl<T: Copy, R> Reg<T, R> {
     /// Create a register-tracked value
     pub fn new(value: T) -> Self {
-        Reg { value, _registers: PhantomData }
+        Reg {
+            value,
+            _registers: PhantomData,
+        }
     }
 
     pub fn get(&self) -> T {
@@ -114,21 +119,35 @@ pub trait RegisterSize {
     type Size;
 }
 
-impl RegisterSize for i32 { type Size = N1; }
-impl RegisterSize for u32 { type Size = N1; }
-impl RegisterSize for f32 { type Size = N1; }
-impl RegisterSize for i64 { type Size = N2; }
-impl RegisterSize for u64 { type Size = N2; }
-impl RegisterSize for f64 { type Size = N2; }
-impl RegisterSize for bool { type Size = N1; }  // Predicate register
+impl RegisterSize for i32 {
+    type Size = N1;
+}
+impl RegisterSize for u32 {
+    type Size = N1;
+}
+impl RegisterSize for f32 {
+    type Size = N1;
+}
+impl RegisterSize for i64 {
+    type Size = N2;
+}
+impl RegisterSize for u64 {
+    type Size = N2;
+}
+impl RegisterSize for f64 {
+    type Size = N2;
+}
+impl RegisterSize for bool {
+    type Size = N1;
+} // Predicate register
 
 // Arrays use N * element_size registers
 impl<T: RegisterSize, const N: usize> RegisterSize for [T; N]
 where
-    // This would need type-level multiplication which is complex
-    // Simplified: treat arrays as using many registers
+// This would need type-level multiplication which is complex
+// Simplified: treat arrays as using many registers
 {
-    type Size = N32;  // Conservative estimate
+    type Size = N32; // Conservative estimate
 }
 
 // ============================================================================
@@ -169,7 +188,11 @@ pub mod runtime {
 
     impl RegisterTracker {
         pub fn new(limit: usize) -> Self {
-            RegisterTracker { used: 0, limit, peak: 0 }
+            RegisterTracker {
+                used: 0,
+                limit,
+                peak: 0,
+            }
         }
 
         /// Allocate registers, returns false if would exceed limit
@@ -187,9 +210,15 @@ pub mod runtime {
             self.used = self.used.saturating_sub(count);
         }
 
-        pub fn used(&self) -> usize { self.used }
-        pub fn remaining(&self) -> usize { self.limit - self.used }
-        pub fn peak(&self) -> usize { self.peak }
+        pub fn used(&self) -> usize {
+            self.used
+        }
+        pub fn remaining(&self) -> usize {
+            self.limit - self.used
+        }
+        pub fn peak(&self) -> usize {
+            self.peak
+        }
     }
 
     /// A value tracked by a register tracker
@@ -207,7 +236,9 @@ pub mod runtime {
             }
         }
 
-        pub fn get(&self) -> &T { &self.value }
+        pub fn get(&self) -> &T {
+            &self.value
+        }
 
         pub fn free(self, tracker: &mut RegisterTracker) -> T {
             tracker.free(self.reg_count);
@@ -270,7 +301,7 @@ pub mod runtime {
             let _v3 = TrackedValue::new(&mut tracker, 0u64, 4).unwrap();
             assert_eq!(tracker.used(), 8);
 
-            let _ = v2;  // Use v2 to avoid warning
+            let _ = v2; // Use v2 to avoid warning
         }
     }
 }

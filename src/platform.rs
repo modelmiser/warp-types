@@ -57,10 +57,8 @@ pub trait Platform: Copy + 'static {
     }
 
     /// Shuffle: each lane reads from source\[indices\[lane\]\]
-    fn shuffle<T: GpuValue>(
-        source: Self::Vector<T>,
-        indices: Self::Vector<u32>,
-    ) -> Self::Vector<T>;
+    fn shuffle<T: GpuValue>(source: Self::Vector<T>, indices: Self::Vector<u32>)
+        -> Self::Vector<T>;
 
     /// Shuffle down: lane i reads from lane i+delta (with wrapping or clamping)
     fn shuffle_down<T: GpuValue>(source: Self::Vector<T>, delta: usize) -> Self::Vector<T>;
@@ -115,7 +113,9 @@ impl<T: GpuValue, const WIDTH: usize> SimdVector<T> for PortableVector<T, WIDTH>
     const WIDTH: usize = WIDTH;
 
     fn splat(value: T) -> Self {
-        PortableVector { data: [value; WIDTH] }
+        PortableVector {
+            data: [value; WIDTH],
+        }
     }
 
     fn extract(self, lane: usize) -> T {
@@ -133,7 +133,9 @@ impl<T: GpuValue, const WIDTH: usize> SimdVector<T> for PortableVector<T, WIDTH>
 
 impl<T: GpuValue, const WIDTH: usize> Default for PortableVector<T, WIDTH> {
     fn default() -> Self {
-        PortableVector { data: [T::default(); WIDTH] }
+        PortableVector {
+            data: [T::default(); WIDTH],
+        }
     }
 }
 
@@ -194,7 +196,12 @@ where
 
     fn ballot(predicates: Self::Vector<bool>) -> Self::Mask {
         // Mask is u64, so WIDTH must not exceed 64 bits.
-        const { assert!(WIDTH <= 64, "CpuSimd<WIDTH>: ballot requires WIDTH <= 64 (u64 mask)") };
+        const {
+            assert!(
+                WIDTH <= 64,
+                "CpuSimd<WIDTH>: ballot requires WIDTH <= 64 (u64 mask)"
+            )
+        };
         let mut mask = 0u64;
         for i in 0..WIDTH {
             if predicates.data[i] {
@@ -322,13 +329,16 @@ impl Platform for GpuWarp32 {
 /// This shows the key insight: the same algorithm works for CPU SIMD and GPU warps
 /// because both support shuffle_xor. The actual implementation would be
 /// specialized per platform for optimal codegen.
-pub fn butterfly_reduce_sum<const WIDTH: usize, T>(
-    values: PortableVector<T, WIDTH>,
-) -> T
+pub fn butterfly_reduce_sum<const WIDTH: usize, T>(values: PortableVector<T, WIDTH>) -> T
 where
     T: GpuValue + core::ops::Add<Output = T>,
 {
-    const { assert!(WIDTH.is_power_of_two(), "butterfly_reduce_sum requires power-of-2 WIDTH") };
+    const {
+        assert!(
+            WIDTH.is_power_of_two(),
+            "butterfly_reduce_sum requires power-of-2 WIDTH"
+        )
+    };
     let mut v = values;
     let mut stride = 1;
     while stride < WIDTH {

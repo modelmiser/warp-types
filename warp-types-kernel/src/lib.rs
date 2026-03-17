@@ -34,7 +34,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, FnArg, Pat};
+use syn::{parse_macro_input, FnArg, ItemFn, Pat};
 
 /// Mark a function as a GPU kernel entry point.
 ///
@@ -93,9 +93,8 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), TokenStream> {
             if let Some(seg) = tp.path.segments.last() {
                 let name = seg.ident.to_string();
                 let valid_scalars = [
-                    "u8", "u16", "u32", "u64", "usize",
-                    "i8", "i16", "i32", "i64", "isize",
-                    "f32", "f64", "bool",
+                    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32",
+                    "f64", "bool",
                 ];
                 if !valid_scalars.contains(&name.as_str()) {
                     let msg = format!(
@@ -107,12 +106,13 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), TokenStream> {
                 }
             }
             Ok(())
-        },
+        }
         _ => {
             let msg = format!(
                 "warp_kernel: parameter `{}` has unsupported type `{}`. \
                  Kernel parameters must be raw pointers or scalar types.",
-                quote!(#pat), quote!(#ty)
+                quote!(#pat),
+                quote!(#ty)
             );
             Err(syn::Error::new_spanned(ty, msg).to_compile_error().into())
         }

@@ -119,10 +119,9 @@ impl WarpBuilder {
     ///
     /// Also prints `cargo:rerun-if-changed` for all kernel source files (recursive).
     pub fn build(self) -> Result<BuildResult, BuildError> {
-        let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-            .map_err(|_| BuildError::NotInBuildScript)?;
-        let out_dir = env::var("OUT_DIR")
-            .map_err(|_| BuildError::NotInBuildScript)?;
+        let manifest_dir =
+            env::var("CARGO_MANIFEST_DIR").map_err(|_| BuildError::NotInBuildScript)?;
+        let out_dir = env::var("OUT_DIR").map_err(|_| BuildError::NotInBuildScript)?;
 
         let kernel_dir = Path::new(&manifest_dir).join(&self.kernel_crate);
         if !kernel_dir.exists() {
@@ -165,7 +164,8 @@ impl WarpBuilder {
         cmd.env_remove("RUSTC");
         cmd.env("RUSTFLAGS", "--cfg warp_kernel_build");
 
-        let output = cmd.output()
+        let output = cmd
+            .output()
             .map_err(|e| BuildError::CargoFailed(format!("Failed to run cargo: {}", e)))?;
 
         if !output.status.success() {
@@ -240,8 +240,13 @@ pub enum BuildError {
 impl std::fmt::Display for BuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BuildError::NotInBuildScript => write!(f, "Not running in a build script (CARGO_MANIFEST_DIR not set)"),
-            BuildError::KernelCrateNotFound(p) => write!(f, "Kernel crate not found: {}", p.display()),
+            BuildError::NotInBuildScript => write!(
+                f,
+                "Not running in a build script (CARGO_MANIFEST_DIR not set)"
+            ),
+            BuildError::KernelCrateNotFound(p) => {
+                write!(f, "Kernel crate not found: {}", p.display())
+            }
             BuildError::CargoFailed(s) => write!(f, "Cargo invocation failed: {}", s),
             BuildError::CompilationFailed(s) => write!(f, "Kernel compilation failed:\n{}", s),
             BuildError::PtxNotFound(s) => write!(f, "PTX file not found: {}", s),
@@ -308,14 +313,14 @@ fn generate_rust_module(kernel_crate: &Path, kernels: &[String]) -> String {
          /// Created by [`Kernels::load`], which parses the PTX and extracts\n\
          /// each kernel entry point as a ready-to-launch [`CudaFunction`].\n\
          ///\n\
-         /// # Available kernels\n"
+         /// # Available kernels\n",
     );
     for name in kernels {
         code.push_str(&format!("/// - `{}` \n", name));
     }
     code.push_str(
         "pub struct Kernels {\n\
-         _module: ::std::sync::Arc<::cudarc::driver::CudaModule>,\n"
+         _module: ::std::sync::Arc<::cudarc::driver::CudaModule>,\n",
     );
     for name in kernels {
         code.push_str(&format!(
@@ -336,7 +341,7 @@ fn generate_rust_module(kernel_crate: &Path, kernels: &[String]) -> String {
          pub fn load(ctx: &::std::sync::Arc<::cudarc::driver::CudaContext>) -> \
              ::std::result::Result<Self, Box<dyn ::std::error::Error>> {\n\
              let ptx = ::cudarc::nvrtc::Ptx::from_src(KERNEL_PTX.to_string());\n\
-             let module = ctx.load_module(ptx)?;\n"
+             let module = ctx.load_module(ptx)?;\n",
     );
     for name in kernels {
         code.push_str(&format!(
@@ -360,7 +365,10 @@ fn generate_rust_module(kernel_crate: &Path, kernels: &[String]) -> String {
 
 /// Emit `cargo:rerun-if-changed` for all files in the kernel crate recursively.
 fn emit_rerun_if_changed(kernel_dir: &Path) {
-    println!("cargo:rerun-if-changed={}", kernel_dir.join("Cargo.toml").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        kernel_dir.join("Cargo.toml").display()
+    );
 
     let src_dir = kernel_dir.join("src");
     if src_dir.exists() {
@@ -389,11 +397,13 @@ fn emit_rerun_recursive(dir: &Path) {
 fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildError> {
     // Get the crate name from Cargo.toml
     let cargo_toml = kernel_dir.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| BuildError::PtxNotFound(format!("Can't read {}: {}", cargo_toml.display(), e)))?;
+    let content = std::fs::read_to_string(&cargo_toml).map_err(|e| {
+        BuildError::PtxNotFound(format!("Can't read {}: {}", cargo_toml.display(), e))
+    })?;
 
     // Simple TOML parsing — find name = "..."
-    let crate_name = content.lines()
+    let crate_name = content
+        .lines()
         .find_map(|line| {
             let line = line.trim();
             if line.starts_with("name") {
@@ -426,7 +436,9 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().is_some_and(|e| e == "s") {
-                let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
+                let fname = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 // Match crate_name-HASH.s pattern, skip core/compiler_builtins
                 if fname.starts_with(&crate_name)
@@ -444,7 +456,9 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().is_some_and(|e| e == "s") {
-                let fname = p.file_stem().map(|s| s.to_string_lossy().to_string())
+                let fname = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 if !fname.starts_with("core-")
                     && !fname.starts_with("compiler_builtins-")
@@ -460,6 +474,9 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         "No .s/.ptx file found in {}. Crate name: '{}'. Checked: {:?}",
         target_dir.display(),
         crate_name,
-        candidates.iter().map(|c| c.display().to_string()).collect::<Vec<_>>()
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
     )))
 }

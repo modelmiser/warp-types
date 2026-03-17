@@ -24,12 +24,12 @@
 //! This is unlike `Warp<S>` where only `Warp<All>` has shuffle.
 //! The safety comes from the partition structure, not the active set.
 
-use core::marker::PhantomData;
-use crate::GpuValue;
-use crate::gpu::GpuShuffle;
+use crate::active_set::{sealed, All};
 use crate::data::PerLane;
+use crate::gpu::GpuShuffle;
 use crate::warp::Warp;
-use crate::active_set::{All, sealed};
+use crate::GpuValue;
+use core::marker::PhantomData;
 
 /// A thread block tile of `SIZE` threads.
 ///
@@ -55,19 +55,27 @@ pub trait ValidTileSize: sealed::Sealed {
 
 #[allow(private_interfaces)]
 impl sealed::Sealed for Tile<4> {
-    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+    fn _sealed() -> sealed::SealToken {
+        sealed::SealToken
+    }
 }
 #[allow(private_interfaces)]
 impl sealed::Sealed for Tile<8> {
-    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+    fn _sealed() -> sealed::SealToken {
+        sealed::SealToken
+    }
 }
 #[allow(private_interfaces)]
 impl sealed::Sealed for Tile<16> {
-    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+    fn _sealed() -> sealed::SealToken {
+        sealed::SealToken
+    }
 }
 #[allow(private_interfaces)]
 impl sealed::Sealed for Tile<32> {
-    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+    fn _sealed() -> sealed::SealToken {
+        sealed::SealToken
+    }
 }
 
 impl ValidTileSize for Tile<4> {
@@ -114,7 +122,9 @@ impl Warp<All> {
     where
         Tile<SIZE>: ValidTileSize,
     {
-        Tile { _phantom: PhantomData }
+        Tile {
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -131,16 +141,19 @@ where
     ///
     /// On GPU: emits `shfl.sync.bfly.b32` with `c = ((32-SIZE)<<8)|0x1F`,
     /// confining the shuffle to SIZE-lane segments.
-    pub fn shuffle_xor<T: GpuValue + GpuShuffle>(
-        &self, data: PerLane<T>, mask: u32,
-    ) -> PerLane<T> {
-        debug_assert!(mask < SIZE as u32, "shuffle_xor: mask {mask} >= tile SIZE {SIZE}");
+    pub fn shuffle_xor<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
+        debug_assert!(
+            mask < SIZE as u32,
+            "shuffle_xor: mask {mask} >= tile SIZE {SIZE}"
+        );
         PerLane::new(data.get().gpu_shfl_xor_width(mask, SIZE as u32))
     }
 
     /// Shuffle down within the tile (confined to tile-sized segments).
     pub fn shuffle_down<T: GpuValue + GpuShuffle>(
-        &self, data: PerLane<T>, delta: u32,
+        &self,
+        data: PerLane<T>,
+        delta: u32,
     ) -> PerLane<T> {
         PerLane::new(data.get().gpu_shfl_down_width(delta, SIZE as u32))
     }
@@ -149,7 +162,8 @@ where
     ///
     /// Uses butterfly reduction with `log2(SIZE)` shuffle-XOR steps.
     pub fn reduce_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
-        &self, data: PerLane<T>,
+        &self,
+        data: PerLane<T>,
     ) -> T {
         let mut val = data.get();
         let mut stride = 1u32;
@@ -168,7 +182,8 @@ where
     /// preserving. Needs `if lane_id >= stride` guard (requires `lane_id()`).
     /// Retained for type-system demonstration.
     pub fn inclusive_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
-        &self, data: PerLane<T>,
+        &self,
+        data: PerLane<T>,
     ) -> PerLane<T> {
         let mut val = data.get();
         let mut stride = 1u32;
@@ -192,23 +207,47 @@ where
 
 impl Tile<32> {
     /// Sub-partition into tiles of 16.
-    pub fn partition_16(&self) -> Tile<16> { Tile { _phantom: PhantomData } }
+    pub fn partition_16(&self) -> Tile<16> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
     /// Sub-partition into tiles of 8.
-    pub fn partition_8(&self) -> Tile<8> { Tile { _phantom: PhantomData } }
+    pub fn partition_8(&self) -> Tile<8> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> { Tile { _phantom: PhantomData } }
+    pub fn partition_4(&self) -> Tile<4> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl Tile<16> {
     /// Sub-partition into tiles of 8.
-    pub fn partition_8(&self) -> Tile<8> { Tile { _phantom: PhantomData } }
+    pub fn partition_8(&self) -> Tile<8> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> { Tile { _phantom: PhantomData } }
+    pub fn partition_4(&self) -> Tile<4> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl Tile<8> {
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> { Tile { _phantom: PhantomData } }
+    pub fn partition_4(&self) -> Tile<4> {
+        Tile {
+            _phantom: PhantomData,
+        }
+    }
 }
 
 // ============================================================================

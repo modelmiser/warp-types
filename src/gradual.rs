@@ -115,12 +115,18 @@ impl DynWarp {
     ///
     /// For AMD 64-lane wavefronts, use `DynWarp::all_64()`.
     pub fn all() -> Self {
-        DynWarp { active_mask: 0xFFFFFFFF, full_mask: 0xFFFFFFFF }
+        DynWarp {
+            active_mask: 0xFFFFFFFF,
+            full_mask: 0xFFFFFFFF,
+        }
     }
 
     /// All 64 lanes active (AMD wavefront size).
     pub fn all_64() -> Self {
-        DynWarp { active_mask: 0xFFFFFFFFFFFFFFFF, full_mask: 0xFFFFFFFFFFFFFFFF }
+        DynWarp {
+            active_mask: 0xFFFFFFFFFFFFFFFF,
+            full_mask: 0xFFFFFFFFFFFFFFFF,
+        }
     }
 
     /// Create from a specific mask.
@@ -135,8 +141,15 @@ impl DynWarp {
     /// Useful for testing or constructing `DynWarp`s with known masks.
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
     pub fn from_mask(mask: u64) -> Self {
-        let full = if mask <= 0xFFFFFFFF { 0xFFFFFFFF } else { 0xFFFFFFFFFFFFFFFF };
-        DynWarp { active_mask: mask, full_mask: full }
+        let full = if mask <= 0xFFFFFFFF {
+            0xFFFFFFFF
+        } else {
+            0xFFFFFFFFFFFFFFFF
+        };
+        DynWarp {
+            active_mask: mask,
+            full_mask: full,
+        }
     }
 
     /// Erase a static `Warp<S>` into a dynamic warp (always succeeds).
@@ -146,8 +159,15 @@ impl DynWarp {
     /// information to less.
     pub fn from_static<S: ActiveSet>(_warp: Warp<S>) -> Self {
         // Determine warp width from mask: if it fits in 32 bits, use 32-lane
-        let full = if S::MASK <= 0xFFFFFFFF { 0xFFFFFFFF } else { 0xFFFFFFFFFFFFFFFF };
-        DynWarp { active_mask: S::MASK, full_mask: full }
+        let full = if S::MASK <= 0xFFFFFFFF {
+            0xFFFFFFFF
+        } else {
+            0xFFFFFFFFFFFFFFFF
+        };
+        DynWarp {
+            active_mask: S::MASK,
+            full_mask: full,
+        }
     }
 
     /// Promote this `DynWarp` to a compile-time typed `Warp<S>`.
@@ -295,8 +315,14 @@ impl DynWarp {
         let true_mask = self.active_mask & predicate_mask;
         let false_mask = self.active_mask & !predicate_mask;
         (
-            DynWarp { active_mask: true_mask, full_mask: self.full_mask },
-            DynWarp { active_mask: false_mask, full_mask: self.full_mask },
+            DynWarp {
+                active_mask: true_mask,
+                full_mask: self.full_mask,
+            },
+            DynWarp {
+                active_mask: false_mask,
+                full_mask: self.full_mask,
+            },
         )
     }
 
@@ -536,8 +562,8 @@ mod tests {
 
     #[test]
     fn merge_mismatched_width_fails() {
-        let a = DynWarp::all();       // 32-lane
-        let b = DynWarp::all_64();    // 64-lane
+        let a = DynWarp::all(); // 32-lane
+        let b = DynWarp::all_64(); // 64-lane
         let (a1, a2) = a.diverge(Even::MASK);
         let (b1, _b2) = b.diverge(Even::MASK);
         // Can't merge 32-lane and 64-lane halves

@@ -52,30 +52,31 @@
 // ============================================================================
 
 pub mod active_set;
-pub mod warp;
+pub mod block;
+pub mod cub;
 pub mod data;
 pub mod diverge;
-pub mod merge;
-pub mod shuffle;
+pub mod dynamic;
 pub mod fence;
-pub mod block;
+pub mod gpu;
+pub mod gradual;
+pub mod merge;
+pub mod platform;
 #[cfg(any(test, feature = "formal-proof"))]
 pub mod proof;
-pub mod platform;
-pub mod gradual;
-pub mod gpu;
-pub mod cub;
+pub mod shuffle;
+pub mod simwarp;
 pub mod sort;
 pub mod tile;
-pub mod dynamic;
-pub mod simwarp;
+pub mod warp;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)
 // ============================================================================
 
 #[cfg(not(target_arch = "nvptx64"))]
-#[allow(dead_code)] // Research modules contain experimental prototypes with unused code
+#[allow(dead_code)]
+// Research modules contain experimental prototypes with unused code
 // Research modules: exploratory demos, not production API.
 // Suppress clippy lints inappropriate for proof-of-concept code.
 #[allow(
@@ -88,7 +89,7 @@ pub mod simwarp;
     clippy::approx_constant,
     rustdoc::invalid_html_tags,
     rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_rust_codeblocks,
+    rustdoc::invalid_rust_codeblocks
 )]
 pub mod research;
 
@@ -153,37 +154,51 @@ pub trait GpuValue: active_set::sealed::Sealed + Copy + Send + Sync + Default + 
 
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for i32 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for i32 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for u32 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for u32 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for f32 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for f32 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for i64 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for i64 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for u64 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for u64 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for f64 {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for f64 {}
 #[allow(private_interfaces)]
 impl active_set::sealed::Sealed for bool {
-    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+    fn _sealed() -> active_set::sealed::SealToken {
+        active_set::sealed::SealToken
+    }
 }
 impl GpuValue for bool {}
 
@@ -192,23 +207,21 @@ impl GpuValue for bool {}
 // ============================================================================
 
 pub use active_set::{
-    ActiveSet, ComplementOf, ComplementWithin, CanDiverge,
-    All, Empty, Even, Odd, LowHalf, HighHalf,
-    Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
+    ActiveSet, All, CanDiverge, ComplementOf, ComplementWithin, Empty, Even, EvenHigh, EvenLow,
+    HighHalf, Lane0, LowHalf, NotLane0, Odd, OddHigh, OddLow,
 };
-pub use warp::Warp;
-pub use data::{LaneId, WarpId, Uniform, PerLane, SingleLane, Role};
-pub use merge::{merge, merge_within};
-pub use shuffle::{
-    BallotResult, ShuffleSafe,
-    Permutation, HasDual, Xor, RotateDown, RotateUp, Identity, Compose,
-};
-pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteState};
-pub use block::{SharedRegion, BlockId, ThreadId};
-pub use platform::{Platform, CpuSimd, GpuWarp32, GpuWarp64, SimdVector};
+pub use block::{BlockId, SharedRegion, ThreadId};
+pub use data::{LaneId, PerLane, Role, SingleLane, Uniform, WarpId};
 pub use dynamic::DynDiverge;
+pub use fence::{Fenced, FullWrite, GlobalRegion, PartialWrite, Unwritten, WriteState};
 pub use gradual::DynWarp;
+pub use merge::{merge, merge_within};
+pub use platform::{CpuSimd, GpuWarp32, GpuWarp64, Platform, SimdVector};
+pub use shuffle::{
+    BallotResult, Compose, HasDual, Identity, Permutation, RotateDown, RotateUp, ShuffleSafe, Xor,
+};
 pub use tile::Tile;
+pub use warp::Warp;
 pub use warp_types_kernel::warp_kernel;
 
 /// Convenience prelude — import everything needed for typical usage.
@@ -221,15 +234,11 @@ pub use warp_types_kernel::warp_kernel;
 /// let merged: Warp<All> = merge(evens, odds);
 /// ```
 pub mod prelude {
-    pub use crate::{
-        Warp, GpuValue,
-        All, Empty, Even, Odd, LowHalf, HighHalf,
-        Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
-        ActiveSet, ComplementOf, ComplementWithin, CanDiverge,
-        PerLane, Uniform, SingleLane,
-        merge, merge_within,
-        DynWarp, DynDiverge, Tile,
-    };
     pub use crate::data;
     pub use crate::gpu::GpuShuffle;
+    pub use crate::{
+        merge, merge_within, ActiveSet, All, CanDiverge, ComplementOf, ComplementWithin,
+        DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, GpuValue, HighHalf, Lane0, LowHalf,
+        NotLane0, Odd, OddHigh, OddLow, PerLane, SingleLane, Tile, Uniform, Warp,
+    };
 }

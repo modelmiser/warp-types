@@ -6,8 +6,8 @@
 //! or vary per-lane. Making this distinction in the type system prevents
 //! a large class of bugs.
 
-use std::marker::PhantomData;
 use crate::GpuValue;
+use std::marker::PhantomData;
 
 /// A lane identifier (0..31 for NVIDIA, 0..63 for AMD)
 ///
@@ -134,14 +134,21 @@ impl Role {
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
         assert!(start < 32 && end <= 32 && start < end);
         let width = (end - start) as u32;
-        let mask = if width >= 32 { u32::MAX } else { ((1u32 << width) - 1) << start };
+        let mask = if width >= 32 {
+            u32::MAX
+        } else {
+            ((1u32 << width) - 1) << start
+        };
         Role { mask, name }
     }
 
     /// Create a role from a single lane
     pub const fn lane(id: u8, name: &'static str) -> Self {
         assert!(id < 32);
-        Role { mask: 1u32 << id, name }
+        Role {
+            mask: 1u32 << id,
+            name,
+        }
     }
 
     /// Check if a lane belongs to this role
@@ -176,10 +183,7 @@ impl<const N: usize> Warp<N> {
         let mut i = 0;
         while i < N {
             // Check no overlap
-            assert!(
-                coverage & roles[i].mask == 0,
-                "Roles must not overlap"
-            );
+            assert!(coverage & roles[i].mask == 0, "Roles must not overlap");
             coverage |= roles[i].mask;
             i += 1;
         }
@@ -200,8 +204,8 @@ impl<const N: usize> Warp<N> {
 
 // Example: A coordinator-worker warp configuration
 pub const COORDINATOR_WORKER: Warp<2> = Warp::new([
-    Role::lanes(0, 4, "coordinator"),   // Lanes 0-3
-    Role::lanes(4, 32, "worker"),       // Lanes 4-31
+    Role::lanes(0, 4, "coordinator"), // Lanes 0-3
+    Role::lanes(4, 32, "worker"),     // Lanes 4-31
 ]);
 
 #[cfg(test)]
@@ -248,9 +252,6 @@ mod tests {
     #[test]
     fn test_warp_roles() {
         // This compiles: roles cover all 32 lanes exactly once
-        let _warp = Warp::new([
-            Role::lanes(0, 16, "left"),
-            Role::lanes(16, 32, "right"),
-        ]);
+        let _warp = Warp::new([Role::lanes(0, 16, "left"), Role::lanes(16, 32, "right")]);
     }
 }

@@ -110,7 +110,7 @@ pub enum Expr {
     Merge(Box<Expr>, Box<Expr>),
 
     /// Shuffle: exchange values between lanes (requires Warp<All>)
-    Shuffle(Box<Expr>, Box<Expr>, u32),  // warp, data, xor_mask
+    Shuffle(Box<Expr>, Box<Expr>, u32), // warp, data, xor_mask
 
     /// Let binding
     Let(String, Box<Expr>, Box<Expr>),
@@ -156,7 +156,8 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
         Expr::PerLaneVal(vals) => {
             if vals.len() != WARP_SIZE as usize {
                 return Err(format!(
-                    "PerLaneVal has {} elements, expected {WARP_SIZE}", vals.len()
+                    "PerLaneVal has {} elements, expected {WARP_SIZE}",
+                    vals.len()
                 ));
             }
             Ok(Type::PerLane)
@@ -169,7 +170,10 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
         }
 
         // Variable lookup
-        Expr::Var(x) => ctx.get(x).cloned().ok_or_else(|| format!("Unbound variable: {}", x)),
+        Expr::Var(x) => ctx
+            .get(x)
+            .cloned()
+            .ok_or_else(|| format!("Unbound variable: {}", x)),
 
         // DIVERGE RULE:
         // Γ ⊢ w : Warp<S>
@@ -284,15 +288,14 @@ pub fn step(expr: &Expr) -> Option<Expr> {
             match (w1.as_ref(), w2.as_ref()) {
                 (Expr::WarpVal(s1), Expr::WarpVal(s2)) => {
                     // Runtime check (type system should have verified disjointness)
-                    assert!(s1.is_disjoint(s2), "SOUNDNESS VIOLATION: merge of non-disjoint sets");
+                    assert!(
+                        s1.is_disjoint(s2),
+                        "SOUNDNESS VIOLATION: merge of non-disjoint sets"
+                    );
                     Some(Expr::WarpVal(s1.union(s2)))
                 }
-                (Expr::WarpVal(_), _) => {
-                    step(w2).map(|w2_| Expr::Merge(w1.clone(), Box::new(w2_)))
-                }
-                _ => {
-                    step(w1).map(|w1_| Expr::Merge(Box::new(w1_), w2.clone()))
-                }
+                (Expr::WarpVal(_), _) => step(w2).map(|w2_| Expr::Merge(w1.clone(), Box::new(w2_))),
+                _ => step(w1).map(|w1_| Expr::Merge(Box::new(w1_), w2.clone())),
             }
         }
 
@@ -303,7 +306,8 @@ pub fn step(expr: &Expr) -> Option<Expr> {
                     // Runtime check (type system should have verified All)
                     assert!(s.is_all(), "SOUNDNESS VIOLATION: shuffle on non-All warp");
                     assert_eq!(
-                        vals.len(), WARP_SIZE as usize,
+                        vals.len(),
+                        WARP_SIZE as usize,
                         "PerLaneVal must have exactly {WARP_SIZE} elements, got {}",
                         vals.len()
                     );
@@ -321,9 +325,7 @@ pub fn step(expr: &Expr) -> Option<Expr> {
                 (Expr::WarpVal(_), _) => {
                     step(data).map(|d| Expr::Shuffle(w.clone(), Box::new(d), *mask))
                 }
-                _ => {
-                    step(w).map(|w_| Expr::Shuffle(Box::new(w_), data.clone(), *mask))
-                }
+                _ => step(w).map(|w_| Expr::Shuffle(Box::new(w_), data.clone(), *mask)),
             }
         }
 
@@ -369,7 +371,11 @@ fn substitute(expr: &Expr, var: &str, val: &Expr) -> Expr {
         ),
         Expr::Let(x, e1, e2) => {
             let e1_ = substitute(e1, var, val);
-            let e2_ = if x == var { e2.clone() } else { Box::new(substitute(e2, var, val)) };
+            let e2_ = if x == var {
+                e2.clone()
+            } else {
+                Box::new(substitute(e2, var, val))
+            };
             Expr::Let(x.clone(), Box::new(e1_), e2_)
         }
     }

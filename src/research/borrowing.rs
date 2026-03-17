@@ -39,7 +39,9 @@ pub trait ActiveSet: Copy + 'static {
 
 #[derive(Copy, Clone)]
 pub struct All;
-impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+}
 
 #[derive(Copy, Clone)]
 pub struct Warp<S: ActiveSet> {
@@ -48,7 +50,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -228,7 +232,8 @@ pub mod split {
 
     impl<'a, T: Copy, const SIZE: usize> DisjointView<'a, T, SIZE> {
         pub fn read(&self, local_index: usize) -> Option<T> {
-            self.owned_indices.get(local_index)
+            self.owned_indices
+                .get(local_index)
                 .map(|&i| self.mem.data[i])
         }
     }
@@ -254,8 +259,14 @@ pub mod split {
         }
 
         (
-            DisjointView { mem, owned_indices: true_indices },
-            DisjointView { mem, owned_indices: false_indices },
+            DisjointView {
+                mem,
+                owned_indices: true_indices,
+            },
+            DisjointView {
+                mem,
+                owned_indices: false_indices,
+            },
         )
     }
 
@@ -384,7 +395,7 @@ pub mod lease {
     /// A leased memory region (must be returned)
     pub struct Lease<T: Copy, const SIZE: usize> {
         data: [T; SIZE],
-        source_id: usize,  // Identifies which pool this came from
+        source_id: usize, // Identifies which pool this came from
     }
 
     impl<T: Copy, const SIZE: usize> Lease<T, SIZE> {
@@ -534,7 +545,7 @@ mod integration_tests {
         // Phase 1: Lane-parallel write (all lanes write same index)
         {
             let mut borrow = lane_parallel::borrow_mut(&warp, &mut mem);
-            borrow.write(0, 100);  // All lanes write index 0
+            borrow.write(0, 100); // All lanes write index 0
         }
 
         // Phase 2: Split access (each lane writes own index)

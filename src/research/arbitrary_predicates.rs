@@ -25,7 +25,6 @@ use std::marker::PhantomData;
 ///
 /// This loses precision but maintains the invariant that SOME set exists.
 pub mod existential {
-    
 
     pub trait ActiveSet {
         fn mask(&self) -> u32;
@@ -81,7 +80,9 @@ pub mod existential {
     /// Merge with runtime complement check
     pub fn merge_checked(left: SomeWarp, right: SomeWarp) -> Result<SomeWarp, &'static str> {
         if left.complements(&right) {
-            Ok(SomeWarp { mask: left.mask | right.mask })
+            Ok(SomeWarp {
+                mask: left.mask | right.mask,
+            })
         } else {
             Err("Warps are not complementary")
         }
@@ -93,12 +94,12 @@ pub mod existential {
 
         #[test]
         fn test_arbitrary_predicate() {
-            let threshold = 10u32;  // Runtime value!
+            let threshold = 10u32; // Runtime value!
 
             let (below, above) = diverge_arbitrary(|lane| lane < threshold);
 
-            assert_eq!(below.population(), 10);  // Lanes 0-9
-            assert_eq!(above.population(), 22);  // Lanes 10-31
+            assert_eq!(below.population(), 10); // Lanes 0-9
+            assert_eq!(above.population(), 22); // Lanes 10-31
             assert!(below.complements(&above));
         }
 
@@ -112,10 +113,16 @@ pub mod existential {
             // These overlap — different predicates, not complements
             let (c, _) = diverge_arbitrary(|lane| lane < 5);
             let (d, _) = diverge_arbitrary(|lane| lane < 10);
-            assert_ne!(c.mask, d.mask, "overlapping predicates produce different masks");
+            assert_ne!(
+                c.mask, d.mask,
+                "overlapping predicates produce different masks"
+            );
 
             // Merging non-complements must fail
-            assert!(merge_checked(c, d).is_err(), "overlapping warps should fail merge");
+            assert!(
+                merge_checked(c, d).is_err(),
+                "overlapping warps should fail merge"
+            );
         }
     }
 }
@@ -147,13 +154,17 @@ pub mod refinement {
 
     impl<P: LanePredicate> RefinedWarp<P> {
         pub fn new() -> Self {
-            RefinedWarp { _marker: PhantomData }
+            RefinedWarp {
+                _marker: PhantomData,
+            }
         }
 
         pub fn mask() -> u32 {
             let mut m = 0u32;
             for lane in 0..32 {
-                if P::test(lane) { m |= 1 << lane; }
+                if P::test(lane) {
+                    m |= 1 << lane;
+                }
             }
             m
         }
@@ -164,7 +175,9 @@ pub mod refinement {
 
     impl<P: LanePredicate> Copy for Not<P> {}
     impl<P: LanePredicate> Clone for Not<P> {
-        fn clone(&self) -> Self { *self }
+        fn clone(&self) -> Self {
+            *self
+        }
     }
 
     impl<P: LanePredicate> LanePredicate for Not<P> {
@@ -172,7 +185,7 @@ pub mod refinement {
             !P::test(lane)
         }
         fn name() -> &'static str {
-            "Not<P>"  // Would need const generics for real name
+            "Not<P>" // Would need const generics for real name
         }
     }
 
@@ -193,15 +206,23 @@ pub mod refinement {
     #[derive(Copy, Clone)]
     pub struct All;
     impl LanePredicate for All {
-        fn test(_: u32) -> bool { true }
-        fn name() -> &'static str { "All" }
+        fn test(_: u32) -> bool {
+            true
+        }
+        fn name() -> &'static str {
+            "All"
+        }
     }
 
     #[derive(Copy, Clone)]
     pub struct LessThan<const N: u32>;
     impl<const N: u32> LanePredicate for LessThan<N> {
-        fn test(lane: u32) -> bool { lane < N }
-        fn name() -> &'static str { "LessThan<N>" }
+        fn test(lane: u32) -> bool {
+            lane < N
+        }
+        fn name() -> &'static str {
+            "LessThan<N>"
+        }
     }
 
     /// THE LIMITATION: N must be a const, not a runtime value!
@@ -216,8 +237,8 @@ pub mod refinement {
             // With const, this works beautifully
             let (below, above) = diverge::<LessThan<10>>();
 
-            assert_eq!(RefinedWarp::<LessThan<10>>::mask(), 0x000003FF);  // Lanes 0-9
-            assert_eq!(RefinedWarp::<Not<LessThan<10>>>::mask(), 0xFFFFFC00);  // Lanes 10-31
+            assert_eq!(RefinedWarp::<LessThan<10>>::mask(), 0x000003FF); // Lanes 0-9
+            assert_eq!(RefinedWarp::<Not<LessThan<10>>>::mask(), 0xFFFFFC00); // Lanes 10-31
 
             // Merge is statically verified
             let _all = merge(below, above);
@@ -234,7 +255,6 @@ pub mod refinement {
 /// Runtime: A table maps indices to predicates.
 /// Compile-time: Indices have complement relationships.
 pub mod indexed {
-    
 
     /// An index identifying a predicate (opaque token)
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -270,7 +290,9 @@ pub mod indexed {
 
             let mut mask_true = 0u32;
             for lane in 0..32 {
-                if pred(lane) { mask_true |= 1 << lane; }
+                if pred(lane) {
+                    mask_true |= 1 << lane;
+                }
             }
             let mask_false = !mask_true;
 
@@ -293,7 +315,10 @@ pub mod indexed {
 
     impl IndexedWarp {
         pub fn new(id: PredicateId, mask: u32) -> Self {
-            IndexedWarp { predicate_id: id, mask }
+            IndexedWarp {
+                predicate_id: id,
+                mask,
+            }
         }
 
         pub fn id(&self) -> PredicateId {
@@ -313,7 +338,7 @@ pub mod indexed {
     ) -> Result<IndexedWarp, &'static str> {
         if registry.are_complements(left.id(), right.id()) {
             Ok(IndexedWarp::new(
-                PredicateId(u32::MAX),  // "All" sentinel
+                PredicateId(u32::MAX), // "All" sentinel
                 left.mask | right.mask,
             ))
         } else {
@@ -330,7 +355,7 @@ pub mod indexed {
             let mut registry = PredicateRegistry::new();
 
             // Register a runtime predicate
-            let threshold = 15u32;  // Could be computed at runtime!
+            let threshold = 15u32; // Could be computed at runtime!
             let (below_id, above_id) = registry.register(|lane| lane < threshold);
 
             let below = IndexedWarp::new(below_id, registry.mask(below_id));
@@ -354,7 +379,6 @@ pub mod indexed {
 ///
 /// We can verify shapes statically and masks dynamically.
 pub mod hybrid_shape {
-    
 
     /// Shape of an active set - known statically
     #[derive(Copy, Clone, Debug, PartialEq)]
@@ -376,7 +400,10 @@ pub mod hybrid_shape {
 
     impl ShapedWarp {
         pub fn all() -> Self {
-            ShapedWarp { shape: Shape::All, mask: 0xFFFFFFFF }
+            ShapedWarp {
+                shape: Shape::All,
+                mask: 0xFFFFFFFF,
+            }
         }
 
         pub fn shape(&self) -> Shape {
@@ -390,12 +417,22 @@ pub mod hybrid_shape {
 
     /// Diverge by threshold - shape is known, mask is dynamic
     pub fn diverge_by_threshold(threshold: u32) -> (ShapedWarp, ShapedWarp) {
-        let low_mask = if threshold >= 32 { u32::MAX } else { (1u32 << threshold) - 1 };
+        let low_mask = if threshold >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << threshold) - 1
+        };
         let high_mask = !low_mask;
 
         (
-            ShapedWarp { shape: Shape::LowRange, mask: low_mask },
-            ShapedWarp { shape: Shape::HighRange, mask: high_mask },
+            ShapedWarp {
+                shape: Shape::LowRange,
+                mask: low_mask,
+            },
+            ShapedWarp {
+                shape: Shape::HighRange,
+                mask: high_mask,
+            },
         )
     }
 
@@ -403,8 +440,7 @@ pub mod hybrid_shape {
     pub fn merge_shaped(left: ShapedWarp, right: ShapedWarp) -> Result<ShapedWarp, &'static str> {
         match (left.shape, right.shape) {
             // Statically known complement shapes
-            (Shape::LowRange, Shape::HighRange) |
-            (Shape::HighRange, Shape::LowRange) => {
+            (Shape::LowRange, Shape::HighRange) | (Shape::HighRange, Shape::LowRange) => {
                 Ok(ShapedWarp {
                     shape: Shape::All,
                     mask: left.mask | right.mask,
@@ -413,7 +449,10 @@ pub mod hybrid_shape {
             // Runtime check for arbitrary shapes
             (Shape::Arbitrary, Shape::Arbitrary) => {
                 if (left.mask & right.mask) == 0 && (left.mask | right.mask) == 0xFFFFFFFF {
-                    Ok(ShapedWarp { shape: Shape::All, mask: 0xFFFFFFFF })
+                    Ok(ShapedWarp {
+                        shape: Shape::All,
+                        mask: 0xFFFFFFFF,
+                    })
                 } else {
                     Err("Arbitrary shapes don't complement")
                 }
@@ -427,7 +466,7 @@ pub mod hybrid_shape {
         /// Shuffle only on All shape
         pub fn shuffle_xor(&self, data: i32, _mask: u32) -> Option<i32> {
             match self.shape {
-                Shape::All => Some(data),  // Placeholder
+                Shape::All => Some(data), // Placeholder
                 _ => None,
             }
         }
@@ -436,7 +475,7 @@ pub mod hybrid_shape {
         pub fn broadcast_first(&self, data: i32) -> Option<i32> {
             match self.shape {
                 Shape::All | Shape::LowRange | Shape::HighRange => Some(data),
-                Shape::Arbitrary => None,  // Can't identify "first"
+                Shape::Arbitrary => None, // Can't identify "first"
             }
         }
     }
@@ -447,7 +486,7 @@ pub mod hybrid_shape {
 
         #[test]
         fn test_shape_merge() {
-            let threshold = 20u32;  // Runtime!
+            let threshold = 20u32; // Runtime!
             let (low, high) = diverge_by_threshold(threshold);
 
             assert_eq!(low.shape(), Shape::LowRange);

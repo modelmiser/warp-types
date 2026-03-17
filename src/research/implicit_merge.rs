@@ -86,15 +86,21 @@ pub trait ComplementOf<T>: ActiveSet {}
 
 #[derive(Copy, Clone)]
 pub struct All;
-impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+}
 
 #[derive(Copy, Clone)]
 pub struct Even;
-impl ActiveSet for Even { const MASK: u32 = 0x55555555; }
+impl ActiveSet for Even {
+    const MASK: u32 = 0x55555555;
+}
 
 #[derive(Copy, Clone)]
 pub struct Odd;
-impl ActiveSet for Odd { const MASK: u32 = 0xAAAAAAAA; }
+impl ActiveSet for Odd {
+    const MASK: u32 = 0xAAAAAAAA;
+}
 
 impl ComplementOf<Odd> for Even {}
 impl ComplementOf<Even> for Odd {}
@@ -106,7 +112,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -156,8 +164,12 @@ pub mod explicit {
         let _merged: Warp<All> = merge(even, odd);
     }
 
-    fn process_even(_w: Warp<Even>) -> i32 { 1 }
-    fn process_odd(_w: Warp<Odd>) -> i32 { 2 }
+    fn process_even(_w: Warp<Even>) -> i32 {
+        1
+    }
+    fn process_odd(_w: Warp<Odd>) -> i32 {
+        2
+    }
 
     #[cfg(test)]
     mod tests {
@@ -187,11 +199,7 @@ pub mod sugar {
     /// `with_diverged : Warp<All> -> (Warp<S1> -> A) -> (Warp<S2> -> A) -> (A, A)`
     ///
     /// The merge happens at the END of with_diverged, guaranteed.
-    pub fn with_diverged<S1, S2, A, F1, F2>(
-        _warp: Warp<All>,
-        then_fn: F1,
-        else_fn: F2,
-    ) -> (A, A)
+    pub fn with_diverged<S1, S2, A, F1, F2>(_warp: Warp<All>, then_fn: F1, else_fn: F2) -> (A, A)
     where
         S1: ActiveSet + ComplementOf<S2>,
         S2: ActiveSet + ComplementOf<S1>,
@@ -243,11 +251,7 @@ pub mod sugar {
         fn test_with_diverged() {
             let warp: Warp<All> = Warp::new();
 
-            let (a, b) = with_diverged::<Even, Odd, i32, _, _>(
-                warp,
-                |_| 1,
-                |_| 2,
-            );
+            let (a, b) = with_diverged::<Even, Odd, i32, _, _>(warp, |_| 1, |_| 2);
 
             assert_eq!(a, 1);
             assert_eq!(b, 2);
@@ -277,9 +281,7 @@ pub mod scoped {
         pub right: Warp<S2>,
     }
 
-    impl<S1: ActiveSet + ComplementOf<S2>, S2: ActiveSet + ComplementOf<S1>>
-        ScopedDiverge<S1, S2>
-    {
+    impl<S1: ActiveSet + ComplementOf<S2>, S2: ActiveSet + ComplementOf<S1>> ScopedDiverge<S1, S2> {
         pub fn new(_warp: Warp<All>) -> Self {
             ScopedDiverge {
                 left: Warp::new(),
@@ -334,7 +336,9 @@ pub mod ispc_style {
 
     impl MaskedExecution {
         pub fn new() -> Self {
-            MaskedExecution { active_mask: 0xFFFFFFFF }
+            MaskedExecution {
+                active_mask: 0xFFFFFFFF,
+            }
         }
 
         pub fn active_mask(&self) -> u32 {
@@ -385,10 +389,13 @@ pub mod ispc_style {
 
             assert_eq!(exec.active_mask(), 0xFFFFFFFF);
 
-            exec.masked_if(|lane| lane % 2 == 0, |inner| {
-                // Only even lanes active
-                assert_eq!(inner.active_mask() & 0x55555555, inner.active_mask());
-            });
+            exec.masked_if(
+                |lane| lane % 2 == 0,
+                |inner| {
+                    // Only even lanes active
+                    assert_eq!(inner.active_mask() & 0x55555555, inner.active_mask());
+                },
+            );
 
             // Implicitly back to all
             assert_eq!(exec.active_mask(), 0xFFFFFFFF);
@@ -399,10 +406,13 @@ pub mod ispc_style {
         fn test_ispc_shuffle_bug() {
             let mut exec = MaskedExecution::new();
 
-            exec.masked_if(|lane| lane % 2 == 0, |inner| {
-                // Bug: trying to shuffle when not all lanes active
-                inner.unsafe_shuffle();
-            });
+            exec.masked_if(
+                |lane| lane % 2 == 0,
+                |inner| {
+                    // Bug: trying to shuffle when not all lanes active
+                    inner.unsafe_shuffle();
+                },
+            );
         }
     }
 }

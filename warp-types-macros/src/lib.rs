@@ -113,7 +113,10 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
     let mut output = TokenStream2::new();
 
     // Collect masks from all blocks, checking for conflicts
-    let insert_mask = |name: &Ident, m: u64, masks: &mut HashMap<String, u64>| -> std::result::Result<(), TokenStream> {
+    let insert_mask = |name: &Ident,
+                       m: u64,
+                       masks: &mut HashMap<String, u64>|
+     -> std::result::Result<(), TokenStream> {
         let key = name.to_string();
         if let Some(&existing) = masks.get(&key) {
             if existing != m {
@@ -121,9 +124,7 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                     "{} defined with conflicting masks: 0x{:08X} vs 0x{:08X}",
                     key, existing, m,
                 );
-                return Err(syn::Error::new_spanned(name, msg)
-                    .to_compile_error()
-                    .into());
+                return Err(syn::Error::new_spanned(name, msg).to_compile_error().into());
             }
         }
         masks.insert(key, m);

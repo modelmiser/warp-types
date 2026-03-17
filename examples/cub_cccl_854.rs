@@ -65,17 +65,35 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
-    pub fn size(&self) -> u32 { S::SIZE }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
+    pub fn size(&self) -> u32 {
+        S::SIZE
+    }
 }
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct SubWarp16;
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct SubWarp16;
 
-impl ActiveSet for All       { const MASK: u32 = 0xFFFFFFFF; const SIZE: u32 = 32; const NAME: &'static str = "All"; }
-impl ActiveSet for SubWarp16 { const MASK: u32 = 0x0000FFFF; const SIZE: u32 = 16; const NAME: &'static str = "SubWarp16"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const SIZE: u32 = 32;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for SubWarp16 {
+    const MASK: u32 = 0x0000FFFF;
+    const SIZE: u32 = 16;
+    const NAME: &'static str = "SubWarp16";
+}
 
 // ============================================================================
 // GATED OPERATIONS

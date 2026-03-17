@@ -30,8 +30,8 @@ use std::marker::PhantomData;
 
 // Import from core modules (reorganized from static_verify)
 use crate::active_set::All;
-use crate::warp::Warp;
 use crate::data::PerLane;
+use crate::warp::Warp;
 
 // ============================================================================
 // APPROACH A: FORBID WARP OPS IN VARYING LOOPS (Practical)
@@ -54,11 +54,7 @@ pub mod forbid_warp_ops {
     ///
     /// The body cannot do warp operations because it doesn't have the warp.
     /// This is enforced by the type system - you can't conjure a Warp.
-    pub fn varying_loop<F>(
-        warp: Warp<All>,
-        trip_counts: PerLane<u32>,
-        mut body: F,
-    ) -> Warp<All>
+    pub fn varying_loop<F>(warp: Warp<All>, trip_counts: PerLane<u32>, mut body: F) -> Warp<All>
     where
         F: FnMut(u32, u32), // (lane_id, iteration) -> ()
     {
@@ -172,7 +168,9 @@ pub mod uniform_with_mask {
             let mut count = 0;
 
             let _ = uniform_loop(warp, 5, done_at, |_w, _iter, is_active| {
-                if is_active { count += 1; }
+                if is_active {
+                    count += 1;
+                }
             });
 
             assert_eq!(count, 3); // Only 3 "active" iterations
@@ -200,13 +198,13 @@ pub mod phased_loop {
     pub fn phased_loop<F1, F2>(
         warp: Warp<All>,
         trip_counts: PerLane<u32>,
-        min_trips: u32,  // min(trip_counts) - must be computed beforehand!
+        min_trips: u32, // min(trip_counts) - must be computed beforehand!
         mut uniform_body: F1,
         mut cleanup_body: F2,
     ) -> Warp<All>
     where
-        F1: FnMut(&Warp<All>, u32),  // Warp available in uniform phase
-        F2: FnMut(u32, u32),          // No warp in cleanup phase
+        F1: FnMut(&Warp<All>, u32), // Warp available in uniform phase
+        F2: FnMut(u32, u32),        // No warp in cleanup phase
     {
         // Phase 1: Uniform - all lanes together
         for i in 0..min_trips {
@@ -247,12 +245,16 @@ pub mod phased_loop {
                 warp,
                 trips,
                 min_trips,
-                |_w, _i| { uniform_count += 1; },
-                |_lane, _i| { cleanup_count += 1; },
+                |_w, _i| {
+                    uniform_count += 1;
+                },
+                |_lane, _i| {
+                    cleanup_count += 1;
+                },
             );
 
-            assert_eq!(uniform_count, 5);  // min_trips iterations
-            assert_eq!(cleanup_count, 5);  // remaining iterations
+            assert_eq!(uniform_count, 5); // min_trips iterations
+            assert_eq!(cleanup_count, 5); // remaining iterations
         }
     }
 }
@@ -278,7 +280,7 @@ pub mod work_redistribution {
     pub fn redistribute_work<T: Copy + Default, F>(
         warp: &Warp<All>,
         items_per_lane: PerLane<u32>,
-        get_item: impl Fn(u32, u32) -> T,  // (lane, index) -> item
+        get_item: impl Fn(u32, u32) -> T, // (lane, index) -> item
         process: F,
     ) where
         F: Fn(T),
@@ -357,15 +359,19 @@ pub mod effect_system {
         data: Computation<UniformEffect, T>,
     ) -> Computation<UniformEffect, T> {
         // Placeholder: on CPU, shuffle is a no-op (return same value)
-        Computation { _effect: PhantomData, value: data.value }
+        Computation {
+            _effect: PhantomData,
+            value: data.value,
+        }
     }
 
     // Varying loop produces Divergent effect
-    pub fn varying_loop<T>(
-        body: impl Fn() -> T,
-    ) -> Computation<DivergentEffect, T> {
+    pub fn varying_loop<T>(body: impl Fn() -> T) -> Computation<DivergentEffect, T> {
         // Placeholder: on CPU, execute body once (no actual divergence)
-        Computation { _effect: PhantomData, value: body() }
+        Computation {
+            _effect: PhantomData,
+            value: body(),
+        }
     }
 
     // Can't compose: shuffle(varying_loop(...)) is a type error
@@ -373,11 +379,12 @@ pub mod effect_system {
 
     // To use shuffle after loop, must "synchronize" which consumes
     // DivergentEffect and produces UniformEffect:
-    pub fn synchronize<T>(
-        comp: Computation<DivergentEffect, T>,
-    ) -> Computation<UniformEffect, T> {
+    pub fn synchronize<T>(comp: Computation<DivergentEffect, T>) -> Computation<UniformEffect, T> {
         // Placeholder: on CPU, synchronize is a no-op barrier (value passes through)
-        Computation { _effect: PhantomData, value: comp.value }
+        Computation {
+            _effect: PhantomData,
+            value: comp.value,
+        }
     }
 }
 
@@ -463,10 +470,10 @@ pub mod recursive_session {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::*;
     use super::forbid_warp_ops::varying_loop;
-    use super::uniform_with_mask::uniform_loop;
     use super::phased_loop::phased_loop;
+    use super::uniform_with_mask::uniform_loop;
+    use super::*;
 
     #[test]
     fn test_all_approaches_preserve_warp_all() {

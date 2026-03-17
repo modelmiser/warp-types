@@ -67,44 +67,66 @@ pub struct CpuSession<State> {
 impl CpuSession<protocol::Init> {
     /// Start a new GPU session
     pub fn new() -> Self {
-        CpuSession { _state: PhantomData }
+        CpuSession {
+            _state: PhantomData,
+        }
     }
 
     /// Allocate memory on device
     /// State transition: Init -> Allocated
-    pub fn allocate<T: Copy + Default>(self, size: usize) -> (CpuSession<protocol::Allocated<T>>, DeviceBuffer<T>) {
+    pub fn allocate<T: Copy + Default>(
+        self,
+        size: usize,
+    ) -> (CpuSession<protocol::Allocated<T>>, DeviceBuffer<T>) {
         let buffer = DeviceBuffer {
             data: vec![T::default(); size],
             _marker: PhantomData,
         };
-        (CpuSession { _state: PhantomData }, buffer)
+        (
+            CpuSession {
+                _state: PhantomData,
+            },
+            buffer,
+        )
     }
 }
 
 impl<T: Copy> CpuSession<protocol::Allocated<T>> {
     /// Copy data from host to device
     /// State transition: Allocated -> DataOnDevice
-    pub fn copy_to_device(self, buffer: &mut DeviceBuffer<T>, data: &[T]) -> CpuSession<protocol::DataOnDevice<T>> {
+    pub fn copy_to_device(
+        self,
+        buffer: &mut DeviceBuffer<T>,
+        data: &[T],
+    ) -> CpuSession<protocol::DataOnDevice<T>> {
         for (i, &val) in data.iter().enumerate() {
             if i < buffer.data.len() {
                 buffer.data[i] = val;
             }
         }
-        CpuSession { _state: PhantomData }
+        CpuSession {
+            _state: PhantomData,
+        }
     }
 }
 
 impl<T: Copy> CpuSession<protocol::DataOnDevice<T>> {
     /// Launch a kernel
     /// State transition: DataOnDevice -> Executing
-    pub fn launch_kernel<F>(self, buffer: &mut DeviceBuffer<T>, kernel: F) -> CpuSession<protocol::Executing<T>>
+    pub fn launch_kernel<F>(
+        self,
+        buffer: &mut DeviceBuffer<T>,
+        kernel: F,
+    ) -> CpuSession<protocol::Executing<T>>
     where
         F: FnOnce(&mut [T]),
     {
         // In real GPU: would launch async kernel
         // Here: execute synchronously for simulation
         kernel(&mut buffer.data);
-        CpuSession { _state: PhantomData }
+        CpuSession {
+            _state: PhantomData,
+        }
     }
 }
 
@@ -113,16 +135,26 @@ impl<T: Copy> CpuSession<protocol::Executing<T>> {
     /// State transition: Executing -> Complete
     pub fn synchronize(self) -> CpuSession<protocol::Complete<T>> {
         // In real GPU: cudaDeviceSynchronize()
-        CpuSession { _state: PhantomData }
+        CpuSession {
+            _state: PhantomData,
+        }
     }
 }
 
 impl<T: Copy> CpuSession<protocol::Complete<T>> {
     /// Copy results back to host
     /// State transition: Complete -> ResultsOnHost
-    pub fn copy_to_host(self, buffer: &DeviceBuffer<T>) -> (CpuSession<protocol::ResultsOnHost<T>>, Vec<T>) {
+    pub fn copy_to_host(
+        self,
+        buffer: &DeviceBuffer<T>,
+    ) -> (CpuSession<protocol::ResultsOnHost<T>>, Vec<T>) {
         let results = buffer.data.clone();
-        (CpuSession { _state: PhantomData }, results)
+        (
+            CpuSession {
+                _state: PhantomData,
+            },
+            results,
+        )
     }
 }
 
@@ -130,7 +162,9 @@ impl<T> CpuSession<protocol::ResultsOnHost<T>> {
     /// End the session, free resources
     /// State transition: ResultsOnHost -> Ended
     pub fn end(self) -> CpuSession<protocol::Ended> {
-        CpuSession { _state: PhantomData }
+        CpuSession {
+            _state: PhantomData,
+        }
     }
 }
 
@@ -140,7 +174,7 @@ impl<T> CpuSession<protocol::ResultsOnHost<T>> {
 
 /// A buffer allocated on the GPU device
 pub struct DeviceBuffer<T: Copy> {
-    data: Vec<T>,  // Simulated device memory
+    data: Vec<T>, // Simulated device memory
     _marker: PhantomData<T>,
 }
 
@@ -193,13 +227,19 @@ pub mod async_session {
 
     impl AsyncSession<protocol::Ready> {
         pub fn new(stream: Stream) -> Self {
-            AsyncSession { stream, _state: PhantomData }
+            AsyncSession {
+                stream,
+                _state: PhantomData,
+            }
         }
 
         /// Start async copy to device
         pub fn async_copy_to_device(self) -> AsyncSession<protocol::CopyingToDevice> {
             // In real GPU: cudaMemcpyAsync
-            AsyncSession { stream: self.stream, _state: PhantomData }
+            AsyncSession {
+                stream: self.stream,
+                _state: PhantomData,
+            }
         }
     }
 
@@ -207,7 +247,10 @@ pub mod async_session {
         /// Launch kernel (implicitly waits for copy)
         pub fn launch_kernel(self) -> AsyncSession<protocol::KernelLaunched> {
             // In real GPU: kernel<<<...>>>
-            AsyncSession { stream: self.stream, _state: PhantomData }
+            AsyncSession {
+                stream: self.stream,
+                _state: PhantomData,
+            }
         }
     }
 
@@ -215,7 +258,10 @@ pub mod async_session {
         /// Start async copy back
         pub fn async_copy_to_host(self) -> AsyncSession<protocol::CopyingToHost> {
             // In real GPU: cudaMemcpyAsync
-            AsyncSession { stream: self.stream, _state: PhantomData }
+            AsyncSession {
+                stream: self.stream,
+                _state: PhantomData,
+            }
         }
     }
 
@@ -223,7 +269,10 @@ pub mod async_session {
         /// Synchronize stream (wait for all operations)
         pub fn sync(self) -> AsyncSession<protocol::Ready> {
             // In real GPU: cudaStreamSynchronize
-            AsyncSession { stream: self.stream, _state: PhantomData }
+            AsyncSession {
+                stream: self.stream,
+                _state: PhantomData,
+            }
         }
     }
 }
@@ -369,7 +418,7 @@ mod tests {
 
         // Enable peer access
         assert!(session.enable_peer_access(DeviceId(0), DeviceId(1)));
-        assert!(!session.enable_peer_access(DeviceId(0), DeviceId(0)));  // Can't peer with self
+        assert!(!session.enable_peer_access(DeviceId(0), DeviceId(0))); // Can't peer with self
     }
 }
 

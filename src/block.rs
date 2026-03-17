@@ -7,9 +7,9 @@
 //!
 //! This module provides typed abstractions for the block and grid levels.
 
-use core::marker::PhantomData;
-use crate::GpuValue;
 use crate::data::Role;
+use crate::GpuValue;
+use core::marker::PhantomData;
 
 // ============================================================================
 // Shared memory with ownership semantics
@@ -52,7 +52,10 @@ impl<T: GpuValue, const OWNER: u8> SharedRegion<T, OWNER> {
     }
 
     pub fn grant_read(&self) -> SharedView<'_, T, OWNER> {
-        SharedView { region: self, _phantom: PhantomData }
+        SharedView {
+            region: self,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn owner(&self) -> Role {
@@ -85,7 +88,9 @@ pub struct WorkQueue<T: GpuValue, const PRODUCER: u8, const CONSUMER: u8> {
 #[derive(Debug, Clone, Copy)]
 pub struct QueueFull;
 
-impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8> WorkQueue<T, PRODUCER, CONSUMER> {
+impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
+    WorkQueue<T, PRODUCER, CONSUMER>
+{
     pub fn new(producer_role: Role, _consumer_role: Role) -> Self {
         WorkQueue {
             tasks: SharedRegion::new(producer_role),
@@ -96,21 +101,29 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8> WorkQueue<T,
 
     pub fn push(&mut self, task: T) -> Result<(), QueueFull> {
         let next = (self.head + 1) % 32;
-        if next == self.tail { return Err(QueueFull); }
+        if next == self.tail {
+            return Err(QueueFull);
+        }
         self.tasks.write(self.head, task);
         self.head = next;
         Ok(())
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        if self.tail == self.head { return None; }
+        if self.tail == self.head {
+            return None;
+        }
         let task = self.tasks.read(self.tail);
         self.tail = (self.tail + 1) % 32;
         Some(task)
     }
 
-    pub fn is_empty(&self) -> bool { self.tail == self.head }
-    pub fn is_full(&self) -> bool { (self.head + 1) % 32 == self.tail }
+    pub fn is_empty(&self) -> bool {
+        self.tail == self.head
+    }
+    pub fn is_full(&self) -> bool {
+        (self.head + 1) % 32 == self.tail
+    }
 }
 
 // ============================================================================
@@ -136,10 +149,14 @@ pub trait BlockRole {
 }
 
 pub struct Leader;
-impl BlockRole for Leader { const NAME: &'static str = "Leader"; }
+impl BlockRole for Leader {
+    const NAME: &'static str = "Leader";
+}
 
 pub struct Worker;
-impl BlockRole for Worker { const NAME: &'static str = "Worker"; }
+impl BlockRole for Worker {
+    const NAME: &'static str = "Worker";
+}
 
 pub trait ProtocolState {}
 
@@ -162,10 +179,16 @@ pub struct BlockSession<R: BlockRole, S: ProtocolState, const N: usize> {
 impl<R: BlockRole, S: ProtocolState, const N: usize> BlockSession<R, S, N> {
     #[allow(dead_code)] // Constructor for future block-level API usage
     pub(crate) fn new(block_id: BlockId) -> Self {
-        BlockSession { block_id, _role: PhantomData, _state: PhantomData }
+        BlockSession {
+            block_id,
+            _role: PhantomData,
+            _state: PhantomData,
+        }
     }
 
-    pub fn block_id(&self) -> BlockId { self.block_id }
+    pub fn block_id(&self) -> BlockId {
+        self.block_id
+    }
 }
 
 // ============================================================================
@@ -185,28 +208,51 @@ pub struct ReductionSession<Phase> {
 impl ReductionSession<WarpPhase> {
     #[allow(dead_code)] // Constructor for future reduction pipeline usage
     pub(crate) fn new(value: u32) -> Self {
-        ReductionSession { value, _phase: PhantomData }
+        ReductionSession {
+            value,
+            _phase: PhantomData,
+        }
     }
 
     pub fn warp_reduce(self) -> (u32, ReductionSession<BlockPhase>) {
-        (self.value, ReductionSession { value: self.value, _phase: PhantomData })
+        (
+            self.value,
+            ReductionSession {
+                value: self.value,
+                _phase: PhantomData,
+            },
+        )
     }
 }
 
 impl ReductionSession<BlockPhase> {
     pub fn block_reduce(self) -> (u32, ReductionSession<GridPhase>) {
-        (self.value, ReductionSession { value: self.value, _phase: PhantomData })
+        (
+            self.value,
+            ReductionSession {
+                value: self.value,
+                _phase: PhantomData,
+            },
+        )
     }
 }
 
 impl ReductionSession<GridPhase> {
     pub fn grid_reduce(self) -> (u32, ReductionSession<Complete>) {
-        (self.value, ReductionSession { value: self.value, _phase: PhantomData })
+        (
+            self.value,
+            ReductionSession {
+                value: self.value,
+                _phase: PhantomData,
+            },
+        )
     }
 }
 
 impl ReductionSession<Complete> {
-    pub fn result(self) -> u32 { self.value }
+    pub fn result(self) -> u32 {
+        self.value
+    }
 }
 
 #[cfg(test)]

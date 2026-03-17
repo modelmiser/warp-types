@@ -66,7 +66,11 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let src = (i as u32 ^ mask) as usize;
-            out[i] = if src < WIDTH { self.lanes[src] } else { self.lanes[i] };
+            out[i] = if src < WIDTH {
+                self.lanes[src]
+            } else {
+                self.lanes[i]
+            };
         }
         SimWarp { lanes: out }
     }
@@ -78,7 +82,11 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
         for i in 0..WIDTH {
             // Use u64 arithmetic to prevent usize overflow on 32-bit platforms.
             let src = i as u64 + delta as u64;
-            out[i] = if src < WIDTH as u64 { self.lanes[src as usize] } else { self.lanes[i] };
+            out[i] = if src < WIDTH as u64 {
+                self.lanes[src as usize]
+            } else {
+                self.lanes[i]
+            };
         }
         SimWarp { lanes: out }
     }
@@ -100,8 +108,14 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Indexed shuffle: all lanes read from lane[src_lane].
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
         let src = src_lane as usize;
-        let val = if src < WIDTH { self.lanes[src] } else { self.lanes[0] };
-        SimWarp { lanes: [val; WIDTH] }
+        let val = if src < WIDTH {
+            self.lanes[src]
+        } else {
+            self.lanes[0]
+        };
+        SimWarp {
+            lanes: [val; WIDTH],
+        }
     }
 
     /// Butterfly shuffle confined to segments of `width` lanes.
@@ -111,7 +125,10 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// segment, the lane reads its own value.
     pub fn shuffle_xor_width(&self, mask: u32, width: u32) -> Self {
         let w = width as usize;
-        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
+        assert!(
+            w > 0 && w.is_power_of_two() && w <= WIDTH,
+            "width must be power-of-2 in 1..={WIDTH}"
+        );
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
@@ -129,7 +146,10 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Shuffle down confined to segments of `width` lanes.
     pub fn shuffle_down_width(&self, delta: u32, width: u32) -> Self {
         let w = width as usize;
-        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
+        assert!(
+            w > 0 && w.is_power_of_two() && w <= WIDTH,
+            "width must be power-of-2 in 1..={WIDTH}"
+        );
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
@@ -148,7 +168,10 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Shuffle up confined to segments of `width` lanes.
     pub fn shuffle_up_width(&self, delta: u32, width: u32) -> Self {
         let w = width as usize;
-        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
+        assert!(
+            w > 0 && w.is_power_of_two() && w <= WIDTH,
+            "width must be power-of-2 in 1..={WIDTH}"
+        );
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
@@ -238,7 +261,11 @@ pub fn bitonic_sort(sw: &SimWarp<i32>) -> SimWarp<i32> {
             let is_lower = (lane_id as u32 & xor_mask) == 0;
             let keep_smaller = ascending == is_lower;
             if keep_smaller {
-                if my <= p { my } else { p }
+                if my <= p {
+                    my
+                } else {
+                    p
+                }
             } else if my >= p {
                 my
             } else {
@@ -354,7 +381,11 @@ mod tests {
         let result = butterfly_reduce(&sw, |a, b| a + b);
         let expected = 32 * 33 / 2; // 528
         for i in 0..32 {
-            assert_eq!(result.lane(i), expected, "lane {i} should have sum {expected}");
+            assert_eq!(
+                result.lane(i),
+                expected,
+                "lane {i} should have sum {expected}"
+            );
         }
     }
 
@@ -431,7 +462,10 @@ mod tests {
             assert!(
                 sorted.lane(i) >= sorted.lane(i - 1),
                 "lane {} ({}) < lane {} ({})",
-                i, sorted.lane(i), i - 1, sorted.lane(i - 1)
+                i,
+                sorted.lane(i),
+                i - 1,
+                sorted.lane(i - 1)
             );
         }
     }

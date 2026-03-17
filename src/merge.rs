@@ -55,8 +55,8 @@
 //! }
 //! ```
 
-use crate::warp::Warp;
 use crate::active_set::*;
+use crate::warp::Warp;
 
 /// Merge two warps with complementary active sets.
 ///
@@ -213,11 +213,7 @@ mod tests {
     #[test]
     fn test_with_diverged() {
         let warp: Warp<All> = Warp::new();
-        let (a, b, merged) = with_diverged::<Even, Odd, i32, _, _>(
-            warp,
-            |_| 100,
-            |_| 200,
-        );
+        let (a, b, merged) = with_diverged::<Even, Odd, i32, _, _>(warp, |_| 100, |_| 200);
         assert_eq!(a, 100);
         assert_eq!(b, 200);
         assert_eq!(merged.population(), 32);

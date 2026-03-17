@@ -65,7 +65,7 @@ pub mod mu_types {
 
     impl<P: Protocol> Protocol for Mu<P>
     where
-        P: Protocol<EndSet = <P as Protocol>::StartSet>,  // Loop invariant
+        P: Protocol<EndSet = <P as Protocol>::StartSet>, // Loop invariant
     {
         type StartSet = P::StartSet;
         type EndSet = P::EndSet;
@@ -110,7 +110,9 @@ pub mod uniform_iteration {
 
     impl<S: ActiveSet, const N: usize> UniformLoop<S, N> {
         pub fn new() -> Self {
-            UniformLoop { _marker: PhantomData }
+            UniformLoop {
+                _marker: PhantomData,
+            }
         }
 
         /// Execute body N times, preserving warp type
@@ -150,7 +152,7 @@ pub mod uniform_iteration {
             });
 
             assert_eq!(count, 5);
-            let _: Warp<All> = result;  // Type preserved
+            let _: Warp<All> = result; // Type preserved
         }
     }
 }
@@ -199,8 +201,8 @@ pub mod convergent_iteration {
             mut converged: P,
         ) -> (Warp<S>, bool, usize)
         where
-            F: FnMut(&Warp<S>),          // Loop body
-            P: FnMut(&Warp<S>) -> bool,  // All-lanes convergence check
+            F: FnMut(&Warp<S>),         // Loop body
+            P: FnMut(&Warp<S>) -> bool, // All-lanes convergence check
         {
             for i in 0..self.max_iterations {
                 if converged(&warp) {
@@ -240,8 +242,10 @@ pub mod convergent_iteration {
             let iteration = Cell::new(0);
             let (result, converged, iters) = conv_loop.execute(
                 warp,
-                |_w| { iteration.set(iteration.get() + 1); },
-                |_w| iteration.get() >= 5,  // Converge after 5 iterations
+                |_w| {
+                    iteration.set(iteration.get() + 1);
+                },
+                |_w| iteration.get() >= 5, // Converge after 5 iterations
             );
 
             assert!(converged);
@@ -298,24 +302,19 @@ pub mod reducing_iteration {
         ///
         /// Key: Body takes (lane_id, iteration) but NOT a Warp.
         /// This prevents warp operations in the body.
-        pub fn execute<F, P>(
-            self,
-            warp: Warp<S>,
-            mut body: F,
-            mut any_active: P,
-        ) -> Warp<S>
+        pub fn execute<F, P>(self, warp: Warp<S>, mut body: F, mut any_active: P) -> Warp<S>
         where
-            F: FnMut(u32, usize),        // (lane_id, iteration)
-            P: FnMut() -> bool,          // Any lanes still active?
+            F: FnMut(u32, usize), // (lane_id, iteration)
+            P: FnMut() -> bool,   // Any lanes still active?
         {
             for i in 0..self.max_iterations {
                 if !any_active() {
                     break;
                 }
                 // In real GPU: only active lanes execute body
-                body(0, i);  // Simulated for lane 0
+                body(0, i); // Simulated for lane 0
             }
-            warp  // All lanes reconverge (hardware guarantees)
+            warp // All lanes reconverge (hardware guarantees)
         }
     }
 
@@ -340,14 +339,16 @@ pub mod reducing_iteration {
             max_iters: usize,
         ) -> Warp<S>
         where
-            W: FnMut(&Warp<S>),    // Has warp access
-            L: FnMut(u32),         // Per-lane only
-            P: FnMut() -> bool,    // All done?
+            W: FnMut(&Warp<S>), // Has warp access
+            L: FnMut(u32),      // Per-lane only
+            P: FnMut() -> bool, // All done?
         {
             for _ in 0..max_iters {
-                warp_phase(&warp);  // Warp ops allowed here
-                lane_phase(0);      // Per-lane only
-                if done() { break; }
+                warp_phase(&warp); // Warp ops allowed here
+                lane_phase(0); // Per-lane only
+                if done() {
+                    break;
+                }
             }
             warp
         }
@@ -473,12 +474,9 @@ pub mod fold_unfold {
         warp: Warp<P::ActiveSet>,
         max_unfolds: usize,
     ) -> Warp<P::ActiveSet> {
-        fn go<P: RecBody>(
-            warp: Warp<P::ActiveSet>,
-            remaining: usize,
-        ) -> Warp<P::ActiveSet> {
+        fn go<P: RecBody>(warp: Warp<P::ActiveSet>, remaining: usize) -> Warp<P::ActiveSet> {
             if remaining == 0 {
-                warp  // Base case: stop recursing
+                warp // Base case: stop recursing
             } else {
                 P::body(warp, |w| go::<P>(w, remaining - 1))
             }
@@ -509,7 +507,7 @@ pub mod fold_unfold {
         fn test_fold_unfold() {
             let warp: Warp<All> = Warp::new();
             let result = execute_rec::<CountingProtocol>(warp, 10);
-            let _: Warp<All> = result;  // Type preserved
+            let _: Warp<All> = result; // Type preserved
         }
     }
 }
@@ -658,7 +656,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -668,10 +668,10 @@ impl<S: ActiveSet> Warp<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::uniform_iteration::*;
     use super::convergent_iteration::*;
     use super::reducing_iteration::*;
+    use super::uniform_iteration::*;
+    use super::*;
 
     #[test]
     fn test_uniform_preserves_type() {
@@ -690,7 +690,9 @@ mod tests {
         let i = Cell::new(0);
         let (result, _, _): (Warp<All>, _, _) = conv.execute(
             warp,
-            |_w| { i.set(i.get() + 1); },
+            |_w| {
+                i.set(i.get() + 1);
+            },
             |_w| i.get() >= 10,
         );
         let _ = result;
@@ -705,7 +707,9 @@ mod tests {
         let count = Cell::new(0);
         let result: Warp<All> = red.execute(
             warp,
-            |_lane, _iter| { count.set(count.get() + 1); },
+            |_lane, _iter| {
+                count.set(count.get() + 1);
+            },
             || count.get() < 10,
         );
         let _ = result;
@@ -729,8 +733,12 @@ mod tests {
         struct DummyTree;
         impl recursive_diverge::RecursiveTreeProtocol for DummyTree {
             fn visit_node(_warp: &Warp<All>, _depth: usize) {}
-            fn has_left(_lane: u32) -> bool { false }
-            fn has_right(_lane: u32) -> bool { false }
+            fn has_left(_lane: u32) -> bool {
+                false
+            }
+            fn has_right(_lane: u32) -> bool {
+                false
+            }
         }
 
         let warp: Warp<All> = Warp::new();

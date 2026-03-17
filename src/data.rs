@@ -16,7 +16,10 @@ pub struct LaneId(u8);
 
 impl LaneId {
     pub const fn new(id: u8) -> Self {
-        assert!(id < 64, "Lane ID must be < 64 (supports NVIDIA 32-lane and AMD 64-lane)");
+        assert!(
+            id < 64,
+            "Lane ID must be < 64 (supports NVIDIA 32-lane and AMD 64-lane)"
+        );
         LaneId(id)
     }
 
@@ -102,7 +105,9 @@ impl<T: GpuValue> PerLane<T> {
 impl<T: GpuValue + core::ops::Add<Output = T>> core::ops::Add for PerLane<T> {
     type Output = PerLane<T>;
     fn add(self, rhs: PerLane<T>) -> PerLane<T> {
-        PerLane { value: self.value + rhs.value }
+        PerLane {
+            value: self.value + rhs.value,
+        }
     }
 }
 
@@ -147,13 +152,20 @@ impl Role {
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
         assert!(start < 64 && end <= 64 && start < end);
         let width = (end - start) as u64;
-        let mask = if width >= 64 { u64::MAX } else { ((1u64 << width) - 1) << start };
+        let mask = if width >= 64 {
+            u64::MAX
+        } else {
+            ((1u64 << width) - 1) << start
+        };
         Role { mask, name }
     }
 
     pub const fn lane(id: u8, name: &'static str) -> Self {
         assert!(id < 64);
-        Role { mask: 1u64 << id, name }
+        Role {
+            mask: 1u64 << id,
+            name,
+        }
     }
 
     pub const fn contains(self, lane: LaneId) -> bool {

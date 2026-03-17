@@ -27,8 +27,8 @@
 //! 4. **Protocol-first**: Write protocol, generate/check code against it
 //! 5. **Gradual**: Start untyped, add annotations incrementally
 
-use std::marker::PhantomData;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 // ============================================================================
 // WHAT NEEDS TO BE INFERRED?
@@ -127,7 +127,6 @@ pub mod full_inference {
 /// Key insight: Most warp operations are LOCAL to a function.
 /// Cross-function warp passing is rare (and should be annotated).
 pub mod local_inference {
-    
 
     /// A program point with inferred active set
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,7 +159,7 @@ pub mod local_inference {
     impl LocalInferrer {
         pub fn new() -> Self {
             LocalInferrer {
-                current_mask: 0xFFFFFFFF,  // All lanes active
+                current_mask: 0xFFFFFFFF, // All lanes active
                 protocol: Vec::new(),
                 diverge_stack: Vec::new(),
             }
@@ -248,7 +247,7 @@ pub mod local_inference {
         #[test]
         fn test_diverge_merge_inference() {
             let mut inf = LocalInferrer::new();
-            inf.diverge("even", 0x55555555);  // Even lanes
+            inf.diverge("even", 0x55555555); // Even lanes
             assert_eq!(inf.current_mask, 0x55555555);
             inf.merge().unwrap();
             assert_eq!(inf.current_mask, 0xFFFFFFFF);
@@ -337,7 +336,9 @@ pub mod bidirectional {
 
         /// Start in checking mode with expected protocol
         pub fn check(expected: Protocol) -> Self {
-            BiChecker { mode: Mode::Check(expected) }
+            BiChecker {
+                mode: Mode::Check(expected),
+            }
         }
 
         /// Switch from infer to check when we hit an annotation
@@ -389,7 +390,6 @@ pub mod bidirectional {
 /// - Can generate skeleton code from protocol
 /// - Type errors are "code doesn't match spec" (clear blame)
 pub mod protocol_first {
-    
 
     /// A protocol specification
     #[derive(Clone, Debug)]
@@ -418,29 +418,37 @@ pub mod protocol_first {
                 ProtocolSpec::Shuffle { mask, then } => {
                     format!(
                         "{}let data = warp.shuffle_xor(data, {});\n{}",
-                        pad, mask, then.generate_skeleton(indent)
+                        pad,
+                        mask,
+                        then.generate_skeleton(indent)
                     )
                 }
 
-                ProtocolSpec::Diverge { predicate, true_branch, false_branch } => {
+                ProtocolSpec::Diverge {
+                    predicate,
+                    true_branch,
+                    false_branch,
+                } => {
                     format!(
                         "{}let (true_warp, false_warp) = warp.diverge(|lane| {});\n\
                          {}// true branch:\n{}\
                          {}// false branch:\n{}\
                          {}let warp = merge(true_warp, false_warp);\n",
-                        pad, predicate,
-                        pad, true_branch.generate_skeleton(indent + 1),
-                        pad, false_branch.generate_skeleton(indent + 1),
+                        pad,
+                        predicate,
+                        pad,
+                        true_branch.generate_skeleton(indent + 1),
+                        pad,
+                        false_branch.generate_skeleton(indent + 1),
                         pad
                     )
                 }
 
-                ProtocolSpec::Seq(specs) => {
-                    specs.iter()
-                        .map(|s| s.generate_skeleton(indent))
-                        .collect::<Vec<_>>()
-                        .join("")
-                }
+                ProtocolSpec::Seq(specs) => specs
+                    .iter()
+                    .map(|s| s.generate_skeleton(indent))
+                    .collect::<Vec<_>>()
+                    .join(""),
             }
         }
     }
@@ -448,11 +456,26 @@ pub mod protocol_first {
     /// Example: Butterfly reduction protocol
     pub fn butterfly_protocol() -> ProtocolSpec {
         ProtocolSpec::Seq(vec![
-            ProtocolSpec::Shuffle { mask: 1, then: Box::new(ProtocolSpec::End) },
-            ProtocolSpec::Shuffle { mask: 2, then: Box::new(ProtocolSpec::End) },
-            ProtocolSpec::Shuffle { mask: 4, then: Box::new(ProtocolSpec::End) },
-            ProtocolSpec::Shuffle { mask: 8, then: Box::new(ProtocolSpec::End) },
-            ProtocolSpec::Shuffle { mask: 16, then: Box::new(ProtocolSpec::End) },
+            ProtocolSpec::Shuffle {
+                mask: 1,
+                then: Box::new(ProtocolSpec::End),
+            },
+            ProtocolSpec::Shuffle {
+                mask: 2,
+                then: Box::new(ProtocolSpec::End),
+            },
+            ProtocolSpec::Shuffle {
+                mask: 4,
+                then: Box::new(ProtocolSpec::End),
+            },
+            ProtocolSpec::Shuffle {
+                mask: 8,
+                then: Box::new(ProtocolSpec::End),
+            },
+            ProtocolSpec::Shuffle {
+                mask: 16,
+                then: Box::new(ProtocolSpec::End),
+            },
         ])
     }
 
@@ -504,7 +527,9 @@ pub mod gradual {
 
     impl DynWarp {
         pub fn all() -> Self {
-            DynWarp { active_mask: 0xFFFFFFFF }
+            DynWarp {
+                active_mask: 0xFFFFFFFF,
+            }
         }
 
         /// Shuffle - runtime check for All
@@ -515,7 +540,7 @@ pub mod gradual {
                     self.active_mask
                 ));
             }
-            Ok(0)  // Placeholder
+            Ok(0) // Placeholder
         }
 
         /// Diverge - always works, returns two warps
@@ -580,7 +605,8 @@ pub mod gradual {
             } else {
                 Err(format!(
                     "Type ascription failed: expected 0x{:08X}, got 0x{:08X}",
-                    S::MASK, dyn_warp.active_mask
+                    S::MASK,
+                    dyn_warp.active_mask
                 ))
             }
         }
@@ -598,7 +624,9 @@ pub mod gradual {
 
         #[test]
         fn test_dyn_warp_shuffle_partial_fails() {
-            let warp = DynWarp { active_mask: 0x55555555 };
+            let warp = DynWarp {
+                active_mask: 0x55555555,
+            };
             assert!(warp.shuffle(42, 1).is_err());
         }
 

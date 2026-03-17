@@ -24,8 +24,8 @@
 //! }
 //! ```
 
-use crate::warp::Warp;
 use crate::active_set::*;
+use crate::warp::Warp;
 
 // ============================================================================
 // Diverge methods on Warp<All>

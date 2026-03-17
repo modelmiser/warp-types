@@ -37,7 +37,7 @@ use std::marker::PhantomData;
 /// Marker trait for access patterns
 pub trait AccessPattern: Copy + 'static {
     fn name() -> &'static str;
-    fn transactions_per_warp() -> usize;  // 1 = perfect, 32 = worst
+    fn transactions_per_warp() -> usize; // 1 = perfect, 32 = worst
 }
 
 /// All lanes access the same address (broadcast load)
@@ -45,8 +45,12 @@ pub trait AccessPattern: Copy + 'static {
 pub struct Uniform;
 
 impl AccessPattern for Uniform {
-    fn name() -> &'static str { "Uniform" }
-    fn transactions_per_warp() -> usize { 1 }
+    fn name() -> &'static str {
+        "Uniform"
+    }
+    fn transactions_per_warp() -> usize {
+        1
+    }
 }
 
 /// Lane i accesses base + i * sizeof(T) (perfect coalescing)
@@ -54,8 +58,12 @@ impl AccessPattern for Uniform {
 pub struct Consecutive;
 
 impl AccessPattern for Consecutive {
-    fn name() -> &'static str { "Consecutive" }
-    fn transactions_per_warp() -> usize { 1 }  // For aligned, same-line access
+    fn name() -> &'static str {
+        "Consecutive"
+    }
+    fn transactions_per_warp() -> usize {
+        1
+    } // For aligned, same-line access
 }
 
 /// Lane i accesses base + i * STRIDE * sizeof(T)
@@ -63,7 +71,9 @@ impl AccessPattern for Consecutive {
 pub struct Strided<const STRIDE: usize>;
 
 impl<const STRIDE: usize> AccessPattern for Strided<STRIDE> {
-    fn name() -> &'static str { "Strided" }
+    fn name() -> &'static str {
+        "Strided"
+    }
     fn transactions_per_warp() -> usize {
         // Depends on cache line size and stride
         // Rough estimate: stride 0 = uniform (1 txn), otherwise min(32, STRIDE)
@@ -76,8 +86,12 @@ impl<const STRIDE: usize> AccessPattern for Strided<STRIDE> {
 pub struct Random;
 
 impl AccessPattern for Random {
-    fn name() -> &'static str { "Random" }
-    fn transactions_per_warp() -> usize { 32 }  // Worst case
+    fn name() -> &'static str {
+        "Random"
+    }
+    fn transactions_per_warp() -> usize {
+        32
+    } // Worst case
 }
 
 // ============================================================================
@@ -159,22 +173,46 @@ pub trait WorstOf<Other: AccessPattern>: AccessPattern {
 }
 
 // Uniform is dominated by everything
-impl WorstOf<Uniform> for Uniform { type Result = Uniform; }
-impl WorstOf<Consecutive> for Uniform { type Result = Consecutive; }
-impl<const S: usize> WorstOf<Strided<S>> for Uniform { type Result = Strided<S>; }
-impl WorstOf<Random> for Uniform { type Result = Random; }
+impl WorstOf<Uniform> for Uniform {
+    type Result = Uniform;
+}
+impl WorstOf<Consecutive> for Uniform {
+    type Result = Consecutive;
+}
+impl<const S: usize> WorstOf<Strided<S>> for Uniform {
+    type Result = Strided<S>;
+}
+impl WorstOf<Random> for Uniform {
+    type Result = Random;
+}
 
 // Consecutive dominates Uniform
-impl WorstOf<Uniform> for Consecutive { type Result = Consecutive; }
-impl WorstOf<Consecutive> for Consecutive { type Result = Consecutive; }
-impl<const S: usize> WorstOf<Strided<S>> for Consecutive { type Result = Strided<S>; }
-impl WorstOf<Random> for Consecutive { type Result = Random; }
+impl WorstOf<Uniform> for Consecutive {
+    type Result = Consecutive;
+}
+impl WorstOf<Consecutive> for Consecutive {
+    type Result = Consecutive;
+}
+impl<const S: usize> WorstOf<Strided<S>> for Consecutive {
+    type Result = Strided<S>;
+}
+impl WorstOf<Random> for Consecutive {
+    type Result = Random;
+}
 
 // Random dominates everything
-impl WorstOf<Uniform> for Random { type Result = Random; }
-impl WorstOf<Consecutive> for Random { type Result = Random; }
-impl<const S: usize> WorstOf<Strided<S>> for Random { type Result = Random; }
-impl WorstOf<Random> for Random { type Result = Random; }
+impl WorstOf<Uniform> for Random {
+    type Result = Random;
+}
+impl WorstOf<Consecutive> for Random {
+    type Result = Random;
+}
+impl<const S: usize> WorstOf<Strided<S>> for Random {
+    type Result = Random;
+}
+impl WorstOf<Random> for Random {
+    type Result = Random;
+}
 
 // ============================================================================
 // SAFE LOAD/STORE WITH PATTERN
@@ -223,7 +261,9 @@ pub mod store {
     /// Uniform store: all lanes write same value to same address
     /// Note: This is safe because all lanes write the same value
     pub fn uniform<T: Copy>(ptr: &WarpPtrMut<T, Uniform>, value: T) {
-        unsafe { *ptr.base() = value; }
+        unsafe {
+            *ptr.base() = value;
+        }
     }
 
     /// Consecutive store: lane i writes to base[i]
@@ -245,11 +285,11 @@ pub mod infer {
 
     /// Index expression types
     pub enum IndexExpr {
-        Constant(usize),           // Same for all lanes → Uniform
-        LaneId,                    // lane_id → Consecutive
-        LaneIdTimes(usize),        // lane_id * stride → Strided
-        LaneIdPlus(usize),         // lane_id + offset → Consecutive (shifted)
-        Computed,                  // Arbitrary → Random
+        Constant(usize),    // Same for all lanes → Uniform
+        LaneId,             // lane_id → Consecutive
+        LaneIdTimes(usize), // lane_id * stride → Strided
+        LaneIdPlus(usize),  // lane_id + offset → Consecutive (shifted)
+        Computed,           // Arbitrary → Random
     }
 
     /// Infer pattern from index expression

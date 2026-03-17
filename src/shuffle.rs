@@ -7,11 +7,11 @@
 //! 2. **`Warp<All>`-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 
-use core::marker::PhantomData;
-use crate::GpuValue;
-use crate::data::{LaneId, Uniform, PerLane};
-use crate::warp::Warp;
 use crate::active_set::All;
+use crate::data::{LaneId, PerLane, Uniform};
+use crate::warp::Warp;
+use crate::GpuValue;
+use core::marker::PhantomData;
 
 /// Result of a warp ballot operation.
 ///
@@ -32,7 +32,9 @@ impl BallotResult {
         BallotResult { mask }
     }
 
-    pub fn mask(self) -> Uniform<u32> { self.mask }
+    pub fn mask(self) -> Uniform<u32> {
+        self.mask
+    }
 
     pub fn lane_voted(self, lane: LaneId) -> Uniform<bool> {
         let id = lane.get();
@@ -50,7 +52,11 @@ impl BallotResult {
 
     pub fn first_lane(self) -> Option<LaneId> {
         let tz = self.mask.get().trailing_zeros();
-        if tz < 32 { Some(LaneId::new(tz as u8)) } else { None }
+        if tz < 32 {
+            Some(LaneId::new(tz as u8))
+        } else {
+            None
+        }
     }
 }
 
@@ -85,7 +91,9 @@ impl Warp<All> {
     /// On GPU: emits `shfl.sync.bfly.b32` via inline assembly.
     /// On CPU: returns the input value (single-thread identity).
     pub fn shuffle_xor<T: GpuValue + crate::gpu::GpuShuffle>(
-        &self, data: PerLane<T>, mask: u32,
+        &self,
+        data: PerLane<T>,
+        mask: u32,
     ) -> PerLane<T> {
         PerLane::new(data.get().gpu_shfl_xor(mask))
     }
@@ -95,7 +103,9 @@ impl Warp<All> {
     /// On GPU: emits `shfl.sync.down.b32`.
     /// On CPU: returns input (identity).
     pub fn shuffle_down<T: GpuValue + crate::gpu::GpuShuffle>(
-        &self, data: PerLane<T>, delta: u32,
+        &self,
+        data: PerLane<T>,
+        delta: u32,
     ) -> PerLane<T> {
         PerLane::new(data.get().gpu_shfl_down(delta))
     }
@@ -108,7 +118,8 @@ impl Warp<All> {
     /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
     /// On CPU: returns val × 32 (butterfly doubling via identity shuffle).
     pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
-        &self, data: PerLane<T>,
+        &self,
+        data: PerLane<T>,
     ) -> Uniform<T> {
         let mut val = data.get();
         val = val + val.gpu_shfl_xor(16);
@@ -143,16 +154,12 @@ impl Warp<All> {
     ///
     /// Equivalent to `self.shuffle_xor(PerLane::new(val), mask).get()` but
     /// avoids the verbosity of wrapping/unwrapping for the common case.
-    pub fn shuffle_xor_raw<T: GpuValue + crate::gpu::GpuShuffle>(
-        &self, val: T, mask: u32,
-    ) -> T {
+    pub fn shuffle_xor_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, mask: u32) -> T {
         val.gpu_shfl_xor(mask)
     }
 
     /// Shuffle down on a raw scalar — convenience that skips PerLane wrapping.
-    pub fn shuffle_down_raw<T: GpuValue + crate::gpu::GpuShuffle>(
-        &self, val: T, delta: u32,
-    ) -> T {
+    pub fn shuffle_down_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, delta: u32) -> T {
         val.gpu_shfl_down(delta)
     }
 }
@@ -185,9 +192,15 @@ pub trait HasDual: Permutation {
 pub struct Xor<const MASK: u32>;
 
 impl<const MASK: u32> Permutation for Xor<MASK> {
-    fn forward(i: u32) -> u32 { (i ^ MASK) & 0x1F }
-    fn inverse(i: u32) -> u32 { (i ^ MASK) & 0x1F }
-    fn is_self_dual() -> bool { true }
+    fn forward(i: u32) -> u32 {
+        (i ^ MASK) & 0x1F
+    }
+    fn inverse(i: u32) -> u32 {
+        (i ^ MASK) & 0x1F
+    }
+    fn is_self_dual() -> bool {
+        true
+    }
 }
 
 impl<const MASK: u32> HasDual for Xor<MASK> {
@@ -209,15 +222,27 @@ pub struct RotateDown<const DELTA: u32>;
 pub struct RotateUp<const DELTA: u32>;
 
 impl<const DELTA: u32> Permutation for RotateDown<DELTA> {
-    fn forward(i: u32) -> u32 { (i + 32 - (DELTA & 0x1F)) & 0x1F }
-    fn inverse(i: u32) -> u32 { (i + (DELTA & 0x1F)) & 0x1F }
-    fn is_self_dual() -> bool { (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16 }
+    fn forward(i: u32) -> u32 {
+        (i + 32 - (DELTA & 0x1F)) & 0x1F
+    }
+    fn inverse(i: u32) -> u32 {
+        (i + (DELTA & 0x1F)) & 0x1F
+    }
+    fn is_self_dual() -> bool {
+        (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16
+    }
 }
 
 impl<const DELTA: u32> Permutation for RotateUp<DELTA> {
-    fn forward(i: u32) -> u32 { (i + (DELTA & 0x1F)) & 0x1F }
-    fn inverse(i: u32) -> u32 { (i + 32 - (DELTA & 0x1F)) & 0x1F }
-    fn is_self_dual() -> bool { (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16 }
+    fn forward(i: u32) -> u32 {
+        (i + (DELTA & 0x1F)) & 0x1F
+    }
+    fn inverse(i: u32) -> u32 {
+        (i + 32 - (DELTA & 0x1F)) & 0x1F
+    }
+    fn is_self_dual() -> bool {
+        (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16
+    }
 }
 
 impl<const DELTA: u32> HasDual for RotateDown<DELTA> {
@@ -233,9 +258,15 @@ impl<const DELTA: u32> HasDual for RotateUp<DELTA> {
 pub struct Identity;
 
 impl Permutation for Identity {
-    fn forward(i: u32) -> u32 { i & 0x1F }
-    fn inverse(i: u32) -> u32 { i & 0x1F }
-    fn is_self_dual() -> bool { true }
+    fn forward(i: u32) -> u32 {
+        i & 0x1F
+    }
+    fn inverse(i: u32) -> u32 {
+        i & 0x1F
+    }
+    fn is_self_dual() -> bool {
+        true
+    }
 }
 
 impl HasDual for Identity {
@@ -247,8 +278,12 @@ impl HasDual for Identity {
 pub struct Compose<P1: Permutation, P2: Permutation>(PhantomData<(P1, P2)>);
 
 impl<P1: Permutation, P2: Permutation> Permutation for Compose<P1, P2> {
-    fn forward(i: u32) -> u32 { P2::forward(P1::forward(i)) }
-    fn inverse(i: u32) -> u32 { P1::inverse(P2::inverse(i)) }
+    fn forward(i: u32) -> u32 {
+        P2::forward(P1::forward(i))
+    }
+    fn inverse(i: u32) -> u32 {
+        P1::inverse(P2::inverse(i))
+    }
 }
 
 impl<P1: Permutation + HasDual, P2: Permutation + HasDual> HasDual for Compose<P1, P2> {

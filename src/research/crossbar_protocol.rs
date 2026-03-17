@@ -66,32 +66,50 @@ pub trait TileComplement<Other: TileSet>: TileSet {}
 /// All 16 tiles active.
 #[derive(Copy, Clone, Debug)]
 pub struct AllTiles;
-impl TileSet for AllTiles { const MASK: u16 = 0xFFFF; const NAME: &'static str = "AllTiles"; }
+impl TileSet for AllTiles {
+    const MASK: u16 = 0xFFFF;
+    const NAME: &'static str = "AllTiles";
+}
 
 /// No tiles active.
 #[derive(Copy, Clone, Debug)]
 pub struct NoTiles;
-impl TileSet for NoTiles { const MASK: u16 = 0x0000; const NAME: &'static str = "NoTiles"; }
+impl TileSet for NoTiles {
+    const MASK: u16 = 0x0000;
+    const NAME: &'static str = "NoTiles";
+}
 
 /// Lower half: tiles 0–7.
 #[derive(Copy, Clone, Debug)]
 pub struct LowerHalf;
-impl TileSet for LowerHalf { const MASK: u16 = 0x00FF; const NAME: &'static str = "LowerHalf"; }
+impl TileSet for LowerHalf {
+    const MASK: u16 = 0x00FF;
+    const NAME: &'static str = "LowerHalf";
+}
 
 /// Upper half: tiles 8–15.
 #[derive(Copy, Clone, Debug)]
 pub struct UpperHalf;
-impl TileSet for UpperHalf { const MASK: u16 = 0xFF00; const NAME: &'static str = "UpperHalf"; }
+impl TileSet for UpperHalf {
+    const MASK: u16 = 0xFF00;
+    const NAME: &'static str = "UpperHalf";
+}
 
 /// Even tiles: 0, 2, 4, ..., 14.
 #[derive(Copy, Clone, Debug)]
 pub struct EvenTiles;
-impl TileSet for EvenTiles { const MASK: u16 = 0x5555; const NAME: &'static str = "EvenTiles"; }
+impl TileSet for EvenTiles {
+    const MASK: u16 = 0x5555;
+    const NAME: &'static str = "EvenTiles";
+}
 
 /// Odd tiles: 1, 3, 5, ..., 15.
 #[derive(Copy, Clone, Debug)]
 pub struct OddTiles;
-impl TileSet for OddTiles { const MASK: u16 = 0xAAAA; const NAME: &'static str = "OddTiles"; }
+impl TileSet for OddTiles {
+    const MASK: u16 = 0xAAAA;
+    const NAME: &'static str = "OddTiles";
+}
 
 // Complement pairs — same pattern as warp active sets
 impl TileComplement<OddTiles> for EvenTiles {}
@@ -116,8 +134,12 @@ pub struct TileGroup<S: TileSet> {
 }
 
 impl<S: TileSet> TileGroup<S> {
-    pub fn new() -> Self { TileGroup { _set: PhantomData } }
-    pub fn active_mask(&self) -> u16 { S::MASK }
+    pub fn new() -> Self {
+        TileGroup { _set: PhantomData }
+    }
+    pub fn active_mask(&self) -> u16 {
+        S::MASK
+    }
 }
 
 // ============================================================================
@@ -222,10 +244,7 @@ impl TileGroup<AllTiles> {
 /// Same `ComplementOf` proof as warp `merge`. The compiler rejects merges
 /// of non-complementary tile groups — you can't claim all tiles are present
 /// when some are missing.
-pub fn merge_tiles<A, B>(
-    _a: TileGroup<A>,
-    _b: TileGroup<B>,
-) -> TileGroup<AllTiles>
+pub fn merge_tiles<A, B>(_a: TileGroup<A>, _b: TileGroup<B>) -> TileGroup<AllTiles>
 where
     A: TileSet + TileComplement<B>,
     B: TileSet,
@@ -252,7 +271,10 @@ pub struct CrossbarPort {
 
 impl CrossbarPort {
     pub fn new(tile_id: usize) -> Self {
-        CrossbarPort { tile_id, channels: [Option::None; 16] }
+        CrossbarPort {
+            tile_id,
+            channels: [Option::None; 16],
+        }
     }
 
     /// SEND ch, value — stage a message on channel ch.
@@ -267,7 +289,9 @@ impl CrossbarPort {
         self.channels[channel].is_some()
     }
 
-    pub fn tile_id(&self) -> usize { self.tile_id }
+    pub fn tile_id(&self) -> usize {
+        self.tile_id
+    }
 }
 
 /// A full crossbar connecting N tiles — runtime model of crossbar_ntile.v.
@@ -275,12 +299,14 @@ impl CrossbarPort {
 /// The pipeline registers are modeled as Option<u64>: None = not valid,
 /// Some(v) = valid with data v. This mirrors the hardware's pipe_valid/pipe_data.
 pub struct Crossbar {
-    pipe: [[Option<u64>; 16]; 16],  // pipe[src][dst]
+    pipe: [[Option<u64>; 16]; 16], // pipe[src][dst]
 }
 
 impl Crossbar {
     pub fn new() -> Self {
-        Crossbar { pipe: [[Option::None; 16]; 16] }
+        Crossbar {
+            pipe: [[Option::None; 16]; 16],
+        }
     }
 
     /// Clock the crossbar: accept sends from ports, deliver to receivers.
@@ -315,7 +341,7 @@ impl Crossbar {
         if S::MASK & (1 << src) != 0 {
             self.pipe[src][dst]
         } else {
-            Option::None  // Source not in active set — would be stale
+            Option::None // Source not in active set — would be stale
         }
     }
 }
@@ -370,8 +396,8 @@ mod tests {
 
         // stride=1: swap adjacent pairs
         let result = tiles.butterfly(&data, 1);
-        assert_eq!(result[0], data[1]);  // tile 0 gets tile 1's data
-        assert_eq!(result[1], data[0]);  // tile 1 gets tile 0's data
+        assert_eq!(result[0], data[1]); // tile 0 gets tile 1's data
+        assert_eq!(result[1], data[0]); // tile 1 gets tile 0's data
         assert_eq!(result[2], data[3]);
         assert_eq!(result[3], data[2]);
 
@@ -421,7 +447,7 @@ mod tests {
         // Merge back — now collectives work again
         let all = merge_tiles(lower, upper);
         let result = all.ring_pass(&data);
-        assert_eq!(result[1], 0);  // tile 0's data moved to tile 1
+        assert_eq!(result[1], 0); // tile 0's data moved to tile 1
     }
 
     #[test]
@@ -456,17 +482,17 @@ mod tests {
         port0.send(1, 0xDEAD);
         xbar.clock(&[port0]);
 
-        assert_eq!(xbar.recv(1, 0), Some(0xDEAD));  // tile 1 gets correct data
+        assert_eq!(xbar.recv(1, 0), Some(0xDEAD)); // tile 1 gets correct data
 
         // Cycle 2: tile 0 diverges — does NOT send.
         // But the pipeline register still holds 0xDEAD!
-        let port0_idle = CrossbarPort::new(0);  // no sends staged
+        let port0_idle = CrossbarPort::new(0); // no sends staged
         assert!(!port0_idle.is_sending(1));
         // Note: we don't clock with the idle port — the old data persists.
 
         // tile 1 reads again — gets STALE data
         let stale = xbar.recv(1, 0);
-        assert_eq!(stale, Some(0xDEAD));  // BUG: still sees old value
+        assert_eq!(stale, Some(0xDEAD)); // BUG: still sees old value
 
         // With session types, this would be caught:
         // After diverge, tile 1 cannot call recv from tile 0's group
@@ -502,17 +528,19 @@ mod tests {
         let mut xbar = Crossbar::new();
 
         // Each tile stages SEND to its right neighbor
-        let ports: Vec<CrossbarPort> = (0..16).map(|id| {
-            let mut port = CrossbarPort::new(id);
-            port.send((id + 1) % 16, id as u64 * 100);
-            port
-        }).collect();
+        let ports: Vec<CrossbarPort> = (0..16)
+            .map(|id| {
+                let mut port = CrossbarPort::new(id);
+                port.send((id + 1) % 16, id as u64 * 100);
+                port
+            })
+            .collect();
 
         xbar.clock(&ports);
 
         // Each tile receives from its left neighbor
         for id in 0..16 {
-            let src = (id + 16 - 1) % 16;  // left neighbor
+            let src = (id + 16 - 1) % 16; // left neighbor
             let data = xbar.recv(id, src);
             assert_eq!(data, Some(src as u64 * 100));
         }

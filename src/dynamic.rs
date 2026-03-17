@@ -68,8 +68,8 @@
 //! assert_eq!(sum, 32);
 //! ```
 
-use crate::warp::Warp;
 use crate::active_set::All;
+use crate::warp::Warp;
 
 /// A data-dependent divergence with paired branches.
 ///
@@ -111,10 +111,13 @@ impl DynDiverge {
     /// Consumes the `DynDiverge` — you can't use the branches after merging.
     pub fn merge(self) -> Warp<All> {
         debug_assert_eq!(
-            self.true_mask | self.false_mask, self.parent_mask,
+            self.true_mask | self.false_mask,
+            self.parent_mask,
             "DynDiverge invariant violated: true_mask | false_mask != parent_mask \
              (0x{:016X} | 0x{:016X} = 0x{:016X}, expected 0x{:016X})",
-            self.true_mask, self.false_mask, self.true_mask | self.false_mask,
+            self.true_mask,
+            self.false_mask,
+            self.true_mask | self.false_mask,
             self.parent_mask,
         );
         Warp::new()
@@ -173,7 +176,8 @@ impl Warp<All> {
         debug_assert!(
             predicate_mask & !all_mask == 0,
             "diverge_dynamic: predicate_mask 0x{:016X} has bits outside warp mask 0x{:016X}",
-            predicate_mask, all_mask,
+            predicate_mask,
+            all_mask,
         );
         DynDiverge {
             true_mask: all_mask & predicate_mask,
@@ -237,11 +241,14 @@ mod tests {
         let mut true_seen = 0u64;
         let mut false_seen = 0u64;
 
-        let merged = warp.diverge_dynamic(0x0F0F0F0F)
-            .with_branches(
-                |t| { true_seen = t; },
-                |f| { false_seen = f; },
-            );
+        let merged = warp.diverge_dynamic(0x0F0F0F0F).with_branches(
+            |t| {
+                true_seen = t;
+            },
+            |f| {
+                false_seen = f;
+            },
+        );
 
         assert_eq!(true_seen, 0x0F0F0F0F);
         assert_eq!(false_seen, 0xF0F0F0F0);

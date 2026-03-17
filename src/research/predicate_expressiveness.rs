@@ -188,7 +188,10 @@ pub mod algorithm_survey {
 
     /// Stream compaction
     pub fn stream_compaction() -> (&'static str, &'static str) {
-        ("Level 2→1", "data[lane].valid, then compute destination indices")
+        (
+            "Level 2→1",
+            "data[lane].valid, then compute destination indices",
+        )
     }
 
     /// Parallel sort (bitonic, radix)
@@ -313,7 +316,8 @@ mod tests {
         let summary = algorithm_survey::summary();
 
         // Count Level 1 vs Level 2+ algorithms
-        let level1_count = summary.iter()
+        let level1_count = summary
+            .iter()
             .filter(|(_, level, _)| level.starts_with("Level 1"))
             .count();
 

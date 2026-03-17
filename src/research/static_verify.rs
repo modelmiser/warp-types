@@ -171,7 +171,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _phantom: PhantomData }
+        Warp {
+            _phantom: PhantomData,
+        }
     }
 
     pub fn active_set_name(&self) -> &'static str {
@@ -228,14 +230,14 @@ impl Warp<Even> {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct EvenLow;
 impl ActiveSet for EvenLow {
-    const MASK: u32 = 0x00005555;  // Even ∩ LowHalf
+    const MASK: u32 = 0x00005555; // Even ∩ LowHalf
     const NAME: &'static str = "EvenLow";
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct EvenHigh;
 impl ActiveSet for EvenHigh {
-    const MASK: u32 = 0x55550000;  // Even ∩ HighHalf
+    const MASK: u32 = 0x55550000; // Even ∩ HighHalf
     const NAME: &'static str = "EvenHigh";
 }
 
@@ -421,9 +423,9 @@ mod tests {
         let (evens, odds) = all.diverge_even_odd();
 
         // Sync works on any active set - it just syncs those lanes
-        all.sync();    // Syncs all 32 lanes
-        evens.sync();  // Syncs only even lanes
-        odds.sync();   // Syncs only odd lanes
+        all.sync(); // Syncs all 32 lanes
+        evens.sync(); // Syncs only even lanes
+        odds.sync(); // Syncs only odd lanes
     }
 
     // ========================================================================

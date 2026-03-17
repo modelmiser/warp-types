@@ -203,11 +203,9 @@ pub mod hierarchical {
     }
 
     /// Compose sessions hierarchically
-    pub fn decompose_grid<GP, BP>(
-        grid: GridSession<GP>,
-    ) -> Vec<BlockSession<BP>> {
+    pub fn decompose_grid<GP, BP>(grid: GridSession<GP>) -> Vec<BlockSession<BP>> {
         (0..grid.num_blocks())
-            .map(|i| BlockSession::new(BlockId(i), 32))  // Assume 32 warps/block
+            .map(|i| BlockSession::new(BlockId(i), 32)) // Assume 32 warps/block
             .collect()
     }
 
@@ -249,7 +247,9 @@ pub mod indexed {
 
     impl<const N: usize> IndexedSession<N> {
         pub fn new() -> Self {
-            IndexedSession { _marker: PhantomData }
+            IndexedSession {
+                _marker: PhantomData,
+            }
         }
 
         pub fn block_id() -> usize {
@@ -283,7 +283,7 @@ pub mod indexed {
         let _right = (N + 1) % NUM_BLOCKS;
 
         // In real GPU: read from global memory at neighbor positions
-        (IndexedSession::new(), my_value, my_value)  // Placeholder
+        (IndexedSession::new(), my_value, my_value) // Placeholder
     }
 
     #[cfg(test)]

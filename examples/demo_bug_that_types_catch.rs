@@ -78,7 +78,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 
     pub fn active_mask(&self) -> u32 {
@@ -283,7 +285,7 @@ mod tests {
         // If we diverge, shuffle is no longer available:
         let (evens, _odds) = warp.diverge_even_odd();
         // evens.shuffle_xor(data, 1);  // ERROR: method not found
-        let _ = evens;  // Suppress unused warning
+        let _ = evens; // Suppress unused warning
     }
 }
 

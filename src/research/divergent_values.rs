@@ -43,15 +43,21 @@ pub trait ComplementOf<T>: ActiveSet {}
 
 #[derive(Copy, Clone)]
 pub struct All;
-impl ActiveSet for All { const MASK: u32 = 0xFFFFFFFF; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+}
 
 #[derive(Copy, Clone)]
 pub struct Even;
-impl ActiveSet for Even { const MASK: u32 = 0x55555555; }
+impl ActiveSet for Even {
+    const MASK: u32 = 0x55555555;
+}
 
 #[derive(Copy, Clone)]
 pub struct Odd;
-impl ActiveSet for Odd { const MASK: u32 = 0xAAAAAAAA; }
+impl ActiveSet for Odd {
+    const MASK: u32 = 0xAAAAAAAA;
+}
 
 impl ComplementOf<Odd> for Even {}
 impl ComplementOf<Even> for Odd {}
@@ -76,7 +82,10 @@ impl<T: Copy + Default, S: ActiveSet> ValueIn<T, S> {
                 values[lane] = Some(compute(lane));
             }
         }
-        ValueIn { values, _scope: PhantomData }
+        ValueIn {
+            values,
+            _scope: PhantomData,
+        }
     }
 
     /// Create a uniform value across the active set
@@ -87,7 +96,10 @@ impl<T: Copy + Default, S: ActiveSet> ValueIn<T, S> {
                 values[lane] = Some(value);
             }
         }
-        ValueIn { values, _scope: PhantomData }
+        ValueIn {
+            values,
+            _scope: PhantomData,
+        }
     }
 
     /// Get value for a lane (None if lane not in S)
@@ -105,7 +117,10 @@ pub struct UniformIn<T, S: ActiveSet> {
 
 impl<T: Copy, S: ActiveSet> UniformIn<T, S> {
     pub fn new(value: T) -> Self {
-        UniformIn { value, _scope: PhantomData }
+        UniformIn {
+            value,
+            _scope: PhantomData,
+        }
     }
 
     pub fn get(&self) -> T {
@@ -212,7 +227,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -257,7 +274,9 @@ pub struct TrackedVar<T: Copy> {
 
 impl<T: Copy> TrackedVar<T> {
     pub fn uniform(value: T) -> Self {
-        TrackedVar { values: [value; 32] }
+        TrackedVar {
+            values: [value; 32],
+        }
     }
 
     pub fn per_lane(values: [T; 32]) -> Self {
@@ -304,9 +323,9 @@ mod tests {
         // Value computed only in even lanes
         let even_val: ValueIn<i32, Even> = ValueIn::uniform(100);
 
-        assert_eq!(even_val.get(0), Some(100));  // Lane 0 is even
-        assert_eq!(even_val.get(1), None);       // Lane 1 is odd
-        assert_eq!(even_val.get(2), Some(100));  // Lane 2 is even
+        assert_eq!(even_val.get(0), Some(100)); // Lane 0 is even
+        assert_eq!(even_val.get(1), None); // Lane 1 is odd
+        assert_eq!(even_val.get(2), Some(100)); // Lane 2 is even
     }
 
     #[test]
@@ -317,10 +336,10 @@ mod tests {
 
         let merged = phi_merge(even_val, odd_val);
 
-        assert_eq!(merged.0[0], 100);  // Even lane
-        assert_eq!(merged.0[1], 200);  // Odd lane
-        assert_eq!(merged.0[2], 100);  // Even lane
-        assert_eq!(merged.0[3], 200);  // Odd lane
+        assert_eq!(merged.0[0], 100); // Even lane
+        assert_eq!(merged.0[1], 200); // Odd lane
+        assert_eq!(merged.0[2], 100); // Even lane
+        assert_eq!(merged.0[3], 200); // Odd lane
     }
 
     #[test]
@@ -351,7 +370,7 @@ mod tests {
         // Convert to PerLane with default for missing
         let per_lane = v.to_per_lane(0);
         assert_eq!(per_lane.0[0], 100);
-        assert_eq!(per_lane.0[1], 0);  // Default
+        assert_eq!(per_lane.0[1], 0); // Default
     }
 
     #[test]
@@ -363,8 +382,8 @@ mod tests {
         x.update_where::<Even>(100);
 
         // After "merge", check values
-        assert_eq!(x.get(0), 100);  // Updated in even branch
-        assert_eq!(x.get(1), 0);    // Unchanged in odd branch
+        assert_eq!(x.get(0), 100); // Updated in even branch
+        assert_eq!(x.get(1), 0); // Unchanged in odd branch
         assert_eq!(x.get(2), 100);
         assert_eq!(x.get(3), 0);
     }
@@ -376,10 +395,10 @@ mod tests {
         // Even lanes get lane_id * 10
         x.update_where_with::<Even>(|lane| lane as i32 * 10);
 
-        assert_eq!(x.get(0), 0);    // 0 * 10
-        assert_eq!(x.get(1), 0);    // Unchanged
-        assert_eq!(x.get(2), 20);   // 2 * 10
-        assert_eq!(x.get(4), 40);   // 4 * 10
+        assert_eq!(x.get(0), 0); // 0 * 10
+        assert_eq!(x.get(1), 0); // Unchanged
+        assert_eq!(x.get(2), 20); // 2 * 10
+        assert_eq!(x.get(4), 40); // 4 * 10
     }
 
     #[test]
@@ -399,11 +418,11 @@ mod tests {
         }
 
         // Check final state
-        assert_eq!(x.get(0), 2);   // EvenLow: updated twice
-        assert_eq!(x.get(1), 0);   // Odd: never updated
-        assert_eq!(x.get(2), 2);   // EvenLow
-        assert_eq!(x.get(16), 1);  // EvenHigh: only first update
-        assert_eq!(x.get(17), 0);  // Odd
+        assert_eq!(x.get(0), 2); // EvenLow: updated twice
+        assert_eq!(x.get(1), 0); // Odd: never updated
+        assert_eq!(x.get(2), 2); // EvenLow
+        assert_eq!(x.get(16), 1); // EvenHigh: only first update
+        assert_eq!(x.get(17), 0); // Odd
     }
 }
 

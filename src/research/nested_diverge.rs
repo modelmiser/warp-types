@@ -31,35 +31,45 @@ pub trait ActiveSet {
 pub struct All;
 impl ActiveSet for All {
     const MASK: u32 = 0xFFFFFFFF;
-    fn name() -> &'static str { "All" }
+    fn name() -> &'static str {
+        "All"
+    }
 }
 
 /// Even lanes: 0, 2, 4, ..., 30
 pub struct Even;
 impl ActiveSet for Even {
     const MASK: u32 = 0x55555555;
-    fn name() -> &'static str { "Even" }
+    fn name() -> &'static str {
+        "Even"
+    }
 }
 
 /// Odd lanes: 1, 3, 5, ..., 31
 pub struct Odd;
 impl ActiveSet for Odd {
     const MASK: u32 = 0xAAAAAAAA;
-    fn name() -> &'static str { "Odd" }
+    fn name() -> &'static str {
+        "Odd"
+    }
 }
 
 /// Low half: lanes 0-15
 pub struct LowHalf;
 impl ActiveSet for LowHalf {
     const MASK: u32 = 0x0000FFFF;
-    fn name() -> &'static str { "LowHalf" }
+    fn name() -> &'static str {
+        "LowHalf"
+    }
 }
 
 /// High half: lanes 16-31
 pub struct HighHalf;
 impl ActiveSet for HighHalf {
     const MASK: u32 = 0xFFFF0000;
-    fn name() -> &'static str { "HighHalf" }
+    fn name() -> &'static str {
+        "HighHalf"
+    }
 }
 
 // ============================================================================
@@ -69,29 +79,37 @@ impl ActiveSet for HighHalf {
 /// Even ∩ LowHalf = lanes 0, 2, 4, 6, 8, 10, 12, 14
 pub struct EvenLow;
 impl ActiveSet for EvenLow {
-    const MASK: u32 = Even::MASK & LowHalf::MASK;  // 0x00005555
-    fn name() -> &'static str { "EvenLow" }
+    const MASK: u32 = Even::MASK & LowHalf::MASK; // 0x00005555
+    fn name() -> &'static str {
+        "EvenLow"
+    }
 }
 
 /// Even ∩ HighHalf = lanes 16, 18, 20, 22, 24, 26, 28, 30
 pub struct EvenHigh;
 impl ActiveSet for EvenHigh {
-    const MASK: u32 = Even::MASK & HighHalf::MASK;  // 0x55550000
-    fn name() -> &'static str { "EvenHigh" }
+    const MASK: u32 = Even::MASK & HighHalf::MASK; // 0x55550000
+    fn name() -> &'static str {
+        "EvenHigh"
+    }
 }
 
 /// Odd ∩ LowHalf = lanes 1, 3, 5, 7, 9, 11, 13, 15
 pub struct OddLow;
 impl ActiveSet for OddLow {
-    const MASK: u32 = Odd::MASK & LowHalf::MASK;  // 0x0000AAAA
-    fn name() -> &'static str { "OddLow" }
+    const MASK: u32 = Odd::MASK & LowHalf::MASK; // 0x0000AAAA
+    fn name() -> &'static str {
+        "OddLow"
+    }
 }
 
 /// Odd ∩ HighHalf = lanes 17, 19, 21, 23, 25, 27, 29, 31
 pub struct OddHigh;
 impl ActiveSet for OddHigh {
-    const MASK: u32 = Odd::MASK & HighHalf::MASK;  // 0xAAAA0000
-    fn name() -> &'static str { "OddHigh" }
+    const MASK: u32 = Odd::MASK & HighHalf::MASK; // 0xAAAA0000
+    fn name() -> &'static str {
+        "OddHigh"
+    }
 }
 
 // ============================================================================
@@ -136,7 +154,9 @@ pub struct Warp<S: ActiveSet> {
 
 impl<S: ActiveSet> Warp<S> {
     pub fn new() -> Self {
-        Warp { _marker: PhantomData }
+        Warp {
+            _marker: PhantomData,
+        }
     }
 
     pub fn active_set_name(&self) -> &'static str {
@@ -214,10 +234,7 @@ impl CanDiverge<EvenHigh, OddHigh> for HighHalf {
 // ============================================================================
 
 /// Merge two complementary sub-warps back into their parent
-pub fn merge<S1, S2, P>(
-    _left: Warp<S1>,
-    _right: Warp<S2>,
-) -> Warp<P>
+pub fn merge<S1, S2, P>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<P>
 where
     S1: ComplementWithin<S2, P>,
     S2: ActiveSet,
@@ -409,30 +426,38 @@ pub mod lattice {
 pub mod depth_3 {
     use super::*;
 
-    pub struct VeryLow;  // Lanes 0-7
+    pub struct VeryLow; // Lanes 0-7
     impl ActiveSet for VeryLow {
         const MASK: u32 = 0x000000FF;
-        fn name() -> &'static str { "VeryLow" }
+        fn name() -> &'static str {
+            "VeryLow"
+        }
     }
 
-    pub struct MidLow;  // Lanes 8-15
+    pub struct MidLow; // Lanes 8-15
     impl ActiveSet for MidLow {
         const MASK: u32 = 0x0000FF00;
-        fn name() -> &'static str { "MidLow" }
+        fn name() -> &'static str {
+            "MidLow"
+        }
     }
 
     /// Even ∩ VeryLow = lanes 0, 2, 4, 6
     pub struct EvenVeryLow;
     impl ActiveSet for EvenVeryLow {
-        const MASK: u32 = Even::MASK & VeryLow::MASK;  // 0x00000055
-        fn name() -> &'static str { "EvenVeryLow" }
+        const MASK: u32 = Even::MASK & VeryLow::MASK; // 0x00000055
+        fn name() -> &'static str {
+            "EvenVeryLow"
+        }
     }
 
     /// Even ∩ MidLow = lanes 8, 10, 12, 14
     pub struct EvenMidLow;
     impl ActiveSet for EvenMidLow {
-        const MASK: u32 = Even::MASK & MidLow::MASK;  // 0x00005500
-        fn name() -> &'static str { "EvenMidLow" }
+        const MASK: u32 = Even::MASK & MidLow::MASK; // 0x00005500
+        fn name() -> &'static str {
+            "EvenMidLow"
+        }
     }
 
     // Complements within EvenLow
@@ -463,8 +488,8 @@ pub mod depth_3 {
             // Level 3: EvenLow → EvenVeryLow, EvenMidLow
             let (even_very_low, even_mid_low) = EvenLow::diverge(even_low);
 
-            assert_eq!(even_very_low.population(), 4);  // Lanes 0,2,4,6
-            assert_eq!(even_mid_low.population(), 4);   // Lanes 8,10,12,14
+            assert_eq!(even_very_low.population(), 4); // Lanes 0,2,4,6
+            assert_eq!(even_mid_low.population(), 4); // Lanes 8,10,12,14
         }
 
         #[test]
@@ -504,8 +529,8 @@ pub mod depth_3 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::merge_ordering::*;
+    use super::*;
 
     #[test]
     fn test_mask_values() {
@@ -572,12 +597,8 @@ mod tests {
         let _odd_high: Warp<OddHigh> = Warp::new();
 
         // Both orderings produce Warp<All>
-        let result1 = tree_merge_even_odd(
-            Warp::new(), Warp::new(), Warp::new(), Warp::new()
-        );
-        let result2 = tree_merge_low_high(
-            Warp::new(), Warp::new(), Warp::new(), Warp::new()
-        );
+        let result1 = tree_merge_even_odd(Warp::new(), Warp::new(), Warp::new(), Warp::new());
+        let result2 = tree_merge_low_high(Warp::new(), Warp::new(), Warp::new(), Warp::new());
 
         assert_eq!(result1.population(), 32);
         assert_eq!(result2.population(), 32);

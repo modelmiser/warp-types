@@ -16,9 +16,9 @@
 //!
 //! This turns a memory ordering bug into a type error.
 
-use core::marker::PhantomData;
 use crate::active_set::{ActiveSet, ComplementOf, ComplementWithin};
 use crate::warp::Warp;
+use core::marker::PhantomData;
 
 // ============================================================================
 // Write state markers
@@ -35,7 +35,9 @@ pub trait WriteState: crate::active_set::sealed::Sealed {}
 pub struct Unwritten;
 #[allow(private_interfaces)]
 impl crate::active_set::sealed::Sealed for Unwritten {
-    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+    fn _sealed() -> crate::active_set::sealed::SealToken {
+        crate::active_set::sealed::SealToken
+    }
 }
 impl WriteState for Unwritten {}
 
@@ -46,7 +48,9 @@ pub struct PartialWrite<S: ActiveSet> {
 }
 #[allow(private_interfaces)]
 impl<S: ActiveSet> crate::active_set::sealed::Sealed for PartialWrite<S> {
-    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+    fn _sealed() -> crate::active_set::sealed::SealToken {
+        crate::active_set::sealed::SealToken
+    }
 }
 impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 
@@ -55,7 +59,9 @@ impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 pub struct FullWrite;
 #[allow(private_interfaces)]
 impl crate::active_set::sealed::Sealed for FullWrite {
-    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+    fn _sealed() -> crate::active_set::sealed::SealToken {
+        crate::active_set::sealed::SealToken
+    }
 }
 impl WriteState for FullWrite {}
 
@@ -64,7 +70,9 @@ impl WriteState for FullWrite {}
 pub struct Fenced;
 #[allow(private_interfaces)]
 impl crate::active_set::sealed::Sealed for Fenced {
-    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+    fn _sealed() -> crate::active_set::sealed::SealToken {
+        crate::active_set::sealed::SealToken
+    }
 }
 impl WriteState for Fenced {}
 
@@ -88,7 +96,9 @@ pub struct GlobalRegion<S: WriteState> {
 impl GlobalRegion<Unwritten> {
     /// Create a new unwritten global region.
     pub fn new() -> Self {
-        GlobalRegion { _phantom: PhantomData }
+        GlobalRegion {
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -109,8 +119,16 @@ impl<S: ActiveSet> Warp<S> {
     /// Use `global_store_complement` with the complement's partial write to
     /// advance to `FullWrite`, or call this then `merge_writes` with a
     /// `PartialWrite<Empty>` (which `Empty: ComplementOf<All>` satisfies).
-    pub fn global_store(self, _region: GlobalRegion<Unwritten>) -> (Self, GlobalRegion<PartialWrite<S>>) {
-        (self, GlobalRegion { _phantom: PhantomData })
+    pub fn global_store(
+        self,
+        _region: GlobalRegion<Unwritten>,
+    ) -> (Self, GlobalRegion<PartialWrite<S>>) {
+        (
+            self,
+            GlobalRegion {
+                _phantom: PhantomData,
+            },
+        )
     }
 
     /// Store values to a region that already has a partial write from
@@ -124,7 +142,12 @@ impl<S: ActiveSet> Warp<S> {
     where
         S: ComplementOf<S2>,
     {
-        (self, GlobalRegion { _phantom: PhantomData })
+        (
+            self,
+            GlobalRegion {
+                _phantom: PhantomData,
+            },
+        )
     }
 }
 
@@ -156,7 +179,9 @@ where
     S1: ComplementOf<S2>,
     S2: ActiveSet,
 {
-    GlobalRegion { _phantom: PhantomData }
+    GlobalRegion {
+        _phantom: PhantomData,
+    }
 }
 
 /// Merge writes from partial writes that are complements within a parent set.
@@ -172,7 +197,9 @@ where
     S2: ActiveSet,
     P: ActiveSet,
 {
-    GlobalRegion { _phantom: PhantomData }
+    GlobalRegion {
+        _phantom: PhantomData,
+    }
 }
 
 /// Issue a thread fence after all writes are complete.
@@ -181,7 +208,9 @@ where
 /// all lanes have written before the fence.
 pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
     // In real implementation: __threadfence()
-    GlobalRegion { _phantom: PhantomData }
+    GlobalRegion {
+        _phantom: PhantomData,
+    }
 }
 
 impl GlobalRegion<Fenced> {
@@ -237,14 +266,20 @@ mod tests {
         // Nested divergence: EvenLow + EvenHigh are complements within Even (not All).
         // merge_writes_within returns PartialWrite<Even>, which can then be merged
         // with PartialWrite<Odd> to get FullWrite.
-        let el = GlobalRegion::<PartialWrite<EvenLow>> { _phantom: PhantomData };
-        let eh = GlobalRegion::<PartialWrite<EvenHigh>> { _phantom: PhantomData };
+        let el = GlobalRegion::<PartialWrite<EvenLow>> {
+            _phantom: PhantomData,
+        };
+        let eh = GlobalRegion::<PartialWrite<EvenHigh>> {
+            _phantom: PhantomData,
+        };
 
         // Nested merge: EvenLow + EvenHigh → Even (partial)
         let even_partial: GlobalRegion<PartialWrite<Even>> = merge_writes_within(el, eh);
 
         // Top-level merge: Even + Odd → FullWrite
-        let odd = GlobalRegion::<PartialWrite<Odd>> { _phantom: PhantomData };
+        let odd = GlobalRegion::<PartialWrite<Odd>> {
+            _phantom: PhantomData,
+        };
         let full = merge_writes(even_partial, odd);
         let _fenced = threadfence(full);
     }

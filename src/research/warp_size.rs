@@ -35,18 +35,22 @@ pub mod const_generic {
     use super::*;
 
     pub trait ActiveSet<const N: usize>: Copy + 'static {
-        fn mask() -> u64;  // u64 to support up to 64 lanes
+        fn mask() -> u64; // u64 to support up to 64 lanes
     }
 
     #[derive(Copy, Clone)]
     pub struct All;
 
     impl ActiveSet<32> for All {
-        fn mask() -> u64 { 0xFFFFFFFF }
+        fn mask() -> u64 {
+            0xFFFFFFFF
+        }
     }
 
     impl ActiveSet<64> for All {
-        fn mask() -> u64 { 0xFFFFFFFFFFFFFFFF }
+        fn mask() -> u64 {
+            0xFFFFFFFFFFFFFFFF
+        }
     }
 
     #[derive(Copy, Clone)]
@@ -56,7 +60,9 @@ pub mod const_generic {
 
     impl<S: ActiveSet<N>, const N: usize> Warp<S, N> {
         pub fn new() -> Self {
-            Warp { _marker: PhantomData }
+            Warp {
+                _marker: PhantomData,
+            }
         }
 
         pub fn size() -> usize {
@@ -69,10 +75,7 @@ pub mod const_generic {
     }
 
     /// Ballot: count active lanes
-    pub fn ballot<S: ActiveSet<N>, const N: usize>(
-        _warp: &Warp<S, N>,
-        pred: &[bool],
-    ) -> u64 {
+    pub fn ballot<S: ActiveSet<N>, const N: usize>(_warp: &Warp<S, N>, pred: &[bool]) -> u64 {
         let mut mask = 0u64;
         for lane in 0..N {
             if lane < pred.len() && pred[lane] {
@@ -83,10 +86,7 @@ pub mod const_generic {
     }
 
     /// Reduce: sum across warp
-    pub fn reduce_sum<S: ActiveSet<N>, const N: usize>(
-        _warp: &Warp<S, N>,
-        values: &[i32],
-    ) -> i32 {
+    pub fn reduce_sum<S: ActiveSet<N>, const N: usize>(_warp: &Warp<S, N>, values: &[i32]) -> i32 {
         values.iter().take(N).sum()
     }
 
@@ -158,12 +158,16 @@ pub mod platform_trait {
         const WARP_SIZE: usize = 32;
         type Mask = u32;
 
-        fn full_mask() -> u32 { 0xFFFFFFFF }
+        fn full_mask() -> u32 {
+            0xFFFFFFFF
+        }
 
         fn ballot(pred: &[bool]) -> u32 {
             let mut mask = 0u32;
             for (i, &p) in pred.iter().take(32).enumerate() {
-                if p { mask |= 1 << i; }
+                if p {
+                    mask |= 1 << i;
+                }
             }
             mask
         }
@@ -181,12 +185,16 @@ pub mod platform_trait {
         const WARP_SIZE: usize = 64;
         type Mask = u64;
 
-        fn full_mask() -> u64 { 0xFFFFFFFFFFFFFFFF }
+        fn full_mask() -> u64 {
+            0xFFFFFFFFFFFFFFFF
+        }
 
         fn ballot(pred: &[bool]) -> u64 {
             let mut mask = 0u64;
             for (i, &p) in pred.iter().take(64).enumerate() {
-                if p { mask |= 1 << i; }
+                if p {
+                    mask |= 1 << i;
+                }
             }
             mask
         }
@@ -210,7 +218,9 @@ pub mod platform_trait {
 
     impl<P: Platform> Warp<P> {
         pub fn new() -> Self {
-            Warp { _platform: PhantomData }
+            Warp {
+                _platform: PhantomData,
+            }
         }
 
         pub fn size() -> usize {
@@ -332,7 +342,9 @@ pub mod active_set_portable {
                 (1u64 << N) - 1
             }
         }
-        fn name() -> &'static str { "All" }
+        fn name() -> &'static str {
+            "All"
+        }
     }
 
     // Even lanes: 0, 2, 4, ... (pattern 0x5555...)
@@ -344,7 +356,9 @@ pub mod active_set_portable {
             }
             mask
         }
-        fn name() -> &'static str { "Even" }
+        fn name() -> &'static str {
+            "Even"
+        }
     }
 
     // Odd lanes: 1, 3, 5, ... (pattern 0xAAAA...)
@@ -356,7 +370,9 @@ pub mod active_set_portable {
             }
             mask
         }
-        fn name() -> &'static str { "Odd" }
+        fn name() -> &'static str {
+            "Odd"
+        }
     }
 
     // Low half: 0..N/2
@@ -369,18 +385,26 @@ pub mod active_set_portable {
                 (1u64 << half) - 1
             }
         }
-        fn name() -> &'static str { "LowHalf" }
+        fn name() -> &'static str {
+            "LowHalf"
+        }
     }
 
     // High half: N/2..N
     impl<const N: usize> ActiveSet<N> for HighHalf {
         fn mask() -> u64 {
             let half = N / 2;
-            let low = if half >= 64 { u64::MAX } else { (1u64 << half) - 1 };
+            let low = if half >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << half) - 1
+            };
             let all = if N >= 64 { u64::MAX } else { (1u64 << N) - 1 };
             all ^ low
         }
-        fn name() -> &'static str { "HighHalf" }
+        fn name() -> &'static str {
+            "HighHalf"
+        }
     }
 
     #[cfg(test)]
@@ -389,9 +413,12 @@ pub mod active_set_portable {
 
         #[test]
         fn test_even_odd_32() {
-            assert_eq!(<Even as ActiveSet<32>>::mask(), 0x55555555);  // 32-bit pattern
-            assert_eq!(<Odd as ActiveSet<32>>::mask(), 0xAAAAAAAA);   // Complement
-            assert_eq!(<Even as ActiveSet<32>>::mask() | <Odd as ActiveSet<32>>::mask(), 0xFFFFFFFF);
+            assert_eq!(<Even as ActiveSet<32>>::mask(), 0x55555555); // 32-bit pattern
+            assert_eq!(<Odd as ActiveSet<32>>::mask(), 0xAAAAAAAA); // Complement
+            assert_eq!(
+                <Even as ActiveSet<32>>::mask() | <Odd as ActiveSet<32>>::mask(),
+                0xFFFFFFFF
+            );
         }
 
         #[test]
@@ -456,6 +483,6 @@ mod integration_tests {
 
         simulate_diverge::<32>();
         simulate_diverge::<64>();
-        simulate_diverge::<16>();  // Could support even smaller warps
+        simulate_diverge::<16>(); // Could support even smaller warps
     }
 }

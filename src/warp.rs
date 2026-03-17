@@ -17,8 +17,8 @@
 //! }
 //! ```
 
-use core::marker::PhantomData;
 use crate::active_set::ActiveSet;
+use core::marker::PhantomData;
 
 /// A warp with compile-time tracked active lanes.
 ///
@@ -54,7 +54,9 @@ impl Warp<crate::active_set::All> {
     /// that. The Lean formalization models linear semantics where this is
     /// enforced; the Rust implementation trusts the programmer here.
     pub fn kernel_entry() -> Self {
-        Warp { _phantom: PhantomData }
+        Warp {
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -74,7 +76,9 @@ impl<S: ActiveSet> Warp<S> {
     /// let fake: Warp<Even> = Warp::new();
     /// ```
     pub(crate) fn new() -> Self {
-        Warp { _phantom: PhantomData }
+        Warp {
+            _phantom: PhantomData,
+        }
     }
 
     /// Human-readable name of the active set.

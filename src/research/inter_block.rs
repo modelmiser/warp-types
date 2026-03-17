@@ -55,9 +55,7 @@ pub struct ThreadId {
 
 impl ThreadId {
     pub fn global_id(&self, warps_per_block: u32, lanes_per_warp: u32) -> u32 {
-        self.block.0 * warps_per_block * lanes_per_warp
-            + self.warp.0 * lanes_per_warp
-            + self.lane.0
+        self.block.0 * warps_per_block * lanes_per_warp + self.warp.0 * lanes_per_warp + self.lane.0
     }
 }
 
@@ -99,7 +97,10 @@ pub mod intra_block {
 
     impl<T: Copy, const SIZE: usize> SharedMem<T, SIZE> {
         /// All threads in block can read (after barrier)
-        pub fn read(&self, _idx: usize) -> T where T: Default {
+        pub fn read(&self, _idx: usize) -> T
+        where
+            T: Default,
+        {
             // Placeholder: CPU has no shared memory; return default value
             T::default()
         }
@@ -154,7 +155,9 @@ pub mod inter_block {
 
         /// Atomic add - returns old value
         pub fn atomic_add(&self, _idx: usize, _val: T) -> T
-        where T: std::ops::Add<Output = T> {
+        where
+            T: std::ops::Add<Output = T>,
+        {
             T::default() // CPU placeholder — returns "old value" of zero
         }
     }
@@ -253,7 +256,7 @@ impl<State: ProtocolState, const N: usize> BlockSession<Leader, State, N> {
         _global: &mut inter_block::GlobalMem<T>,
     ) -> BlockSession<Leader, WorkDistributed, N>
     where
-        State: Into<Initial>,  // Only from Initial state
+        State: Into<Initial>, // Only from Initial state
     {
         // Write to global memory locations for each worker
         // In real code: for i in 1..N { global.write(i, data); }
@@ -288,7 +291,7 @@ impl<State: ProtocolState, const N: usize> BlockSession<Worker, State, N> {
     {
         // Read from our global memory slot
         // In real code: let data = global.read(self.block_id.0);
-        let data: T = T::default();  // Placeholder
+        let data: T = T::default(); // Placeholder
         (data, BlockSession::new(self.block_id))
     }
 
@@ -335,9 +338,15 @@ pub mod cooperative {
     }
 
     impl CooperativeGroup for ThreadBlockGroup {
-        fn size(&self) -> u32 { self.num_threads }
-        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
-        fn sync(&self) { intra_block::sync_threads(); }
+        fn size(&self) -> u32 {
+            self.num_threads
+        }
+        fn thread_rank(&self) -> u32 {
+            0
+        } // CPU single-thread placeholder
+        fn sync(&self) {
+            intra_block::sync_threads();
+        }
     }
 
     /// Grid group (all threads in the grid) - requires cooperative launch
@@ -347,21 +356,32 @@ pub mod cooperative {
     }
 
     impl CooperativeGroup for GridGroup {
-        fn size(&self) -> u32 { self.num_blocks * self.threads_per_block }
-        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
-        fn sync(&self) { inter_block::grid_sync(); }
+        fn size(&self) -> u32 {
+            self.num_blocks * self.threads_per_block
+        }
+        fn thread_rank(&self) -> u32 {
+            0
+        } // CPU single-thread placeholder
+        fn sync(&self) {
+            inter_block::grid_sync();
+        }
     }
 
     /// Coalesced group (subset of a warp with active lanes)
     /// This connects to our warp divergence work!
     pub struct CoalescedGroup {
-        mask: u32,  // Active lane mask
+        mask: u32, // Active lane mask
     }
 
     impl CooperativeGroup for CoalescedGroup {
-        fn size(&self) -> u32 { self.mask.count_ones() }
-        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
-        fn sync(&self) { /* Implicit in warp execution */ }
+        fn size(&self) -> u32 {
+            self.mask.count_ones()
+        }
+        fn thread_rank(&self) -> u32 {
+            0
+        } // CPU single-thread placeholder
+        fn sync(&self) { /* Implicit in warp execution */
+        }
     }
 
     /// Tiled partition (fixed-size subset of a warp)
@@ -370,9 +390,14 @@ pub mod cooperative {
     }
 
     impl<const SIZE: u32> CooperativeGroup for TiledPartition<SIZE> {
-        fn size(&self) -> u32 { SIZE }
-        fn thread_rank(&self) -> u32 { 0 } // CPU single-thread placeholder
-        fn sync(&self) { /* Implicit in warp execution for SIZE <= 32 */ }
+        fn size(&self) -> u32 {
+            SIZE
+        }
+        fn thread_rank(&self) -> u32 {
+            0
+        } // CPU single-thread placeholder
+        fn sync(&self) { /* Implicit in warp execution for SIZE <= 32 */
+        }
     }
 }
 
@@ -402,8 +427,8 @@ pub trait SessionLevel {
 pub struct WarpLevel;
 impl SessionLevel for WarpLevel {
     type Id = LaneId;
-    type CommPrimitive = ();  // Shuffles
-    type SyncPrimitive = ();  // Implicit (SIMT)
+    type CommPrimitive = (); // Shuffles
+    type SyncPrimitive = (); // Implicit (SIMT)
     const MAX_PARTICIPANTS: u32 = 32;
 }
 
@@ -411,18 +436,18 @@ impl SessionLevel for WarpLevel {
 pub struct BlockLevel;
 impl SessionLevel for BlockLevel {
     type Id = WarpId;
-    type CommPrimitive = ();  // Shared memory
-    type SyncPrimitive = ();  // __syncthreads
-    const MAX_PARTICIPANTS: u32 = 32;  // Typical max warps per block
+    type CommPrimitive = (); // Shared memory
+    type SyncPrimitive = (); // __syncthreads
+    const MAX_PARTICIPANTS: u32 = 32; // Typical max warps per block
 }
 
 /// Grid level: variable blocks, global memory, cooperative groups
 pub struct GridLevel;
 impl SessionLevel for GridLevel {
     type Id = BlockId;
-    type CommPrimitive = ();  // Global memory
-    type SyncPrimitive = ();  // grid.sync()
-    const MAX_PARTICIPANTS: u32 = 65535;  // Max blocks
+    type CommPrimitive = (); // Global memory
+    type SyncPrimitive = (); // grid.sync()
+    const MAX_PARTICIPANTS: u32 = 65535; // Max blocks
 }
 
 // ============================================================================
@@ -493,15 +518,24 @@ pub mod hierarchical_reduce {
 
     impl ReductionSession<WarpPhase> {
         pub fn new(value: u32) -> Self {
-            ReductionSession { value, _phase: PhantomData }
+            ReductionSession {
+                value,
+                _phase: PhantomData,
+            }
         }
 
         /// Warp reduction using shuffles
         /// Returns the result (in lane 0) and advances to block phase
         pub fn warp_reduce(self) -> (u32, ReductionSession<BlockPhase>) {
             // In real code: use shuffle_down reduction
-            let result = self.value;  // Placeholder
-            (result, ReductionSession { value: result, _phase: PhantomData })
+            let result = self.value; // Placeholder
+            (
+                result,
+                ReductionSession {
+                    value: result,
+                    _phase: PhantomData,
+                },
+            )
         }
     }
 
@@ -511,7 +545,13 @@ pub mod hierarchical_reduce {
         pub fn block_reduce(self) -> (u32, ReductionSession<GridPhase>) {
             // In real code: write to shared mem, sync, reduce
             let result = self.value;
-            (result, ReductionSession { value: result, _phase: PhantomData })
+            (
+                result,
+                ReductionSession {
+                    value: result,
+                    _phase: PhantomData,
+                },
+            )
         }
     }
 
@@ -521,7 +561,13 @@ pub mod hierarchical_reduce {
         pub fn grid_reduce(self) -> (u32, ReductionSession<Complete>) {
             // In real code: write to global mem, grid sync, reduce
             let result = self.value;
-            (result, ReductionSession { value: result, _phase: PhantomData })
+            (
+                result,
+                ReductionSession {
+                    value: result,
+                    _phase: PhantomData,
+                },
+            )
         }
     }
 
@@ -569,8 +615,8 @@ pub mod hierarchical_reduce {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::hierarchical_reduce::*;
+    use super::*;
 
     #[test]
     fn test_thread_id() {

@@ -71,7 +71,11 @@
 //!
 //! Run: `cargo test --example opencv_12320`
 
-#![allow(clippy::needless_range_loop, clippy::new_without_default, clippy::useless_vec)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::new_without_default,
+    clippy::useless_vec
+)]
 
 use std::marker::PhantomData;
 
@@ -92,21 +96,39 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl<S: ActiveSet> Warp<S> {
-    pub fn new() -> Self { Warp { _phantom: PhantomData } }
-    pub fn active_mask(&self) -> u32 { S::MASK }
+    pub fn new() -> Self {
+        Warp {
+            _phantom: PhantomData,
+        }
+    }
+    pub fn active_mask(&self) -> u32 {
+        S::MASK
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct PerLane<T>(pub [T; 32]);
 
 // Active set types
-#[derive(Copy, Clone)] pub struct All;
-#[derive(Copy, Clone)] pub struct Active;    // threads that entered the divergent branch
-#[derive(Copy, Clone)] pub struct Inactive;  // threads that took the other path
+#[derive(Copy, Clone)]
+pub struct All;
+#[derive(Copy, Clone)]
+pub struct Active; // threads that entered the divergent branch
+#[derive(Copy, Clone)]
+pub struct Inactive; // threads that took the other path
 
-impl ActiveSet for All      { const MASK: u32 = 0xFFFFFFFF; const NAME: &'static str = "All"; }
-impl ActiveSet for Active   { const MASK: u32 = 0x0000FFFF; const NAME: &'static str = "Active"; }
-impl ActiveSet for Inactive { const MASK: u32 = 0xFFFF0000; const NAME: &'static str = "Inactive"; }
+impl ActiveSet for All {
+    const MASK: u32 = 0xFFFFFFFF;
+    const NAME: &'static str = "All";
+}
+impl ActiveSet for Active {
+    const MASK: u32 = 0x0000FFFF;
+    const NAME: &'static str = "Active";
+}
+impl ActiveSet for Inactive {
+    const MASK: u32 = 0xFFFF0000;
+    const NAME: &'static str = "Inactive";
+}
 
 impl ComplementOf<Inactive> for Active {}
 impl ComplementOf<Active> for Inactive {}
@@ -170,7 +192,10 @@ impl Warp<Active> {
 }
 
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
-where S1: ComplementOf<S2>, S2: ActiveSet {
+where
+    S1: ComplementOf<S2>,
+    S2: ActiveSet,
+{
     Warp::new()
 }
 
@@ -228,10 +253,7 @@ fn _buggy_version_for_doctest() {}
 ///
 /// Inactive lanes contribute identity (0 for addition). Then scan the full
 /// warp. Active lanes get correct prefix sums; inactive lanes get zeroes.
-fn fix_merge_then_scan(
-    warp: Warp<All>,
-    active_data: PerLane<u32>,
-) -> PerLane<u32> {
+fn fix_merge_then_scan(warp: Warp<All>, active_data: PerLane<u32>) -> PerLane<u32> {
     let (active, inactive) = warp.diverge_on_condition();
 
     // Inactive lanes contribute identity element (0)
@@ -253,10 +275,7 @@ fn fix_merge_then_scan(
 /// only involves active lanes. No shuffle, no convergence requirement, no
 /// deadlock risk. This matches OpenCV's fix: `__activemask()` restricts the
 /// operation to participating threads.
-fn fix_subwarp_scan(
-    warp: Warp<All>,
-    active_data: &[u32],
-) -> Vec<u32> {
+fn fix_subwarp_scan(warp: Warp<All>, active_data: &[u32]) -> Vec<u32> {
     let (active, _inactive) = warp.diverge_on_condition();
 
     // Scan only within active lanes — no shuffle, no deadlock
@@ -281,8 +300,14 @@ mod tests {
 
         // Inclusive prefix sum of [1,1,1,...,1] = [1,2,3,...,32]
         for lane in 0..32 {
-            assert_eq!(result.0[lane], (lane + 1) as u32,
-                "lane {} expected {} got {}", lane, lane + 1, result.0[lane]);
+            assert_eq!(
+                result.0[lane],
+                (lane + 1) as u32,
+                "lane {} expected {} got {}",
+                lane,
+                lane + 1,
+                result.0[lane]
+            );
         }
     }
 
@@ -300,8 +325,11 @@ mod tests {
         let mut expected = 0u32;
         for lane in 0..32 {
             expected += (lane + 1) as u32;
-            assert_eq!(result.0[lane], expected,
-                "lane {} expected {} got {}", lane, expected, result.0[lane]);
+            assert_eq!(
+                result.0[lane], expected,
+                "lane {} expected {} got {}",
+                lane, expected, result.0[lane]
+            );
         }
     }
 
@@ -336,15 +364,24 @@ mod tests {
 
         // Active lanes (0-15) get prefix sum [1, 2, 3, ..., 16]
         for lane in 0..16 {
-            assert_eq!(result.0[lane], (lane + 1) as u32,
-                "active lane {} expected {} got {}", lane, lane + 1, result.0[lane]);
+            assert_eq!(
+                result.0[lane],
+                (lane + 1) as u32,
+                "active lane {} expected {} got {}",
+                lane,
+                lane + 1,
+                result.0[lane]
+            );
         }
 
         // Inactive lanes (16-31) have 0 data, so their prefix sums carry
         // the total from active lanes (16) forward
         for lane in 16..32 {
-            assert_eq!(result.0[lane], 16,
-                "inactive lane {} expected 16 got {}", lane, result.0[lane]);
+            assert_eq!(
+                result.0[lane], 16,
+                "inactive lane {} expected 16 got {}",
+                lane, result.0[lane]
+            );
         }
     }
 
@@ -360,8 +397,14 @@ mod tests {
         // Sub-warp inclusive scan of [1,1,...,1] = [1,2,3,...,16]
         assert_eq!(result.len(), 16);
         for i in 0..16 {
-            assert_eq!(result[i], (i + 1) as u32,
-                "sub-warp lane {} expected {} got {}", i, i + 1, result[i]);
+            assert_eq!(
+                result[i],
+                (i + 1) as u32,
+                "sub-warp lane {} expected {} got {}",
+                i,
+                i + 1,
+                result[i]
+            );
         }
     }
 
@@ -425,8 +468,11 @@ mod tests {
 
         // Active lanes should match between both fixes
         for i in 0..16 {
-            assert_eq!(result_a.0[i], result_b[i],
-                "lane {} disagrees: fix_a={}, fix_b={}", i, result_a.0[i], result_b[i]);
+            assert_eq!(
+                result_a.0[i], result_b[i],
+                "lane {} disagrees: fix_a={}, fix_b={}",
+                i, result_a.0[i], result_b[i]
+            );
         }
     }
 
