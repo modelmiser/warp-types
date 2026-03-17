@@ -217,12 +217,12 @@ Uniform values are guaranteed identical across lanes:
 ```rust
 pub struct Uniform<T>(T);
 
-impl<T: Copy> Uniform<T> {
+impl<T: GpuValue> Uniform<T> {
     pub fn from_const(value: T) -> Self {
         Uniform(value)
     }
 
-    pub fn get(&self) -> T {
+    pub fn get(self) -> T {
         self.0
     }
 
@@ -237,16 +237,16 @@ impl<T: Copy> Uniform<T> {
 A value existing only in lane N:
 
 ```rust
-pub struct SingleLane<T, const N: usize>(T);
+pub struct SingleLane<T: GpuValue, const LANE: u8>(T);
 
-impl<T: Copy, const N: usize> SingleLane<T, N> {
+impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
     pub fn get(&self) -> T {
         self.0
     }
 
     pub fn broadcast(self) -> Uniform<T> {
-        // GPU intrinsic: broadcast from lane N
-        Uniform(unsafe { intrinsic_broadcast(self.0, N) })
+        // GPU intrinsic: broadcast from lane LANE
+        Uniform(unsafe { intrinsic_broadcast(self.0, LANE) })
     }
 }
 ```
@@ -264,7 +264,7 @@ impl Warp<All> {
         (Warp::new(), Warp::new())
     }
 
-    pub fn diverge_low_high(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
+    pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
         (Warp::new(), Warp::new())
     }
 }
@@ -274,21 +274,20 @@ The `self` parameter consumes the original warp. Rust's ownership system prevent
 
 ### Generic Diverge
 
-For arbitrary predicates, we use a macro or const generics:
+The formal typing rule (§3) describes a generic `diverge<P: Predicate>`. In the implementation, predicates are instantiated as concrete methods (`diverge_even_odd`, `diverge_halves`, `extract_lane0`). For runtime-dependent predicates, `diverge_dynamic(mask: u64)` returns a `DynDiverge` with structural complement guarantees (§5).
 
 ```rust
-impl<S: ActiveSet> Warp<S> {
-    pub fn diverge<P: Predicate>(self) -> (Warp<Intersect<S, P>>, Warp<Intersect<S, Not<P>>>)
-    where
-        Intersect<S, P>: ActiveSet,
-        Intersect<S, Not<P>>: ActiveSet,
-    {
-        (Warp::new(), Warp::new())
-    }
+impl Warp<All> {
+    pub fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) { ... }
+    pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) { ... }
+    pub fn extract_lane0(self) -> (Warp<Lane0>, Warp<NotLane0>) { ... }
 }
-```
 
-This requires type-level computation (intersection, complement), which we implement using associated types.
+impl Warp<Even> {
+    pub fn diverge_halves(self) -> (Warp<EvenLow>, Warp<EvenHigh>) { ... }
+}
+// ... nested diverge methods for each active set
+```
 
 ### Type-Safe Merge
 
@@ -348,9 +347,9 @@ trait Platform {
     type Vector<T>;
     type Mask;
 
-    fn shuffle_xor<T>(data: Self::Vector<T>, mask: u32) -> Self::Vector<T>;
+    fn shuffle_xor<T: GpuValue>(source: Self::Vector<T>, mask: usize) -> Self::Vector<T>;
     fn reduce_sum<T>(values: Self::Vector<T>) -> T;
-    fn ballot(pred: &[bool]) -> Self::Mask;
+    fn ballot(predicates: Self::Vector<bool>) -> Self::Mask;
 }
 ```
 

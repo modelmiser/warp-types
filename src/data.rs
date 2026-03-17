@@ -100,6 +100,13 @@ impl<T: GpuValue> PerLane<T> {
     }
 }
 
+impl<T: GpuValue + core::ops::Add<Output = T>> core::ops::Add for PerLane<T> {
+    type Output = PerLane<T>;
+    fn add(self, rhs: PerLane<T>) -> PerLane<T> {
+        PerLane { value: self.value + rhs.value }
+    }
+}
+
 /// A value that exists ONLY in a specific lane.
 ///
 /// Models the result of a reduction — only one lane has the answer.

@@ -64,6 +64,7 @@ We introduce *warp typestate*, a type system that tracks which lanes are active 
 With this type system, the buggy code above becomes a compile error:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLane<bool>) -> i32 {
     let (active, inactive) = warp.diverge(|lane| participate[lane]);
 
@@ -79,20 +80,21 @@ fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLan
 The fix is explicit: merge back to `Warp<All>` before shuffling, ensuring all lanes have valid data:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLane<bool>) -> i32 {
     let (active, inactive) = warp.diverge(|lane| participate[lane]);
 
     // Inactive lanes contribute zero
     let active_data = data;
-    let inactive_data = PerLane::splat(0);
+    let inactive_data = PerLane::new(0);
 
     // Merge back - type system verifies complement
     let warp: Warp<All> = merge(active, inactive);
-    let combined = merge_data(active_data, inactive_data);
+    // Data merge implicit in SIMT — each lane holds its branch result
 
     // Now shuffle is safe
-    let partner = warp.shuffle_xor(combined, 1);  // OK: Warp<All>
-    combined + partner
+    let partner = warp.shuffle_xor(data, 1);  // OK: Warp<All>
+    data + partner
 }
 ```
 
@@ -666,7 +668,7 @@ XOR 1:    [sum, sum, sum, ...]     -- all lanes have the total
 ### Typed Implementation
 
 ```rust
-fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> Uniform<i32> {
+fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> i32 {
     // Type of warp: Warp<All> ✓
 
     let data = data + warp.shuffle_xor(data, 16);
@@ -681,7 +683,7 @@ fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> Uniform<i32> {
     let data = data + warp.shuffle_xor(data, 1);
 
     // All lanes now have the same value
-    data.assume_uniform()  // Unsafe: programmer asserts uniformity
+    data.get()  // All lanes now hold the total
 }
 ```
 
@@ -692,6 +694,7 @@ Every `shuffle_xor` call type-checks because `warp` has type `Warp<All>` through
 Now consider a filtered reduction where some lanes don't participate:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn filtered_sum(warp: Warp<All>, data: PerLane<i32>, keep: PerLane<bool>) -> Uniform<i32> {
     // Diverge based on keep predicate
     let (active, inactive) = warp.diverge(|lane| keep[lane]);
@@ -704,14 +707,14 @@ fn filtered_sum(warp: Warp<All>, data: PerLane<i32>, keep: PerLane<bool>) -> Uni
 
     // CORRECT: Prepare data and merge first
     let active_data = data;
-    let inactive_data = PerLane::splat(0);  // Non-participants contribute 0
+    let inactive_data = PerLane::new(0);  // Non-participants contribute 0
 
     // Merge back to Warp<All>
     let warp: Warp<All> = merge(active, inactive);  // ✓ Keep ⊥ ¬Keep
-    let combined = merge_data(active_data, inactive_data);
+    // Data merge implicit in SIMT — each lane holds its branch result
 
     // Now butterfly reduction is safe
-    butterfly_sum(warp, combined)
+    butterfly_sum(warp, active_data)
 }
 ```
 
@@ -1266,7 +1269,7 @@ The type system tracks predicate indices and verifies that merge uses the matchi
 When nothing is known statically, use an existential wrapper:
 ```rust
 struct SomeWarp {
-    mask: u32,
+    mask: u64,
     // Active set is unknown at type level
 }
 
@@ -1340,9 +1343,9 @@ The warp protocol uses our warp typestate. The block protocol uses traditional s
 
 ### Why This Matters
 
-The novel contribution of this paper is *warp-level* session types with quiescence. This is the gap in prior work:
+The novel contribution of this paper is *warp-level* linear typestate with quiescence — motivated by the session type analogy but technically distinct (§1.1). This is the gap in prior work:
 - Traditional session types: all parties active or failed
-- Our extension: parties can go quiescent and resume
+- Our approach: parties can go quiescent and resume, tracked via active-set lattice rather than protocol sequencing
 
 Inter-block communication doesn't need this extension—it's already well-served by existing session type systems. Our contribution is recognizing where the existing theory applies and where we need something new.
 
@@ -1504,7 +1507,7 @@ Active sets are marker types with no runtime representation:
 
 ```rust
 pub trait ActiveSet: Copy + 'static {
-    const MASK: u32;
+    const MASK: u64;
     const NAME: &'static str;
 }
 ```
@@ -1544,7 +1547,7 @@ impl<S: ActiveSet> Warp<S> {
         Warp { _marker: PhantomData }
     }
 
-    pub fn active_mask(&self) -> u32 {
+    pub fn active_mask(&self) -> u64 {
         S::MASK
     }
 }
@@ -1680,28 +1683,25 @@ Our approach has the lowest overhead because the types *are* the verification.
 
 ### `PerLane<T>`
 
-Per-lane data is stored as an array:
+Per-lane data wraps a single value — because on GPU, each lane IS a separate thread with its own registers:
 
 ```rust
-#[repr(C)]
-pub struct PerLane<T>([T; 32]);
+pub struct PerLane<T: GpuValue> {
+    value: T,
+}
 
-impl<T: Copy> PerLane<T> {
-    pub fn splat(value: T) -> Self {
-        PerLane([value; 32])
+impl<T: GpuValue> PerLane<T> {
+    pub fn new(value: T) -> Self {
+        PerLane { value }
     }
 
-    pub fn get(&self, lane: usize) -> T {
-        self.0[lane]
-    }
-
-    pub fn set(&mut self, lane: usize, value: T) {
-        self.0[lane] = value;
+    pub fn get(self) -> T {
+        self.value
     }
 }
 ```
 
-On GPU, this maps to registers. Each lane accesses its own element.
+The single-`T` representation reflects GPU reality: in SIMT execution, 32 lanes each run the same code with their own register file. A `PerLane<i32>` stored by lane 0 holds lane 0's value; lane 15's copy holds lane 15's value. There is no 32-element array — the parallelism is in the hardware, not the data structure. For CPU testing, shuffle operations are identity functions (returning the input value), since only one thread executes.
 
 ### `Uniform<T>`
 
@@ -1710,17 +1710,17 @@ Uniform values are guaranteed identical across lanes:
 ```rust
 pub struct Uniform<T>(T);
 
-impl<T: Copy> Uniform<T> {
+impl<T: GpuValue> Uniform<T> {
     pub fn from_const(value: T) -> Self {
         Uniform(value)
     }
 
-    pub fn get(&self) -> T {
+    pub fn get(self) -> T {
         self.0
     }
 
     pub fn broadcast(self) -> PerLane<T> {
-        PerLane::splat(self.0)
+        PerLane::new(self.0)
     }
 }
 ```
@@ -1730,9 +1730,9 @@ impl<T: Copy> Uniform<T> {
 A value existing only in lane N:
 
 ```rust
-pub struct SingleLane<T, const N: usize>(T);
+pub struct SingleLane<T: GpuValue, const LANE: u8>(T);
 
-impl<T: Copy, const N: usize> SingleLane<T, N> {
+impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
     pub fn get(&self) -> T {
         self.0
     }
@@ -1757,7 +1757,7 @@ impl Warp<All> {
         (Warp::new(), Warp::new())
     }
 
-    pub fn diverge_low_high(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
+    pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
         (Warp::new(), Warp::new())
     }
 }
@@ -1767,21 +1767,29 @@ The `self` parameter consumes the original warp. Rust's ownership system prevent
 
 ### Generic Diverge
 
-For arbitrary predicates, we use a macro or const generics:
+The formal typing rule (§3) describes a generic `diverge<P: Predicate>`. In the implementation, predicates are instantiated as concrete methods (`diverge_even_odd`, `diverge_halves`, `extract_lane0`). For runtime-dependent predicates, `diverge_dynamic(mask: u64)` returns a `DynDiverge` with structural complement guarantees (§5).
 
 ```rust
-impl<S: ActiveSet> Warp<S> {
-    pub fn diverge<P: Predicate>(self) -> (Warp<Intersect<S, P>>, Warp<Intersect<S, Not<P>>>)
-    where
-        Intersect<S, P>: ActiveSet,
-        Intersect<S, Not<P>>: ActiveSet,
-    {
+impl Warp<All> {
+    pub fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) {
         (Warp::new(), Warp::new())
+    }
+
+    pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
+        (Warp::new(), Warp::new())
+    }
+
+    pub fn extract_lane0(self) -> (Warp<Lane0>, Warp<NotLane0>) {
+        (Warp::new(), Warp::new())
+    }
+
+    pub fn diverge_dynamic(self, mask: u64) -> DynDiverge {
+        DynDiverge::new(mask)
     }
 }
 ```
 
-This requires type-level computation (intersection, complement), which we implement using associated types.
+Each concrete method encodes a specific predicate as a pair of complementary marker types. The `warp_sets!` macro (§6.1) generates and validates these pairings at compile time.
 
 ### Type-Safe Merge
 
@@ -1802,26 +1810,7 @@ The trait bound `S1: ComplementOf<S2>` is the compile-time verification.
 
 ### Data Merge
 
-Merging data from two branches:
-
-```rust
-pub fn merge_data<T: Copy, S1: ActiveSet, S2: ComplementOf<S1>>(
-    left: PerLane<T>,
-    right: PerLane<T>,
-) -> PerLane<T> {
-    let mut result = [T::default(); 32];
-    for lane in 0..32 {
-        if S1::MASK & (1 << lane) != 0 {
-            result[lane] = left.0[lane];
-        } else {
-            result[lane] = right.0[lane];
-        }
-    }
-    PerLane(result)
-}
-```
-
-On GPU, this is a predicated select operation.
+On GPU, merging data from two branches is a predicated select operation: each lane activates for its branch and contributes its own `PerLane<T>` value. Since each lane holds a single `T` (see §6.3), the merge is implicit in the SIMT execution model — each lane simply writes its branch result, and reconvergence makes both results available.
 
 ## 6.5 GPU Intrinsics
 
@@ -1835,15 +1824,11 @@ extern "C" {
 
 // High-level wrapper (safe, typed)
 impl Warp<All> {
-    pub fn shuffle_xor<T: ShufflePrimitive>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
-        let mut result = PerLane::splat(T::default());
-        for lane in 0..32 {
-            unsafe {
-                result.0[lane] = __shfl_xor_sync(0xFFFFFFFF, data.0[lane].to_bits(), mask, 32)
-                    .from_bits();
-            }
-        }
-        result
+    pub fn shuffle_xor<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
+        // On GPU: each lane calls the intrinsic with its own value.
+        // PerLane<T> holds a single T per lane — the hardware provides
+        // the 32-way parallelism.
+        PerLane::new(data.get().gpu_shfl_xor(mask))
     }
 }
 ```
@@ -1860,9 +1845,9 @@ trait Platform {
     type Vector<T>;
     type Mask;
 
-    fn shuffle_xor<T>(data: Self::Vector<T>, mask: u32) -> Self::Vector<T>;
+    fn shuffle_xor<T: GpuValue>(source: Self::Vector<T>, mask: usize) -> Self::Vector<T>;
     fn reduce_sum<T>(values: Self::Vector<T>) -> T;
-    fn ballot(pred: &[bool]) -> Self::Mask;
+    fn ballot(predicates: Self::Vector<bool>) -> Self::Mask;
 }
 ```
 
@@ -2008,10 +1993,10 @@ We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects
 
 | Bug | Source | Failure Mode | Caught? |
 |-----|--------|--------------|---------|
-| Full mask in divergent scan → hang | OpenCV#12320 | Deadlock on Volta/Turing | Yes |
+| Full mask in divergent scan → hang | OpenCV#12320 | Deadlock on Volta/Turing | Yes — modeled in code |
 | Full mask with early-exit → freeze | Ginkgo#54 | Deadlock on Titan V | Yes |
-| `__activemask()` misuse in radix sort | PyTorch#98157 | Wrong distribution counts | Yes |
-| Wrong mask computation → illegal insn | TVM PR#17307 | Crash on H100 | Yes |
+| `__activemask()` misuse in radix sort | PyTorch#98157 | Wrong distribution counts | Yes — modeled in code |
+| Wrong mask computation → illegal insn | TVM PR#17307 | Crash on H100 | Yes — modeled in code |
 | Bad mask for logical warp < 32 | CUB#115 | Silent wrong reduction | Yes |
 | ShuffleIndex wrong for sub-warps | CUB#112 | Silent wrong aggregate | Yes |
 | WarpReduce wrong for non-pow2 sizes | CCCL#858 | Silent wrong reduction | Partial |
@@ -2111,7 +2096,7 @@ Our prototype includes 268 unit tests, 50 example tests across 8 worked bug exam
 - Recursive protocols (5 loop patterns)
 - Arbitrary predicates (existential, indexed, hybrid)
 - Work stealing with dynamic roles
-- Platform portability (warp-32 and wavefront-64)
+- Platform portability (warp-32; wavefront-64 mask width supported but not hardware-tested)
 - Warp-size-generic algorithms
 
 Every test validates that the type system permits correct patterns and rejects incorrect ones.
@@ -2123,7 +2108,7 @@ Every test validates that the type system permits correct patterns and rejects i
 Our types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
 
 - `Warp<S>` contains only `PhantomData<S>`, which has zero size and zero runtime representation.
-- `ActiveSet` is a trait with `const MASK: u32`—resolved at compile time.
+- `ActiveSet` is a trait with `const MASK: u64`—resolved at compile time.
 - `ComplementOf<S>` is a trait bound, checked at compile time.
 - Monomorphization eliminates all generic dispatch.
 
@@ -2145,7 +2130,7 @@ define noundef i32 @zero_overhead_butterfly(i32 noundef returned %data) {
 @zero_overhead_diverge_merge = alias i32 (i32), ptr @zero_overhead_butterfly
 ```
 
-Both functions compile to `ret i32 %data`. LLVM deduplicates them into a single alias because they have identical machine behavior. The warp creation, 5 shuffle steps, diverge, merge, and active set types are *all erased*. The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u32` mask).
+Both functions compile to `ret i32 %data`. LLVM deduplicates them into a single alias because they have identical machine behavior. The warp creation, 5 shuffle steps, diverge, merge, and active set types are *all erased*. The only `Warp`-containing symbols in the entire optimized IR are error message strings and `DynWarp` functions (which intentionally carry a runtime `u64` mask).
 
 **NVIDIA PTX** (`rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O`): We compiled actual Rust type system code—`PhantomData`, trait bounds, `ComplementOf`, `diverge_even_odd()`, `merge()`—directly to NVIDIA PTX via the `nvptx64-nvidia-cuda` target. Two function pairs:
 
@@ -2223,7 +2208,7 @@ We measured the annotation overhead by analyzing the user-facing algorithm code 
 
 The overall annotation burden is **27.3%** — roughly one annotation line per three algorithm lines. The range (12.5%–50%) is instructive: the lowest burden occurs when the fix is algorithmic (cuda-samples#398: check active count, skip reduction — only the `warp: Warp<All>` parameter is overhead). The highest occurs in minimal examples where diverge/merge ceremony dominates. In larger real algorithms, the ratio converges toward the lower end.
 
-The annotations are: `warp: Warp<All>` function parameters (5 occurrences), `diverge_*()` calls (4), `merge()` calls (3), type annotations on warp handles (2), and `merge_data` with type-system constants (1). Notably, `kernel_entry()` is called only at kernel entry points — library functions take `Warp<All>` as a parameter, which is the idiomatic pattern.
+The annotations are: `warp: Warp<All>` function parameters (5 occurrences), `diverge_*()` calls (4), `merge()` calls (3), and type annotations on warp handles (2). Notably, `kernel_entry()` is called only at kernel entry points — library functions take `Warp<All>` as a parameter, which is the idiomatic pattern.
 
 ### Limitations
 
@@ -2253,16 +2238,16 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 | Metric | Result |
 |--------|--------|
-| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
+| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 vendor response, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Type system tests | 268 unit + 50 example + 28 doc (346 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 theorems total (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
-Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
+Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
 We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is the first approach that makes lane-level divergence *safe* rather than *forbidden*.
 

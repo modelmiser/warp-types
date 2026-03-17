@@ -307,3 +307,5 @@ Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics 
 
 The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
 
+The Lean model uses a pure expression calculus without a store (the paper's formal presentation uses configuration triples). `PerLane` is modeled as an opaque type without data payload. The merge rule handles only top-level merge (back to `All`); the nested merge rule (`merge_within`) is defined but not used in the typing judgment. These simplifications focus the mechanization on the active-set tracking that is the core safety claim.
+

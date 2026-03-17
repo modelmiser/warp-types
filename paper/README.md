@@ -23,6 +23,7 @@ We prove our type system sound (progress and preservation), implement it as a Ru
 | 7. Evaluation | [evaluation.md](evaluation.md) | ~3 | ✅ Revised (real bugs, honest data, Hazy argument) |
 | 8. Related Work | [related-work.md](related-work.md) | ~2.5 | ✅ Revised (Hazy, NVIDIA deprecation) |
 | 9-10. Future & Conclusion | [future-and-conclusion.md](future-and-conclusion.md) | ~1.5 | ✅ Revised (fence scope boundary, updated framing) |
+| Appendix. Empirical Evidence | [empirical-evidence.md](empirical-evidence.md) | — | Supporting material for §1 and §7 |
 
 **Total: ~25 pages** (will need trimming for venue)
 
@@ -71,5 +72,5 @@ let partner = active.shuffle_xor(data, 1);
 ## Related Files
 
 - [../src/proof.rs](../src/proof.rs) — Executable proof sketch (9 tests)
-- [../lean/](../lean/) — Lean 4 formalization (28 theorems, zero sorry, zero axioms)
+- [../lean/](../lean/) — Lean 4 formalization (32 named theorems, zero sorry, zero axioms)
 

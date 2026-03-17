@@ -50,7 +50,9 @@ We introduce *warp typestate*, a linear type system that tracks which lanes are 
 With this type system, the buggy code above becomes a compile error:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLane<bool>) -> i32 {
+    // Conceptual — see §6 for actual API
     let (active, inactive) = warp.diverge(|lane| participate[lane]);
 
     // ERROR: no method `shuffle_xor` found for `Warp<Active>`
@@ -65,20 +67,22 @@ fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLan
 The fix is explicit: merge back to `Warp<All>` before shuffling, ensuring all lanes have valid data:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLane<bool>) -> i32 {
+    // Conceptual — see §6 for actual API
     let (active, inactive) = warp.diverge(|lane| participate[lane]);
 
     // Inactive lanes contribute zero
     let active_data = data;
-    let inactive_data = PerLane::splat(0);
+    let inactive_data = PerLane::new(0);
 
     // Merge back - type system verifies complement
     let warp: Warp<All> = merge(active, inactive);
-    let combined = merge_data(active_data, inactive_data);
+    // Data merge is implicit in SIMT execution (see §6.4)
 
     // Now shuffle is safe
-    let partner = warp.shuffle_xor(combined, 1);  // OK: Warp<All>
-    combined + partner
+    let partner = warp.shuffle_xor(data, 1);  // OK: Warp<All>
+    data.get() + partner.get()
 }
 ```
 

@@ -64,7 +64,9 @@ Both fixes type-check because they ensure all lanes participate before shuffling
 
 Each remaining documented bug has a self-contained worked example demonstrating the exact type error our system produces and why `__shfl_sync`'s runtime mask does not catch the bug.
 
-**PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, the warp handle becomes `Warp<Active>`. Calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`. The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask because `0xFFFFFFFF` is a valid `u32`, regardless of how many lanes were actually active.
+**PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, the warp handle becomes `Warp<Active>`. Calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`.¹ The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask because `0xFFFFFFFF` is a valid `u32`, regardless of how many lanes were actually active.
+
+¹The formal rule (§3.3) permits ballot on any `Warp<S>` because every active lane observes the same result. The implementation restricts ballot to `Warp<All>` as a conservative choice.
 
 **CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The source-level mask was correct; the compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register and no initialization. The compiler cannot optimize away something that doesn't exist at runtime. `shuffle_up()` on `Warp<SubWarp16>` is a type error.
 
@@ -111,7 +113,7 @@ Our prototype includes 268 unit tests, 50 example tests across 8 worked bug exam
 - Recursive protocols (5 loop patterns)
 - Arbitrary predicates (existential, indexed, hybrid)
 - Work stealing with dynamic roles
-- Platform portability (warp-32 and wavefront-64)
+- Platform portability (warp-32 via CpuSimd)
 - Warp-size-generic algorithms
 
 Every test validates that the type system permits correct patterns and rejects incorrect ones.
@@ -123,7 +125,7 @@ Every test validates that the type system permits correct patterns and rejects i
 Our types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
 
 - `Warp<S>` contains only `PhantomData<S>`, which has zero size and zero runtime representation.
-- `ActiveSet` is a trait with `const MASK: u32`—resolved at compile time.
+- `ActiveSet` is a trait with `const MASK: u64`—resolved at compile time.
 - `ComplementOf<S>` is a trait bound, checked at compile time.
 - Monomorphization eliminates all generic dispatch.
 
@@ -199,7 +201,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 | Metric | Result |
 |--------|--------|
-| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
+| Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation, 1 vendor response) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
@@ -207,9 +209,9 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Type system tests | 268 unit + 50 example + 28 doc (346 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 theorems total (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
 | Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
-Session-typed divergence provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
+Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
 We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is the first approach that makes lane-level divergence *safe* rather than *forbidden*.

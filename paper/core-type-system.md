@@ -331,7 +331,7 @@ XOR 1:    [sum, sum, sum, ...]     -- all lanes have the total
 ### Typed Implementation
 
 ```rust
-fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> Uniform<i32> {
+fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> i32 {
     // Type of warp: Warp<All> ✓
 
     let data = data + warp.shuffle_xor(data, 16);
@@ -345,8 +345,8 @@ fn butterfly_sum(warp: Warp<All>, data: PerLane<i32>) -> Uniform<i32> {
     let data = data + warp.shuffle_xor(data, 2);
     let data = data + warp.shuffle_xor(data, 1);
 
-    // All lanes now have the same value
-    data.assume_uniform()  // Unsafe: programmer asserts uniformity
+    // All lanes now have the same value (uniform after full butterfly)
+    data.get()
 }
 ```
 
@@ -357,6 +357,7 @@ Every `shuffle_xor` call type-checks because `warp` has type `Warp<All>` through
 Now consider a filtered reduction where some lanes don't participate:
 
 ```rust
+// Pseudocode — actual API uses concrete diverge methods (§6)
 fn filtered_sum(warp: Warp<All>, data: PerLane<i32>, keep: PerLane<bool>) -> Uniform<i32> {
     // Diverge based on keep predicate
     let (active, inactive) = warp.diverge(|lane| keep[lane]);
@@ -369,14 +370,14 @@ fn filtered_sum(warp: Warp<All>, data: PerLane<i32>, keep: PerLane<bool>) -> Uni
 
     // CORRECT: Prepare data and merge first
     let active_data = data;
-    let inactive_data = PerLane::splat(0);  // Non-participants contribute 0
+    let inactive_data = PerLane::new(0);  // Non-participants contribute 0
 
     // Merge back to Warp<All>
     let warp: Warp<All> = merge(active, inactive);  // ✓ Keep ⊥ ¬Keep
-    let combined = merge_data(active_data, inactive_data);
+    // Data merge implicit in SIMT — each lane holds its branch result
 
     // Now butterfly reduction is safe
-    butterfly_sum(warp, combined)
+    butterfly_sum(warp, active_data)
 }
 ```
 

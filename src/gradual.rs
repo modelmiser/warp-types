@@ -12,10 +12,10 @@
 //!
 //! # Cost
 //!
-//! `DynWarp` is NOT zero-overhead: it carries a `u32` mask (4 bytes).
+//! `DynWarp` is NOT zero-overhead: it carries a `u64` mask (8 bytes).
 //! `Warp<S>` is zero-sized. Migrating from `DynWarp` to `Warp<S>` is both
 //! a safety upgrade (compile-time vs runtime) and a performance upgrade
-//! (zero-sized vs 4 bytes + branch per operation).
+//! (zero-sized vs 8 bytes + branch per operation).
 //!
 //! # Example: Gradual Migration
 //!
@@ -103,23 +103,30 @@ impl std::error::Error for AscribeError {}
 #[derive(Clone, Debug)]
 pub struct DynWarp {
     active_mask: u64,
+    /// The full mask representing "all lanes active" for this warp width.
+    /// 0xFFFFFFFF for 32-lane (NVIDIA), 0xFFFFFFFFFFFFFFFF for 64-lane (AMD).
+    full_mask: u64,
 }
 
 impl DynWarp {
     /// All 32 lanes active (NVIDIA warp size).
     ///
-    /// For AMD 64-lane wavefronts, use `DynWarp::from_static(Warp::kernel_entry())`
-    /// or construct via `DynWarp::all_64()` (when available).
+    /// For AMD 64-lane wavefronts, use `DynWarp::all_64()`.
     pub fn all() -> Self {
-        DynWarp { active_mask: 0xFFFFFFFF }
+        DynWarp { active_mask: 0xFFFFFFFF, full_mask: 0xFFFFFFFF }
     }
 
-    /// Create from a specific mask.
+    /// All 64 lanes active (AMD wavefront size).
+    pub fn all_64() -> Self {
+        DynWarp { active_mask: 0xFFFFFFFFFFFFFFFF, full_mask: 0xFFFFFFFFFFFFFFFF }
+    }
+
+    /// Create from a specific mask within a 32-lane warp.
     ///
     /// Useful for testing or constructing `DynWarp`s with known masks.
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
     pub fn from_mask(mask: u64) -> Self {
-        DynWarp { active_mask: mask }
+        DynWarp { active_mask: mask, full_mask: 0xFFFFFFFF }
     }
 
     /// Erase a static `Warp<S>` into a dynamic warp (always succeeds).
@@ -128,7 +135,9 @@ impl DynWarp {
     /// and move to runtime tracking. Always safe — going from more
     /// information to less.
     pub fn from_static<S: ActiveSet>(_warp: Warp<S>) -> Self {
-        DynWarp { active_mask: S::MASK }
+        // Determine warp width from mask: if it fits in 32 bits, use 32-lane
+        let full = if S::MASK <= 0xFFFFFFFF { 0xFFFFFFFF } else { 0xFFFFFFFFFFFFFFFF };
+        DynWarp { active_mask: S::MASK, full_mask: full }
     }
 
     /// Promote this `DynWarp` to a compile-time typed `Warp<S>`.
@@ -179,10 +188,11 @@ impl DynWarp {
     /// The `Warp<S>` equivalent only exists on `Warp<All>`.
     /// `DynWarp` checks at runtime instead.
     pub fn shuffle_xor_scalar(&self, value: i32, _xor_mask: u32) -> Result<i32, WarpError> {
-        if self.active_mask != 0xFFFFFFFF {
+        let full = self.full_mask;
+        if self.active_mask != full {
             return Err(WarpError {
                 operation: "shuffle_xor",
-                expected_mask: 0xFFFFFFFF,
+                expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
@@ -193,10 +203,11 @@ impl DynWarp {
 
     /// Shuffle down on a single scalar — runtime check for all-active.
     pub fn shuffle_down_scalar(&self, value: i32, _delta: u32) -> Result<i32, WarpError> {
-        if self.active_mask != 0xFFFFFFFF {
+        let full = self.full_mask;
+        if self.active_mask != full {
             return Err(WarpError {
                 operation: "shuffle_down",
-                expected_mask: 0xFFFFFFFF,
+                expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
@@ -205,10 +216,11 @@ impl DynWarp {
 
     /// Sum reduction — runtime check for all-active.
     pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
-        if self.active_mask != 0xFFFFFFFF {
+        let full = self.full_mask;
+        if self.active_mask != full {
             return Err(WarpError {
                 operation: "reduce_sum",
-                expected_mask: 0xFFFFFFFF,
+                expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
@@ -218,10 +230,11 @@ impl DynWarp {
 
     /// Broadcast — runtime check for all-active.
     pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
-        if self.active_mask != 0xFFFFFFFF {
+        let full = self.full_mask;
+        if self.active_mask != full {
             return Err(WarpError {
                 operation: "broadcast",
-                expected_mask: 0xFFFFFFFF,
+                expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
@@ -230,10 +243,11 @@ impl DynWarp {
 
     /// Ballot — runtime check for all-active.
     pub fn ballot(&self, predicate: &[bool; 32]) -> Result<u32, WarpError> {
-        if self.active_mask != 0xFFFFFFFF {
+        let full = self.full_mask;
+        if self.active_mask != full {
             return Err(WarpError {
                 operation: "ballot",
-                expected_mask: 0xFFFFFFFF,
+                expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
@@ -258,8 +272,8 @@ impl DynWarp {
         let true_mask = self.active_mask & predicate_mask;
         let false_mask = self.active_mask & !predicate_mask;
         (
-            DynWarp { active_mask: true_mask },
-            DynWarp { active_mask: false_mask },
+            DynWarp { active_mask: true_mask, full_mask: self.full_mask },
+            DynWarp { active_mask: false_mask, full_mask: self.full_mask },
         )
     }
 
@@ -285,6 +299,7 @@ impl DynWarp {
         }
         Ok(DynWarp {
             active_mask: self.active_mask | other.active_mask,
+            full_mask: self.full_mask,
         })
     }
 }

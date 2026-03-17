@@ -45,7 +45,7 @@ pub trait ActiveSet: sealed::Sealed + Copy + 'static {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not the complement of `{Other}` — cannot merge these sub-warps",
     label = "merge requires complementary active sets (e.g., Even + Odd, LowHalf + HighHalf)",
-    note = "use `diverge_even_odd()` or `diverge_low_high()` to create valid complement pairs, then merge them"
+    note = "use `diverge_even_odd()` or `diverge_halves()` to create valid complement pairs, then merge them"
 )]
 pub trait ComplementOf<Other: ActiveSet>: sealed::Sealed + ActiveSet {}
 

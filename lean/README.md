@@ -15,7 +15,7 @@ This catches three classes of bugs:
 
 ## Theorems Proven
 
-All theorems are fully machine-checked. Zero sorry, zero axioms.
+Core theorems are fully machine-checked. Zero sorry, zero axioms.
 
 | Theorem | Statement | File |
 |---------|-----------|------|
@@ -30,6 +30,10 @@ All theorems are fully machine-checked. Zero sorry, zero axioms.
 | **Bug 3** (PIConGPU #2514) | Ballot on diverged subset is untypable | Metatheory.lean |
 | **Bug 4** (LLVM #155682) | Shuffle after lane-0 conditional is untypable | Metatheory.lean |
 | **Bug 5** (demo) | Shuffle after even/odd divergence is untypable | Metatheory.lean |
+
+### Scope
+
+The Lean model focuses on active-set tracking — the core safety mechanism. It uses a pure expression calculus (no store/configuration triples) with `PerLane` as an opaque type (no data payload). The merge rule handles top-level merge (back to `All`); the nested merge rule is defined (`IsComplement`) but not used in the typing judgment. These simplifications are intentional: the mechanization proves that the active-set discipline prevents shuffle on diverged warps, which is the paper's central claim. See §4.8 of the paper for the full mechanization scope.
 
 ## Key Design Decisions
 
@@ -77,10 +81,10 @@ Developed independently by Chad Aldreda, outside academic or institutional affil
 ## Citation
 
 ```bibtex
-@software{aldreda2025warptypes,
+@software{aldreda2026warptypes,
   author    = {Aldreda, Chad},
   title     = {Warp Typestate: Lean 4 Formalization},
-  year      = {2025},
+  year      = {2026},
   url       = {https://github.com/modelmiser/warp-types}
 }
 ```

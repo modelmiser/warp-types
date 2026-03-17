@@ -122,14 +122,25 @@ pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i3
 ///
 /// Requires `Copy` (registers are value types), `Send + Sync` (cross-lane),
 /// `Default` (inactive lanes need a value), and `'static` (no borrows).
-pub trait GpuValue: Copy + Send + Sync + Default + 'static {}
+///
+/// Sealed: only primitive GPU types implement this trait. External crates
+/// cannot add implementations, ensuring `PerLane<T>` and `Uniform<T>`
+/// only wrap types with known GPU register semantics.
+pub trait GpuValue: active_set::sealed::Sealed + Copy + Send + Sync + Default + 'static {}
 
+impl active_set::sealed::Sealed for i32 {}
 impl GpuValue for i32 {}
+impl active_set::sealed::Sealed for u32 {}
 impl GpuValue for u32 {}
+impl active_set::sealed::Sealed for f32 {}
 impl GpuValue for f32 {}
+impl active_set::sealed::Sealed for i64 {}
 impl GpuValue for i64 {}
+impl active_set::sealed::Sealed for u64 {}
 impl GpuValue for u64 {}
+impl active_set::sealed::Sealed for f64 {}
 impl GpuValue for f64 {}
+impl active_set::sealed::Sealed for bool {}
 impl GpuValue for bool {}
 
 // ============================================================================

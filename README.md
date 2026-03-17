@@ -68,7 +68,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 
 ```bash
 cargo test                                    # 268 unit + 28 doc tests
-cargo test --examples                         # 50 tests across 8 real-bug examples
+cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
 
@@ -117,15 +117,15 @@ fn main() {
 | Claim | Evidence | Command |
 |-------|----------|---------|
 | Type safety (diverged warp can't shuffle, merge requires complements) | 13 compile-fail doctests | `cargo test --doc` |
-| Real bug caught at compile time | 8 worked bug examples (21 bugs surveyed) | `cargo test --examples` |
+| Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | Full Lean 4 mechanization (28 theorems), zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Full Lean 4 mechanization (32 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
-| Platform portability (32/64 lanes) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
+| Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (18 tests) | `cargo test gradual` |
 | All claims | Full test suite (346 tests) | `cargo test && cargo test --examples` |
 
@@ -170,7 +170,7 @@ warp-types/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (28 theorems, zero sorry)
+├── lean/                   # Lean 4 formalization (32 named theorems, zero sorry)
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft

@@ -154,6 +154,7 @@ pub struct BlockSession<R: BlockRole, S: ProtocolState, const N: usize> {
 }
 
 impl<R: BlockRole, S: ProtocolState, const N: usize> BlockSession<R, S, N> {
+    #[allow(dead_code)] // Constructor for future block-level API usage
     pub(crate) fn new(block_id: BlockId) -> Self {
         BlockSession { block_id, _role: PhantomData, _state: PhantomData }
     }
@@ -176,6 +177,7 @@ pub struct ReductionSession<Phase> {
 }
 
 impl ReductionSession<WarpPhase> {
+    #[allow(dead_code)] // Constructor for future reduction pipeline usage
     pub(crate) fn new(value: u32) -> Self {
         ReductionSession { value, _phase: PhantomData }
     }
