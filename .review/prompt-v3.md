@@ -65,6 +65,12 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - proof.rs substitute() skips capture avoidance — safe because step() only substitutes closed values
 - block.rs SharedRegion OWNER const generic vs Role runtime field — different concerns (type tag vs lane geometry), documented
 - examples/pytorch_98157.rs DynWarp uses u32 (core uses u64) — pedagogical simplification, documented
+- Tile::shuffle_xor has debug_assert for mask < SIZE
+- Compose<P1, P2> implements HasDual (dual = Compose<P2::Dual, P1::Dual>)
+- proof.rs type_check validates PerLaneVal vector length (rejects != WARP_SIZE)
+- DynWarp::from_mask(0) documents zero-mask → 32-lane inference
+- DynWarp::reduce_sum_scalar wrapping_mul documented (GPU hardware semantics)
+- WorkQueue capacity 31 documented (ring buffer sentinel)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
