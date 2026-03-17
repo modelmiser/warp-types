@@ -47,7 +47,7 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - README test counts match actual (291 unit + 50 example + 28 doc = 369)
 - lib.rs module overview includes all public modules including simwarp
 - butterfly_reduce is WIDTH-generic (dynamic mask computation, not hardcoded [16,8,4,2,1])
-- README test counts all match actual (291 unit, 25 gradual, 369 total)
+- README test counts all match actual (291 unit, 21 gradual, 369 total)
 - builder Cargo.toml fragile TOML name parsing — ACCEPTED (fallback mitigates)
 - CpuSimd<WIDTH>::reduce_sum/max/min have const assert WIDTH > 0 — prevents empty-iterator panic
 - block.rs ReductionSession is type-state ordering demo (CPU identity no-op, same class as sort.rs/cub.rs)

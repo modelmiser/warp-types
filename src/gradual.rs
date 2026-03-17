@@ -13,10 +13,11 @@
 //!
 //! # Cost
 //!
-//! `DynWarp` is NOT zero-overhead: it carries a `u64` mask (8 bytes).
+//! `DynWarp` is NOT zero-overhead: it carries two `u64` masks (16 bytes) —
+//! `active_mask` plus `full_mask` for 32/64-lane width detection.
 //! `Warp<S>` is zero-sized. Migrating from `DynWarp` to `Warp<S>` is both
 //! a safety upgrade (compile-time vs runtime) and a performance upgrade
-//! (zero-sized vs 8 bytes + branch per operation).
+//! (zero-sized vs 16 bytes + branch per operation).
 //!
 //! # Example: Gradual Migration
 //!
