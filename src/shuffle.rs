@@ -4,7 +4,7 @@
 //!
 //! 1. **Type-safe shuffle traits** — enforce correct return types
 //!    (shuffle → PerLane, ballot → Uniform, reduce → T)
-//! 2. **Warp<All>-restricted shuffles** — shuffle methods only on full warps
+//! 2. **`Warp<All>`-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 
 use core::marker::PhantomData;
@@ -80,7 +80,7 @@ impl ShuffleSafe for Warp<All> {}
 impl Warp<All> {
     /// Shuffle XOR: each lane exchanges with lane (id ^ mask).
     ///
-    /// **ONLY AVAILABLE ON Warp<All>** — diverged warps cannot shuffle.
+    /// **ONLY AVAILABLE ON `Warp<All>`** — diverged warps cannot shuffle.
     ///
     /// On GPU: emits `shfl.sync.bfly.b32` via inline assembly.
     /// On CPU: returns the input value (single-thread identity).
@@ -90,7 +90,7 @@ impl Warp<All> {
         PerLane::new(data.get().gpu_shfl_xor(mask))
     }
 
-    /// Shuffle down: lane[i] reads from lane[i+delta].
+    /// Shuffle down: lane\[i\] reads from lane\[i+delta\].
     ///
     /// On GPU: emits `shfl.sync.down.b32`.
     /// On CPU: returns input (identity).
@@ -322,9 +322,12 @@ mod tests {
         assert_eq!(shuffled_u64.get(), u64::MAX);
 
         // f64: bit-preserving two-pass
+        #[allow(clippy::approx_constant)]
         let data_f64 = PerLane::new(3.14159_f64);
         let shuffled_f64 = all.shuffle_xor(data_f64, 1);
-        assert_eq!(shuffled_f64.get(), 3.14159_f64);
+        #[allow(clippy::approx_constant)]
+        let expected_f64 = 3.14159_f64;
+        assert_eq!(shuffled_f64.get(), expected_f64);
 
         // Reduction works on 64-bit
         let ones_i64 = PerLane::new(1_i64);

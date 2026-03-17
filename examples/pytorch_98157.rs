@@ -64,7 +64,7 @@
 //!
 //! Run: `cargo test --example pytorch_98157`
 
-#![allow(dead_code)]
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
 
 use std::marker::PhantomData;
 
@@ -351,6 +351,7 @@ fn fix_static_convergence(
 ///
 /// For code being migrated incrementally: DynWarp catches the
 /// `__activemask()` bug at runtime instead of compile time.
+#[allow(dead_code)] // used only in tests
 fn fix_dynwarp_checked(
     data: &[u32; 32],
     radix_pos: u32,
@@ -373,6 +374,7 @@ fn fix_dynwarp_checked(
 }
 
 /// Correct DynWarp workflow: diverge, merge, then ballot.
+#[allow(dead_code)] // used only in tests
 fn fix_dynwarp_merge_then_ballot(
     data: &[u32; 32],
     radix_pos: u32,
@@ -666,6 +668,7 @@ mod tests {
 
 /// Simulate findPattern's bucket selection: given radix counts, which bucket
 /// contains the k-th element (0-indexed)?
+#[allow(dead_code)] // used only in tests
 fn find_bucket(counts: &[u32; RADIX_SIZE], k: u32) -> Option<u32> {
     let mut cumulative = 0u32;
     for (bucket, &count) in counts.iter().enumerate() {

@@ -45,6 +45,8 @@
 //!
 //! Run: `cargo test --example cub_cccl_854`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================

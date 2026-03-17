@@ -46,6 +46,8 @@
 //!
 //! Run: `cargo test --example picongpu_2514`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================

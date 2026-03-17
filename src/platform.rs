@@ -56,7 +56,7 @@ pub trait Platform: Copy + 'static {
         Self::Vector::splat(value)
     }
 
-    /// Shuffle: each lane reads from source[indices[lane]]
+    /// Shuffle: each lane reads from source\[indices\[lane\]\]
     fn shuffle<T: GpuValue>(
         source: Self::Vector<T>,
         indices: Self::Vector<u32>,

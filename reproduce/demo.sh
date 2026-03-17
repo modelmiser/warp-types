@@ -16,10 +16,10 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$SCRIPT_DIR"
 
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  warp-types: Session-Typed GPU Divergence               ║"
-echo "║  Same bug. Same GPU. The type system prevents it.       ║"
-echo "╚══════════════════════════════════════════════════════════╝"
+echo "╔════════════════════════════════════════════════════════════════╗"
+echo "║  warp-types: Type-Safe Warp Programming via Linear Typestate   ║"
+echo "║  Same bug. Same GPU. The type system prevents it.              ║"
+echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
 # ================================================================
@@ -35,13 +35,17 @@ echo "  Lane 0 reads from lane 16 — but lane 16 didn't participate."
 echo "  Its register value is whatever was there. Undefined behavior."
 echo ""
 
-if command -v nvcc &>/dev/null; then
+if command -v nvcc &>/dev/null && [ -f "$SCRIPT_DIR/reduce7_bug.cu" ]; then
     echo "▸ Compiling CUDA reduce7 (buggy + fixed)..."
     nvcc -O2 -o /tmp/reduce7_cuda "$SCRIPT_DIR/reduce7_bug.cu" 2>/dev/null
     echo ""
     /tmp/reduce7_cuda
 else
-    echo "  [nvcc not found — showing expected output]"
+    if ! command -v nvcc &>/dev/null; then
+        echo "  [nvcc not found — showing expected output]"
+    else
+        echo "  [CUDA source not included (requires NVIDIA CUDA Samples) — showing expected output]"
+    fi
     echo ""
     echo "  === Buggy reduce7 (CUDA, partial mask) ==="
     echo "    Input:    [1, 1, 1, ..., 1]  (32 ones)"

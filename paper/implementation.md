@@ -31,7 +31,9 @@ warp_sets! {
 }
 ```
 
-The generated types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.
+The generated types are zero-sized (`std::mem::size_of::<Even>() == 0`). They exist only at compile time.¹
+
+¹The implementation uses `Empty` where the formal calculus (§3) uses ⊥/None, avoiding collision with Rust's `Option::None`.
 
 ### Warp as Phantom Type
 

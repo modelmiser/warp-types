@@ -292,25 +292,23 @@ pub mod merge_ordering {
 // WHAT ABOUT INVALID MERGES?
 // ============================================================================
 
-/// These would be compile errors:
-///
-/// ```compile_fail
-/// // Can't merge EvenLow with OddHigh - not complements within any parent!
-/// let bad: Warp<???> = merge(even_low, odd_high);
-/// ```
-///
-/// EvenLow (0,2,4,6,8,10,12,14) and OddHigh (17,19,21,...,31) are:
-/// - Disjoint: EvenLow ∩ OddHigh = ∅ ✓
-/// - But NOT complementary within any standard parent
-/// - EvenLow ∪ OddHigh ≠ Even, Odd, LowHalf, HighHalf, or All
-///
-/// To merge them, you'd need a custom parent type:
-/// struct EvenLowOrOddHigh;  // Mask = 0x0000555 | 0xAAAA0000
-///
-/// But this isn't a "natural" split from any single diverge!
-pub mod invalid_merges {
-    // This module is documentation - the invalid code won't compile
-}
+// These would be compile errors:
+//
+// ```compile_fail
+// // Can't merge EvenLow with OddHigh - not complements within any parent!
+// let bad: Warp<???> = merge(even_low, odd_high);
+// ```
+//
+// EvenLow (0,2,4,6,8,10,12,14) and OddHigh (17,19,21,...,31) are:
+// - Disjoint: EvenLow ∩ OddHigh = ∅ ✓
+// - But NOT complementary within any standard parent
+// - EvenLow ∪ OddHigh ≠ Even, Odd, LowHalf, HighHalf, or All
+//
+// To merge them, you'd need a custom parent type:
+// struct EvenLowOrOddHigh;  // Mask = 0x0000555 | 0xAAAA0000
+//
+// But this isn't a "natural" split from any single diverge!
+// (No code needed — the invalid merges won't compile, which is the point.)
 
 // ============================================================================
 // CROSS-MERGE: When Different Paths Produce Same Leaves
@@ -339,11 +337,8 @@ pub mod path_independence {
         even_low
     }
 
-    /// Both produce Warp<EvenLow> - same type, regardless of path taken!
-    pub fn paths_are_equivalent() -> bool {
-        // The type system guarantees via_even() and via_low() return the same type
-        true
-    }
+    // Both produce Warp<EvenLow> — same type, regardless of path taken.
+    // The type system guarantees this at compile time; no runtime check needed.
 }
 
 // ============================================================================
@@ -373,28 +368,31 @@ pub mod path_independence {
 /// The ComplementWithin trait encodes the complement relationship.
 /// The CanDiverge trait encodes which splits are valid.
 pub mod lattice {
-    use super::*;
+    #[cfg(test)]
+    mod tests {
+        use crate::research::nested_diverge::*;
 
-    /// Verify the lattice relationships hold
-    #[allow(dead_code)]
-    fn verify_lattice() {
-        // Even ∩ LowHalf = EvenLow
-        assert_eq!(Even::MASK & LowHalf::MASK, EvenLow::MASK);
+        /// Verify the lattice relationships hold
+        #[test]
+        fn verify_lattice() {
+            // Even ∩ LowHalf = EvenLow
+            assert_eq!(Even::MASK & LowHalf::MASK, EvenLow::MASK);
 
-        // Even ∩ HighHalf = EvenHigh
-        assert_eq!(Even::MASK & HighHalf::MASK, EvenHigh::MASK);
+            // Even ∩ HighHalf = EvenHigh
+            assert_eq!(Even::MASK & HighHalf::MASK, EvenHigh::MASK);
 
-        // EvenLow ∪ EvenHigh = Even
-        assert_eq!(EvenLow::MASK | EvenHigh::MASK, Even::MASK);
+            // EvenLow ∪ EvenHigh = Even
+            assert_eq!(EvenLow::MASK | EvenHigh::MASK, Even::MASK);
 
-        // EvenLow ∪ OddLow = LowHalf
-        assert_eq!(EvenLow::MASK | OddLow::MASK, LowHalf::MASK);
+            // EvenLow ∪ OddLow = LowHalf
+            assert_eq!(EvenLow::MASK | OddLow::MASK, LowHalf::MASK);
 
-        // All four leaves union to All
-        assert_eq!(
-            EvenLow::MASK | EvenHigh::MASK | OddLow::MASK | OddHigh::MASK,
-            All::MASK
-        );
+            // All four leaves union to All
+            assert_eq!(
+                EvenLow::MASK | EvenHigh::MASK | OddLow::MASK | OddHigh::MASK,
+                All::MASK
+            );
+        }
     }
 }
 
@@ -486,22 +484,20 @@ pub mod depth_3 {
 // THE EXPONENTIAL PROBLEM
 // ============================================================================
 
-/// With N diverge predicates, we could have 2^N leaf types!
-///
-/// Example: 3 predicates (even/odd, low/high, verylow/midlow)
-/// → 8 possible leaf types (only some are reachable from valid paths)
-///
-/// For a real type system:
-/// - Can't enumerate all 2^32 possible subsets
-/// - Must use compositional types: Intersect<Even, LowHalf, VeryLow>
-/// - Or: runtime masks with static "shape" verification
-///
-/// Our marker-type approach works for common patterns but doesn't scale
-/// to arbitrary predicates. This is the Q1 limitation.
-pub mod exponential {
-    // The number of potential active sets grows exponentially with predicates.
-    // Marker types handle common cases; dependent types would be needed for full generality.
-}
+// With N diverge predicates, we could have 2^N leaf types!
+//
+// Example: 3 predicates (even/odd, low/high, verylow/midlow)
+// → 8 possible leaf types (only some are reachable from valid paths)
+//
+// For a real type system:
+// - Can't enumerate all 2^32 possible subsets
+// - Must use compositional types: Intersect<Even, LowHalf, VeryLow>
+// - Or: runtime masks with static "shape" verification
+//
+// Our marker-type approach works for common patterns but doesn't scale
+// to arbitrary predicates. This is the Q1 limitation.
+// The number of potential active sets grows exponentially with predicates.
+// Marker types handle common cases; dependent types would be needed for full generality.
 
 // ============================================================================
 // TESTS

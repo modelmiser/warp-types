@@ -41,7 +41,7 @@ Our type system offers a third path: lane-level divergence that is safe rather t
 
 ## 1.1 Our Approach: Linear Typestate for Divergence
 
-We observe that divergence has the structure of a *session type protocol*. In traditional session types, communication follows a protocol where participants send and receive messages in a prescribed order. Branching in the protocol creates sub-sessions; participants must follow compatible branches.
+We observe that divergence has the structure of a *linear resource protocol*. In traditional session types, communication follows a protocol where participants send and receive messages in a prescribed order. Branching in the protocol creates sub-sessions; participants must follow compatible branches.
 
 SIMT divergence is similar, but with a twist: when a warp diverges, some participants don't take the "other branch"—they go *quiescent*. They stop participating entirely until the branches reconverge. This is not captured by traditional session types, where all participants remain active.
 
@@ -116,7 +116,7 @@ This paper makes the following contributions:
 
 ## 1.3 The Bigger Picture
 
-Session-typed divergence is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
+Warp typestate is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
 
 The remainder of this paper is organized as follows. §2 provides background on GPU execution and session types. §3 presents our core type system. §4 proves soundness. §5 extends the system to handle loops and arbitrary predicates. §6 describes our implementation. §7 evaluates bug detection and performance. §8 discusses related work. §9 sketches future directions and §10 concludes.
 
@@ -1871,7 +1871,7 @@ fn butterfly_reduce_sum<P: Platform>(data: P::Vector<i32>) -> i32 {
 }
 ```
 
-Session-typed divergence applies uniformly: `CpuSimd` uses masked array operations for diverged lanes; `GpuWarp32` uses SIMT masking. The `ComplementOf` proof requirement is platform-independent — it verifies the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
+Warp typestate applies uniformly: `CpuSimd` uses masked array operations for diverged lanes; `GpuWarp32` uses SIMT masking. The `ComplementOf` proof requirement is platform-independent — it verifies the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
 
 ## 6.7 Error Messages
 
@@ -2261,7 +2261,7 @@ We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. W
 
 # 8. Related Work
 
-Session-typed divergence draws on and differs from work in GPU verification, session types, and type systems for parallelism.
+Warp typestate draws on and differs from work in GPU verification, session types, and type systems for parallelism.
 
 ## 8.1 GPU Verification
 
@@ -2472,7 +2472,7 @@ The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread 
 
 # 9. Future Work
 
-Session-typed divergence opens several research directions.
+Warp typestate opens several research directions.
 
 ## 9.1 Tooling and Data-Dependent Divergence
 
@@ -2515,7 +2515,7 @@ Rich IDE support would enhance usability:
 
 Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`).
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 18 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 16 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -2575,9 +2575,9 @@ The key insight is that GPU divergence fits the session type model: diverging is
 
 Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
 
-Beyond safety, the type system **unlocks performance that is currently too dangerous to attempt.** State-of-the-art GPU kernels (Flash Attention, Hazy megakernel) avoid lane-level divergence entirely—not because uniform execution is always optimal, but because divergent shuffles are too risky to get right. Algorithms that could be faster with lane-level heterogeneity (warp-level bitonic sort in tile-based rasterizers, divergent reductions in ray-BVH traversal, per-lane work stealing in load-imbalanced ML kernels) are written as uniform instead, leaving performance on the table. Session-typed divergence makes the fast-but-dangerous path safe, enabling optimizations that the current programming model discourages.
+Beyond safety, the type system **unlocks performance that is currently too dangerous to attempt.** State-of-the-art GPU kernels (Flash Attention, Hazy megakernel) avoid lane-level divergence entirely—not because uniform execution is always optimal, but because divergent shuffles are too risky to get right. Algorithms that could be faster with lane-level heterogeneity (warp-level bitonic sort in tile-based rasterizers, divergent reductions in ray-BVH traversal, per-lane work stealing in load-imbalanced ML kernels) are written as uniform instead, leaving performance on the table. Warp typestate makes the fast-but-dangerous path safe, enabling optimizations that the current programming model discourages.
 
-Session-typed divergence is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
+Warp typestate is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
 
 **The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
 

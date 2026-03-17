@@ -5,6 +5,8 @@ edition = "2021"
 authors = ["Chad Aldreda"]
 description = "Proc macro for generating active set hierarchies"
 license = "MIT"
+rust-version = "1.75"
+repository = "https://github.com/modelmiser/warp-types"
 
 [lib]
 proc-macro = true

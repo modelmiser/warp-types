@@ -50,6 +50,8 @@
 //!
 //! Run: `cargo test --example tvm_17307`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================

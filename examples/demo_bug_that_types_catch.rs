@@ -27,6 +27,8 @@
 //! cargo test --example demo_bug_that_types_catch
 //! ```
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================
@@ -289,10 +291,10 @@ mod tests {
 // ============================================================================
 
 fn main() {
-    println!("Session-Typed Divergence Demo");
-    println!("=============================\n");
+    println!("Warp Typestate Divergence Demo");
+    println!("==============================\n");
 
-    println!("This demo shows how session types catch GPU divergence bugs.\n");
+    println!("This demo shows how linear typestate catches GPU divergence bugs.\n");
 
     println!("The Bug (would be undefined behavior in CUDA):");
     println!("  1. Warp diverges based on a predicate");

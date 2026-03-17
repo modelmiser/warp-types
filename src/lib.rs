@@ -26,13 +26,18 @@
 //! - [`warp`] — `Warp<S>` type parameterized by active set
 //! - [`data`] — Value categories: `PerLane<T>`, `Uniform<T>`, `SingleLane<T, N>`
 //! - [`diverge`] — Split warps by predicate (produces complementary sub-warps)
-//! - [`merge`] — Rejoin complementary sub-warps (compile-time verified)
+//! - [mod@merge] — Rejoin complementary sub-warps (compile-time verified)
 //! - [`shuffle`] — Shuffle/ballot/reduce (restricted to `Warp<All>`) + permutation algebra
 //! - [`fence`] — Fence-divergence interactions (§5.6) — type-state write tracking
 //! - [`block`] — Block-level: shared memory ownership, inter-block sessions, reductions
-//! - [`proof`] — Soundness proof sketch (progress + preservation)
+//! - `proof` — Soundness proof sketch (progress + preservation)
 //! - [`platform`] — CPU/GPU platform trait for dual-mode algorithms
 //! - [`gradual`] — `DynWarp` ↔ `Warp<S>` bridge for gradual typing (§9.4)
+//! - [`gpu`] — GPU intrinsics for nvptx64 and amdgpu targets
+//! - [`cub`] — Typed CUB-equivalent warp primitives (reduce, scan, broadcast)
+//! - [`sort`] — Typed warp-level bitonic sort
+//! - [`tile`] — Cooperative Groups: thread block tiles with typed shuffle safety
+//! - [`dynamic`] — Data-dependent divergence with structural complement guarantees
 
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
@@ -76,6 +81,12 @@ pub mod dynamic;
     clippy::needless_range_loop,
     clippy::module_inception,
     clippy::doc_markdown,
+    clippy::empty_line_after_doc_comments,
+    clippy::items_after_test_module,
+    clippy::approx_constant,
+    rustdoc::invalid_html_tags,
+    rustdoc::broken_intra_doc_links,
+    rustdoc::invalid_rust_codeblocks,
 )]
 pub mod research;
 

@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "warp-types-builder"]
+
 [package]
 name = "warp-types"
 version = "0.1.0"

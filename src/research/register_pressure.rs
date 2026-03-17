@@ -144,7 +144,8 @@ where
     (Budget::new(), Reg::new(value))
 }
 
-/// Free registers when done with a value
+/// Frees one register slot (simplified — a full implementation would track R
+/// and add it back to B, but this prototype only increments by one).
 pub fn free<T: Copy, R, B>(_budget: Budget<B>, _reg: Reg<T, R>) -> Budget<S<B>>
 where
     // This is simplified - real implementation would add R to B

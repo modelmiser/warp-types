@@ -33,6 +33,8 @@
 //!
 //! Run: `cargo test --example nvidia_cuda_samples_398`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================

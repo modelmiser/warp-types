@@ -6,9 +6,10 @@
 //! 2. **Boundary**: `dyn_warp.ascribe::<All>()?` — validate at function edges
 //! 3. **End**: `Warp<S>` everywhere — fully compile-time checked
 //!
-//! `DynWarp` mirrors the `Warp<S>` API but carries its active mask at runtime
-//! instead of in the type system. Every operation that would be a type error
-//! on `Warp<S>` becomes a `Result::Err` on `DynWarp`.
+//! `DynWarp` provides a subset of the `Warp<S>` API with scalar (i32) shuffle
+//! operations. Generic shuffles require the static type system. It carries its
+//! active mask at runtime instead of in the type system. Every operation that
+//! would be a type error on `Warp<S>` becomes a `Result::Err` on `DynWarp`.
 //!
 //! # Cost
 //!

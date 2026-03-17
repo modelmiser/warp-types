@@ -19,6 +19,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-04-15
+          components: rustfmt
+      - name: Format check
+        run: cargo fmt --check
       - name: Build
         run: cargo build --verbose
       - name: Unit tests
@@ -35,6 +38,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-04-15
-          components: clippy
+          components: clippy, rustfmt
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings

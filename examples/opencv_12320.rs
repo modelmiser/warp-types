@@ -71,6 +71,8 @@
 //!
 //! Run: `cargo test --example opencv_12320`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default, clippy::useless_vec)]
+
 use std::marker::PhantomData;
 
 // ============================================================================

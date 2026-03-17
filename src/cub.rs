@@ -93,36 +93,29 @@ impl Warp<All> {
         PerLane::new(val)
     }
 
-    /// Exclusive prefix sum across all lanes.
+    /// Exclusive prefix sum across all lanes (STUB -- not yet correct).
     ///
     /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)`.
-    /// Lane i gets sum of lanes 0..i (lane 0 gets `identity`).
+    /// Lane i should get sum of lanes 0..i (lane 0 gets `identity`).
     ///
-    /// **Limitation:** The `identity` parameter is not applied on either the
-    /// CPU emulation path or the GPU path. On CPU, `shfl_up` returns self,
-    /// so the result is the inclusive sum (wrong for exclusive). On GPU,
+    /// **WARNING:** This function does not produce a correct exclusive scan on
+    /// any target. Lane 0 should receive `identity` but gets its own value
+    /// instead, because the implementation lacks `lane_id()`. On CPU,
+    /// `shfl_up` returns self, so the result is the inclusive sum. On GPU,
     /// lane 0's `shfl_up(1)` returns its own value, not the identity.
-    /// A correct implementation requires `gpu::lane_id()` to conditionally
-    /// replace lane 0's value. This function currently demonstrates the
-    /// type-system contract only; use the real GPU kernel pattern for
-    /// correct scan semantics.
+    /// Use `inclusive_sum` and implement the shift manually in GPU kernel code.
+    ///
+    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
     ///
     /// ```
     /// use warp_types::*;
     ///
     /// let warp: Warp<All> = Warp::kernel_entry();
     /// let data = data::PerLane::new(1i32);
+    /// #[allow(deprecated)]
     /// let prefix = warp.exclusive_sum(data, 0);
     /// // CPU emulation: NOT a correct exclusive scan (see doc)
     /// ```
-    /// Exclusive prefix sum across all lanes (STUB — not yet correct).
-    ///
-    /// **WARNING:** This function does not produce a correct exclusive scan on
-    /// any target. Lane 0 should receive `identity` but gets its own value
-    /// instead, because the implementation lacks `lane_id()`. Use
-    /// `inclusive_sum` and implement the shift manually in GPU kernel code.
-    ///
-    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
     #[deprecated(note = "produces incorrect results — use inclusive_sum and manual shift instead")]
     pub fn exclusive_sum<T>(&self, data: PerLane<T>, identity: T) -> PerLane<T>
     where
@@ -177,7 +170,7 @@ impl Warp<All> {
         PerLane::new(data.get().gpu_shfl_idx(src_lane))
     }
 
-    /// Warp-level shuffle up: lane[i] reads from lane[i - delta].
+    /// Warp-level shuffle up: lane\[i\] reads from lane\[i - delta\].
     ///
     /// Useful for scan-like operations. Lanes below delta get undefined values.
     pub fn shuffle_up<T: GpuValue + GpuShuffle>(

@@ -126,7 +126,7 @@ fn main() {
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (18 tests) | `cargo test gradual` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (16 tests) | `cargo test gradual` |
 | All claims | Full test suite (346 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure

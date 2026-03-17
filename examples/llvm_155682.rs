@@ -44,6 +44,8 @@
 //!
 //! Run: `cargo test --example llvm_155682`
 
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
+
 use std::marker::PhantomData;
 
 // ============================================================================
