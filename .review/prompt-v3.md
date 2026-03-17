@@ -42,6 +42,10 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - SimWarp width-confined shuffles assert power-of-2 width in 1..=WIDTH
 - SimWarp::shuffle_idx clamps OOB src_lane (GPU semantics, not % WIDTH wrapping)
 - ValidTileSize is sealed via Sealed supertrait — external impls blocked
+- Sealed trait is hard-sealed via SealToken (pub(crate) return type) — not just #[doc(hidden)]
+- sort.rs/cub.rs tests are type-system validation (CPU identity no-op); simwarp tests algorithm correctness
+- README test counts match actual (291 unit + 50 example + 28 doc = 369)
+- lib.rs module overview includes all public modules including simwarp
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
