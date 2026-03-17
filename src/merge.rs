@@ -99,6 +99,13 @@ where
 /// This combinator provides convenient syntax for the common
 /// "diverge → do work → merge" pattern. The merge is explicit in the
 /// type signature but automatic in the control flow.
+///
+/// # Implementation note
+///
+/// Sub-warps are manufactured via `Warp::new()` without an actual diverge
+/// step. This is correct because all `Warp<S>` are zero-sized phantom types —
+/// there is no runtime state to split. The `ComplementOf` bound ensures only
+/// valid complement pairs can be specified (sealed trait, no external impls).
 pub fn with_diverged<S1, S2, A, F1, F2>(
     _warp: Warp<All>,
     then_fn: F1,

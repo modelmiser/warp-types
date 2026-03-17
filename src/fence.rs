@@ -104,6 +104,11 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// Returns the warp (unchanged) and a partially-written region
     /// that tracks which lanes have written.
+    ///
+    /// **Note:** Even `Warp<All>` produces `PartialWrite<All>`, not `FullWrite`.
+    /// Use `global_store_complement` with the complement's partial write to
+    /// advance to `FullWrite`, or call this then `merge_writes` with a
+    /// `PartialWrite<Empty>` (which `Empty: ComplementOf<All>` satisfies).
     pub fn global_store(self, _region: GlobalRegion<Unwritten>) -> (Self, GlobalRegion<PartialWrite<S>>) {
         (self, GlobalRegion { _phantom: PhantomData })
     }

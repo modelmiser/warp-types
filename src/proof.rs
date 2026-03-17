@@ -333,7 +333,14 @@ pub fn step(expr: &Expr) -> Option<Expr> {
     }
 }
 
-/// Substitute value for variable
+/// Substitute value for variable.
+///
+/// # Capture avoidance
+///
+/// This function does NOT perform capture-avoiding substitution (no alpha-
+/// renaming). This is safe because `step()` only calls `substitute` when
+/// `val` is a value, and all values in this language are closed (no free
+/// variables), so capture cannot occur during evaluation.
 fn substitute(expr: &Expr, var: &str, val: &Expr) -> Expr {
     match expr {
         Expr::Var(x) if x == var => val.clone(),

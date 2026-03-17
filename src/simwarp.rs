@@ -76,8 +76,9 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     pub fn shuffle_down(&self, delta: u32) -> Self {
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            let src = i + delta as usize;
-            out[i] = if src < WIDTH { self.lanes[src] } else { self.lanes[i] };
+            // Use u64 arithmetic to prevent usize overflow on 32-bit platforms.
+            let src = i as u64 + delta as u64;
+            out[i] = if src < WIDTH as u64 { self.lanes[src as usize] } else { self.lanes[i] };
         }
         SimWarp { lanes: out }
     }
@@ -133,9 +134,10 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
             let within = i % w;
-            let src_within = within + delta as usize;
-            out[i] = if src_within < w {
-                self.lanes[seg_base + src_within]
+            // Use u64 arithmetic to prevent usize overflow on 32-bit platforms.
+            let src_within = within as u64 + delta as u64;
+            out[i] = if src_within < w as u64 {
+                self.lanes[seg_base + src_within as usize]
             } else {
                 self.lanes[i]
             };
