@@ -39,12 +39,20 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - DynWarp::merge checks full_mask equality
 - DynWarp::from_mask auto-detects 32/64-lane width from mask value
 - PortableVector::extract/insert use debug_assert + direct index (no % WIDTH wrapping)
+- SimWarp width-confined shuffles assert power-of-2 width in 1..=WIDTH
+- SimWarp::shuffle_idx clamps OOB src_lane (GPU semantics, not % WIDTH wrapping)
 
 KNOWN UNTESTED (accepted — don't re-flag):
-- shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP, not missing test
-- proof.rs: type_safety_check step limit (MAX_STEPS=1000) — ACCEPTED RISK, low priority
+- shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
+- proof.rs: type_safety_check step limit (MAX_STEPS=1000) — ACCEPTED RISK
 - All PTX inline assembly, AMD DPP stubs, warp_kernel macro, builder pipeline — HARDWARE-GATED
 - All GPU-targeting examples/reproduce files — HARDWARE-GATED
+- GpuWarp64 Platform impl (placeholder, no AMD support yet) — FEATURE GAP
+- 64-bit BallotResult (mentioned in docs, not implemented) — FEATURE GAP
+- CpuSimd::shuffle_down wraps vs GpuWarp32 clamps — ACCEPTED (trait allows both)
+- CpuSimd::shuffle_xor % WIDTH incorrect for non-power-of-2 — ACCEPTED (no callers use non-pow2)
+- cub.rs: reduce with non-commutative op silently wrong — ACCEPTED (matches CUB's contract)
+- exclusive_sum ignores identity parameter — ACCEPTED (deprecated, documented broken)
 
 SIMWARP COVERAGE (verified with real lane exchange — skip these sequences):
 - Butterfly reduce (5-step XOR)
