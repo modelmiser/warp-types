@@ -188,15 +188,19 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
 // actual code in cub.rs, sort.rs, tile.rs, but with real lane exchange.
 // ============================================================================
 
-/// Butterfly reduction (matches cub.rs `Warp<All>::reduce`).
-pub fn butterfly_reduce<T: Copy + Default>(
-    sw: &SimWarp<T>,
+/// Butterfly reduction (matches cub.rs `Warp<All>::reduce` for 32-lane warps).
+///
+/// Dynamically computes log2(WIDTH) XOR stages, so works for any power-of-2 WIDTH.
+pub fn butterfly_reduce<T: Copy + Default, const WIDTH: usize>(
+    sw: &SimWarp<T, WIDTH>,
     op: impl Fn(T, T) -> T,
-) -> SimWarp<T> {
+) -> SimWarp<T, WIDTH> {
     let mut v = sw.clone();
-    for &mask in &[16, 8, 4, 2, 1] {
+    let mut mask = WIDTH as u32 / 2;
+    while mask >= 1 {
         let shuffled = v.shuffle_xor(mask);
         v = v.zip_with(&shuffled, &op);
+        mask /= 2;
     }
     v
 }
