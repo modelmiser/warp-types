@@ -179,6 +179,43 @@ impl DynWarp {
         Ok(value) // placeholder — real shuffle reads from partner lane
     }
 
+    /// Shuffle down on a single scalar — runtime check for all-active.
+    pub fn shuffle_down_scalar(&self, value: i32, _delta: u32) -> Result<i32, WarpError> {
+        if self.active_mask != 0xFFFFFFFF {
+            return Err(WarpError {
+                operation: "shuffle_down",
+                expected_mask: 0xFFFFFFFF,
+                actual_mask: self.active_mask,
+            });
+        }
+        Ok(value) // placeholder — real shuffle reads from partner lane
+    }
+
+    /// Sum reduction — runtime check for all-active.
+    pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
+        if self.active_mask != 0xFFFFFFFF {
+            return Err(WarpError {
+                operation: "reduce_sum",
+                expected_mask: 0xFFFFFFFF,
+                actual_mask: self.active_mask,
+            });
+        }
+        // CPU single-thread: butterfly doubling gives value * 32
+        Ok(value.wrapping_mul(32))
+    }
+
+    /// Broadcast — runtime check for all-active.
+    pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
+        if self.active_mask != 0xFFFFFFFF {
+            return Err(WarpError {
+                operation: "broadcast",
+                expected_mask: 0xFFFFFFFF,
+                actual_mask: self.active_mask,
+            });
+        }
+        Ok(value)
+    }
+
     /// Ballot — runtime check for all-active.
     pub fn ballot(&self, predicate: &[bool; 32]) -> Result<u32, WarpError> {
         if self.active_mask != 0xFFFFFFFF {

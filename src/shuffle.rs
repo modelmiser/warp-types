@@ -78,6 +78,24 @@ pub trait Reduce<T: GpuValue> {
 }
 
 // ============================================================================
+// Shuffle safety marker (for error message improvement)
+// ============================================================================
+
+/// Marker trait for warp types that support shuffle operations.
+///
+/// Currently only `Warp<All>` and `Tile<N>` implement this.
+/// If you get an error mentioning this trait, it means you're trying to
+/// shuffle on a diverged warp — merge back to `Warp<All>` first.
+#[diagnostic::on_unimplemented(
+    message = "shuffle requires all lanes active, but `{Self}` may have inactive lanes",
+    label = "this warp may be diverged — shuffle needs Warp<All>",
+    note = "after diverge_even_odd(), call merge(evens, odds) to get Warp<All> back, then shuffle"
+)]
+pub trait ShuffleSafe {}
+
+impl ShuffleSafe for Warp<All> {}
+
+// ============================================================================
 // Shuffle operations restricted to Warp<All>
 // ============================================================================
 
@@ -123,6 +141,23 @@ impl Warp<All> {
     /// Broadcast: all lanes get the same value.
     pub fn broadcast<T: GpuValue>(&self, value: T) -> PerLane<T> {
         PerLane::new(value)
+    }
+
+    /// Shuffle XOR on a raw scalar — convenience that skips PerLane wrapping.
+    ///
+    /// Equivalent to `self.shuffle_xor(PerLane::new(val), mask).get()` but
+    /// avoids the verbosity of wrapping/unwrapping for the common case.
+    pub fn shuffle_xor_raw<T: GpuValue + crate::gpu::GpuShuffle>(
+        &self, val: T, mask: u32,
+    ) -> T {
+        val.gpu_shfl_xor(mask)
+    }
+
+    /// Shuffle down on a raw scalar — convenience that skips PerLane wrapping.
+    pub fn shuffle_down_raw<T: GpuValue + crate::gpu::GpuShuffle>(
+        &self, val: T, delta: u32,
+    ) -> T {
+        val.gpu_shfl_down(delta)
     }
 }
 

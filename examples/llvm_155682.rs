@@ -1,6 +1,6 @@
 //! # LLVM Issue #155682: shfl_sync After Conditional Eliminates Branch
 //!
-//! Demonstrates how session-typed divergence prevents a bug where the compiler
+//! Demonstrates how warp typestate prevents a bug where the compiler
 //! "optimizes" a conditional into unconditional execution because of UB from
 //! an uninitialized value reaching a shuffle.
 //!

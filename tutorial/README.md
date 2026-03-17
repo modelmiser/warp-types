@@ -105,6 +105,21 @@ let (evens, odds) = warp.diverge_even_odd();
 // ERROR: no method named `shuffle_xor` found for `Warp<Even>`
 ```
 
+Here's the actual compiler output when you try:
+
+```
+error[E0599]: no method named `shuffle_xor` found for struct `Warp<Even>` in the current scope
+  --> src/main.rs:8:19
+   |
+8  |     evens.shuffle_xor(data, 1);
+   |           ^^^^^^^^^^^ method not found in `Warp<Even>`
+   |
+   = note: the method was found for
+           - `Warp<All>`
+```
+
+The compiler tells you exactly what happened: `shuffle_xor` exists on `Warp<All>` but not `Warp<Even>`. The fix is clear — `merge(evens, odds)` to get `Warp<All>` back.
+
 This is why the cuda-samples #398 bug is impossible in our type system. The buggy pattern requires shuffling with only some lanes active. That code cannot be written — it's a type error.
 
 ## 5. Writing a GPU Kernel
@@ -261,7 +276,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test` (272 unit + 23 doc = 295, plus 50 example = 345 total)
+- Clone the repo and run `cargo test` (263 unit + 24 doc = 287, plus 50 example = 337 total)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`
@@ -269,7 +284,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ### For Researchers
 - The Lean 4 formalization is in `lean/` (28 theorems, all zero `sorry`, zero axioms — including progress, preservation, and 5 bug untypability proofs)
 - Active set masks are `u64` — ready for AMD 64-lane wavefronts
-- The `GpuTarget` enum in the builder supports future backends
+- The `Platform` trait in the builder supports future backends
 - The tile system opens cooperative groups to formal typing
 
 ### For Language Designers

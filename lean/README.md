@@ -2,7 +2,7 @@
 
 A mechanized proof of type safety for a linear type system that prevents GPU warp divergence bugs at compile time.
 
-Warp-level shuffle operations on diverged (partially active) warps are a class of undefined behavior in CUDA/GPU programming that no existing type system catches. This formalization proves that a session-typed approach makes such programs untypable.
+Warp-level shuffle operations on diverged (partially active) warps are a class of undefined behavior in CUDA/GPU programming that no existing type system catches. This formalization proves that a typestate approach makes such programs untypable.
 
 ## What This Formalizes
 

@@ -1,6 +1,6 @@
 # 7. Evaluation
 
-We evaluate session-typed divergence on three dimensions:
+We evaluate warp typestate on three dimensions:
 1. **Bug Detection**: Does the type system catch real divergence bugs?
 2. **Performance**: What is the runtime overhead?
 3. **Expressiveness**: Can practical GPU algorithms be expressed without excessive friction?
@@ -10,6 +10,8 @@ We evaluate session-typed divergence on three dimensions:
 ### Documented Shuffle-Divergence Issues
 
 We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. See §7.1 of the full paper for the complete table.
+
+**Survey methodology.** We searched GitHub issue trackers for projects with known warp/shuffle usage, using queries: `shfl_sync`, `shuffle_xor`, `warp diverge`, `activemask`, `ballot_sync`, `shfl_down wrong`, `shuffle undefined`, and `warp mask bug`. Date range: 2016 (CUDA 9.0 deprecation) through 2025. We included bugs where: (a) the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations, and (b) the issue or fix is publicly documented. We excluded: performance-only issues (divergence that reduces throughput but doesn't produce wrong results), shared memory race conditions (different bug class), and bugs where the report was too vague to determine the mechanism. We did not exhaustively search all GPU projects; the sample is convenience-based, focused on projects with public issue trackers. We report exact caveats for each bug (see footnotes above).
 
 **Modeled bugs** (with worked Rust examples):
 
@@ -82,22 +84,23 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
+Our implementation includes nine compile-fail doctests that serve as machine-checked proof artifacts:
 
 1. `shuffle_xor` on `Warp<Even>` — rejected, method absent (`diverge.rs`)
 2. `merge(Even, LowHalf)` — rejected, non-complements (`merge.rs`)
 3. `merge(Even, Even)` — rejected, same set (`merge.rs`)
-4. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
-5. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
-6. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
-7. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
-8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
+4. `merge(EvenLow, EvenHigh)` as top-level — rejected, nested complements are not `ComplementOf` (`merge.rs`)
+5. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
+6. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
+7. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
+8. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
+9. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
-Our prototype includes 272 unit tests, 50 example tests across 8 worked bug examples, and 23 doc tests (8 compile-fail including linearity enforcement, 15 doc examples) covering the full type system (345 total). The tests exercise:
+Our prototype includes 263 unit tests, 50 example tests across 8 worked bug examples, and 24 doc tests (9 compile-fail including linearity and nested complement enforcement, 15 doc examples) covering the full type system (337 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -197,7 +200,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` — `cargo run` from source to GPU |
-| Type system tests | 272 unit + 50 example + 23 doc (345 total) |
+| Type system tests | 263 unit + 50 example + 24 doc (337 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 theorems total (§4.8) |

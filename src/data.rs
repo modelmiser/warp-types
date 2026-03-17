@@ -75,6 +75,7 @@ impl<T: GpuValue> Uniform<T> {
 /// This is the default for most GPU computations. Each lane has its own
 /// value, and you can only access other lanes' values through explicit
 /// shuffle operations.
+#[must_use = "PerLane values carry per-lane GPU data — dropping discards computation"]
 #[derive(Clone, Copy, Debug)]
 pub struct PerLane<T: GpuValue> {
     value: T,

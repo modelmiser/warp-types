@@ -1,7 +1,7 @@
 //! Block-level types: shared memory ownership and inter-block sessions.
 //!
 //! GPU parallelism has three levels:
-//! - **Warp** (32/64 lanes): shuffles, lockstep, session-typed divergence
+//! - **Warp** (32/64 lanes): shuffles, lockstep, linear typestate
 //! - **Block** (multiple warps): shared memory, `__syncthreads()`
 //! - **Grid** (multiple blocks): global memory, cooperative groups
 //!

@@ -1,4 +1,4 @@
-# 3. Session-Typed Divergence
+# 3. Warp Typestate: Linear Types for Active Sets
 
 This section presents our core type system. We begin with the types (§3.1), then define the active set lattice (§3.2), present the typing rules (§3.3), explain our key mechanism of method availability (§3.4), and conclude with a worked example (§3.5).
 

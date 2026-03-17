@@ -1,4 +1,4 @@
-# Session Types for SIMT Divergence: Type-Safe GPU Warp Programming
+# Type-Safe GPU Warp Programming via Linear Typestate
 
 **Chad Aldreda**
 
@@ -6,7 +6,7 @@
 
 GPU warp primitives like shuffle enable efficient communication between threads, but reading from an inactive lane produces undefined behavior. These bugs are notoriously difficult to detect—they compile successfully, may appear to work, and fail silently: NVIDIA's own reference code contains them, and a plasma physics simulation ran for months with undefined behavior that went undetected on pre-Volta hardware. State-of-the-art persistent thread programs avoid the problem by maintaining warp-uniform execution.
 
-We present *session-typed divergence*, a type system that tracks which lanes are active at each program point. Divergence (branching) creates sub-warps with complementary active sets; reconvergence (merging) requires type-level proof that the sets are complements. Operations requiring all lanes (shuffles) are only available on fully-active warps—not checked at runtime, but *absent from the type*.
+We present *warp typestate*, a type system that tracks which lanes are active at each program point. Divergence (branching) creates sub-warps with complementary active sets; reconvergence (merging) requires type-level proof that the sets are complements. Operations requiring all lanes (shuffles) are only available on fully-active warps—not checked at runtime, but *absent from the type*.
 
 We prove our type system sound (progress and preservation), implement it as a Rust library with zero runtime overhead, and demonstrate that it catches real bugs from NVIDIA's cuda-samples and CUB library at compile time. The result is strictly more permissive than the divergence-prohibition approach (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` (which defers mask correctness to runtime).
 

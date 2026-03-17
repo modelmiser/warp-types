@@ -1,6 +1,6 @@
 //! # The Bug That Types Catch
 //!
-//! This demo shows how session-typed divergence catches shuffle-after-diverge
+//! This demo shows how warp typestate catches shuffle-after-diverge
 //! bugs at compile time.
 //!
 //! ## The Bug (in untyped CUDA)
@@ -18,7 +18,7 @@
 //!
 //! This compiles fine in CUDA. It may work sometimes. It will fail unpredictably.
 //!
-//! ## The Fix (with session-typed divergence)
+//! ## The Fix (with warp typestate)
 //!
 //! Our type system makes this a compile error, and guides you to the fix.
 //!

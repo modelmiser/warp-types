@@ -186,6 +186,24 @@ warp-types-builder = { path = "path/to/warp-types/warp-types-builder" }
 
 The type system is additive — it doesn't require all-or-nothing adoption.
 
+## CUDA-to-warp-types Phrasebook
+
+Common CUDA patterns and their warp-types equivalents:
+
+| CUDA | warp-types |
+|------|------------|
+| `__shfl_xor_sync(0xFFFFFFFF, val, mask)` | `warp.shuffle_xor(PerLane::new(val), mask).get()` or `warp.shuffle_xor_raw(val, mask)` |
+| `__shfl_down_sync(0xFFFFFFFF, val, delta)` | `warp.shuffle_down(PerLane::new(val), delta).get()` or `warp.shuffle_down_raw(val, delta)` |
+| `__ballot_sync(0xFFFFFFFF, pred)` | `warp.ballot(PerLane::new(pred))` (via CUB primitives) |
+| `cub::WarpReduce<T>::Sum(val)` | `warp.reduce_sum(PerLane::new(val))` |
+| `cub::WarpScan<T>::InclusiveSum(val)` | `warp.inclusive_sum(PerLane::new(val))` |
+| `cg::tiled_partition<16>(block)` | `warp.tile::<16>()` |
+| `if (threadIdx.x < N) { ... }` | `let (active, inactive) = warp.diverge_dynamic(mask); ... active.merge()` |
+| `__activemask()` | No equivalent needed — active set is tracked in the type |
+| Full-warp kernel entry | `let warp: Warp<All> = Warp::kernel_entry();` |
+
+**Key difference:** In CUDA, `0xFFFFFFFF` is a runtime mask you pass to every shuffle. In warp-types, the mask is a type (`All`) — the compiler verifies it's correct. You never write a mask constant.
+
 ## FAQ
 
 **Q: Does this work on stable Rust?**

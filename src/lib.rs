@@ -1,6 +1,6 @@
-//! Warp Types: Session-typed GPU warp programming.
+//! Warp Types: Type-safe GPU warp programming via linear typestate.
 //!
-//! Prevents warp divergence bugs at compile time using session types.
+//! Prevents warp divergence bugs at compile time using linear typestate.
 //! A diverged warp literally cannot call shuffle — the method doesn't exist.
 //!
 //! # Core Idea
@@ -38,7 +38,9 @@
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
 #![cfg_attr(target_arch = "nvptx64", feature(abi_ptx, asm_experimental_arch))]
-#![allow(dead_code)]
+// dead_code is allowed only in the research module (experimental prototypes).
+// Core modules should not have dead code — if it's unused, remove it or
+// mark it #[allow(dead_code)] individually with a justification comment.
 
 // ============================================================================
 // Core modules (public API)
@@ -68,6 +70,7 @@ pub mod dynamic;
 // ============================================================================
 
 #[cfg(not(target_arch = "nvptx64"))]
+#[allow(dead_code)] // Research modules contain experimental prototypes with unused code
 pub mod research;
 
 // ============================================================================
@@ -142,7 +145,7 @@ pub use warp::Warp;
 pub use data::{LaneId, WarpId, Uniform, PerLane, SingleLane, Role};
 pub use merge::{merge, merge_within};
 pub use shuffle::{
-    Shuffle, Ballot, Vote, Reduce, BallotResult,
+    Shuffle, Ballot, Vote, Reduce, BallotResult, ShuffleSafe,
     Permutation, HasDual, Xor, RotateDown, RotateUp, Identity, Compose,
 };
 pub use fence::{GlobalRegion, Unwritten, PartialWrite, FullWrite, Fenced, WriteState};

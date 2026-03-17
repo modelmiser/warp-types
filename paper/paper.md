@@ -1,4 +1,4 @@
-# Session Types for SIMT Divergence: Type-Safe GPU Warp Programming
+# Type-Safe GPU Warp Programming via Linear Typestate
 
 **Chad Aldreda**
 
@@ -6,7 +6,7 @@
 
 GPU warp primitives like shuffle enable efficient intra-warp communication, but reading from an inactive lane produces undefined behavior. These bugs compile without warnings, may appear to work, and fail silently: NVIDIA's own reference code contains them, a plasma physics simulation ran for months with undefined behavior undetected, and NVIDIA deprecated an entire API family to address the bug class. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely.
 
-We present *session-typed divergence*, a type system that tracks which lanes are active at each program point. Divergence creates sub-warps with complementary active sets; reconvergence requires type-level proof that the sets are complements. Operations requiring all lanes—shuffles, ballots, reductions—are only available on fully-active warps: not checked at runtime, but *absent from the type*.
+We present *warp typestate*, a linear type system that tracks which lanes are active at each program point. Divergence creates sub-warps with complementary active sets; reconvergence requires type-level proof that the sets are complements. Operations requiring all lanes—shuffles, ballots, reductions—are only available on fully-active warps: not checked at runtime, but *absent from the type*. The design is motivated by a structural analogy to multiparty session type branching, but the mechanism is linear typestate over a Boolean lattice of active sets—there are no channels, no protocol sequencing, and no duality in the session-type sense.
 
 We prove our type system sound (progress and preservation), implement it as a Rust library with zero runtime overhead, and demonstrate that it catches real bugs from NVIDIA's cuda-samples at compile time—including one we reproduced on an RTX 4000 Ada GPU, confirming deterministically wrong results. The approach is strictly more permissive than the divergence-prohibition approach (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` (which defers mask correctness to runtime).
 
@@ -39,13 +39,13 @@ State-of-the-art practitioners have responded by avoiding the problem entirely. 
 
 Our type system offers a third path: lane-level divergence that is safe rather than forbidden. It is strictly more permissive than the divergence-prohibition approach exemplified by Hazy (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` API (which defers mask correctness to runtime). The gap between `__shfl_sync` and compile-time safety is concrete: `__activemask()` returns the current execution mask, which hardware always accepts—but a shuffle using `__activemask()` inside divergent code silently communicates among the wrong subset of lanes [CUDA Programming Guide §K.6]. Our type system closes this gap because the active set is a type-level property, not a runtime value.
 
-## 1.1 Our Approach: Session-Typed Divergence
+## 1.1 Our Approach: Linear Typestate for Divergence
 
 We observe that divergence has the structure of a *session type protocol*. In traditional session types, communication follows a protocol where participants send and receive messages in a prescribed order. Branching in the protocol creates sub-sessions; participants must follow compatible branches.
 
 SIMT divergence is similar, but with a twist: when a warp diverges, some participants don't take the "other branch"—they go *quiescent*. They stop participating entirely until the branches reconverge. This is not captured by traditional session types, where all participants remain active.
 
-We introduce *session-typed divergence*, a type system that tracks which lanes are active at each program point. The key ideas are:
+We introduce *warp typestate*, a type system that tracks which lanes are active at each program point. The key ideas are:
 
 1. **Warps carry active set types.** A warp is typed as `Warp<S>` where `S` describes which lanes are active. `Warp<All>` means all 32 lanes; `Warp<Even>` means only even-numbered lanes.
 
@@ -333,7 +333,7 @@ Our contribution is recognizing this correspondence and building a type system t
 
 ---
 
-# 3. Session-Typed Divergence
+# 3. Warp Typestate: Linear Types for Active Sets
 
 This section presents our core type system. We begin with the types (§3.1), then define the active set lattice (§3.2), present the typing rules (§3.3), explain our key mechanism of method availability (§3.4), and conclude with a worked example (§3.5).
 
@@ -1321,7 +1321,7 @@ We can compose warp-level and block-level protocols:
 Global Protocol MatMul(Blocks B[M][N], Tiles A, B, C) {
     // Block-level: traditional MPST
     foreach b in B {
-        // Warp-level: session-typed divergence
+        // Warp-level: warp typestate
         WarpProtocol {
             load_tile(A);
             load_tile(B);
@@ -1336,7 +1336,7 @@ Global Protocol MatMul(Blocks B[M][N], Tiles A, B, C) {
 }
 ```
 
-The warp protocol uses our session-typed divergence. The block protocol uses traditional session types. They compose hierarchically.
+The warp protocol uses our warp typestate. The block protocol uses traditional session types. They compose hierarchically.
 
 ### Why This Matters
 
@@ -1361,7 +1361,7 @@ auto grid = this_grid();
 Each level has its own session type:
 
 ```rust
-// Warp-level: session-typed divergence
+// Warp-level: warp typestate
 struct Warp<S: ActiveSet>;
 
 // Block-level: traditional session types
@@ -1485,14 +1485,14 @@ Our extensions handle:
 | Memory safety | Compose with Descend | Full |
 | Fence-divergence | Type-state write tracking | Full |
 
-The key insight: not every problem needs session-typed divergence. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication). Notably, the fence-divergence extension reuses the complement proof mechanism from merge — the same `ComplementOf` trait that ensures safe reconvergence also ensures safe memory ordering.
+The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication). Notably, the fence-divergence extension reuses the complement proof mechanism from merge — the same `ComplementOf` trait that ensures safe reconvergence also ensures safe memory ordering.
 
 
 ---
 
 # 6. Implementation
 
-We implement session-typed divergence as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
+We implement warp typestate as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
 
 ## 6.1 Type Encoding
 
@@ -1852,7 +1852,7 @@ The safe wrapper is only available on `Warp<All>`, ensuring all lanes are active
 
 ## 6.6 Dual-Mode Platform Abstraction
 
-The same warp algorithm often needs both CPU and GPU implementations — CPU for testing and debugging, GPU for production. We implement a `Platform` trait that abstracts over execution model while preserving session-typed safety:
+The same warp algorithm often needs both CPU and GPU implementations — CPU for testing and debugging, GPU for production. We implement a `Platform` trait that abstracts over execution model while preserving typestate safety:
 
 ```rust
 trait Platform {
@@ -1966,7 +1966,7 @@ Programmers must call `diverge` and `merge` explicitly. Automatic insertion base
 
 ## 6.10 Summary
 
-Our Rust implementation demonstrates that session-typed divergence can be embedded in an existing systems language with:
+Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
 - **Zero runtime overhead**: Types are erased at MIR, LLVM IR, and PTX levels
 - **Good error messages**: Rust's diagnostics explain what's wrong
 - **Familiar syntax**: Looks like normal Rust code
@@ -1981,7 +1981,7 @@ The key insight: Rust's type system is expressive enough to encode our safety pr
 
 # 7. Evaluation
 
-We evaluate session-typed divergence on three dimensions:
+We evaluate warp typestate on three dimensions:
 1. **Bug Detection**: Does the type system catch real divergence bugs?
 2. **Performance**: What is the runtime overhead?
 3. **Expressiveness**: Can practical GPU algorithms be expressed without excessive friction?
@@ -2273,7 +2273,7 @@ Session-typed divergence draws on and differs from work in GPU verification, ses
 
 Descend [Kopcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming. It prevents data races and use-after-free in GPU code.
 
-**Relationship to our work**: Descend and session-typed divergence are *orthogonal* and *composable*:
+**Relationship to our work**: Descend and warp typestate are *orthogonal* and *composable*:
 - Descend: memory safety (ownership, borrowing, lifetimes)
 - Our work: divergence safety (active lane tracking)
 
@@ -2359,7 +2359,7 @@ Recent work extends MPST to handle participant failures: crash-stop failures [Ad
 
 Ferrite [Chen et al. 2022] is a judgmental embedding of session types in Rust using PhantomData, zero-sized types, and type-level programming—the same encoding techniques we use.
 
-**Relationship to our work**: Ferrite and session-typed divergence share an encoding strategy (phantom types in Rust) but model different domains. Ferrite models inter-process communication channels where parties send and receive messages. We model intra-warp lane communication where parties go quiescent. Key differences: (1) Ferrite's channels carry data; our warps share a register file. (2) Ferrite uses linear channels; we use linear warp handles. (3) Ferrite's session types describe message sequences; ours describe active-set evolution. The shared encoding technique validates our claim that Rust's type system is expressive enough for session-type embeddings.
+**Relationship to our work**: Ferrite and warp typestate share an encoding strategy (phantom types in Rust) but model different domains. Ferrite models inter-process communication channels where parties send and receive messages. We model intra-warp lane communication where parties go quiescent. Key differences: (1) Ferrite's channels carry data; our warps share a register file. (2) Ferrite uses linear channels; we use linear warp handles. (3) Ferrite's session types describe message sequences; ours describe active-set evolution. The shared encoding technique validates our claim that Rust's type system is expressive enough for session-type embeddings.
 
 ### Session Types for Concurrent Objects
 
@@ -2376,6 +2376,12 @@ Futhark [Henriksen et al. 2017] is a functional GPU language with a type system 
 **Relationship to our work**: Futhark *avoids* divergence by design. Its parallelism constructs (map, reduce, scan) don't support divergent branches.
 
 Our approach is complementary: we *embrace* divergence and make it safe. This allows expressing algorithms like adaptive sorting where divergence is fundamental.
+
+### ISPC (Intel SPMD Program Compiler)
+
+ISPC [Pharr and Mark 2012] is a C-variant compiler that implements SPMD programming on CPU SIMD hardware. It introduces `uniform` and `varying` type qualifiers: a `uniform` variable holds a single value shared across all program instances in a gang (analogous to our `Uniform<T>`), while `varying` (the default) holds per-instance values (analogous to our `PerLane<T>`). The compiler enforces a directional conversion rule—`uniform` implicitly widens to `varying`, but assigning `varying` to `uniform` is a compile error. ISPC also provides `foreach_active` (which serializes execution over active instances) and cross-lane operations (`shuffle`, `broadcast`, `reduce_add`) whose mask correctness is guaranteed by the compiler, which emits and propagates execution mask instructions automatically.
+
+**Relationship to our work**: ISPC is the closest existing system to ours in its awareness of divergence at the language level, and its `uniform`/`varying` distinction directly inspired our `Uniform<T>`/`PerLane<T>` types. The key difference is *what* the type system tracks. ISPC's types encode *value uniformity*—whether all instances hold the same value—but not *which instances are active*. The execution mask is a runtime value managed implicitly by the compiler; there is no type-level active set. A function cannot declare in its signature that it requires all lanes to be active, and cross-lane operations are safe because the compiler controls mask emission at runtime, not because the type system prevents misuse. Our `Warp<S>` types go further: they encode the active set itself, making `shuffle_xor` *absent from the type* when lanes are inactive rather than masked at runtime. This distinction matters on GPU hardware, where ISPC's approach does not apply: the execution mask is managed by hardware, not the compiler, and the programmer passes masks to warp intrinsics manually—exactly the interface where the bug class arises.
 
 ### DPJ (Deterministic Parallel Java)
 
@@ -2456,6 +2462,7 @@ The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread 
 | Descend | Memory safety | We do divergence safety |
 | GPUVerify | External verification | We use types |
 | MPST | All parties active | We model quiescence |
+| ISPC | uniform/varying (value uniformity) | We track active sets (which lanes), not just uniformity |
 | Futhark | Avoids divergence | We embrace + type it |
 | `__shfl_sync` | Require mask (runtime) | We prove mask correct (compile-time) |
 | Hazy megakernel | Prohibit divergence | We make divergence safe |
@@ -2536,12 +2543,12 @@ The core idea—session types with quiescent participants—may apply beyond GPU
 
 ## 9.6 Hardware Crossbar Protocols
 
-We have prototyped session-typed crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type.
+We have prototyped typestate crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type.
 
-The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how session types prevent it.
+The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how warp typestate prevents it.
 
 Future work extends toward hardware synthesis proper:
-- Generating crossbar routing configurations from session-typed protocols
+- Generating crossbar routing configurations from typestate protocols
 - Synthesizing predication logic matching diverge/merge structure
 - Area/power optimization guided by protocol structure (unused crossbar paths can be power-gated)
 
@@ -2558,7 +2565,7 @@ Several limitations remain:
 
 GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with undefined behavior undetected on pre-Volta hardware. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs prohibit lane-level divergence entirely rather than manage it.
 
-We presented **session-typed divergence**, a type system that makes lane-level divergence safe rather than forbidden:
+We presented **warp typestate**, a type system that makes lane-level divergence safe rather than forbidden:
 
 1. **Warps carry active set types** (`Warp<Even>`, `Warp<All>`), tracking which lanes are active.
 

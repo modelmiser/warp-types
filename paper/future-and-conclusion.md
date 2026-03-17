@@ -1,6 +1,6 @@
 # 9. Future Work
 
-Session-typed divergence opens several research directions.
+Warp typestate opens several research directions.
 
 ## 9.1 Tooling and Data-Dependent Divergence
 
@@ -67,12 +67,12 @@ The core idea—session types with quiescent participants—may apply beyond GPU
 
 ## 9.6 Hardware Crossbar Protocols
 
-We have prototyped session-typed crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type.
+We have prototyped typestate crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type.
 
-The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how session types prevent it.
+The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how warp typestate prevents it.
 
 Future work extends toward hardware synthesis proper:
-- Generating crossbar routing configurations from session-typed protocols
+- Generating crossbar routing configurations from typestate protocols
 - Synthesizing predication logic matching diverge/merge structure
 - Area/power optimization guided by protocol structure (unused crossbar paths can be power-gated)
 
@@ -87,7 +87,7 @@ Several limitations remain:
 
 GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with undefined behavior undetected on pre-Volta hardware. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs maintain warp-uniform execution rather than manage divergence.
 
-We presented **session-typed divergence**, a type system that makes lane-level divergence safe rather than forbidden:
+We presented **warp typestate**, a linear type system that makes lane-level divergence safe rather than forbidden:
 
 1. **Warps carry active set types** (`Warp<Even>`, `Warp<All>`), tracking which lanes are active.
 
@@ -97,13 +97,13 @@ We presented **session-typed divergence**, a type system that makes lane-level d
 
 4. **Shuffles require all lanes active**. The `shuffle_xor` method exists only on `Warp<All>`. Calling it on a diverged warp is not a runtime error—it is *unrepresentable*.
 
-The key insight is that GPU divergence fits the session type model: diverging is branching where some parties go *quiescent* (not failed, just paused), and reconverging is joining where quiescent parties resume. This correspondence gives us a principled type discipline for an ad-hoc problem.
+The key insight is that GPU divergence has the *shape* of multiparty session type branching: diverging splits participants, reconverging requires a complement proof, and quiescence (temporarily inactive participants) is a phenomenon not captured by existing type disciplines. We formalize this as linear typestate over a Boolean lattice of active sets—not session types proper (there are no channels or protocol sequences), but motivated by the structural analogy. The analogy guided the design; the Boolean lattice and linear resource discipline provide the guarantees.
 
 Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
 
-Beyond safety, the type system **unlocks performance that is currently too dangerous to attempt.** State-of-the-art GPU kernels avoid lane-level divergence entirely—not because uniform execution is always optimal, but because divergent shuffles are too risky to get right. Algorithms that could be faster with lane-level heterogeneity (warp-level sort in rasterizers, divergent reductions in ray traversal, per-lane work stealing in ML kernels) are written as uniform instead, leaving performance on the table. Session-typed divergence makes the fast-but-dangerous path safe.
+Beyond safety, the type system **unlocks performance that is currently too dangerous to attempt.** State-of-the-art GPU kernels avoid lane-level divergence entirely—not because uniform execution is always optimal, but because divergent shuffles are too risky to get right. Algorithms that could be faster with lane-level heterogeneity (warp-level sort in rasterizers, divergent reductions in ray traversal, per-lane work stealing in ML kernels) are written as uniform instead, leaving performance on the table. Warp typestate makes the fast-but-dangerous path safe.
 
-Session-typed divergence is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
+Warp typestate is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
 
 **The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
 

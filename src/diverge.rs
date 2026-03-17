@@ -1,6 +1,6 @@
 //! Diverge operations: splitting a warp by predicate.
 //!
-//! Divergence is the first half of the session-typed divergence pattern.
+//! Divergence is the first half of the warp typestate pattern.
 //! When a warp diverges, it splits into two sub-warps with complementary
 //! active sets. The type system tracks exactly which lanes are active.
 //!

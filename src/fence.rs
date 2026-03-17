@@ -17,7 +17,7 @@
 //! This turns a memory ordering bug into a type error.
 
 use core::marker::PhantomData;
-use crate::active_set::{ActiveSet, ComplementOf};
+use crate::active_set::{ActiveSet, ComplementOf, ComplementWithin};
 use crate::warp::Warp;
 
 // ============================================================================
@@ -57,6 +57,7 @@ impl WriteState for Fenced {}
 /// - `merge_writes()` requires complementary partial writes
 /// - `threadfence()` requires full write
 /// - Reading requires fenced state
+#[must_use = "GlobalRegion tracks write progress — dropping it loses the write-state proof"]
 pub struct GlobalRegion<S: WriteState> {
     _phantom: PhantomData<S>,
 }
@@ -97,7 +98,7 @@ impl<S: ActiveSet> Warp<S> {
     }
 }
 
-/// Merge writes from complementary partial writes.
+/// Merge writes from complementary partial writes (top-level: covers All).
 ///
 /// Requires the same `ComplementOf` proof as warp merge.
 pub fn merge_writes<S1, S2>(
@@ -107,6 +108,22 @@ pub fn merge_writes<S1, S2>(
 where
     S1: ComplementOf<S2>,
     S2: ActiveSet,
+{
+    GlobalRegion { _phantom: PhantomData }
+}
+
+/// Merge writes from partial writes that are complements within a parent set.
+///
+/// For nested divergence: e.g., EvenLow + EvenHigh within Even.
+/// Returns a partial write for the parent set, not a full write.
+pub fn merge_writes_within<S1, S2, P>(
+    _a: GlobalRegion<PartialWrite<S1>>,
+    _b: GlobalRegion<PartialWrite<S2>>,
+) -> GlobalRegion<PartialWrite<P>>
+where
+    S1: ComplementWithin<S2, P>,
+    S2: ActiveSet,
+    P: ActiveSet,
 {
     GlobalRegion { _phantom: PhantomData }
 }
@@ -167,11 +184,18 @@ mod tests {
 
     #[test]
     fn test_nested_fence_protocol() {
-        // Nested divergence: four partial writes merged pairwise
+        // Nested divergence: EvenLow + EvenHigh are complements within Even (not All).
+        // merge_writes_within returns PartialWrite<Even>, which can then be merged
+        // with PartialWrite<Odd> to get FullWrite.
         let el = GlobalRegion::<PartialWrite<EvenLow>> { _phantom: PhantomData };
         let eh = GlobalRegion::<PartialWrite<EvenHigh>> { _phantom: PhantomData };
 
-        // EvenLow + EvenHigh are complements
-        let _full = merge_writes(el, eh);
+        // Nested merge: EvenLow + EvenHigh → Even (partial)
+        let even_partial: GlobalRegion<PartialWrite<Even>> = merge_writes_within(el, eh);
+
+        // Top-level merge: Even + Odd → FullWrite
+        let odd = GlobalRegion::<PartialWrite<Odd>> { _phantom: PhantomData };
+        let full = merge_writes(even_partial, odd);
+        let _fenced = threadfence(full);
     }
 }

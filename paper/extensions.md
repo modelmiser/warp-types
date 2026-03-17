@@ -276,7 +276,7 @@ We can compose warp-level and block-level protocols:
 Global Protocol MatMul(Blocks B[M][N], Tiles A, B, C) {
     // Block-level: traditional MPST
     foreach b in B {
-        // Warp-level: session-typed divergence
+        // Warp-level: warp typestate
         WarpProtocol {
             load_tile(A);
             load_tile(B);
@@ -291,7 +291,7 @@ Global Protocol MatMul(Blocks B[M][N], Tiles A, B, C) {
 }
 ```
 
-The warp protocol uses our session-typed divergence. The block protocol uses traditional session types. They compose hierarchically.
+The warp protocol uses our warp typestate. The block protocol uses traditional session types. They compose hierarchically.
 
 ### Why This Matters
 
@@ -316,7 +316,7 @@ auto grid = this_grid();
 Each level has its own session type:
 
 ```rust
-// Warp-level: session-typed divergence
+// Warp-level: warp typestate
 struct Warp<S: ActiveSet>;
 
 // Block-level: traditional session types
@@ -440,5 +440,5 @@ Our extensions handle:
 | Memory safety | Compose with Descend | Full |
 | Fence-divergence | Type-state write tracking | Full |
 
-The key insight: not every problem needs session-typed divergence. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication). Notably, the fence-divergence extension reuses the complement proof mechanism from merge — the same `ComplementOf` trait that ensures safe reconvergence also ensures safe memory ordering.
+The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication). Notably, the fence-divergence extension reuses the complement proof mechanism from merge — the same `ComplementOf` trait that ensures safe reconvergence also ensures safe memory ordering.
 

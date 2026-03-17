@@ -1,6 +1,6 @@
 //! # NVIDIA cuda-samples Issue #398: Reduction Shuffle-Mask Bug
 //!
-//! Demonstrates how session-typed divergence catches a real bug from NVIDIA's
+//! Demonstrates how warp typestate catches a real bug from NVIDIA's
 //! own cuda-samples repository.
 //!
 //! ## The Real Bug

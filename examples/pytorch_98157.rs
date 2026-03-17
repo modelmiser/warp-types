@@ -1,6 +1,6 @@
 //! # PyTorch Issue #98157: `__activemask()` in `countRadixUsingMask`
 //!
-//! Demonstrates how session-typed divergence catches a real bug in PyTorch's
+//! Demonstrates how warp typestate catches a real bug in PyTorch's
 //! radix sort used by `topk`, `kthvalue`, and `median`.
 //!
 //! ## The Real Bug

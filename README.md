@@ -1,10 +1,10 @@
-# warp-types: Session-Typed GPU Divergence
+# warp-types: Type-Safe GPU Warp Programming via Linear Typestate
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19040616.svg)](https://doi.org/10.5281/zenodo.19040616)
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 272 unit + 50 example + 23 doc tests (345 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
+**Status:** Research prototype with real GPU execution. 263 unit + 50 example + 24 doc tests (337 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
 
 ## The Problem
 
@@ -17,7 +17,7 @@ if (participate) {
 }
 ```
 
-This compiles without warnings, may appear to work, and fails silently. NVIDIA's own cuda-samples contains this bug ([#398](https://github.com/NVIDIA/cuda-samples/issues/398)). Their core library CUB contains a variant ([CCCL#854](https://github.com/NVIDIA/cccl/issues/854)). The PIConGPU plasma physics simulation ran for months with undefined behavior in a divergent branch, undetected because pre-Volta hardware masked the violation ([#2514](https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514)). NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0 to address the bug class.
+This compiles without warnings, may appear to work, and fails silently. NVIDIA's own cuda-samples contains this bug ([#398](https://github.com/NVIDIA/cuda-samples/issues/398)). Their core library CUB contains a variant ([CCCL#854](https://github.com/NVIDIA/cccl/issues/854); the reporter later noted it may have been a false positive, but the source-level pattern is ill-typed in our system regardless). The PIConGPU plasma physics simulation ran for months with undefined behavior in a divergent branch, undetected because pre-Volta hardware masked the violation ([#2514](https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514)). NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0 to address the bug class.
 
 We survey 21 documented bugs across 16 real-world projects. State-of-the-art persistent thread programs (e.g., the [Hazy megakernel](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles)) avoid the problem by maintaining warp-uniform execution.
 
@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 272 unit + 23 doc tests
+cargo test                                    # 263 unit + 24 doc tests
 cargo test --examples                         # 50 tests across 8 real-bug examples
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -125,9 +125,9 @@ fn main() {
 | Soundness (progress + preservation) | Full Lean 4 mechanization (28 theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
-| Platform portability (32/64 lanes) | u64 masks, AMD stubs, GpuTarget enum | `cargo test warp_size` |
+| Platform portability (32/64 lanes) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (18 tests) | `cargo test gradual` |
-| All claims | Full test suite (345 tests) | `cargo test && cargo test --examples` |
+| All claims | Full test suite (337 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 
@@ -179,6 +179,7 @@ warp-types/
 
 ## Limitations
 
+- **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
 - **AMD untested.** u64 masks and `amdgpu` target stubs are in place but require AMD hardware for validation.
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 

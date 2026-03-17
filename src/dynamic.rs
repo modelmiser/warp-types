@@ -43,6 +43,7 @@ use crate::active_set::All;
 /// guaranteeing they are complements. Must be merged to recover `Warp<All>`.
 ///
 /// The mask is runtime. The complement is structural.
+#[must_use = "a DynDiverge must be merged to recover Warp<All> — dropping it loses both branches"]
 pub struct DynDiverge {
     true_mask: u64,
     false_mask: u64,
@@ -76,7 +77,7 @@ impl DynDiverge {
     pub fn merge(self) -> Warp<All> {
         // Safety: true_mask | false_mask == 0xFFFFFFFF (or parent mask)
         // This is guaranteed by diverge_dynamic's construction.
-        Warp::kernel_entry()
+        Warp::new()
     }
 
     /// Execute a closure on the true branch, then the false branch, then merge.

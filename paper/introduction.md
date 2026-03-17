@@ -25,13 +25,13 @@ State-of-the-art practitioners have responded by avoiding the problem entirely. 
 
 Our type system offers a third path: lane-level divergence that is safe rather than forbidden. It is strictly more permissive than the divergence-prohibition approach exemplified by Hazy (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` API (which defers mask correctness to runtime). The gap between `__shfl_sync` and compile-time safety is concrete: `__activemask()` returns the current execution mask, which hardware always accepts—but a shuffle using `__activemask()` inside divergent code silently communicates among the wrong subset of lanes [CUDA Programming Guide §K.6]. Our type system closes this gap because the active set is a type-level property, not a runtime value.
 
-## 1.1 Our Approach: Session-Typed Divergence
+## 1.1 Our Approach: Linear Typestate for Divergence
 
-We observe that divergence has the structure of a *session type protocol*. In traditional session types, communication follows a protocol where participants send and receive messages in a prescribed order. Branching in the protocol creates sub-sessions; participants must follow compatible branches.
+We observe that divergence has the structure of a *linear resource protocol*. When a warp diverges, it splits into two sub-warps whose active sets partition the original—analogous to branching in a multiparty session type, but with a crucial difference: there are no channels, no directed messages, and no protocol sequencing. Instead, some participants go *quiescent* (temporarily inactive), and the type system tracks this as a set-level property rather than a communication protocol.
 
-SIMT divergence is similar, but with a twist: when a warp diverges, some participants don't take the "other branch"—they go *quiescent*. They stop participating entirely until the branches reconverge. This is not captured by traditional session types, where all participants remain active.
+The analogy to session types is motivating: diverge resembles protocol branching, merge resembles session joining, and the complement requirement resembles compatibility. But the technical mechanism is different—we use *linear typestate* over a Boolean lattice of active sets, not session types proper.
 
-We introduce *session-typed divergence*, a type system that tracks which lanes are active at each program point. The key ideas are:
+We introduce *warp typestate*, a linear type system that tracks which lanes are active at each program point. The key ideas are:
 
 1. **Warps carry active set types.** A warp is typed as `Warp<S>` where `S` describes which lanes are active. `Warp<All>` means all 32 lanes; `Warp<Even>` means only even-numbered lanes.
 
@@ -84,11 +84,11 @@ fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLan
 
 ## 1.2 Contributions
 
-We present a session type system for intra-warp communication that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
+We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
 
 This paper makes the following contributions:
 
-1. **A novel type system for GPU divergence** (§3). We present the first type system that tracks active lane masks, preventing undefined behavior from reading inactive lanes. The type system is based on session types extended with a notion of *quiescent participants*.
+1. **A novel type system for GPU divergence** (§3). We present the first type system that tracks active lane masks, preventing undefined behavior from reading inactive lanes. The type system uses linear typestate with a Boolean lattice of active sets, motivated by the structural analogy to multiparty session type branching.
 
 2. **A soundness proof** (§4). We prove that well-typed programs satisfy progress and preservation, ensuring they never read from inactive lanes.
 
@@ -100,6 +100,6 @@ This paper makes the following contributions:
 
 ## 1.3 The Bigger Picture
 
-Session-typed divergence is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
+Warp typestate is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
 
 The remainder of this paper is organized as follows. §2 provides background on GPU execution and session types. §3 presents our core type system. §4 proves soundness. §5 extends the system to handle loops and arbitrary predicates. §6 describes our implementation. §7 evaluates bug detection and performance. §8 discusses related work. §9 sketches future directions and §10 concludes.

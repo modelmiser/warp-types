@@ -1,6 +1,6 @@
 //! # CUB/CCCL Issue #854: Compiler Predicates Off Mask Initialization
 //!
-//! Demonstrates how session-typed divergence prevents a bug class where the
+//! Demonstrates how warp typestate prevents a bug class where the
 //! compiler optimizes away mask initialization, producing wrong PTX.
 //!
 //! ## The Real Bug

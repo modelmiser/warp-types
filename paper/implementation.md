@@ -1,6 +1,6 @@
 # 6. Implementation
 
-We implement session-typed divergence as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
+We implement warp typestate as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
 
 ## 6.1 Type Encoding
 
@@ -356,7 +356,7 @@ The safe wrapper is only available on `Warp<All>`, ensuring all lanes are active
 
 ## 6.6 Dual-Mode Platform Abstraction
 
-The same warp algorithm often needs both CPU and GPU implementations — CPU for testing and debugging, GPU for production. We implement a `Platform` trait that abstracts over execution model while preserving session-typed safety:
+The same warp algorithm often needs both CPU and GPU implementations — CPU for testing and debugging, GPU for production. We implement a `Platform` trait that abstracts over execution model while preserving typestate safety:
 
 ```rust
 trait Platform {
@@ -470,7 +470,7 @@ Programmers must call `diverge` and `merge` explicitly. Automatic insertion base
 
 ## 6.10 Summary
 
-Our Rust implementation demonstrates that session-typed divergence can be embedded in an existing systems language with:
+Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
 - **Zero runtime overhead**: Types are erased
 - **Good error messages**: Rust's diagnostics explain what's wrong
 - **Familiar syntax**: Looks like normal Rust code

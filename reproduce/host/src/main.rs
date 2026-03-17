@@ -1,7 +1,7 @@
 //! Host-side runner for warp-types GPU kernels.
 //!
 //! Loads pre-compiled PTX and runs typed butterfly reduction on actual GPU.
-//! Demonstrates: session-typed divergence produces correct results on real
+//! Demonstrates: warp typestate produces correct results on real
 //! hardware with zero overhead.
 //!
 //! Usage:

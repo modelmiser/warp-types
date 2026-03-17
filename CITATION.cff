@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "warp-types: Session-Typed GPU Divergence"
+title: "warp-types: Type-Safe GPU Warp Programming via Linear Typestate"
 abstract: >-
   A type system that prevents shuffle-from-inactive-lane bugs in GPU warp
   programming by tracking active lane masks at compile time. Diverged warps
@@ -15,7 +15,7 @@ version: "0.1.0"
 date-released: "2026-03-15"
 repository-code: "https://github.com/modelmiser/warp-types"
 keywords:
-  - session-types
+  - linear-typestate
   - gpu-programming
   - warp-divergence
   - type-safety

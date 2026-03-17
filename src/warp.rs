@@ -28,9 +28,14 @@ use crate::active_set::ActiveSet;
 /// - `merge(Warp<Even>, Warp<Odd>)` → `Warp<All>` (complement verified)
 ///
 /// Zero-cost: `Warp<S>` is zero-sized. The active set exists only in the type system.
-/// Warp handles are linear — diverge consumes the parent warp, preventing
-/// use-after-diverge. This is load-bearing for soundness: without linearity,
-/// a user could retain Warp<All> after diverging and shuffle on stale lanes.
+///
+/// Warp handles are affine — diverge consumes the parent warp via Rust's move
+/// semantics, preventing use-after-diverge. Dropping a warp without merging is
+/// permitted by the compiler (Rust is affine, not linear), but `#[must_use]`
+/// emits a warning. The Lean formalization models linear semantics; the Rust
+/// implementation approximates this via move + must_use.
+#[must_use = "dropping a Warp without merging may indicate a missing merge — \
+              both branches of a diverge should be merged before shuffling"]
 pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
@@ -80,11 +85,10 @@ impl<S: ActiveSet> Warp<S> {
     }
 }
 
-impl Default for Warp<crate::active_set::All> {
-    fn default() -> Self {
-        Self::kernel_entry()
-    }
-}
+// NOTE: No Default impl for Warp<All>. Warp handles should only be created
+// via kernel_entry() (public) or diverge (which consumes the parent).
+// A Default impl would allow silent construction in generic contexts
+// (unwrap_or_default, etc.), weakening the entry-point discipline.
 
 impl<S: ActiveSet> core::fmt::Debug for Warp<S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -113,8 +117,8 @@ mod tests {
     }
 
     #[test]
-    fn test_warp_default() {
-        let w: Warp<All> = Warp::default();
+    fn test_warp_kernel_entry() {
+        let w: Warp<All> = Warp::kernel_entry();
         assert_eq!(w.population(), 32);
     }
 

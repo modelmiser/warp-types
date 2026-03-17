@@ -1,4 +1,4 @@
-//! Soundness proof sketch for session-typed divergence.
+//! Soundness proof sketch for warp typestate.
 //!
 //! This module outlines what a formal soundness proof would require.
 //! It's not a machine-checked proof, but a roadmap for one.

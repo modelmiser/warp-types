@@ -1,6 +1,6 @@
 //! # Apache TVM PR #17307: LowerThreadAllreduce Warp Reduction Mask
 //!
-//! Demonstrates how session-typed divergence prevents a bug where a compiler
+//! Demonstrates how warp typestate prevents a bug where a compiler
 //! pass computes a group-based sub-mask for `shfl_down_sync` that triggers
 //! "CUDA illegal instruction" at runtime.
 //!

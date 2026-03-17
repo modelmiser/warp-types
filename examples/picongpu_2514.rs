@@ -1,6 +1,6 @@
 //! # PIConGPU Issue #2514: Hardcoded Full Mask in Divergent Ballot
 //!
-//! Demonstrates how session-typed divergence catches a real bug from the
+//! Demonstrates how warp typestate catches a real bug from the
 //! PIConGPU plasma physics simulation.
 //!
 //! ## The Real Bug

@@ -1,6 +1,6 @@
 //! # OpenCV Issue #12320: Hardcoded Full Mask in warpScanInclusive
 //!
-//! Demonstrates how session-typed divergence catches a real deadlock bug from
+//! Demonstrates how warp typestate catches a real deadlock bug from
 //! OpenCV's GPU module.
 //!
 //! ## The Real Bug

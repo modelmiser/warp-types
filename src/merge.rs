@@ -1,6 +1,6 @@
 //! Merge operations: reconverging diverged warps.
 //!
-//! Merge is the second half of the session-typed divergence pattern.
+//! Merge is the second half of the warp typestate pattern.
 //! The key safety property: `merge()` only compiles if the two warps
 //! have complementary active sets.
 //!
@@ -33,6 +33,25 @@
 //!     let (evens2, _odds2) = w2.diverge_even_odd();
 //!     // BUG: Can't merge Even with Even
 //!     let _ = merge(evens1, evens2);
+//! }
+//! ```
+//!
+//! ## Bug: Merge nested complements as top-level (caught)
+//!
+//! EvenLow + EvenHigh = Even (16 lanes), NOT All (32 lanes).
+//! `merge()` returns `Warp<All>`, so this would be unsound.
+//! Use `merge_within()` instead, which returns `Warp<Even>`.
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//!
+//! fn buggy_nested_merge() {
+//!     let w: Warp<All> = Warp::kernel_entry();
+//!     let (evens, _odds) = w.diverge_even_odd();
+//!     let (even_low, even_high) = evens.diverge_halves();
+//!     // BUG: EvenLow and EvenHigh are NOT ComplementOf each other
+//!     // (they cover Even, not All). This is a compile error.
+//!     let _fake_all: Warp<All> = merge(even_low, even_high);
 //! }
 //! ```
 

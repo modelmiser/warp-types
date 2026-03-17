@@ -66,7 +66,9 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Validate parameters: must be raw pointers or scalars
     for param in params.iter() {
         if let FnArg::Typed(pat_type) = param {
-            validate_kernel_param(&pat_type.ty, &pat_type.pat);
+            if let Err(err) = validate_kernel_param(&pat_type.ty, &pat_type.pat) {
+                return err;
+            }
         }
     }
 
@@ -81,11 +83,11 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Validate that a kernel parameter type is GPU-compatible.
 ///
-/// Emits a compile_error! if the type is not a raw pointer or scalar.
-fn validate_kernel_param(ty: &syn::Type, pat: &Pat) {
+/// Returns `Ok(())` if valid, `Err(TokenStream)` with a `compile_error!` if not.
+fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), TokenStream> {
     match ty {
         // Raw pointers are always OK
-        syn::Type::Ptr(_) => {},
+        syn::Type::Ptr(_) => Ok(()),
         // Path types: check if they're known scalars
         syn::Type::Path(tp) => {
             if let Some(seg) = tp.path.segments.last() {
@@ -96,23 +98,23 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) {
                     "f32", "f64", "bool",
                 ];
                 if !valid_scalars.contains(&name.as_str()) {
-                    let pat_str = quote!(#pat).to_string();
-                    panic!(
+                    let msg = format!(
                         "warp_kernel: parameter `{}` has type `{}` which is not a GPU-compatible type. \
                          Use raw pointers (*const T, *mut T) for device memory or scalar types (u32, i32, f32, etc.).",
-                        pat_str, name
+                        quote!(#pat), name
                     );
+                    return Err(syn::Error::new_spanned(ty, msg).to_compile_error().into());
                 }
             }
+            Ok(())
         },
         _ => {
-            let pat_str = quote!(#pat).to_string();
-            let ty_str = quote!(#ty).to_string();
-            panic!(
+            let msg = format!(
                 "warp_kernel: parameter `{}` has unsupported type `{}`. \
                  Kernel parameters must be raw pointers or scalar types.",
-                pat_str, ty_str
+                quote!(#pat), quote!(#ty)
             );
+            Err(syn::Error::new_spanned(ty, msg).to_compile_error().into())
         }
     }
 }

@@ -3,7 +3,7 @@ name = "warp-types"
 version = "0.1.0"
 edition = "2021"
 authors = ["Chad Aldreda"]
-description = "Session-typed GPU divergence: compile-time prevention of shuffle-from-inactive-lane bugs"
+description = "Type-safe GPU warp programming via linear typestate: compile-time prevention of shuffle-from-inactive-lane bugs"
 license = "MIT"
 repository = "https://github.com/modelmiser/warp-types"
 
