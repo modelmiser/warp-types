@@ -21,9 +21,20 @@
 //! reached by different diverge paths. Path independence is a key property.
 
 /// Sealed trait module — prevents external crates from implementing safety-critical traits.
+///
+/// Hard-sealed: the `_sealed` method returns a `pub(crate)` type, so even if an
+/// external crate implements `Sealed` (possible since the trait is `pub`), they
+/// cannot provide the method body, making the impl unusable.
 #[doc(hidden)]
 pub mod sealed {
-    pub trait Sealed {}
+    #[doc(hidden)]
+    pub(crate) struct SealToken;
+
+    #[allow(private_interfaces)]
+    pub trait Sealed {
+        #[doc(hidden)]
+        fn _sealed() -> SealToken { SealToken }
+    }
 }
 
 /// Marker trait for active lane set types.

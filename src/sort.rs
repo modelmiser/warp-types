@@ -291,7 +291,9 @@ mod tests {
 
     #[test]
     fn test_bitonic_sort_single_value() {
-        // CPU emulation: shuffle_xor returns self, so compare_swap is identity
+        // TYPE-SYSTEM TEST: validates that bitonic_sort compiles on Warp<All>.
+        // CPU shuffle is identity, so the sort is a no-op here.
+        // For algorithmic correctness with real lane exchange, see simwarp::tests.
         let warp: Warp<All> = Warp::kernel_entry();
         let data = PerLane::new(42i32);
         let sorted = warp.bitonic_sort(data);

@@ -235,11 +235,13 @@ mod tests {
 
     #[test]
     fn test_inclusive_sum() {
+        // TYPE-SYSTEM TEST: validates inclusive_sum compiles. The result (32) is
+        // the INCORRECT CPU identity behavior (doubling per stage), not a correct
+        // prefix sum. This function is #[deprecated] and documented broken.
+        // For correct scan with real lane exchange, see simwarp::hillis_steele_*.
         let warp: Warp<All> = Warp::kernel_entry();
         let data = PerLane::new(1i32);
         let result = warp.inclusive_sum(data);
-        // CPU emulation: shfl_up returns self
-        // 1 + 1 = 2, 2 + 2 = 4, ..., 16 + 16 = 32
         assert_eq!(result.get(), 32);
     }
 

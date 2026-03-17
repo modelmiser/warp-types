@@ -38,6 +38,7 @@
 //! - [`sort`] — Typed warp-level bitonic sort
 //! - [`tile`] — Cooperative Groups: thread block tiles with typed shuffle safety
 //! - [`dynamic`] — Data-dependent divergence with structural complement guarantees
+//! - [`simwarp`] — Multi-lane warp simulator with real shuffle semantics (testing)
 
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
