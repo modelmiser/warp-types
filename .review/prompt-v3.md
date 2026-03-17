@@ -46,6 +46,9 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - sort.rs/cub.rs tests are type-system validation (CPU identity no-op); simwarp tests algorithm correctness
 - README test counts match actual (291 unit + 50 example + 28 doc = 369)
 - lib.rs module overview includes all public modules including simwarp
+- butterfly_reduce is WIDTH-generic (dynamic mask computation, not hardcoded [16,8,4,2,1])
+- README test counts all match actual (291 unit, 25 gradual, 369 total)
+- builder Cargo.toml fragile TOML name parsing — ACCEPTED (fallback mitigates)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
