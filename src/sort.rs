@@ -120,25 +120,25 @@ impl Warp<All> {
 
         // Stage 2: blocks of 4
         val = compare_swap(self, val, 2, 4);
-        val = compare_swap(self, val, 1, 2);
+        val = compare_swap(self, val, 1, 4);
 
         // Stage 3: blocks of 8
         val = compare_swap(self, val, 4, 8);
-        val = compare_swap(self, val, 2, 4);
-        val = compare_swap(self, val, 1, 2);
+        val = compare_swap(self, val, 2, 8);
+        val = compare_swap(self, val, 1, 8);
 
         // Stage 4: blocks of 16
         val = compare_swap(self, val, 8, 16);
-        val = compare_swap(self, val, 4, 8);
-        val = compare_swap(self, val, 2, 4);
-        val = compare_swap(self, val, 1, 2);
+        val = compare_swap(self, val, 4, 16);
+        val = compare_swap(self, val, 2, 16);
+        val = compare_swap(self, val, 1, 16);
 
         // Stage 5: blocks of 32 (full warp)
         val = compare_swap(self, val, 16, 32);
-        val = compare_swap(self, val, 8, 16);
-        val = compare_swap(self, val, 4, 8);
-        val = compare_swap(self, val, 2, 4);
-        val = compare_swap(self, val, 1, 2);
+        val = compare_swap(self, val, 8, 32);
+        val = compare_swap(self, val, 4, 32);
+        val = compare_swap(self, val, 2, 32);
+        val = compare_swap(self, val, 1, 32);
 
         val
     }
@@ -184,22 +184,22 @@ impl Warp<All> {
         val = cas(self, val, 1, 2);
         // Stage 2
         val = cas(self, val, 2, 4);
-        val = cas(self, val, 1, 2);
+        val = cas(self, val, 1, 4);
         // Stage 3
         val = cas(self, val, 4, 8);
-        val = cas(self, val, 2, 4);
-        val = cas(self, val, 1, 2);
+        val = cas(self, val, 2, 8);
+        val = cas(self, val, 1, 8);
         // Stage 4
         val = cas(self, val, 8, 16);
-        val = cas(self, val, 4, 8);
-        val = cas(self, val, 2, 4);
-        val = cas(self, val, 1, 2);
+        val = cas(self, val, 4, 16);
+        val = cas(self, val, 2, 16);
+        val = cas(self, val, 1, 16);
         // Stage 5
         val = cas(self, val, 16, 32);
-        val = cas(self, val, 8, 16);
-        val = cas(self, val, 4, 8);
-        val = cas(self, val, 2, 4);
-        val = cas(self, val, 1, 2);
+        val = cas(self, val, 8, 32);
+        val = cas(self, val, 4, 32);
+        val = cas(self, val, 2, 32);
+        val = cas(self, val, 1, 32);
 
         val
     }
@@ -259,22 +259,22 @@ impl Warp<All> {
         (k, v) = cas_kv(self, k, v, 1, 2);
         // Stage 2
         (k, v) = cas_kv(self, k, v, 2, 4);
-        (k, v) = cas_kv(self, k, v, 1, 2);
+        (k, v) = cas_kv(self, k, v, 1, 4);
         // Stage 3
         (k, v) = cas_kv(self, k, v, 4, 8);
-        (k, v) = cas_kv(self, k, v, 2, 4);
-        (k, v) = cas_kv(self, k, v, 1, 2);
+        (k, v) = cas_kv(self, k, v, 2, 8);
+        (k, v) = cas_kv(self, k, v, 1, 8);
         // Stage 4
         (k, v) = cas_kv(self, k, v, 8, 16);
-        (k, v) = cas_kv(self, k, v, 4, 8);
-        (k, v) = cas_kv(self, k, v, 2, 4);
-        (k, v) = cas_kv(self, k, v, 1, 2);
+        (k, v) = cas_kv(self, k, v, 4, 16);
+        (k, v) = cas_kv(self, k, v, 2, 16);
+        (k, v) = cas_kv(self, k, v, 1, 16);
         // Stage 5
         (k, v) = cas_kv(self, k, v, 16, 32);
-        (k, v) = cas_kv(self, k, v, 8, 16);
-        (k, v) = cas_kv(self, k, v, 4, 8);
-        (k, v) = cas_kv(self, k, v, 2, 4);
-        (k, v) = cas_kv(self, k, v, 1, 2);
+        (k, v) = cas_kv(self, k, v, 8, 32);
+        (k, v) = cas_kv(self, k, v, 4, 32);
+        (k, v) = cas_kv(self, k, v, 2, 32);
+        (k, v) = cas_kv(self, k, v, 1, 32);
 
         (k, v)
     }
