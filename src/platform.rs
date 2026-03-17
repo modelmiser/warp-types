@@ -188,10 +188,12 @@ where
     }
 
     fn ballot(predicates: Self::Vector<bool>) -> Self::Mask {
+        // Mask is u64, so WIDTH must not exceed 64 bits.
+        const { assert!(WIDTH <= 64, "CpuSimd<WIDTH>: ballot requires WIDTH <= 64 (u64 mask)") };
         let mut mask = 0u64;
         for i in 0..WIDTH {
             if predicates.data[i] {
-                mask |= 1 << i;
+                mask |= 1u64 << i;
             }
         }
         mask

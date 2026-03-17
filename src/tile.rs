@@ -108,19 +108,20 @@ where
     /// the tile. Caller must ensure mask < SIZE (no automatic clamping).
     ///
     /// **Always safe**: all `SIZE` threads in the tile participate.
+    ///
+    /// On GPU: emits `shfl.sync.bfly.b32` with `c = ((32-SIZE)<<8)|0x1F`,
+    /// confining the shuffle to SIZE-lane segments.
     pub fn shuffle_xor<T: GpuValue + GpuShuffle>(
         &self, data: PerLane<T>, mask: u32,
     ) -> PerLane<T> {
-        // On GPU: shfl.sync.bfly with tile-local mask
-        // On CPU: identity (single thread)
-        PerLane::new(data.get().gpu_shfl_xor(mask))
+        PerLane::new(data.get().gpu_shfl_xor_width(mask, SIZE as u32))
     }
 
-    /// Shuffle down within the tile.
+    /// Shuffle down within the tile (confined to tile-sized segments).
     pub fn shuffle_down<T: GpuValue + GpuShuffle>(
         &self, data: PerLane<T>, delta: u32,
     ) -> PerLane<T> {
-        PerLane::new(data.get().gpu_shfl_down(delta))
+        PerLane::new(data.get().gpu_shfl_down_width(delta, SIZE as u32))
     }
 
     /// Sum reduction across all tile lanes.
@@ -132,7 +133,7 @@ where
         let mut val = data.get();
         let mut stride = 1u32;
         while stride < SIZE as u32 {
-            val = val + val.gpu_shfl_xor(stride);
+            val = val + val.gpu_shfl_xor_width(stride, SIZE as u32);
             stride *= 2;
         }
         val
@@ -151,7 +152,7 @@ where
         let mut val = data.get();
         let mut stride = 1u32;
         while stride < SIZE as u32 {
-            let s = val.gpu_shfl_up(stride);
+            let s = val.gpu_shfl_up_width(stride, SIZE as u32);
             val = val + s;
             stride *= 2;
         }

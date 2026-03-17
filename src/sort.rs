@@ -23,7 +23,7 @@
 //! Total: 15 compare-and-swap operations using shuffle-XOR.
 
 use crate::GpuValue;
-use crate::gpu::GpuShuffle;
+use crate::gpu::{self, GpuShuffle};
 use crate::data::PerLane;
 use crate::warp::Warp;
 use crate::active_set::All;
@@ -32,34 +32,39 @@ use crate::active_set::All;
 // Core compare-and-swap via shuffle
 // ============================================================================
 
-/// Compare-and-swap between lanes at distance `xor_mask`.
+/// Direction-aware compare-and-swap between lanes at distance `xor_mask`.
 ///
-/// Keeps the smaller value (ascending sort). On a real GPU, a full bitonic sort
-/// requires direction-aware compare-and-swap using `(lane_id & stage_mask)` to
-/// alternate ascending/descending blocks. This implementation always sorts
-/// ascending, which is correct for the final merge network but not for the
-/// intermediate bitonic sequences.
+/// Uses `lane_id()` to determine sort direction per lane:
+/// - `ascending = (lane_id & stage_mask) == 0`
+/// - `is_lower = (lane_id & xor_mask) == 0` (lower lane in the pair)
+/// - Lower lane keeps min in ascending blocks, max in descending blocks
 ///
-/// **CPU emulation:** `shuffle_xor` returns self, so `my == partner` → no swap.
+/// This produces a correct bitonic sort on GPU hardware.
+///
+/// **CPU emulation:** `shuffle_xor` returns self, so `my == partner` always.
+/// Direction logic is evaluated but moot — both branches produce the same value.
 /// The sort is a no-op on CPU, which is correct for type-system validation.
-///
-/// **GPU limitation:** The `stage_mask` parameter is accepted but not used.
-/// On a real GPU, this produces ascending-only sort. A production implementation
-/// would need `gpu::lane_id()` to determine sort direction per lane.
 #[inline(always)]
 fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
     warp: &Warp<All>,
     val: PerLane<T>,
     xor_mask: u32,
-    _stage_mask: u32,
+    stage_mask: u32,
 ) -> PerLane<T> {
     let partner_val = warp.shuffle_xor(val, xor_mask);
     let my = val.get();
     let partner = partner_val.get();
 
-    // CPU emulation: shuffle returns self, so my == partner → no swap
-    // GPU: ascending-only compare-and-swap (see doc comment for limitation)
-    if my <= partner {
+    // Direction-aware: each lane determines whether to keep min or max
+    // based on its position in the bitonic network.
+    let lane = gpu::lane_id();
+    let ascending = (lane & stage_mask) == 0;
+    let is_lower = (lane & xor_mask) == 0;
+    let keep_smaller = ascending == is_lower;
+
+    if keep_smaller {
+        if my <= partner { val } else { partner_val }
+    } else if my >= partner {
         val
     } else {
         partner_val
@@ -85,8 +90,7 @@ impl Warp<All> {
     /// On GPU: 15 `shfl.sync.bfly.b32` instructions + 15 min/max comparisons.
     /// Zero overhead from the type system.
     ///
-    /// **Limitation:** Ascending-only. A correct bitonic sort requires direction-aware
-    /// compare-and-swap using `lane_id()`. See `compare_swap` docs for details.
+    /// Uses direction-aware compare-and-swap via `lane_id()` — correct on GPU.
     ///
     /// ```
     /// use warp_types::*;
@@ -154,14 +158,25 @@ impl Warp<All> {
     {
         let mut val = data;
 
-        // Same 15-step structure, using custom compare-and-swap
-        let cas = |warp: &Warp<All>, v: PerLane<T>, xor_mask: u32, _asc_mask: u32| -> PerLane<T> {
+        // Direction-aware custom compare-and-swap
+        let cas = |warp: &Warp<All>, v: PerLane<T>, xor_mask: u32, stage_mask: u32| -> PerLane<T> {
             let partner_val = warp.shuffle_xor(v, xor_mask);
             let my = v.get();
             let partner = partner_val.get();
-            match cmp(&my, &partner) {
-                core::cmp::Ordering::Greater => partner_val,
-                _ => v,
+            let lane = gpu::lane_id();
+            let ascending = (lane & stage_mask) == 0;
+            let is_lower = (lane & xor_mask) == 0;
+            let keep_smaller = ascending == is_lower;
+            if keep_smaller {
+                match cmp(&my, &partner) {
+                    core::cmp::Ordering::Greater => partner_val,
+                    _ => v,
+                }
+            } else {
+                match cmp(&my, &partner) {
+                    core::cmp::Ordering::Less => partner_val,
+                    _ => v,
+                }
             }
         };
 
@@ -214,41 +229,52 @@ impl Warp<All> {
         let mut k = keys;
         let mut v = values;
 
-        // 15-step key-value compare-and-swap
+        // Direction-aware key-value compare-and-swap
         let cas_kv = |warp: &Warp<All>,
                       key: PerLane<K>,
                       val: PerLane<V>,
-                      xor_mask: u32|
+                      xor_mask: u32,
+                      stage_mask: u32|
                       -> (PerLane<K>, PerLane<V>) {
             let partner_key = warp.shuffle_xor(key, xor_mask);
             let partner_val = warp.shuffle_xor(val, xor_mask);
-            if key.get() <= partner_key.get() {
-                (key, val) // keep mine
+            let lane = gpu::lane_id();
+            let ascending = (lane & stage_mask) == 0;
+            let is_lower = (lane & xor_mask) == 0;
+            let keep_smaller = ascending == is_lower;
+            if keep_smaller {
+                if key.get() <= partner_key.get() {
+                    (key, val)
+                } else {
+                    (partner_key, partner_val)
+                }
+            } else if key.get() >= partner_key.get() {
+                (key, val)
             } else {
-                (partner_key, partner_val) // take partner's
+                (partner_key, partner_val)
             }
         };
 
         // Stage 1
-        (k, v) = cas_kv(self, k, v, 1);
+        (k, v) = cas_kv(self, k, v, 1, 2);
         // Stage 2
-        (k, v) = cas_kv(self, k, v, 2);
-        (k, v) = cas_kv(self, k, v, 1);
+        (k, v) = cas_kv(self, k, v, 2, 4);
+        (k, v) = cas_kv(self, k, v, 1, 2);
         // Stage 3
-        (k, v) = cas_kv(self, k, v, 4);
-        (k, v) = cas_kv(self, k, v, 2);
-        (k, v) = cas_kv(self, k, v, 1);
+        (k, v) = cas_kv(self, k, v, 4, 8);
+        (k, v) = cas_kv(self, k, v, 2, 4);
+        (k, v) = cas_kv(self, k, v, 1, 2);
         // Stage 4
-        (k, v) = cas_kv(self, k, v, 8);
-        (k, v) = cas_kv(self, k, v, 4);
-        (k, v) = cas_kv(self, k, v, 2);
-        (k, v) = cas_kv(self, k, v, 1);
+        (k, v) = cas_kv(self, k, v, 8, 16);
+        (k, v) = cas_kv(self, k, v, 4, 8);
+        (k, v) = cas_kv(self, k, v, 2, 4);
+        (k, v) = cas_kv(self, k, v, 1, 2);
         // Stage 5
-        (k, v) = cas_kv(self, k, v, 16);
-        (k, v) = cas_kv(self, k, v, 8);
-        (k, v) = cas_kv(self, k, v, 4);
-        (k, v) = cas_kv(self, k, v, 2);
-        (k, v) = cas_kv(self, k, v, 1);
+        (k, v) = cas_kv(self, k, v, 16, 32);
+        (k, v) = cas_kv(self, k, v, 8, 16);
+        (k, v) = cas_kv(self, k, v, 4, 8);
+        (k, v) = cas_kv(self, k, v, 2, 4);
+        (k, v) = cas_kv(self, k, v, 1, 2);
 
         (k, v)
     }

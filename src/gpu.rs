@@ -30,6 +30,17 @@ pub fn lane_id() -> u32 {
     id
 }
 
+/// CPU fallback: returns 0 (single-thread emulation).
+///
+/// This is correct for CPU testing where `shuffle_xor` is identity:
+/// since `my == partner` always, direction-aware compare-and-swap
+/// produces the same result regardless of `lane_id`.
+#[cfg(not(any(target_arch = "nvptx64", target_arch = "amdgpu")))]
+#[inline(always)]
+pub fn lane_id() -> u32 {
+    0
+}
+
 /// Get the current thread's X index within the block.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
@@ -105,6 +116,69 @@ pub fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
             result = out(reg32) result,
             val = in(reg32) val,
             src_lane = in(reg32) src_lane,
+            mask = in(reg32) mask,
+        );
+    }
+    result
+}
+
+/// Butterfly shuffle confined to a segment of `width` lanes.
+/// PTX: `shfl.sync.bfly.b32` with `c = ((32 - width) << 8) | 0x1F`
+///
+/// Used by `Tile<SIZE>` to confine shuffles within tile boundaries.
+/// `width` must be a power of 2 in {4, 8, 16, 32}.
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32) -> i32 {
+    let c = ((32 - width) << 8) | 0x1F;
+    let result: i32;
+    unsafe {
+        core::arch::asm!(
+            "shfl.sync.bfly.b32 {result}, {val}, {lane_mask}, {c}, {mask};",
+            result = out(reg32) result,
+            val = in(reg32) val,
+            lane_mask = in(reg32) lane_mask,
+            c = in(reg32) c,
+            mask = in(reg32) mask,
+        );
+    }
+    result
+}
+
+/// Shuffle down confined to a segment of `width` lanes.
+/// PTX: `shfl.sync.down.b32` with `c = ((32 - width) << 8) | (width - 1)`
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
+    let c = ((32 - width) << 8) | (width - 1);
+    let result: i32;
+    unsafe {
+        core::arch::asm!(
+            "shfl.sync.down.b32 {result}, {val}, {delta}, {c}, {mask};",
+            result = out(reg32) result,
+            val = in(reg32) val,
+            delta = in(reg32) delta,
+            c = in(reg32) c,
+            mask = in(reg32) mask,
+        );
+    }
+    result
+}
+
+/// Shuffle up confined to a segment of `width` lanes.
+/// PTX: `shfl.sync.up.b32` with `c = ((32 - width) << 8)`
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
+    let c = (32 - width) << 8;
+    let result: i32;
+    unsafe {
+        core::arch::asm!(
+            "shfl.sync.up.b32 {result}, {val}, {delta}, {c}, {mask};",
+            result = out(reg32) result,
+            val = in(reg32) val,
+            delta = in(reg32) delta,
+            c = in(reg32) c,
             mask = in(reg32) mask,
         );
     }
@@ -225,6 +299,24 @@ pub trait GpuShuffle: crate::active_set::sealed::Sealed + Copy + 'static {
 
     /// Indexed shuffle: read from specific lane.
     fn gpu_shfl_idx(self, src_lane: u32) -> Self;
+
+    /// Butterfly shuffle confined to a segment of `width` lanes.
+    ///
+    /// Used by `Tile<SIZE>` to confine shuffles within tile boundaries.
+    /// Default delegates to full-warp shuffle (correct for CPU identity).
+    fn gpu_shfl_xor_width(self, xor_mask: u32, _width: u32) -> Self {
+        self.gpu_shfl_xor(xor_mask)
+    }
+
+    /// Shuffle down confined to a segment of `width` lanes.
+    fn gpu_shfl_down_width(self, delta: u32, _width: u32) -> Self {
+        self.gpu_shfl_down(delta)
+    }
+
+    /// Shuffle up confined to a segment of `width` lanes.
+    fn gpu_shfl_up_width(self, delta: u32, _width: u32) -> Self {
+        self.gpu_shfl_up(delta)
+    }
 }
 
 #[cfg(target_arch = "nvptx64")]
@@ -244,6 +336,18 @@ impl GpuShuffle for i32 {
     #[inline(always)]
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         shfl_sync_idx_i32(0xFFFFFFFF, self, src_lane)
+    }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        shfl_sync_bfly_i32_width(0xFFFFFFFF, self, xor_mask, width)
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        shfl_sync_down_i32_width(0xFFFFFFFF, self, delta, width)
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        shfl_sync_up_i32_width(0xFFFFFFFF, self, delta, width)
     }
 }
 
@@ -266,6 +370,18 @@ impl GpuShuffle for f32 {
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         f32::from_bits(shfl_sync_idx_i32(0xFFFFFFFF, self.to_bits() as i32, src_lane) as u32)
     }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        f32::from_bits((self.to_bits() as i32).gpu_shfl_xor_width(xor_mask, width) as u32)
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        f32::from_bits((self.to_bits() as i32).gpu_shfl_down_width(delta, width) as u32)
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        f32::from_bits((self.to_bits() as i32).gpu_shfl_up_width(delta, width) as u32)
+    }
 }
 
 #[cfg(target_arch = "nvptx64")]
@@ -285,6 +401,18 @@ impl GpuShuffle for u32 {
     #[inline(always)]
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         shfl_sync_idx_i32(0xFFFFFFFF, self as i32, src_lane) as u32
+    }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_xor_width(xor_mask, width) as u32
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_down_width(delta, width) as u32
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_up_width(delta, width) as u32
     }
 }
 
@@ -327,6 +455,27 @@ impl GpuShuffle for i64 {
         let hi = shfl_sync_idx_i32(0xFFFFFFFF, (bits >> 32) as i32, src_lane) as u32;
         ((hi as u64) << 32 | lo as u64) as i64
     }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        let bits = self as u64;
+        let lo = (bits as i32).gpu_shfl_xor_width(xor_mask, width) as u32;
+        let hi = ((bits >> 32) as i32).gpu_shfl_xor_width(xor_mask, width) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        let bits = self as u64;
+        let lo = (bits as i32).gpu_shfl_down_width(delta, width) as u32;
+        let hi = ((bits >> 32) as i32).gpu_shfl_down_width(delta, width) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        let bits = self as u64;
+        let lo = (bits as i32).gpu_shfl_up_width(delta, width) as u32;
+        let hi = ((bits >> 32) as i32).gpu_shfl_up_width(delta, width) as u32;
+        ((hi as u64) << 32 | lo as u64) as i64
+    }
 }
 
 #[cfg(target_arch = "nvptx64")]
@@ -347,6 +496,18 @@ impl GpuShuffle for u64 {
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         (self as i64).gpu_shfl_idx(src_lane) as u64
     }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        (self as i64).gpu_shfl_xor_width(xor_mask, width) as u64
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        (self as i64).gpu_shfl_down_width(delta, width) as u64
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        (self as i64).gpu_shfl_up_width(delta, width) as u64
+    }
 }
 
 #[cfg(target_arch = "nvptx64")]
@@ -366,6 +527,18 @@ impl GpuShuffle for f64 {
     #[inline(always)]
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         f64::from_bits((self.to_bits() as i64).gpu_shfl_idx(src_lane) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_xor_width(xor_mask, width) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_down_width(delta, width) as u64)
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        f64::from_bits((self.to_bits() as i64).gpu_shfl_up_width(delta, width) as u64)
     }
 }
 
@@ -409,6 +582,18 @@ impl GpuShuffle for bool {
     #[inline(always)]
     fn gpu_shfl_idx(self, src_lane: u32) -> Self {
         shfl_sync_idx_i32(0xFFFFFFFF, self as i32, src_lane) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_xor_width(self, xor_mask: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_xor_width(xor_mask, width) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_down_width(self, delta: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_down_width(delta, width) != 0
+    }
+    #[inline(always)]
+    fn gpu_shfl_up_width(self, delta: u32, width: u32) -> Self {
+        (self as i32).gpu_shfl_up_width(delta, width) != 0
     }
 }
 
