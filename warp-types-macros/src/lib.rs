@@ -169,7 +169,10 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
             output.extend(quote! {
                 #[derive(Copy, Clone, Debug, Default)]
                 pub struct #parent_name;
-                impl sealed::Sealed for #parent_name {}
+                #[allow(private_interfaces)]
+                impl sealed::Sealed for #parent_name {
+                    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+                }
                 impl ActiveSet for #parent_name {
                     const MASK: u64 = #mask_lit;
                     const NAME: &'static str = #name_str;
@@ -247,7 +250,10 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                 output.extend(quote! {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #true_name;
-                    impl sealed::Sealed for #true_name {}
+                    #[allow(private_interfaces)]
+                    impl sealed::Sealed for #true_name {
+                        fn _sealed() -> sealed::SealToken { sealed::SealToken }
+                    }
                     impl ActiveSet for #true_name {
                         const MASK: u64 = #true_mask;
                         const NAME: &'static str = #name_str_t;
@@ -259,7 +265,10 @@ pub fn warp_sets(input: TokenStream) -> TokenStream {
                 output.extend(quote! {
                     #[derive(Copy, Clone, Debug, Default)]
                     pub struct #false_name;
-                    impl sealed::Sealed for #false_name {}
+                    #[allow(private_interfaces)]
+                    impl sealed::Sealed for #false_name {
+                        fn _sealed() -> sealed::SealToken { sealed::SealToken }
+                    }
                     impl ActiveSet for #false_name {
                         const MASK: u64 = #false_mask;
                         const NAME: &'static str = #name_str_f;

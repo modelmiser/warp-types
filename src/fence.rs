@@ -33,7 +33,10 @@ pub trait WriteState: crate::active_set::sealed::Sealed {}
 /// No writes have occurred.
 #[derive(Debug, Clone, Copy)]
 pub struct Unwritten;
-impl crate::active_set::sealed::Sealed for Unwritten {}
+#[allow(private_interfaces)]
+impl crate::active_set::sealed::Sealed for Unwritten {
+    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+}
 impl WriteState for Unwritten {}
 
 /// Partial write: only lanes in `S` have written.
@@ -41,19 +44,28 @@ impl WriteState for Unwritten {}
 pub struct PartialWrite<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
-impl<S: ActiveSet> crate::active_set::sealed::Sealed for PartialWrite<S> {}
+#[allow(private_interfaces)]
+impl<S: ActiveSet> crate::active_set::sealed::Sealed for PartialWrite<S> {
+    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+}
 impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 
 /// All lanes have written (complement-verified).
 #[derive(Debug, Clone, Copy)]
 pub struct FullWrite;
-impl crate::active_set::sealed::Sealed for FullWrite {}
+#[allow(private_interfaces)]
+impl crate::active_set::sealed::Sealed for FullWrite {
+    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+}
 impl WriteState for FullWrite {}
 
 /// Fence has been issued after full write.
 #[derive(Debug, Clone, Copy)]
 pub struct Fenced;
-impl crate::active_set::sealed::Sealed for Fenced {}
+#[allow(private_interfaces)]
+impl crate::active_set::sealed::Sealed for Fenced {
+    fn _sealed() -> crate::active_set::sealed::SealToken { crate::active_set::sealed::SealToken }
+}
 impl WriteState for Fenced {}
 
 // ============================================================================

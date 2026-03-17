@@ -151,19 +151,40 @@ pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i3
 /// only wrap types with known GPU register semantics.
 pub trait GpuValue: active_set::sealed::Sealed + Copy + Send + Sync + Default + 'static {}
 
-impl active_set::sealed::Sealed for i32 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for i32 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for i32 {}
-impl active_set::sealed::Sealed for u32 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for u32 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for u32 {}
-impl active_set::sealed::Sealed for f32 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for f32 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for f32 {}
-impl active_set::sealed::Sealed for i64 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for i64 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for i64 {}
-impl active_set::sealed::Sealed for u64 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for u64 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for u64 {}
-impl active_set::sealed::Sealed for f64 {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for f64 {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for f64 {}
-impl active_set::sealed::Sealed for bool {}
+#[allow(private_interfaces)]
+impl active_set::sealed::Sealed for bool {
+    fn _sealed() -> active_set::sealed::SealToken { active_set::sealed::SealToken }
+}
 impl GpuValue for bool {}
 
 // ============================================================================

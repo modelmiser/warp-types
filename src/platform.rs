@@ -178,14 +178,17 @@ where
     }
 
     fn reduce_sum<T: GpuValue + core::ops::Add<Output = T>>(values: Self::Vector<T>) -> T {
+        const { assert!(WIDTH > 0, "CpuSimd<WIDTH>: reduce requires WIDTH > 0") };
         values.data.into_iter().reduce(|a, b| a + b).unwrap()
     }
 
     fn reduce_max<T: GpuValue + Ord>(values: Self::Vector<T>) -> T {
+        const { assert!(WIDTH > 0, "CpuSimd<WIDTH>: reduce requires WIDTH > 0") };
         values.data.into_iter().max().unwrap()
     }
 
     fn reduce_min<T: GpuValue + Ord>(values: Self::Vector<T>) -> T {
+        const { assert!(WIDTH > 0, "CpuSimd<WIDTH>: reduce requires WIDTH > 0") };
         values.data.into_iter().min().unwrap()
     }
 

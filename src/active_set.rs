@@ -22,9 +22,9 @@
 
 /// Sealed trait module — prevents external crates from implementing safety-critical traits.
 ///
-/// Hard-sealed: the `_sealed` method returns a `pub(crate)` type, so even if an
-/// external crate implements `Sealed` (possible since the trait is `pub`), they
-/// cannot provide the method body, making the impl unusable.
+/// Hard-sealed: the `_sealed` method returns a `pub(crate)` type with no default
+/// body. External crates cannot name `SealToken` and therefore cannot provide
+/// the required method implementation.
 #[doc(hidden)]
 pub mod sealed {
     #[doc(hidden)]
@@ -33,7 +33,7 @@ pub mod sealed {
     #[allow(private_interfaces)]
     pub trait Sealed {
         #[doc(hidden)]
-        fn _sealed() -> SealToken { SealToken }
+        fn _sealed() -> SealToken;
     }
 }
 
@@ -81,7 +81,10 @@ pub trait CanDiverge<TrueBranch: ActiveSet, FalseBranch: ActiveSet>: sealed::Sea
 /// No lanes active (degenerate). Not part of the diverge hierarchy.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Empty;
-impl sealed::Sealed for Empty {}
+#[allow(private_interfaces)]
+impl sealed::Sealed for Empty {
+    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+}
 impl ActiveSet for Empty {
     const MASK: u64 = 0;
     const NAME: &'static str = "Empty";

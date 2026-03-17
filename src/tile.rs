@@ -53,10 +53,22 @@ pub trait ValidTileSize: sealed::Sealed {
     const TILE_MASK: u32;
 }
 
-impl sealed::Sealed for Tile<4> {}
-impl sealed::Sealed for Tile<8> {}
-impl sealed::Sealed for Tile<16> {}
-impl sealed::Sealed for Tile<32> {}
+#[allow(private_interfaces)]
+impl sealed::Sealed for Tile<4> {
+    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+}
+#[allow(private_interfaces)]
+impl sealed::Sealed for Tile<8> {
+    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+}
+#[allow(private_interfaces)]
+impl sealed::Sealed for Tile<16> {
+    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+}
+#[allow(private_interfaces)]
+impl sealed::Sealed for Tile<32> {
+    fn _sealed() -> sealed::SealToken { sealed::SealToken }
+}
 
 impl ValidTileSize for Tile<4> {
     const TILE_MASK: u32 = 0xF; // 4 lanes
