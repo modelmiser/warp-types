@@ -51,6 +51,12 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - builder Cargo.toml fragile TOML name parsing — ACCEPTED (fallback mitigates)
 - CpuSimd<WIDTH>::reduce_sum/max/min have const assert WIDTH > 0 — prevents empty-iterator panic
 - block.rs ReductionSession is type-state ordering demo (CPU identity no-op, same class as sort.rs/cub.rs)
+- gpu_shfl_*_width width>32 wrapping — only callers are sealed Tile<{4,8,16,32}>, hardware-sealed
+- inclusive_sum not #[deprecated] unlike exclusive_sum — intentional asymmetry (LOW, not actionable)
+- ValidTileSize::TILE_MASK defined but unread — reserved for future execution mask generation
+- examples/demo_bug shuffle_xor OOB on mask>=32 — pedagogical code, intentionally unguarded
+- warp_kernel silently drops return type — PTX kernels must be void, compile error catches mismatch
+- dynamic.rs DynDiverge::merge debug_assert is vacuously true by construction — intentional
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
@@ -63,6 +69,11 @@ KNOWN UNTESTED (accepted — don't re-flag):
 - CpuSimd::shuffle_xor % WIDTH incorrect for non-power-of-2 — ACCEPTED (no callers use non-pow2)
 - cub.rs: reduce with non-commutative op silently wrong — ACCEPTED (matches CUB's contract)
 - exclusive_sum ignores identity parameter — ACCEPTED (deprecated, documented broken)
+- warp_kernel doesn't reject self receiver — ACCEPTED (compile error on nvptx64 catches it)
+- builder unsanitized kernel names — ACCEPTED (PTX names are C identifiers, low risk)
+- gradual.rs WarpError {:08X} format for 64-lane masks — ACCEPTED (display only, not wrong)
+- simwarp tile_reduce no pow2 guard — ACCEPTED (inner shuffle_xor_width asserts, cascading diagnostic)
+- proof.rs preservation_check true for stuck non-value — ACCEPTED (unreachable for well-typed terms)
 
 SIMWARP COVERAGE (verified with real lane exchange — skip these sequences):
 - Butterfly reduce (5-step XOR)
