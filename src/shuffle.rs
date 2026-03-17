@@ -3,7 +3,7 @@
 //! Shuffles let lanes exchange values within a warp. This module provides:
 //!
 //! 1. **Type-safe shuffle traits** — enforce correct return types
-//!    (shuffle → PerLane, ballot → Uniform, reduce → SingleLane)
+//!    (shuffle → PerLane, ballot → Uniform, reduce → T)
 //! 2. **Warp<All>-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 
@@ -172,10 +172,16 @@ impl<const MASK: u32> HasDual for Xor<MASK> {
 }
 
 /// Rotate down: lane i receives from lane (i + delta) mod 32.
+///
+/// Consistent with CUDA `__shfl_down_sync`: data flows from higher-numbered
+/// lanes to lower. `forward(i)` returns the *destination* of lane i's value
+/// (lane i - delta), while `inverse(i)` returns lane i's *source* (lane i + delta).
 #[derive(Copy, Clone, Debug)]
 pub struct RotateDown<const DELTA: u32>;
 
 /// Rotate up: lane i receives from lane (i - delta) mod 32.
+///
+/// Dual of `RotateDown`. Data flows from lower-numbered lanes to higher.
 #[derive(Copy, Clone, Debug)]
 pub struct RotateUp<const DELTA: u32>;
 

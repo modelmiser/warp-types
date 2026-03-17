@@ -98,11 +98,11 @@ fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLan
 
 ## 1.2 Contributions
 
-We present a session type system for intra-warp communication that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
+We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
 
 This paper makes the following contributions:
 
-1. **A novel type system for GPU divergence** (§3). We present the first type system that tracks active lane masks, preventing undefined behavior from reading inactive lanes. The type system is based on session types extended with a notion of *quiescent participants*.
+1. **A novel type system for GPU divergence** (§3). We present the first type system that tracks active lane masks, preventing undefined behavior from reading inactive lanes. The type system uses linear typestate with a Boolean lattice of active sets, motivated by the structural analogy to multiparty session type branching.
 
 2. **A soundness proof** (§4). We prove that well-typed programs satisfy progress and preservation, ensuring they never read from inactive lanes.
 
@@ -2084,22 +2084,27 @@ The problem deepened with Volta's independent thread scheduling. Pre-Volta archi
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes eight compile-fail doctests that serve as machine-checked proof artifacts:
+Our implementation includes thirteen compile-fail doctests that serve as machine-checked proof artifacts:
 
 1. `shuffle_xor` on `Warp<Even>` — rejected, method absent (`diverge.rs`)
 2. `merge(Even, LowHalf)` — rejected, non-complements (`merge.rs`)
 3. `merge(Even, Even)` — rejected, same set (`merge.rs`)
-4. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
-5. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
-6. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
-7. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
-8. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
+4. `merge(EvenLow, EvenHigh)` as top-level — rejected, nested complements are not `ComplementOf` (`merge.rs`)
+5. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
+6. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
+7. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
+8. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
+9. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
+10. `Warp::new()` from external crate — rejected, `pub(crate)` constructor (`warp.rs`)
+11. `merge_writes(Even, LowHalf)` — rejected, fence non-complements (`fence.rs`)
+12. `bitonic_sort` on `Warp<Even>` — rejected, method absent (`sort.rs`)
+13. `tile` on `Warp<Even>` — rejected, method absent (`tile.rs`)
 
 These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
-Our prototype includes 272 unit tests, 50 example tests across 8 worked bug examples, and 23 doc tests (8 compile-fail including linearity enforcement, 15 doc examples) covering the full type system (345 total). The tests exercise:
+Our prototype includes 268 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail including linearity, nested complement, fence, sort, and tile enforcement, 15 doc examples) covering the full type system (346 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2250,7 +2255,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Type system tests | 272 unit + 50 example + 23 doc (345 total) |
+| Type system tests | 268 unit + 50 example + 28 doc (346 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |

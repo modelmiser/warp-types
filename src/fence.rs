@@ -25,27 +25,34 @@ use crate::warp::Warp;
 // ============================================================================
 
 /// Marker trait for global region write states.
-pub trait WriteState {}
+///
+/// Sealed — external crates cannot implement this trait, preventing
+/// forgery of write-state transitions.
+pub trait WriteState: crate::active_set::sealed::Sealed {}
 
 /// No writes have occurred.
 #[derive(Debug, Clone, Copy)]
 pub struct Unwritten;
+impl crate::active_set::sealed::Sealed for Unwritten {}
 impl WriteState for Unwritten {}
 
 /// Partial write: only lanes in `S` have written.
 pub struct PartialWrite<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
+impl<S: ActiveSet> crate::active_set::sealed::Sealed for PartialWrite<S> {}
 impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 
 /// All lanes have written (complement-verified).
 #[derive(Debug, Clone, Copy)]
 pub struct FullWrite;
+impl crate::active_set::sealed::Sealed for FullWrite {}
 impl WriteState for FullWrite {}
 
 /// Fence has been issued after full write.
 #[derive(Debug, Clone, Copy)]
 pub struct Fenced;
+impl crate::active_set::sealed::Sealed for Fenced {}
 impl WriteState for Fenced {}
 
 // ============================================================================
@@ -90,14 +97,16 @@ impl<S: ActiveSet> Warp<S> {
 
     /// Store values to a region that already has a partial write from
     /// complementary lanes, producing a full write.
+    ///
+    /// Returns the warp (unchanged) so it can still be merged.
     pub fn global_store_complement<S2: ActiveSet>(
         self,
         _region: GlobalRegion<PartialWrite<S2>>,
-    ) -> GlobalRegion<FullWrite>
+    ) -> (Self, GlobalRegion<FullWrite>)
     where
         S: ComplementOf<S2>,
     {
-        GlobalRegion { _phantom: PhantomData }
+        (self, GlobalRegion { _phantom: PhantomData })
     }
 }
 
@@ -179,10 +188,13 @@ mod tests {
         // Each half writes to global memory
         let region = GlobalRegion::new();
         let (evens, partial_even) = evens.global_store(region);
-        let _ = evens; // warp still usable
+        // evens still usable — global_store returns the warp
 
-        // Second half completes the write
-        let full = odds.global_store_complement(partial_even);
+        // Second half completes the write — warp returned for merge
+        let (odds, full) = odds.global_store_complement(partial_even);
+
+        // Warps can still be merged after fence operations
+        let _merged: Warp<All> = crate::merge(evens, odds);
 
         // Fence after full write
         let fenced = threadfence(full);

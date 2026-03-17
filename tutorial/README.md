@@ -276,7 +276,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test` (263 unit + 24 doc = 287, plus 50 example = 337 total)
+- Clone the repo and run `cargo test` (268 unit + 28 doc = 296, plus 50 example = 346 total)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`

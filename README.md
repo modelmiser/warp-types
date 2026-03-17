@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 263 unit + 24 doc tests
+cargo test                                    # 268 unit + 28 doc tests
 cargo test --examples                         # 50 tests across 8 real-bug examples
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -116,7 +116,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Shuffle safety (diverged warp can't shuffle) | 13 compile-fail doctests | `cargo test --doc` |
+| Type safety (diverged warp can't shuffle, merge requires complements) | 13 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 8 worked bug examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
@@ -127,7 +127,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32/64 lanes) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (18 tests) | `cargo test gradual` |
-| All claims | Full test suite (337 tests) | `cargo test && cargo test --examples` |
+| All claims | Full test suite (346 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 
@@ -135,7 +135,7 @@ fn main() {
 warp-types/
 ├── src/
 │   ├── lib.rs              # Core exports + GpuValue trait + warp_kernel re-export
-│   ├── active_set.rs       # Marker types: All, Even, Odd, LowHalf, ... (u64 masks)
+│   ├── active_set.rs       # Marker types: All, Even, Odd, LowHalf, ... (u64 masks, sealed)
 │   ├── warp.rs             # Warp<S> — the core parameterized type
 │   ├── data.rs             # PerLane<T>, Uniform<T>, SingleLane<T, N>
 │   ├── diverge.rs          # Split warps by predicate
@@ -148,7 +148,7 @@ warp-types/
 │   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
 │   ├── fence.rs            # Fence-divergence type-state machine
 │   ├── block.rs            # Block-level shared memory + reductions
-│   ├── proof.rs            # Executable soundness sketch (9 lemmas)
+│   ├── proof.rs            # Executable soundness sketch (3 theorems, 3 lemmas)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
 │   ├── warp_size.rs        # Const-generic warp size portability
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge

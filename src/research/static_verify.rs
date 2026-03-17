@@ -17,7 +17,7 @@
 //! ## Bug 1: Shuffle after diverge (caught)
 //!
 //! ```compile_fail
-//! use warp_types::static_verify::*;
+//! use warp_types::research::static_verify::*;
 //!
 //! fn buggy_shuffle() {
 //!     let warp: Warp<All> = Warp::new();
@@ -32,7 +32,7 @@
 //! ## Bug 2: Merge non-complements (caught)
 //!
 //! ```compile_fail
-//! use warp_types::static_verify::*;
+//! use warp_types::research::static_verify::*;
 //!
 //! fn buggy_merge() {
 //!     let evens: Warp<Even> = Warp::new();
@@ -46,7 +46,7 @@
 //! ## Bug 3: Merge same set (caught)
 //!
 //! ```compile_fail
-//! use warp_types::static_verify::*;
+//! use warp_types::research::static_verify::*;
 //!
 //! fn buggy_merge_same() {
 //!     let evens1: Warp<Even> = Warp::new();

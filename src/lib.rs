@@ -170,7 +170,7 @@ pub mod prelude {
         Warp, GpuValue,
         All, Empty, Even, Odd, LowHalf, HighHalf,
         Lane0, NotLane0, EvenLow, EvenHigh, OddLow, OddHigh,
-        ActiveSet, ComplementOf, CanDiverge,
+        ActiveSet, ComplementOf, ComplementWithin, CanDiverge,
         PerLane, Uniform, SingleLane,
         merge, merge_within,
         DynWarp, DynDiverge, Tile,

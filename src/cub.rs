@@ -9,7 +9,7 @@
 //! |--------------------------|--------------------------------------|
 //! | `cub::WarpReduce<T>`     | `warp.reduce(data, op)`              |
 //! | `cub::WarpScan<T>`       | `warp.inclusive_sum(data)`            |
-//! | `cub::WarpExchange<T>`   | `warp.blocked_to_striped(items)`     |
+//! | `cub::WarpExchange<T>`   | *(not yet implemented)*              |
 //!
 //! # Safety
 //!

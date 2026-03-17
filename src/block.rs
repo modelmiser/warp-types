@@ -154,7 +154,7 @@ pub struct BlockSession<R: BlockRole, S: ProtocolState, const N: usize> {
 }
 
 impl<R: BlockRole, S: ProtocolState, const N: usize> BlockSession<R, S, N> {
-    pub fn new(block_id: BlockId) -> Self {
+    pub(crate) fn new(block_id: BlockId) -> Self {
         BlockSession { block_id, _role: PhantomData, _state: PhantomData }
     }
 
@@ -176,7 +176,7 @@ pub struct ReductionSession<Phase> {
 }
 
 impl ReductionSession<WarpPhase> {
-    pub fn new(value: u32) -> Self {
+    pub(crate) fn new(value: u32) -> Self {
         ReductionSession { value, _phase: PhantomData }
     }
 

@@ -81,6 +81,7 @@ use crate::active_set::All;
 pub struct DynDiverge {
     true_mask: u64,
     false_mask: u64,
+    parent_mask: u64,
 }
 
 impl DynDiverge {
@@ -110,10 +111,11 @@ impl DynDiverge {
     /// Consumes the `DynDiverge` — you can't use the branches after merging.
     pub fn merge(self) -> Warp<All> {
         debug_assert_eq!(
-            self.true_mask | self.false_mask, 0xFFFFFFFF,
-            "DynDiverge invariant violated: true_mask | false_mask != All \
-             (0x{:016X} | 0x{:016X} = 0x{:016X})",
+            self.true_mask | self.false_mask, self.parent_mask,
+            "DynDiverge invariant violated: true_mask | false_mask != parent_mask \
+             (0x{:016X} | 0x{:016X} = 0x{:016X}, expected 0x{:016X})",
             self.true_mask, self.false_mask, self.true_mask | self.false_mask,
+            self.parent_mask,
         );
         Warp::new()
     }
@@ -176,6 +178,7 @@ impl Warp<All> {
         DynDiverge {
             true_mask: all_mask & predicate_mask,
             false_mask: all_mask & !predicate_mask,
+            parent_mask: all_mask,
         }
     }
 }
