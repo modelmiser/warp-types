@@ -24,7 +24,7 @@ int butterfly_untyped(int data) {
 }
 
 // --------------------------------------------------------------------------
-// Typed: identical operations, annotated with session-typed warp state.
+// Typed: identical operations, annotated with typestate-annotated warp state.
 // In our Rust system, these annotations are zero-sized phantom types.
 // Here we show them as comments to prove they add no instructions.
 // --------------------------------------------------------------------------

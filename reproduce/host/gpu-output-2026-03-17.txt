@@ -1,4 +1,4 @@
-    Finished `release` profile [optimized] target(s) in 0.01s
+    Finished `release` profile [optimized] target(s) in 0.00s
      Running `target/release/run-kernel`
 GPU: NVIDIA RTX 4000 SFF Ada Generation
 
@@ -20,7 +20,7 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
   Got:      lane[0]=496, lane[15]=496, lane[31]=496
   Result:   PASS
 
-Session-typed divergence: correct results on real GPU hardware.
+Linear typestate divergence: correct results on real GPU hardware.
 Zero type system overhead. Zero runtime cost. Zero wrong answers.
 
 ================================================================

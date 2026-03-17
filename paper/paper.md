@@ -2089,7 +2089,7 @@ These are not test heuristics—they are verified absences. The Rust compiler co
 
 ### Bug Pattern Coverage
 
-Our prototype includes 269 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail including linearity, nested complement, fence, sort, and tile enforcement, 15 doc examples) covering the full type system (347 total). The tests exercise:
+Our prototype includes 291 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail including linearity, nested complement, fence, sort, and tile enforcement, 15 doc examples) covering the full type system (369 total). The tests exercise:
 
 - Diverge/merge with complement verification
 - Nested divergence (up to depth 3)
@@ -2246,7 +2246,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 vendor response, 1 motivation) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Type system tests | 269 unit + 50 example + 28 doc (347 total) |
+| Type system tests | 291 unit + 50 example + 28 doc (369 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX via nvptx64) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Uniform programs | Zero annotation overhead |

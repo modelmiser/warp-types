@@ -177,6 +177,7 @@ impl Warp<All> {
         data: PerLane<T>,
         src_lane: u32,
     ) -> PerLane<T> {
+        debug_assert!(src_lane < 32, "broadcast_lane: src_lane {src_lane} >= 32");
         PerLane::new(data.get().gpu_shfl_idx(src_lane))
     }
 

@@ -61,7 +61,7 @@
 //! constant instead. This is the same class of bug as PIConGPU #2514 — but with
 //! a worse failure mode (deadlock rather than silent wrong results).
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! After divergence, the warp handle is `Warp<Active>`, not `Warp<All>`.
 //! `shuffle_up` only exists on `Warp<All>`. Calling `warpScanInclusive` on a
@@ -518,7 +518,7 @@ fn main() {
     println!("  __activemask() would return the correct subset, but");
     println!("  the programmer used a constant instead.\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  After divergence: Warp<Active>, not Warp<All>.");
     println!("  warp_scan_inclusive() requires Warp<All>. Compile error.");
     println!("  No runtime mask to hardcode wrong.\n");

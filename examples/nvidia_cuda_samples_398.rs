@@ -25,7 +25,7 @@
 //!
 //! **Source:** <https://github.com/NVIDIA/cuda-samples/issues/398>
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! After the block-level reduction, only a subset of lanes are active.
 //! In our type system, you have a `Warp<Lane0>` (or similar subset).

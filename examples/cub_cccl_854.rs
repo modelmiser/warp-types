@@ -35,7 +35,7 @@
 //! despite being correct at the source level. No runtime API can fix a
 //! compiler optimization bug.
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! In our type system, the mask is not a runtime variable that can be
 //! optimized away — it's a type parameter. `Warp<SubWarp16>` is a zero-sized
@@ -250,7 +250,7 @@ fn main() {
     println!("  Source code is correct! The compiler produces wrong PTX.");
     println!("  No runtime API can fix a compiler optimization bug.\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  The mask is a type (PhantomData), not a register.");
     println!("  Zero-sized: nothing to initialize, nothing to optimize away.");
     println!("  Warp<SubWarp16> has no shuffle_up — sub-warp ops are separate.\n");

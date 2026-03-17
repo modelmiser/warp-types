@@ -56,7 +56,7 @@ echo "=== Comparing ==="
 if diff -q /tmp/ptx_untyped.txt /tmp/ptx_typed.txt > /dev/null 2>&1; then
     echo "IDENTICAL PTX"
     echo ""
-    echo "The session-typed annotations produce zero additional PTX instructions."
+    echo "The typestate annotations produce zero additional PTX instructions."
     echo "Type system overhead: 0 instructions, 0 registers, 0 bytes."
 else
     echo "DIFFERENT PTX (unexpected)"

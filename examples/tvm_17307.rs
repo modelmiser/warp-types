@@ -39,7 +39,7 @@
 //! boundary (values don't cross group boundaries because the shuffle wraps
 //! at `width`).
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! Computing a sub-group mask produces `Warp<SubGroup>`, not `Warp<All>`.
 //! `shuffle_down` only exists on `Warp<All>`. The type system rejects the
@@ -418,7 +418,7 @@ fn main() {
     println!("  claims only 8 participate. Hardware faults on H100, RTX 4090,");
     println!("  AMD 7900 XTX, Apple M2 Ultra.\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  Narrowing the mask produces Warp<SubGroup0>, not Warp<All>.");
     println!("  shuffle_down() only exists on Warp<All>. Compile error.");
     println!("  No runtime mask to get wrong — the type IS the mask.\n");

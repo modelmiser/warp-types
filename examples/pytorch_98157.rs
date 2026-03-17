@@ -50,7 +50,7 @@
 //! code path can be in different scheduling groups, giving different activemask
 //! results. Using `__activemask()` as the ballot mask under-counts votes.
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! In our type system, there is no `activemask()` function that returns a runtime
 //! value. The active set is the type parameter `S` in `Warp<S>`. You cannot
@@ -742,7 +742,7 @@ fn main() {
     println!("  not 'which threads are on this code path' (program convergence).");
     println!("  The PTX ISA spec explicitly warns against using it for synchronization.\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  No activemask() function exists. The active set is a type parameter.");
     println!("  ballot() requires Warp<All>. After diverge(), you have Warp<LoopActive>.");
     println!("  Compile error: no method `ballot` found for `Warp<LoopActive>`.\n");

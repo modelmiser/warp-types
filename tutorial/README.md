@@ -276,7 +276,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test` (269 unit + 28 doc = 297, plus 50 example = 347 total)
+- Clone the repo and run `cargo test` (291 unit + 28 doc = 319, plus 50 example = 369 total)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`
@@ -289,7 +289,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 
 ### For Language Designers
 - The core insight transfers to any language with phantom types or zero-cost abstractions
-- Session types for hardware communication protocols (not just software)
+- Typestate for hardware communication protocols (not just software)
 - The `ComplementOf` pattern (compile-time proof of set complement) is reusable
 
 ### Known Limitations

@@ -38,7 +38,7 @@
 //! active set. `__activemask()` would return the correct active set, but
 //! the programmer used a hardcoded constant instead.
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! After divergence, the warp handle is `Warp<Active>`, not `Warp<All>`.
 //! `ballot()` only exists on `Warp<All>`. There is no runtime mask to get
@@ -259,7 +259,7 @@ fn main() {
     println!("  The mask is a runtime u32. Hardware accepts any value.");
     println!("  The programmer used 0xFFFFFFFF instead of __activemask().\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  After divergence: Warp<Active>, not Warp<All>.");
     println!("  ballot() doesn't exist on Warp<Active>. Compile error.\n");
 

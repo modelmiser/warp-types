@@ -34,7 +34,7 @@
 //! `__shfl_sync`'s mask is correct (0xFFFFFFFF, all lanes ARE active). The
 //! bug isn't in the mask — it's in the uninitialized data reaching the shuffle.
 //!
-//! ## Why Session Types Catch It
+//! ## Why Warp Typestate Catches It
 //!
 //! After `if (laneId == 0)`, lane 0 has `Warp<Lane0>` and the rest have
 //! `Warp<NotLane0>`. To shuffle, you must merge back to `Warp<All>`. The
@@ -289,7 +289,7 @@ fn main() {
     println!("  The bug is uninitialized `row` on lanes 1-31 reaching the shuffle.");
     println!("  LLVM sees UB → assumes branch always taken → eliminates it.\n");
 
-    println!("Why Session Types Catch It:");
+    println!("Why Warp Typestate Catches It:");
     println!("  After if: Warp<Lane0>, not Warp<All>. Must merge before shuffle.");
     println!("  Merge forces all lanes to provide data. No uninitialized values.");
     println!("  No UB → no branch elimination.\n");

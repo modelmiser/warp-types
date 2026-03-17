@@ -155,6 +155,10 @@ where
         data: PerLane<T>,
         delta: u32,
     ) -> PerLane<T> {
+        debug_assert!(
+            delta < SIZE as u32,
+            "shuffle_down: delta {delta} >= tile SIZE {SIZE}"
+        );
         PerLane::new(data.get().gpu_shfl_down_width(delta, SIZE as u32))
     }
 

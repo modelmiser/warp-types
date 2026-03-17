@@ -141,7 +141,7 @@ pub struct ThreadId {
 }
 
 // ============================================================================
-// Inter-block session types
+// Inter-block protocol types
 // ============================================================================
 
 pub trait BlockRole {
