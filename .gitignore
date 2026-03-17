@@ -4,4 +4,5 @@ __pycache__
 reproduce/reduce7_bug
 .*crystal*/
 .review/
+COLD-REVIEW*
 INSIGHTS.md
