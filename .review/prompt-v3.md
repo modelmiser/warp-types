@@ -56,6 +56,7 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - ValidTileSize::TILE_MASK defined but unread — reserved for future execution mask generation
 - examples/demo_bug shuffle_xor OOB on mask>=32 — pedagogical code, intentionally unguarded
 - warp_kernel silently drops return type — PTX kernels must be void, compile error catches mismatch
+- warp_kernel doc says "On host: nothing" but macro emits extern "ptx-kernel" on all targets — compiler error, not silent no-op
 - dynamic.rs DynDiverge::merge debug_assert is vacuously true by construction — intentional
 - GpuWarp32::shuffle clamps OOB indices (GPU semantics, not CpuSimd % WIDTH wrapping)
 - SimWarp::shuffle_down/shuffle_down_width use u64 arithmetic (32-bit overflow prevented)
