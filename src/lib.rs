@@ -67,6 +67,7 @@ pub mod cub;
 pub mod sort;
 pub mod tile;
 pub mod dynamic;
+pub mod simwarp;
 
 // ============================================================================
 // Research explorations (compiled, not re-exported)
