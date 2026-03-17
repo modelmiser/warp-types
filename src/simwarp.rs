@@ -98,7 +98,8 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
 
     /// Indexed shuffle: all lanes read from lane[src_lane].
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
-        let val = self.lanes[(src_lane as usize) % WIDTH];
+        let src = src_lane as usize;
+        let val = if src < WIDTH { self.lanes[src] } else { self.lanes[0] };
         SimWarp { lanes: [val; WIDTH] }
     }
 
@@ -109,6 +110,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// segment, the lane reads its own value.
     pub fn shuffle_xor_width(&self, mask: u32, width: u32) -> Self {
         let w = width as usize;
+        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
@@ -126,6 +128,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Shuffle down confined to segments of `width` lanes.
     pub fn shuffle_down_width(&self, delta: u32, width: u32) -> Self {
         let w = width as usize;
+        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
@@ -143,6 +146,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Shuffle up confined to segments of `width` lanes.
     pub fn shuffle_up_width(&self, delta: u32, width: u32) -> Self {
         let w = width as usize;
+        assert!(w > 0 && w.is_power_of_two() && w <= WIDTH, "width must be power-of-2 in 1..={WIDTH}");
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
