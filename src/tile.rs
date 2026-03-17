@@ -29,7 +29,7 @@ use crate::GpuValue;
 use crate::gpu::GpuShuffle;
 use crate::data::PerLane;
 use crate::warp::Warp;
-use crate::active_set::All;
+use crate::active_set::{All, sealed};
 
 /// A thread block tile of `SIZE` threads.
 ///
@@ -45,10 +45,18 @@ pub struct Tile<const SIZE: usize> {
 }
 
 /// Marker trait for valid tile sizes (powers of 2 that divide 32).
-pub trait ValidTileSize {
+///
+/// Sealed — only implemented for Tile<4>, Tile<8>, Tile<16>, Tile<32>.
+/// External crates cannot implement this for arbitrary sizes.
+pub trait ValidTileSize: sealed::Sealed {
     /// Mask for this tile within a warp (based on thread position).
     const TILE_MASK: u32;
 }
+
+impl sealed::Sealed for Tile<4> {}
+impl sealed::Sealed for Tile<8> {}
+impl sealed::Sealed for Tile<16> {}
+impl sealed::Sealed for Tile<32> {}
 
 impl ValidTileSize for Tile<4> {
     const TILE_MASK: u32 = 0xF; // 4 lanes
