@@ -170,7 +170,7 @@ Three files make the complete pipeline:
 **`my-kernels/Cargo.toml`** — the kernel crate:
 ```toml
 [dependencies]
-warp-types = { path = "path/to/warp-types" }
+warp-types = "0.1.0"
 ```
 
 **`build.rs`** — auto-compiles kernels to PTX:
@@ -276,7 +276,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test` (291 unit + 28 doc = 319, plus 50 example = 369 total)
+- Clone the repo and run `cargo test && cargo test --examples` (291 unit + 28 doc + 50 example = 369 total)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`
