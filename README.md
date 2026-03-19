@@ -1,6 +1,6 @@
 # warp-types: Type-Safe GPU Warp Programming via Linear Typestate
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19073622.svg)](https://doi.org/10.5281/zenodo.19073622)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19040615.svg)](https://doi.org/10.5281/zenodo.19040615)
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 

@@ -4,7 +4,6 @@
 
 ### Added
 - **SimWarp**: Multi-lane warp simulator with real shuffle semantics — butterfly reduce, bitonic sort, tile-confined shuffle, Hillis-Steele scan, 64-lane AMD reduce all verified with actual lane exchange
-- Cold review infrastructure (`.review/prompt-v3.md`) — 77 known patterns, 17 known untested items accumulated over 23 review rounds
 
 ### Fixed
 - `SimWarp::shuffle_idx` OOB behavior: now wraps modularly via `% WIDTH` (matching GPU `shfl.sync.idx` semantics); previously returned lane 0's value
@@ -29,8 +28,6 @@
 
 ### Documentation
 - Tutorial updated for crates.io dependency (not path dep)
-- Zenodo DOI updated to new release (10.5281/zenodo.19073622)
-- Cold review protocol evolved through 3 major versions with methodology lessons
 
 ## [0.1.0] — 2026-03-18
 
