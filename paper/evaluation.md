@@ -9,9 +9,9 @@ We evaluate warp typestate on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. See §7.1 of the full paper for the complete table.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. The full table of all 21 bugs with per-issue caveats is available in the supplementary material.
 
-**Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes above).
+**Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes below).
 
 **Modeled bugs** (with worked Rust examples):
 
@@ -97,7 +97,7 @@ Our types impose zero runtime overhead—not measured to be negligible, but *gua
 
 The generated code contains no trace of the type system. A `Warp<All>` and a `Warp<Even>` produce identical machine code for any operation available on both.
 
-We verified this at three levels: Rust MIR (`Warp<S>` values optimized away entirely), LLVM IR (see §7.2 in full paper), and NVIDIA PTX.
+We verified this at three levels: Rust MIR (`Warp<S>` values optimized away entirely), LLVM IR (`zero_overhead_butterfly` compiles to a single `shl`; `zero_overhead_diverge_merge` compiles to `ret i32 %data`), and NVIDIA PTX.
 
 **NVIDIA PTX** (`rustc +nightly --target nvptx64-nvidia-cuda -O`): We compiled actual Rust type system code—`PhantomData`, trait bounds, `ComplementOf`, `diverge`/`merge`—directly to PTX via the `nvptx64-nvidia-cuda` target. Both `butterfly_typed` (through `Warp<All>`) and `diverge_merge_typed` (`kernel_entry → diverge → merge`) produce byte-identical PTX vs. their untyped equivalents. The entire type system is erased through the full LLVM NVPTX backend. Reproduction: `bash reproduce/compare_rust_ptx.sh`.
 

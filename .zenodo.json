@@ -9,7 +9,7 @@
   "license": "MIT",
   "upload_type": "software",
   "access_right": "open",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "keywords": [
     "linear typestate",
     "GPU programming",
@@ -27,5 +27,5 @@
       "identifier": "https://github.com/modelmiser/warp-types"
     }
   ],
-  "notes": "Includes: Rust implementation (269 unit + 50 example + 28 doc = 347 tests), Lean 4 formalization (zero sorry, zero axioms — full progress, preservation, substitution, bug untypability proofs), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
+  "notes": "Includes: Rust implementation (291 unit + 50 example + 28 doc = 369 tests), SimWarp multi-lane simulator, Lean 4 formalization (zero sorry, zero axioms — full progress, preservation, substitution, bug untypability proofs), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
 }
