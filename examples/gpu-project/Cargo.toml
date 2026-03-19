@@ -1,3 +1,6 @@
+[workspace]
+exclude = ["my-kernels"]
+
 [package]
 name = "gpu-project-example"
 version = "0.1.0"
