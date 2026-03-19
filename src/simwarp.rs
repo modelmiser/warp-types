@@ -108,11 +108,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Indexed shuffle: all lanes read from lane[src_lane].
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
         let src = src_lane as usize;
-        let val = if src < WIDTH {
-            self.lanes[src]
-        } else {
-            self.lanes[0]
-        };
+        let val = self.lanes[src % WIDTH];
         SimWarp {
             lanes: [val; WIDTH],
         }
