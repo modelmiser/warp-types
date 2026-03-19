@@ -72,6 +72,9 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - DynWarp::reduce_sum_scalar wrapping_mul documented (GPU hardware semantics)
 - WorkQueue capacity 31 documented (ring buffer sentinel)
 - cub.rs::reduce and tile.rs::reduce_sum return bare T (not Uniform<T>) — design choice matching CUB API convention
+- cub.rs::broadcast_lane debug_assert on src_lane<32 — GPU hardware clamps OOB, CPU identity, no UB
+- tile.rs::shuffle_xor/shuffle_down debug_assert on mask/delta<SIZE — same class as broadcast_lane
+- Tile<1>/Tile<2> not supported — doc says "matching NVIDIA cooperative groups" but only {4,8,16,32}
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - shuffle.rs: ballot has no GPU codepath (CPU-only on all targets) — FEATURE GAP
