@@ -3,7 +3,7 @@ members = [".", "warp-types-builder", "warp-types-macros", "warp-types-kernel"]
 
 [package]
 name = "warp-types"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Chad Aldreda"]
@@ -16,7 +16,7 @@ default = []
 formal-proof = [] # Enable proof module (requires std)
 
 [dependencies]
-warp-types-macros = { path = "warp-types-macros", version = "0.1.0" }
-warp-types-kernel = { path = "warp-types-kernel", version = "0.1.0" }
+warp-types-macros = { path = "warp-types-macros", version = "0.2.0" }
+warp-types-kernel = { path = "warp-types-kernel", version = "0.2.0" }
 
 [dev-dependencies]
