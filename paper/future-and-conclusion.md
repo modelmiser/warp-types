@@ -31,15 +31,7 @@ Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservatio
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 
-## 9.3 IDE Integration
-
-Rich IDE support would enhance usability:
-- Visualize active sets at each program point
-- Show which lanes are active in hover tooltips
-- Suggest merge points when shuffles fail type checking
-- Refactoring: extract divergent code into typed helper functions
-
-## 9.4 Protocol Inference and Gradual Typing
+## 9.3 Protocol Inference and Gradual Typing
 
 Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`).
 
@@ -55,28 +47,23 @@ Remaining future work:
 - Local inference integration into the public API (infer active sets within functions, require annotations only at boundaries)
 - Protocol-first development (design protocol in DSL, generate/check code against it)
 
-## 9.5 Beyond SIMT
+## 9.4 Beyond SIMT
 
 The core idea—session types with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
 
-**FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.6). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
+**FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.5). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
 
-**Distributed systems** (partial transfer): Node quiescence maps to lane inactivity, and multiparty session types already model distributed communication. However, the domains diverge on three axes: (1) distributed systems have genuine failure modes (Byzantine, crash-stop, network partition) that GPU warps lack; (2) SIMT divergence is deterministic (predicate-based) while distributed failure is non-deterministic; (3) SIMT guarantees eventual reconvergence at a merge point while distributed systems may not reconverge. The quiescence model is complementary to fault-tolerant MPST (§8.2) but not a direct replacement.
+**Distributed systems** (partial transfer): Node quiescence maps to lane inactivity, but the domains differ: distributed systems have genuine failure modes, non-deterministic failures, and no guarantee of reconvergence. Our quiescence model complements fault-tolerant MPST (§8.2) but is not a direct replacement.
 
-**Database queries and proof search** (structural similarity only): Predicate filtering in databases and case splits in proof search share the abstract shape of "active subset selection," but the mechanism diverges fundamentally. Database rows are independent data items, not lock-step execution units sharing an instruction stream—there is no "communication between filtered rows" analogous to shuffle. Proof sub-goals interact via shared logical context, not register exchange. We note the structural parallel but do not claim actionable type-system transfer to these domains.
+**Database queries and proof search** (structural similarity only): Database predicate filtering and proof case splits share the abstract shape of active subset selection but lack the inter-participant communication that makes the type discipline actionable.
 
-## 9.6 Hardware Crossbar Protocols
+## 9.5 Hardware Crossbar Protocols
 
 We have prototyped typestate crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type.
 
 The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how warp typestate prevents it.
 
-Future work extends toward hardware synthesis proper:
-- Generating crossbar routing configurations from typestate protocols
-- Synthesizing predication logic matching diverge/merge structure
-- Area/power optimization guided by protocol structure (unused crossbar paths can be power-gated)
-
-## 9.7 Remaining Limitations
+## 9.6 Remaining Limitations
 
 Several limitations remain:
 - Higher-order protocols (protocols parameterized by protocols)
@@ -100,10 +87,6 @@ We presented **warp typestate**, a linear type system that makes lane-level dive
 The key insight is that GPU divergence has the *shape* of multiparty session type branching: diverging splits participants, reconverging requires a complement proof, and quiescence (temporarily inactive participants) is a phenomenon not captured by existing type disciplines. We formalize this as linear typestate over a Boolean lattice of active sets—not session types proper (there are no channels or protocol sequences), but motivated by the structural analogy. The analogy guided the design; the Boolean lattice and linear resource discipline provide the guarantees.
 
 Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
-
-Beyond safety, the type system **unlocks performance that is currently too dangerous to attempt.** State-of-the-art GPU kernels avoid lane-level divergence entirely—not because uniform execution is always optimal, but because divergent shuffles are too risky to get right. Algorithms that could be faster with lane-level heterogeneity (warp-level sort in rasterizers, divergent reductions in ray traversal, per-lane work stealing in ML kernels) are written as uniform instead, leaving performance on the table. Warp typestate makes the fast-but-dangerous path safe.
-
-Warp typestate is not just a solution for GPU programming. It is an instance of a broader pattern: *participatory computation* where the set of active participants changes over time. We have demonstrated a direct transfer to FPGA crossbar protocols (§9.6), identified partial transfers to distributed systems, and noted structural parallels in databases and proof search (§9.5). The transfer fidelity correlates with mechanism match: domains where inactive participants produce silent data corruption (FPGAs, GPUs) benefit most; domains with merely analogous "active subset selection" benefit least.
 
 **The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
 
@@ -135,4 +118,3 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 - Wadler 2012. "Propositions as Sessions" (ICFP)
 - Wright and Felleisen 1994. "A Syntactic Approach to Type Soundness" (IC)
 - Anthropic. (2026). Claude Opus 4.6 [Large language model]. https://www.anthropic.com
-

@@ -192,66 +192,9 @@ Our approach has the lowest overhead because the types *are* the verification.
 
 ### `PerLane<T>`
 
-Per-lane data wraps a single value — because on GPU, each lane IS a separate thread with its own registers:
+Per-lane data wraps a single value — because on GPU, each lane IS a separate thread with its own registers. A `PerLane<i32>` stored by lane 0 holds lane 0's value; lane 15's copy holds lane 15's value. There is no 32-element array — the parallelism is in the hardware, not the data structure. For CPU testing, shuffle operations are identity functions (returning the input value), since only one thread executes.
 
-```rust
-pub struct PerLane<T: GpuValue> {
-    value: T,
-}
-
-impl<T: GpuValue> PerLane<T> {
-    pub fn new(value: T) -> Self {
-        PerLane { value }
-    }
-
-    pub fn get(self) -> T {
-        self.value
-    }
-}
-```
-
-The single-`T` representation reflects GPU reality: in SIMT execution, 32 lanes each run the same code with their own register file. A `PerLane<i32>` stored by lane 0 holds lane 0's value; lane 15's copy holds lane 15's value. There is no 32-element array — the parallelism is in the hardware, not the data structure. For CPU testing, shuffle operations are identity functions (returning the input value), since only one thread executes.
-
-### `Uniform<T>`
-
-Uniform values are guaranteed identical across lanes:
-
-```rust
-pub struct Uniform<T>(T);
-
-impl<T: GpuValue> Uniform<T> {
-    pub fn from_const(value: T) -> Self {
-        Uniform(value)
-    }
-
-    pub fn get(self) -> T {
-        self.0
-    }
-
-    pub fn broadcast(self) -> PerLane<T> {
-        PerLane::new(self.0)
-    }
-}
-```
-
-### SingleLane<T, N>
-
-A value existing only in lane N:
-
-```rust
-pub struct SingleLane<T: GpuValue, const LANE: u8>(T);
-
-impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
-    pub fn get(&self) -> T {
-        self.0
-    }
-
-    pub fn broadcast(self) -> Uniform<T> {
-        // GPU intrinsic: broadcast from lane LANE
-        Uniform(unsafe { intrinsic_broadcast(self.0, LANE) })
-    }
-}
-```
+`Uniform<T>` and `SingleLane<T, N>` are defined in §3.1.
 
 ## 6.4 Diverge and Merge
 
@@ -278,19 +221,6 @@ The `self` parameter consumes the original warp. Rust's ownership system prevent
 
 The formal typing rule (§3) describes a generic `diverge<P: Predicate>`. In the implementation, predicates are instantiated as concrete methods (`diverge_even_odd`, `diverge_halves`, `extract_lane0`). For runtime-dependent predicates, `diverge_dynamic(mask: u64)` returns a `DynDiverge` with structural complement guarantees (§5).
 
-```rust
-impl Warp<All> {
-    pub fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) { ... }
-    pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) { ... }
-    pub fn extract_lane0(self) -> (Warp<Lane0>, Warp<NotLane0>) { ... }
-}
-
-impl Warp<Even> {
-    pub fn diverge_halves(self) -> (Warp<EvenLow>, Warp<EvenHigh>) { ... }
-}
-// ... nested diverge methods for each active set
-```
-
 ### Type-Safe Merge
 
 Merge verifies complements at compile time:
@@ -307,9 +237,7 @@ where
 
 The trait bound `S1: ComplementOf<S2>` is the compile-time verification. Top-level `merge` returns `Warp<All>` because `ComplementOf` is only implemented for pairs that cover all lanes. For nested divergence (e.g., merging `EvenLow` + `EvenHigh` back to `Even`), a separate `merge_within` function uses a `ComplementWithin<S2, Parent>` trait to return `Warp<Parent>`. The formal typing rule in §3.3 shows `Warp<S1 ∪ S2>`, which equals `Warp<All>` when `S1 ⊥ S2`.
 
-### Data Merge
-
-On GPU, merging data from two branches is a predicated select operation: each lane activates for its branch and contributes its own `PerLane<T>` value. Since each lane holds a single `T` (see §6.3), the merge is implicit in the SIMT execution model — each lane simply writes its branch result, and reconvergence makes both results available.
+On GPU, merging data from two branches is implicit in the SIMT execution model — each lane writes its branch result, and reconvergence makes both results available (see §6.3).
 
 ## 6.5 GPU Intrinsics
 
@@ -341,41 +269,7 @@ The safe wrapper is only available on `Warp<All>`, ensuring all lanes are active
 
 ## 6.6 Dual-Mode Platform Abstraction
 
-The same warp algorithm often needs both CPU and GPU implementations — CPU for testing and debugging, GPU for production. We implement a `Platform` trait that abstracts over execution model while preserving typestate safety:
-
-```rust
-trait Platform {
-    const WIDTH: usize;
-    type Vector<T>;
-    type Mask;
-
-    fn shuffle_xor<T: GpuValue>(source: Self::Vector<T>, mask: usize) -> Self::Vector<T>;
-    fn reduce_sum<T>(values: Self::Vector<T>) -> T;
-    fn ballot(predicates: Self::Vector<bool>) -> Self::Mask;
-}
-```
-
-Two implementations provide the abstraction:
-
-- **`CpuSimd<const WIDTH: usize>`**: Array-based emulation using `PortableVector<T, WIDTH>`. Shuffle operations use explicit lane indexing; reductions iterate over the array. Zero hardware dependency — runs anywhere Rust compiles.
-
-- **`GpuWarp32`**: 32-lane warp emulation (currently delegates to `CpuSimd::<32>`; production use would emit PTX intrinsics). Active set masks use `u64` throughout the implementation for portability across NVIDIA 32-lane warps and AMD RDNA/CDNA 64-lane wavefronts.
-
-The same algorithm runs on both platforms without modification:
-
-```rust
-fn butterfly_reduce_sum<P: Platform>(data: P::Vector<i32>) -> i32 {
-    let mut data = data;
-    let mut stride = P::WIDTH / 2;
-    while stride > 0 {
-        data = data + P::shuffle_xor(data, stride as u32);
-        stride /= 2;
-    }
-    data.extract(0)
-}
-```
-
-Warp typestate applies uniformly: `CpuSimd` uses masked array operations for diverged lanes; `GpuWarp32` uses SIMT masking. The `ComplementOf` proof requirement is platform-independent — it verifies the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
+The same warp algorithm often needs both CPU and GPU implementations. `CpuSimd<const WIDTH: usize>` provides array-based emulation with explicit lane indexing — zero hardware dependency, runs anywhere Rust compiles. `GpuWarp32` targets 32-lane warps (currently delegates to `CpuSimd::<32>`; production use would emit PTX intrinsics). Warp typestate applies uniformly across both: the `ComplementOf` proof requirement is platform-independent, verifying the same active-set algebra regardless of whether the underlying execution is scalar emulation or hardware SIMT.
 
 ## 6.7 Error Messages
 
@@ -393,53 +287,9 @@ error[E0599]: no method named `shuffle_xor` found for struct `Warp<Even>` in the
 help: consider calling `merge` to reconverge the warp first
 ```
 
-**Merge non-complements:**
-```
-error[E0277]: the trait bound `Even: ComplementOf<LowHalf>` is not satisfied
-  --> src/main.rs:15:18
-   |
-15 |     let merged = merge(evens, low_half);
-   |                  ^^^^^ the trait `ComplementOf<LowHalf>` is not implemented for `Even`
-   |
-   = help: the following implementations were found:
-             <Even as ComplementOf<Odd>>
-   = note: `Even` and `LowHalf` are not complements (they overlap)
-```
-
-These messages tell the programmer exactly what's wrong and how to fix it.
-
 ## 6.8 Practical Considerations
 
-### Compile Time
-
-The type system adds negligible compile time. Trait resolution is fast, and there's no complex type-level computation (unlike, say, type-level naturals).
-
-Benchmark on our test suite:
-- Without types: 2.3s
-- With types: 2.4s
-- Overhead: ~4%
-
-### Code Size
-
-Zero-sized types and monomorphization mean code size is unchanged. The types are erased; only the operations remain.
-
-### Debugging
-
-Types are visible in debuggers and error messages. A `Warp<Even>` is clearly different from `Warp<All>`, aiding debugging.
-
-### Interop
-
-The library can wrap existing CUDA code:
-
-```rust
-// Wrap unsafe CUDA code with typed interface
-pub fn safe_butterfly(data: PerLane<i32>) -> Uniform<i32> {
-    let warp: Warp<All> = Warp::kernel_entry();
-    // ... typed operations ...
-}
-```
-
-Unsafe code can be isolated behind safe APIs.
+The type system adds negligible compile time overhead: 2.3s without types vs 2.4s with types (~4%) on our test suite. Zero-sized types and monomorphization mean code size is unchanged — the types are erased; only the operations remain. Types are visible in debuggers and error messages, aiding debugging (`Warp<Even>` is clearly distinct from `Warp<All>`). The library can wrap existing unsafe CUDA code behind safe typed APIs, enabling incremental adoption.
 
 ## 6.9 Limitations
 
@@ -463,4 +313,3 @@ Our Rust implementation demonstrates that warp typestate can be embedded in an e
 - **Platform portability**: Same algorithms run on CPU and GPU via the `Platform` trait
 
 The key insight: Rust's type system is expressive enough to encode our safety properties without runtime cost. The `Platform` abstraction further demonstrates that the type discipline is not GPU-specific — it applies uniformly to any SIMT-like execution model.
-

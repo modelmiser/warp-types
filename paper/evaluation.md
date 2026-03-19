@@ -11,7 +11,7 @@ We evaluate warp typestate on three dimensions:
 
 We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. See §7.1 of the full paper for the complete table.
 
-**Survey methodology.** We searched GitHub issue trackers for projects with known warp/shuffle usage, using queries: `shfl_sync`, `shuffle_xor`, `warp diverge`, `activemask`, `ballot_sync`, `shfl_down wrong`, `shuffle undefined`, and `warp mask bug`. Date range: 2016 (CUDA 9.0 deprecation) through 2025. We included bugs where: (a) the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations, and (b) the issue or fix is publicly documented. We excluded: performance-only issues (divergence that reduces throughput but doesn't produce wrong results), shared memory race conditions (different bug class), and bugs where the report was too vague to determine the mechanism. We did not exhaustively search all GPU projects; the sample is convenience-based, focused on projects with public issue trackers. We report exact caveats for each bug (see footnotes above).
+**Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes above).
 
 **Modeled bugs** (with worked Rust examples):
 
@@ -62,15 +62,13 @@ Both fixes type-check because they ensure all lanes participate before shuffling
 
 ### Concrete Demonstrations: Remaining Bugs
 
-Each remaining documented bug has a self-contained worked example demonstrating the exact type error our system produces and why `__shfl_sync`'s runtime mask does not catch the bug.
+Each remaining documented bug has a self-contained worked example demonstrating the exact type error our system produces.
 
-**PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, the warp handle becomes `Warp<Active>`. Calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`.¹ The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask because `0xFFFFFFFF` is a valid `u32`, regardless of how many lanes were actually active.
+**PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`. The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask regardless of how many lanes were actually active.
 
-¹The formal rule (§3.3) permits ballot on any `Warp<S>` because every active lane observes the same result. The implementation restricts ballot to `Warp<All>` as a conservative choice. The `ballot()` method is implemented on `Warp<All>` in the Rust library, matching this restriction.
+**CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register representation—so the compiler cannot optimize away something that doesn't exist at runtime.
 
-**CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The source-level mask was correct; the compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register and no initialization. The compiler cannot optimize away something that doesn't exist at runtime. `shuffle_up()` on `Warp<SubWarp16>` is a type error.
-
-**LLVM #155682** (`examples/llvm_155682.rs`): After `if (laneId == 0)`, lane 0 has `Warp<Lane0>`. Calling `shuffle_broadcast()` on `Warp<Lane0>` is a type error. The fix—merging back to `Warp<All>` via `merge(lane0, rest)`—forces both sides to provide data, eliminating the uninitialized value that triggered LLVM's UB-based branch elimination.
+**LLVM #155682** (`examples/llvm_155682.rs`): After `if (laneId == 0)`, lane 0 has `Warp<Lane0>`. Calling `shuffle_broadcast()` on `Warp<Lane0>` is a type error. The fix—merging back via `merge(lane0, rest)`—forces both sides to provide data, eliminating the uninitialized value that triggered LLVM's UB-based branch elimination.
 
 ### Hardware Reproduction
 
@@ -78,45 +76,13 @@ We reproduced the cuda-samples#398 bug on an NVIDIA RTX 4000 SFF Ada (compute 8.
 
 The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block_size=1024` produces the correct result, where all 32 lanes vote true and the ballot mask is `0xFFFFFFFF`. The fixed version (all lanes participate with zeroed inactive data) produces correct results at all block sizes. The reproduction code is in `reproduce/reduce7_bug.cu`.
 
-### Vendor Response: API Deprecation and Architectural Change
-
-The severity of shuffle-divergence bugs is reflected in NVIDIA's response. In CUDA 9.0, NVIDIA deprecated the entire `__shfl`, `__shfl_up`, `__shfl_down`, and `__shfl_xor` API family—a breaking change across the CUDA ecosystem. The CUDA Programming Guide states: *"If the target thread is inactive, the retrieved value is undefined"* (§10.22). The replacement `__shfl_sync` family requires an explicit mask parameter, but as Bugs 1–4 demonstrate, the mask is a runtime value that programmers still get wrong.
-
-The problem deepened with Volta's independent thread scheduling. Pre-Volta architectures enforced warp-level lockstep execution, so implicit convergence masked most shuffle-divergence UB. Volta allowed threads within a warp to genuinely interleave, turning latent UB into observable bugs. NVIDIA's architecture whitepaper acknowledges this: *"[Independent thread scheduling] can lead to a rather different set of threads participating in the executed code than intended."* Code that happened to work on Pascal silently broke on Volta—and the `__shfl_sync` mask was supposed to fix this, but simply moved the burden from implicit hardware convergence to explicit (and error-prone) programmer annotation.
-
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes thirteen compile-fail doctests that serve as machine-checked proof artifacts:
-
-1. `shuffle_xor` on `Warp<Even>` — rejected, method absent (`diverge.rs`)
-2. `merge(Even, LowHalf)` — rejected, non-complements (`merge.rs`)
-3. `merge(Even, Even)` — rejected, same set (`merge.rs`)
-4. `merge(EvenLow, EvenHigh)` as top-level — rejected, nested complements are not `ComplementOf` (`merge.rs`)
-5. `merge(EvenLow, OddHigh)` — rejected, non-covering nested sets (`nested_diverge.rs`)
-6. `shuffle_xor` on `Warp<Even>` — rejected, research variant (`static_verify.rs`)
-7. `merge(Even, LowHalf)` — rejected, research variant (`static_verify.rs`)
-8. `merge(Even, Even)` — rejected, research variant (`static_verify.rs`)
-9. Use-after-diverge (`warp.shuffle_xor` after `warp.diverge_even_odd()`) — rejected, moved value (`warp.rs`)
-10. `Warp::new()` from external crate — rejected, `pub(crate)` constructor (`warp.rs`)
-11. `merge_writes(Even, LowHalf)` — rejected, fence non-complements (`fence.rs`)
-12. `bitonic_sort` on `Warp<Even>` — rejected, method absent (`sort.rs`)
-13. `tile` on `Warp<Even>` — rejected, method absent (`tile.rs`)
-
-These are not test heuristics—they are verified absences. The Rust compiler confirms that each operation is a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes thirteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
-Our prototype includes 291 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail including linearity, nested complement, fence, sort, and tile enforcement, 15 doc examples) covering the full type system (369 total). The tests exercise:
-
-- Diverge/merge with complement verification
-- Nested divergence (up to depth 3)
-- Recursive protocols (5 loop patterns)
-- Arbitrary predicates (existential, indexed, hybrid)
-- Work stealing with dynamic roles
-- Platform portability (warp-32 via CpuSimd)
-- Warp-size-generic algorithms
-
-Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 291 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail, 15 doc examples) covering the full type system (369 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
@@ -159,9 +125,7 @@ This answers the standard expressiveness objection ("does the type system reject
 
 ### Lane-Heterogeneous Programs
 
-Programs that use lane-level divergence require explicit `diverge`/`merge` annotations. This is the intended design: the annotation *is* the safety contract. It makes visible the control-flow structure that was previously implicit and error-prone.
-
-The annotation overhead is modest. Divergence points require one `diverge` call (producing two typed sub-warps) and one `merge` call (consuming them). For a butterfly reduction with 5 shuffle stages, the typed version adds 3 lines (the initial diverge, a merge to restore `Warp<All>`, and a data merge).
+Programs that use lane-level divergence require explicit `diverge`/`merge` annotations—the annotation *is* the safety contract, making visible the control-flow structure that was previously implicit and error-prone. The overhead is modest: a butterfly reduction with 5 shuffle stages adds 3 lines (the initial diverge, a merge to restore `Warp<All>`, and a data merge).
 
 ### Patterns and Their Typability
 
@@ -185,7 +149,7 @@ Four patterns are not fully expressible in our current system:
 
 3. **Cross-function active set polymorphism**: Functions that are generic over the active set require explicit trait bounds, increasing annotation burden at API boundaries.
 
-4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern. `DynWarp` (§9.4) provides a runtime escape for patterns where static exit tracking is too restrictive.
+4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. The type system correctly rejects this—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern. `DynWarp` (§9.3) provides a runtime escape for patterns where static exit tracking is too restrictive.
 
 These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows necessarily from the linearity discipline that makes the type system sound.
 
@@ -205,12 +169,10 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
-| Cargo integration | `#[warp_kernel]` + `WarpBuilder` — `cargo run` from source to GPU |
 | Type system tests | 291 unit + 50 example + 28 doc (369 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 named theorems total including 14 infrastructure lemmas (§4.8) |
-| Data-dependent divergence | Yes | `diverge_dynamic(mask)` — structural complement, no dependent types |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 

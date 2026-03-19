@@ -16,41 +16,9 @@ Descend does not track which lanes are active. A shuffle in Descend may read fro
 
 The ideal system combines both: lanes must be active (our contribution) *and* have valid data (Descend's contribution).
 
-### GPUVerify
+### GPUVerify, CUDA Sanitizers, and Race Detection
 
-GPUVerify [Betts et al. 2012, 2015] is a static verification tool for GPU kernels. It uses predicated execution semantics and barrier invariants to prove race-freedom.
-
-**Relationship to our work**: GPUVerify is an *external verifier*, not a type system:
-- Separate tool run after compilation
-- Provides yes/no answer (not incremental feedback)
-- Heavyweight (SMT solving, can timeout)
-
-Our approach integrates verification into the type system:
-- Immediate feedback during editing
-- Incremental (errors as you type)
-- Lightweight (type checking is fast)
-
-GPUVerify does not specifically target shuffle-from-inactive-lane bugs, though its predicated semantics could potentially catch them.
-
-### CUDA Sanitizers
-
-NVIDIA provides sanitizers (compute-sanitizer) for detecting GPU errors at runtime:
-- Memory errors (memcheck)
-- Race conditions (racecheck)
-- Synchronization issues (synccheck)
-
-**Relationship to our work**: Sanitizers are *dynamic* analysis:
-- Catch bugs during testing, not compilation
-- Only find bugs in executed paths
-- Significant runtime overhead (significant [NVIDIA Compute Sanitizer documentation])
-
-Our approach catches bugs at compile time, before any execution.
-
-### GPU Race Detection
-
-GMRace [Zheng et al. 2014] and CURD [Peng et al. 2018] detect warp-level data races using static analysis and dynamic instrumentation, respectively.
-
-**Relationship to our work**: Race detection focuses on data races (concurrent conflicting accesses to shared memory), not divergence bugs (reading from inactive lanes via shuffle). These are related but distinct bug classes.
+GPUVerify [Betts et al. 2012, 2015] uses predicated execution semantics and SMT solving to prove race-freedom. NVIDIA's compute-sanitizer detects memory errors, races, and synchronization bugs at runtime. GMRace [Zheng et al. 2014] and CURD [Peng et al. 2018] detect warp-level data races via static analysis and dynamic instrumentation, respectively. All of these are *external* to the type system: separate tools or runtime passes that provide post-hoc verification. Our approach integrates verification into the type system itself—immediate feedback during editing, lightweight (no SMT), and specifically targeting the shuffle-from-inactive-lane bug class that these tools do not specifically address.
 
 ### LLVM Uniformity and Divergence Analysis
 
@@ -83,7 +51,7 @@ Honda, Yoshida, and Carbone [2008] extended session types to multiple parties. E
 
 Gradual session types [Igarashi et al. 2017] allow mixing static and dynamic typing for sessions. Unknown types are checked at runtime.
 
-**Relationship to our work**: Our Layer 4 (existential types, §5.2) and `DynWarp` gradual typing bridge (§9.4) are directly inspired by this work. Our `ascribe()` operation corresponds to the cast at the gradual typing boundary.
+**Relationship to our work**: Our Layer 4 (existential types, §5.2) and `DynWarp` gradual typing bridge (§9.3) are directly inspired by this work. Our `ascribe()` operation corresponds to the cast at the gradual typing boundary.
 
 ### Fault-Tolerant Multiparty Session Types
 
@@ -97,11 +65,7 @@ Ferrite [Chen et al. 2022] embeds session types in Rust using PhantomData, zero-
 
 **Relationship to our work**: Ferrite models inter-process communication channels; we model intra-warp lane communication with quiescence. Key differences: Ferrite's channels carry data (ours share a register file), Ferrite's session types describe message sequences (ours describe active-set evolution). The shared encoding validates that Rust's type system is expressive enough for session-type embeddings.
 
-### Session Types for Concurrent Objects
-
-Dardha et al. [2017] apply session types to concurrent objects in object-oriented languages.
-
-**Relationship to our work**: They model object-to-object communication. We model lane-to-lane communication within a warp. The synchronization models differ: objects are asynchronous; warps are lock-step.
+Dardha et al. [2017] apply session types to concurrent objects; the synchronization model (asynchronous objects vs. lock-step warps) differs fundamentally from ours.
 
 ## 8.3 Type Systems for Parallelism
 
@@ -115,69 +79,27 @@ Our approach is complementary: we *embrace* divergence and make it safe. This al
 
 ### ISPC (Intel SPMD Program Compiler)
 
-ISPC [Pharr and Mark 2012] is a C-variant compiler that implements SPMD programming on CPU SIMD hardware. It introduces `uniform` and `varying` type qualifiers: a `uniform` variable holds a single value shared across all program instances in a gang (analogous to our `Uniform<T>`), while `varying` (the default) holds per-instance values (analogous to our `PerLane<T>`). The compiler enforces a directional conversion rule—`uniform` implicitly widens to `varying`, but assigning `varying` to `uniform` is a compile error. ISPC also provides `foreach_active` (which serializes execution over active instances) and cross-lane operations (`shuffle`, `broadcast`, `reduce_add`) whose mask correctness is guaranteed by the compiler, which emits and propagates execution mask instructions automatically.
+ISPC [Pharr and Mark 2012] implements SPMD programming on CPU SIMD hardware with `uniform` and `varying` type qualifiers—a `uniform` variable holds a single value shared across all instances in a gang (analogous to our `Uniform<T>`), while `varying` (the default) holds per-instance values (analogous to our `PerLane<T>`). ISPC also provides `foreach_active` and cross-lane operations whose mask correctness is guaranteed by compiler-emitted mask instructions.
 
-**Relationship to our work**: ISPC is the closest existing system to ours in its awareness of divergence at the language level, and its `uniform`/`varying` distinction directly inspired our `Uniform<T>`/`PerLane<T>` types. The key difference is *what* the type system tracks. ISPC's types encode *value uniformity*—whether all instances hold the same value—but not *which instances are active*. The execution mask is a runtime value managed implicitly by the compiler; there is no type-level active set. A function cannot declare in its signature that it requires all lanes to be active, and cross-lane operations are safe because the compiler controls mask emission at runtime, not because the type system prevents misuse. Our `Warp<S>` types go further: they encode the active set itself, making `shuffle_xor` *absent from the type* when lanes are inactive rather than masked at runtime. This distinction matters on GPU hardware, where ISPC's approach does not apply: the execution mask is managed by hardware, not the compiler, and the programmer passes masks to warp intrinsics manually—exactly the interface where the bug class arises.
+**Relationship to our work**: ISPC is the closest existing system in its language-level awareness of divergence. The key difference is *what* the type system tracks: ISPC encodes *value uniformity* (whether all instances hold the same value) but not *which instances are active*. The execution mask is a runtime value managed by the compiler; there is no type-level active set. Our `Warp<S>` types encode the active set itself, making `shuffle_xor` *absent from the type* when lanes are inactive. This distinction matters on GPU hardware, where the execution mask is managed by hardware and the programmer passes masks manually—exactly where the bug class arises.
 
-### DPJ (Deterministic Parallel Java)
+### DPJ, Æminium, and Data-Race-Free Type Systems
 
-DPJ [Bocchino et al. 2009] uses region types to ensure determinism in parallel Java programs.
-
-**Relationship to our work**: DPJ focuses on determinism through effect typing. Our focus is different: we ensure safety of warp-level communication, not determinism.
-
-### Æminium
-
-Æminium [Stork et al. 2014] is an implicitly parallel language with a permission system based on access permissions.
-
-**Relationship to our work**: Æminium extracts parallelism from sequential code. We type explicitly parallel GPU code. The goals are opposite: they hide parallelism; we expose it.
-
-### Data-Race-Free Type Systems
-
-Several systems ensure data-race freedom through types [Boyapati et al. 2002, Flanagan and Freund 2000].
-
-**Relationship to our work**: Race-freedom and divergence safety are distinct:
-- Race: two threads access same location, at least one writes
-- Divergence bug: one thread reads from inactive lane's register
-
-Our active set types are not about preventing races—they're about preventing reads from inactive lanes.
+DPJ [Bocchino et al. 2009] uses region types for determinism in parallel Java. Æminium [Stork et al. 2014] extracts parallelism from sequential code via access permissions. Data-race-free type systems [Boyapati et al. 2002, Flanagan and Freund 2000] ensure race-freedom through types. All three focus on preventing data races or ensuring determinism—orthogonal to our concern. A data race (two threads access same location, at least one writes) and a divergence bug (one thread reads from an inactive lane's register) are distinct bug classes; our active-set types address only the latter.
 
 ## 8.4 Linear and Affine Types
 
 ### Ownership Types (Rust)
 
-Rust's ownership system [Matsakis and Klock 2014] ensures memory safety through affine types (values used at most once).
-
-**Relationship to our work**: We leverage Rust's type system for our implementation. The `Warp<S>` type uses Rust's move semantics—consumed by diverge, produced by merge. This prevents use-after-diverge. Rust's type system is *affine* (values can be used at most once or dropped), not linear (must be used exactly once). A `Warp<S>` can be silently dropped without merging. We mitigate this with `#[must_use]`, which emits compiler warnings, but it is not a hard error. Our Lean formalization models stricter linear semantics; the Rust implementation approximates this via affine types + warnings.
+Rust's ownership system [Matsakis and Klock 2014] ensures memory safety through affine types. Our `Warp<S>` uses Rust's move semantics—consumed by diverge, produced by merge—preventing use-after-diverge. Rust's type system is *affine* (values used at most once or dropped), not linear (must be used exactly once), so a `Warp<S>` can be silently dropped without merging; we mitigate this with `#[must_use]` warnings, and our Lean formalization models stricter linear semantics.
 
 ### Linear Logic
 
-Linear logic [Girard 1987] provides the foundation for both session types [Caires and Pfenning 2010, Wadler 2012] and linear resource typing.
-
-**Relationship to our work**: Our warp linearity uses multiplicative conjunction: diverge produces `Warp<S1> ⊗ Warp<S2>` (a pair of independent linear resources); merge consumes such a pair. This is standard linear resource management, not the Caires-Pfenning session-type interpretation where ⊗ types a channel that sends a channel. Our system lives in the *resource* reading of linear logic, not the *session* reading—a distinction that matters for understanding what guarantees the type system provides.
+Linear logic [Girard 1987] provides the foundation for both session types [Caires and Pfenning 2010, Wadler 2012] and linear resource typing. Our warp linearity uses multiplicative conjunction: diverge produces `Warp<S1> ⊗ Warp<S2>`; merge consumes such a pair. This is the *resource* reading of linear logic, not the *session* reading (where ⊗ types a channel that sends a channel)—a distinction that matters for understanding our guarantees.
 
 ## 8.5 GPU Programming Models
 
-### CUDA and OpenCL
-
-CUDA [NVIDIA 2007] and OpenCL [Khronos 2009] are the dominant GPU programming models. Both expose warp/wavefront primitives but provide no type-level safety.
-
-**Relationship to our work**: We build on top of these models, adding a typed layer. Our types can wrap CUDA intrinsics.
-
-### SYCL and oneAPI
-
-SYCL [Khronos 2020] and Intel's oneAPI provide modern C++ abstractions for heterogeneous programming.
-
-**Relationship to our work**: These aim for portability and productivity but do not address divergence safety. Our approach could be integrated into SYCL's sub-group operations.
-
-### HIP
-
-AMD's HIP [AMD 2016] is largely CUDA-compatible. Our approach applies equally to HIP's wavefront primitives.
-
-### Cooperative Groups
-
-CUDA's Cooperative Groups [NVIDIA 2017] provide a unified interface for thread groups at all levels.
-
-**Relationship to our work**: Cooperative Groups make group membership explicit but don't provide type safety. A thread can still shuffle on a group where some threads have diverged. We provide the missing types.
+CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit but still allow shuffling on groups where threads have diverged—we provide the missing types.
 
 ### NVIDIA's `__shfl_sync` Migration (CUDA 9.0)
 
@@ -187,9 +109,7 @@ NVIDIA deprecated the original `__shfl` family in CUDA 9.0, replacing it with `_
 
 ### Hazy Megakernel (2025)
 
-The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread program as of this writing, fusing ~100 operations into a single kernel with an on-GPU interpreter.
-
-**Relationship to our work**: Hazy avoids the divergence problem by maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
+The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
 
 ## 8.6 Summary
 
@@ -206,4 +126,3 @@ The Hazy megakernel [Stanford 2025] is the most sophisticated persistent thread 
 | Rust ownership | Memory | We do active sets |
 
 **Our unique contribution**: Linear typestate for active lane masks, with a complement lattice ensuring safe divergence and reconvergence. No prior work types the active lane mask. The structural analogy to session type branching motivates the design; the technical mechanism is typestate over a Boolean lattice, not session types.
-

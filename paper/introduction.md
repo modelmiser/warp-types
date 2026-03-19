@@ -17,7 +17,7 @@ __device__ int conditional_exchange(int data, bool participate) {
 
 This code compiles without warnings and may appear to work correctly in testing. But it contains undefined behavior: the shuffle operation reads values from *all* lanes, including those where `participate` is false. Those threads are inactive—their registers may contain stale data, garbage, or trap values. The result is non-deterministic: sometimes correct, sometimes wrong, sometimes a crash.
 
-This bug pattern is not hypothetical. NVIDIA's own `cuda-samples` repository contains a shuffle-mask bug in its reference parallel reduction (`reduce7`): when launched with one block of 32 threads, only lane 0 enters the final reduction, but `__shfl_down_sync` reads from lane 16, which is inactive [cuda-samples#398]. The result is a silently wrong sum—no crash, no error—at a configuration most test suites skip. NVIDIA's core primitives library CUB has an open issue suggesting compiler optimizations may predicate off mask initialization in sub-warp configurations [CCCL#854]—the reporter later noted it may have been a false positive, but the source-level pattern is ill-typed in our system regardless. The PIConGPU plasma physics simulation ran for months on K80 GPUs with `__ballot_sync(0xFFFFFFFF, ...)` inside a divergent branch—real undefined behavior that went undetected because pre-Volta hardware enforced warp-level convergence, masking the violation [PIConGPU#2514]. An LLVM issue illustrates the problem extending into compiler optimization: `__shfl_sync` after a conditional causes the compiler to eliminate the branch entirely, running a lane-0-only atomic on all 32 lanes [LLVM#155682].
+This bug pattern is not hypothetical. NVIDIA's own `cuda-samples` repository contains a shuffle-mask bug in its reference parallel reduction (`reduce7`): when launched with one block of 32 threads, only lane 0 enters the final reduction, but `__shfl_down_sync` reads from lane 16, which is inactive [cuda-samples#398]. The result is a silently wrong sum—no crash, no error—at a configuration most test suites skip. NVIDIA's core primitives library CUB has an open issue suggesting compiler optimizations may predicate off mask initialization in sub-warp configurations [CCCL#854]—the source-level pattern is ill-typed in our system regardless. The PIConGPU plasma physics simulation ran for months on K80 GPUs with `__ballot_sync(0xFFFFFFFF, ...)` inside a divergent branch—real undefined behavior that went undetected because pre-Volta hardware enforced warp-level convergence, masking the violation [PIConGPU#2514]. An LLVM issue illustrates the problem extending into compiler optimization: `__shfl_sync` after a conditional causes the compiler to eliminate the branch entirely, running a lane-0-only atomic on all 32 lanes [LLVM#155682].
 
 The bug class is severe enough that NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0, replacing it with `__shfl_sync` which requires an explicit mask parameter [CUDA Programming Guide §10.22]. But the mask is still a runtime value—and as the bugs above demonstrate, programmers get it wrong. Volta's independent thread scheduling made the situation worse: code that was latent undefined behavior on Pascal became observable bugs when threads within a warp could genuinely interleave.
 
@@ -64,27 +64,7 @@ fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLan
 }
 ```
 
-The fix is explicit: merge back to `Warp<All>` before shuffling, ensuring all lanes have valid data:
-
-```rust
-// Pseudocode — actual API uses concrete diverge methods (§6)
-fn conditional_exchange(warp: Warp<All>, data: PerLane<i32>, participate: PerLane<bool>) -> i32 {
-    // Conceptual — see §6 for actual API
-    let (active, inactive) = warp.diverge(|lane| participate[lane]);
-
-    // Inactive lanes contribute zero
-    let active_data = data;
-    let inactive_data = PerLane::new(0);
-
-    // Merge back - type system verifies complement
-    let warp: Warp<All> = merge(active, inactive);
-    // Data merge is implicit in SIMT execution (see §6.4)
-
-    // Now shuffle is safe
-    let partner = warp.shuffle_xor(data, 1);  // OK: Warp<All>
-    data.get() + partner.get()
-}
-```
+The fix is to merge back to `Warp<All>` before shuffling—the type system guides the programmer toward correct code (§7.1).
 
 ## 1.2 Contributions
 
@@ -104,6 +84,6 @@ This paper makes the following contributions:
 
 ## 1.3 The Bigger Picture
 
-Warp typestate is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.6), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
+Warp typestate is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.5), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
 
-The remainder of this paper is organized as follows. §2 provides background on GPU execution and session types. §3 presents our core type system. §4 proves soundness. §5 extends the system to handle loops and arbitrary predicates. §6 describes our implementation. §7 evaluates bug detection and performance. §8 discusses related work. §9 sketches future directions and §10 concludes.
+The paper proceeds through background (§2), core type system (§3), soundness proof (§4), extensions (§5), implementation (§6), evaluation (§7), related work (§8), and future directions (§9–10).

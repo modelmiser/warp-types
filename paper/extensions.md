@@ -27,8 +27,6 @@ But what are `S` and `S'`? They depend on runtime values.
 
 We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants via four typing rules.
 
-### Typing Rules
-
 **LOOP-UNIFORM**: All lanes iterate together; warp operations permitted in body.
 
 ```
@@ -91,38 +89,6 @@ fn uniform_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. The invariant is that all lanes iterate together.
 
-**Pattern 2: Convergent Loop (LOOP-CONVERGENT)**
-```rust
-fn convergent_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
-    loop {
-        data = process(data);
-        if warp.all(|lane| data[lane] < threshold) {
-            break;
-        }
-    }
-
-    warp  // Returns Warp<All>
-}
-```
-
-Type: `Warp<All> → Warp<All>`. The loop exits only when all lanes satisfy the predicate.
-
-**Pattern 3: Varying Loop (LOOP-VARYING)**
-```rust
-fn varying_loop(warp: Warp<All>, mut data: PerLane<i32>) -> (Warp<All>, PerLane<i32>) {
-    // Per-lane accumulation - no warp operations needed
-    for lane in 0..32 {
-        while data[lane] > threshold {
-            data[lane] = process_single(data[lane]);
-        }
-    }
-
-    (warp, data)  // Warp unchanged
-}
-```
-
-Type: `Warp<All> → Warp<All>`. The warp is not used inside the loop, so varying iteration is safe.
-
 **Pattern 4: Phased Loop (LOOP-PHASED)**
 ```rust
 fn phased_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
@@ -146,22 +112,6 @@ fn phased_loop(mut warp: Warp<All>, mut data: PerLane<i32>) -> Warp<All> {
 
 Type: `Warp<All> → Warp<All>`. Warp operations happen only in uniform phases.
 
-### Recursive Protocol Types
-
-For more complex patterns, we use μ-types:
-
-```
-μX. (diverge → (compute ; merge ; X) ⊕ done)
-```
-
-This protocol:
-1. Diverges
-2. Computes on each branch
-3. Merges back
-4. Recurses or terminates
-
-The key decidability condition: **diverge and merge must be balanced within each iteration**. This ensures the active set at loop end equals the active set at loop start.
-
 ## 5.2 Arbitrary Predicates
 
 The core system uses static predicates (`Even`, `Odd`, `LowHalf`). Real programs diverge on runtime values:
@@ -178,7 +128,7 @@ We can't know at compile time which lanes satisfy `data < threshold`. The active
 
 ### Solution: Layered Types
 
-We provide a hierarchy of approaches, from most static to most dynamic:
+We provide a hierarchy of four approaches, from most static to most dynamic. Each layer trades some static guarantees for increased expressiveness:
 
 **Layer 1: Marker Types (Zero Runtime Cost)**
 
@@ -226,31 +176,15 @@ struct SomeWarp {
 }
 
 impl SomeWarp {
-    fn merge_with_complement(self, other: SomeWarp) -> Result<Warp<All>, Error> {
-        if self.mask & other.mask == 0 && self.mask | other.mask == ALL {
-            Ok(Warp::new())
-        } else {
-            Err(Error::NotComplements)
-        }
-    }
+    fn merge_with_complement(self, other: SomeWarp) -> Result<Warp<All>, Error>;
 }
 ```
 
-Safety is checked at runtime, but the type system still prevents forgetting the check.
-
-**Layer 5: Dependent Types (Full Static Safety)**
-
-A language with dependent types could express:
-```rust
-fn diverge<P: Predicate>(warp: Warp<S>, pred: P)
-    -> (Warp<S ∩ P>, Warp<S ∩ ¬P>)
-```
-
-Where `S ∩ P` is computed at the type level based on the predicate.
+Safety is checked at runtime (masks must be complements), but the type system still prevents forgetting the check — you cannot use `SomeWarp` for warp operations without first proving complementarity through `merge_with_complement`.
 
 ### Recommendation
 
-Most GPU code uses Layer 1–2 (80%+ of cases). Layer 3–4 are escape hatches for complex data-dependent patterns. Layer 5 requires dependent types but provides full safety.
+Most GPU code uses Layer 1–2 (80%+ of cases). Layer 3 handles cases where the predicate is known but the satisfying lanes are not. Layer 4 is the full escape hatch for arbitrary data-dependent patterns, trading static guarantees for runtime checks while still ensuring the check cannot be forgotten.
 
 ## 5.3 Inter-Block Communication
 
@@ -262,7 +196,7 @@ Warp-level divergence is special: lanes go *quiescent* within a single instructi
 
 Block-level communication is different:
 - Blocks execute *independently* (no shared instruction stream)
-- Blocks don't "go quiescent"—they run fully or don't exist
+- Blocks don't "go quiescent" — they run fully or don't exist
 - Communication is through shared memory or global memory
 - Synchronization is explicit (barriers, atomics)
 
@@ -270,36 +204,16 @@ This is the domain of traditional multiparty session types [Honda, Yoshida, Carb
 
 ### Hierarchical Protocols
 
-We can compose warp-level and block-level protocols:
-
-```
-Global Protocol MatMul(Blocks B[M][N], Tiles A, B, C) {
-    // Block-level: traditional MPST
-    foreach b in B {
-        // Warp-level: warp typestate
-        WarpProtocol {
-            load_tile(A);
-            load_tile(B);
-            diverge(predicate) {
-                compute_partial();
-            } merge;
-            reduce();
-            store_tile(C);
-        }
-    }
-    barrier;  // Block synchronization
-}
-```
-
-The warp protocol uses our warp typestate. The block protocol uses traditional session types. They compose hierarchically.
+We compose the two levels hierarchically: warp protocols use our typestate within each block, while inter-block protocols use traditional MPST. A matrix multiplication kernel, for example, would use traditional MPST to coordinate tile distribution across blocks, while each block internally uses warp typestate to ensure safe shuffles within its reduction phase.
 
 ### Why This Matters
 
 The novel contribution of this paper is *warp-level* session types with quiescence. This is the gap in prior work:
+
 - Traditional session types: all parties active or failed
 - Our extension: parties can go quiescent and resume
 
-Inter-block communication doesn't need this extension—it's already well-served by existing session type systems. Our contribution is recognizing where the existing theory applies and where we need something new.
+Inter-block communication doesn't need this extension — it is already well-served by existing session type systems. Our contribution is recognizing where the existing theory applies and where we need something new.
 
 ## 5.4 Cooperative Groups
 
@@ -311,87 +225,22 @@ auto block = this_thread_block();
 auto grid = this_grid();
 ```
 
+Modern GPUs also support subgroups smaller than a warp via `tiled_partition`.
+
 ### Typing Cooperative Groups
 
-Each level has its own session type:
+Our type system extends naturally to these levels. Each group carries its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and `Subgroup<S: ActiveSet8>` for 8-lane partitions. The `tiled_partition` operation creates typed subgroups from a warp, each inheriting the active-set discipline.
 
-```rust
-// Warp-level: warp typestate
-struct Warp<S: ActiveSet>;
-
-// Block-level: traditional session types
-struct Block<Role: BlockRole, State: ProtocolState>;
-
-// Grid-level: barrier-synchronized collective
-struct Grid<Phase: GridPhase>;
-```
-
-The `tiled_partition` operation creates a typed warp from a block:
-
-```rust
-impl Block<AnyRole, Computing> {
-    fn tiled_partition<const SIZE: usize>(self) -> Vec<Warp<All>> {
-        // Partition block into SIZE-lane warps
-    }
-}
-```
-
-### Subgroup Operations
-
-Modern GPUs support subgroups smaller than a warp:
-
-```rust
-// Partition warp into 8-lane subgroups
-let subgroups: [Subgroup<All8>; 4] = warp.partition::<8>();
-
-// Each subgroup has its own session type
-impl Subgroup<S> {
-    fn shuffle_xor<T>(&self, data: PerLane<T, 8>, mask: u32) -> PerLane<T, 8>
-    where
-        S: AllLanes<8>;  // All 8 lanes active
-}
-```
-
-The same principles apply: shuffle requires all lanes active, diverge produces complements, merge verifies complements.
+The same principles apply at every width: shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The `ComplementOf` proof mechanism is parameterized by group size, not hardcoded to 32 lanes.
 
 ## 5.5 Memory Safety Integration
 
-Our type system focuses on divergence safety. It composes with memory safety systems like Descend [Kopcke et al. 2024].
+Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Kopcke et al. 2024]. The two systems address independent concerns:
 
-### Descend Integration
+- **Descend** prevents data races and use-after-free via ownership/borrowing for GPU memory
+- **Warp typestate** prevents reads from inactive lanes via active-set tracking
 
-Descend tracks ownership and borrowing for GPU memory. We can layer divergence types on top:
-
-```rust
-// Descend: owned per-lane data
-let data: PerLane<Owned<i32>> = allocate_per_lane();
-
-// Our system: warp with active set
-let warp: Warp<All> = Warp::kernel_entry();
-
-// Combined: shuffle requires active lanes AND ownership
-let result = warp.shuffle_xor(data, 1);
-// Type: PerLane<Owned<i32>>
-```
-
-The systems are orthogonal:
-- Descend prevents data races and use-after-free
-- Our system prevents reading from inactive lanes
-
-Together, they provide comprehensive GPU safety.
-
-### Future: Unified Type System
-
-A unified type system could track both:
-
-```rust
-struct Warp<S: ActiveSet, M: MemoryState> {
-    // S: which lanes are active
-    // M: memory ownership state
-}
-```
-
-This is future work, potentially via a proc macro layer or a dependently-typed extension.
+The systems are orthogonal: Descend ensures no data races, while our system ensures no divergence bugs. Together, they provide comprehensive GPU safety — the first preventing spatial errors (wrong memory), the second preventing temporal errors (wrong execution state). Neither subsumes the other, and they can be layered via a proc macro that checks both ownership and active-set constraints on each operation. A unified type system tracking `Warp<S: ActiveSet, M: MemoryState>` is future work (§9).
 
 ## 5.6 Fence-Divergence Interactions
 
@@ -424,8 +273,6 @@ fn safe_fence_pattern(warp: Warp<All>) {
 }
 ```
 
-This extends our type system from intra-warp communication safety to intra-warp memory ordering safety, using the same proof mechanism throughout.
-
 ## 5.7 Summary
 
 Our extensions handle:
@@ -434,11 +281,10 @@ Our extensions handle:
 |-----------|----------|---------------|
 | Uniform loops | Entry/exit invariants | Full |
 | Varying loops | No warp ops in body | Full |
-| Runtime predicates | Layered types (1–5) | Varies |
+| Runtime predicates | Layered types (1–4) | Varies |
 | Inter-block | Traditional MPST | Full |
 | Cooperative groups | Hierarchical protocols | Full |
 | Memory safety | Compose with Descend | Full |
 | Fence-divergence | Type-state write tracking | Full |
 
-The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication). Notably, the fence-divergence extension reuses the complement proof mechanism from merge — the same `ComplementOf` trait that ensures safe reconvergence also ensures safe memory ordering.
-
+The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication, memory safety).

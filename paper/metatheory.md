@@ -154,19 +154,7 @@ Warps are linear resources—they cannot be duplicated or discarded. This is ess
 
 *Proof:* By the linear typing rule. Unused linear resources are a type error.
 
-### Why Linearity Matters
-
-Without linearity, a warp could be used twice:
-
-```rust
-// WRONG (if warps were copyable)
-let (evens, odds) = warp.diverge_even_odd();
-let x = warp.shuffle_xor(data, 1);  // Using original warp again!
-```
-
-This would allow shuffling on `Warp<All>` even after diverging, which is unsound—some lanes are now inactive.
-
-With linearity, `diverge` *consumes* the original warp and produces two new warps. You cannot use the original after diverging.
+Without linearity, the original warp could be reused after diverge, allowing unsafe shuffles on `Warp<All>` when some lanes are actually inactive.
 
 ## 4.5 Nested Divergence
 
@@ -194,28 +182,6 @@ Sets `S₁` and `S₂` are complements within `P`, written `S₁ ⊥_P S₂`, if
 
 *Proof:* By Lemma 4.5, `S₁ ∪ S₂ = P`.
 
-### Example: Double Divergence
-
-```
-Warp<All>
-    │
-    ├── diverge(even)
-    │
-Warp<Even>         Warp<Odd>
-    │
-    ├── diverge(low_half)
-    │
-Warp<EvenLow>    Warp<EvenHigh>
-```
-
-Where `EvenLow = Even ∩ LowHalf` and `EvenHigh = Even ∩ HighHalf`.
-
-The merge path:
-1. `merge(Warp<EvenLow>, Warp<EvenHigh>) : Warp<Even>` (since `EvenLow ⊥_Even EvenHigh`)
-2. `merge(Warp<Even>, Warp<Odd>) : Warp<All>` (since `Even ⊥ Odd`)
-
-At each step, the type system verifies the complement relation.
-
 ## 4.6 Shuffle Within Diverged Warp
 
 Our core system restricts shuffles to `Warp<All>`. We can relax this for shuffles that stay within an active set.
@@ -241,18 +207,6 @@ A mask `m` preserves set `S`, written `preserves(m, S)`, if:
 - `preserves(8, LowHalf)`: XORing a low lane with 8 gives another low lane (for lanes 0–15). ✓
 
 ## 4.7 Discussion
-
-Our soundness proof establishes that well-typed programs never read from inactive lanes. The key mechanisms are:
-
-1. **Type-level tracking**: `Warp<S>` records the active set at the type level.
-
-2. **Complement verification**: Merge requires a compile-time proof that sets are complements.
-
-3. **Method restriction**: Shuffle is only available on `Warp<All>`, enforced by method resolution.
-
-4. **Linearity**: Warps cannot be duplicated, preventing use-after-diverge.
-
-The proof is constructive: the type system not only prevents bugs but guides programmers toward correct code. When a shuffle doesn't type-check, the fix is to merge first.
 
 ### Decidability
 
@@ -282,9 +236,9 @@ The mechanization covers two files totaling 896 lines of Lean:
 - `even_odd_complement`, `lowHalf_highHalf_complement`: Concrete complement instances. Proved by `decide` (BitVec 32 is decidable).
 
 **Full metatheory** (`Metatheory.lean`):
-- **Progress** (Theorem 4.1): A closed well-typed expression is either a value or can step. Proved by induction on the typing derivation, using canonical forms lemmas for each type constructor.
-- **Preservation** (Theorem 4.2): If `Γ ⊢ e : τ ⊣ Γ'` and `e ⟶ e'`, then `Γ ⊢ e' : τ ⊣ Γ'`. Proved by induction on the step relation, with case analysis on typing. The critical `letVal` case uses the substitution lemma below.
-- **Substitution lemma** (`subst_typing`): Substituting a value for a linear binding removes that binding from both input and output contexts. This is the key lemma enabling preservation for `let`-bindings in a linear type system. Proved directly (~90 lines) via induction on the typing derivation, with explicit context threading through merge, shuffle, and pair sub-expressions.
+- **Progress** (Theorem 4.1): A closed well-typed expression is either a value or can step.
+- **Preservation** (Theorem 4.2): If `Γ ⊢ e : τ ⊣ Γ'` and `e ⟶ e'`, then `Γ ⊢ e' : τ ⊣ Γ'`.
+- **Substitution lemma** (`subst_typing`): Substituting a value for a linear binding removes that binding from both input and output contexts.
 
 **Untypability proofs** (5 documented GPU bugs):
 - `bug1_cuda_samples_398`: Shuffle after extracting lane 0 — untypable.
@@ -293,19 +247,12 @@ The mechanization covers two files totaling 896 lines of Lean:
 - `bug4_llvm_155682`: Shuffle after lane-0 conditional — untypable.
 - `bug5_shuffle_after_diverge`: Shuffle after even/odd divergence — untypable.
 
-Each untypability proof factors through a single lemma (`shuffle_diverged_untypable`) that shows: if the active set after diverge is not `All`, no typing derivation exists for a shuffle on that sub-warp. The concrete bugs instantiate this with specific masks and close via `decide`.
-
-**Supporting infrastructure** (14 lemmas): canonical forms for `Warp`, `PerLane`, and `Pair` types; `value_preserves_ctx` (values don't consume linear resources); `value_any_ctx` (values can be typed in any context); `output_binding_from_input` (output context bindings originate from input); context algebra (`remove_comm`, `remove_lookup_self`, `remove_lookup_ne`, etc.).
+Each factors through `shuffle_diverged_untypable`: if the active set after diverge is not `All`, no typing derivation exists for a shuffle on that sub-warp.
 
 ### Design Choices
 
-The formalization models active sets as `BitVec 32` (Lean's built-in bitvector type), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks which bindings remain after evaluation — this directly encodes the consumption semantics that Rust enforces via move. The substitution lemma is proved directly rather than axiomatized, which required explicit context infrastructure but yields a stronger result: the mechanization has no trusted assumptions beyond Lean's kernel.
-
-Lean 4 is chosen for two reasons: (1) Aeneas translates Rust's borrow semantics into a purely functional representation amenable to Lean verification; (2) prior work on GPU verification (MCL framework) was built in Lean.
+Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, directly encoding Rust's move semantics. The mechanization has no trusted assumptions beyond Lean's kernel.
 
 ### What Is Not Mechanized
 
 The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
-
-The Lean model uses a pure expression calculus without a store (the paper's formal presentation uses configuration triples). `PerLane` is modeled as an opaque type without data payload. The merge rule handles only top-level merge (back to `All`); the nested merge rule (`merge_within`) is defined but not used in the typing judgment. These simplifications focus the mechanization on the active-set tracking that is the core safety claim.
-
