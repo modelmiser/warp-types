@@ -9,7 +9,10 @@
 set -e
 cd "$(dirname "$0")"
 
-ARCH="sm_89"  # Ada Lovelace (RTX 4000 SFF Ada)
+# GPU architecture — change to match your hardware:
+#   sm_75 (Turing: RTX 2000), sm_80 (Ampere: A100), sm_86 (Ampere: RTX 3000),
+#   sm_89 (Ada: RTX 4000), sm_90 (Hopper: H100)
+ARCH="${CUDA_ARCH:-sm_89}"
 SRC="typed_vs_untyped.cu"
 PTX="typed_vs_untyped.ptx"
 

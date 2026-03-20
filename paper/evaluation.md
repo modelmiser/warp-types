@@ -171,7 +171,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Type system tests | 291 unit + 50 example + 28 doc (369 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
-| Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
+| Annotation burden | 16.7% of source lines contain type annotations (range: 11.3%–25.3% across 8 examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, etc.) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 named theorems total including 14 infrastructure lemmas (§4.8) |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.

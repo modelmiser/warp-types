@@ -25,13 +25,13 @@ We prove our type system sound (progress and preservation), implement it as a Ru
 | 9-10. Future & Conclusion | [future-and-conclusion.md](future-and-conclusion.md) | ~1.5 | ✅ Revised (fence scope boundary, updated framing) |
 | Appendix. Empirical Evidence | [empirical-evidence.md](empirical-evidence.md) | — | Supporting material for §1 and §7 |
 
-**Total: ~25 pages** (will need trimming for venue)
+**Total: ~19 pages** (condensed from ~25; see CHANGELOG)
 
 ## Key Contributions
 
 1. **Novel type system for GPU divergence** — First to type active lane masks, preventing undefined behavior from reading inactive lanes.
 
-2. **Session types with quiescence** — Extends multiparty session types with participants that go temporarily inactive and resume.
+2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks, enforced by Rust's move semantics and sealed traits. (Not session types proper — see §3 and §6.1 for the distinction.)
 
 3. **Soundness proof** — Progress and preservation theorems ensure well-typed programs never read from inactive lanes.
 

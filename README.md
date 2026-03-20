@@ -121,12 +121,12 @@ fn main() {
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
-| Zero overhead | Verified at MIR, LLVM IR, and PTX levels | `cargo rustc --release --lib -- --emit=llvm-ir` |
+| Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
 | Soundness (progress + preservation) | Full Lean 4 mechanization (28 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (21 tests) | `cargo test gradual` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (25 tests) | `cargo test gradual` |
 | All claims | Full test suite (369 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
@@ -151,6 +151,7 @@ warp-types/
 │   ├── proof.rs            # Executable soundness sketch (3 theorems, 3 lemmas)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge
+│   ├── simwarp.rs           # Multi-lane warp simulator (real shuffle semantics for testing)
 │   └── research/           # 24 research exploration modules (incl. warp_size portability)
 ├── warp-types-macros/      # warp_sets! proc macro (active set hierarchy generation)
 ├── warp-types-kernel/      # #[warp_kernel] proc macro (GPU kernel entry points)

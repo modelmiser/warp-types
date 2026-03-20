@@ -208,10 +208,10 @@ We compose the two levels hierarchically: warp protocols use our typestate withi
 
 ### Why This Matters
 
-The novel contribution of this paper is *warp-level* session types with quiescence. This is the gap in prior work:
+The novel contribution of this paper is *linear typestate* for warp divergence — tracking active lane sets at compile time via a Boolean lattice. This is the gap in prior work:
 
 - Traditional session types: all parties active or failed
-- Our extension: parties can go quiescent and resume
+- Our approach: lanes go temporarily inactive (quiescent) and resume, tracked in the type system via complementary active sets
 
 Inter-block communication doesn't need this extension — it is already well-served by existing session type systems. Our contribution is recognizing where the existing theory applies and where we need something new.
 

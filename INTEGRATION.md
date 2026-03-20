@@ -11,7 +11,7 @@ Three paths, from lowest friction to highest benefit.
 ```toml
 # Cargo.toml
 [dependencies]
-warp-types = { path = "path/to/warp-types" }  # or version once published
+warp-types = "0.2"
 ```
 
 ```rust
