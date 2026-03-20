@@ -173,7 +173,7 @@ impl Warp<All> {
         // Reject masks with bits outside the warp's active lanes.
         // Clamping is correct (we AND with all_mask), but stray bits
         // suggest the caller misunderstands the warp width.
-        debug_assert!(
+        assert!(
             predicate_mask & !all_mask == 0,
             "diverge_dynamic: predicate_mask 0x{:016X} has bits outside warp mask 0x{:016X}",
             predicate_mask,

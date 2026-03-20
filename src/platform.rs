@@ -164,7 +164,8 @@ where
     fn shuffle_down<T: GpuValue>(source: Self::Vector<T>, delta: usize) -> Self::Vector<T> {
         let mut result = PortableVector::default();
         for i in 0..WIDTH {
-            let src_idx = (i + delta) % WIDTH;
+            // Clamp: lanes where i+delta >= WIDTH read their own value (GPU semantics).
+            let src_idx = if i + delta < WIDTH { i + delta } else { i };
             result.data[i] = source.data[src_idx];
         }
         result

@@ -129,16 +129,35 @@ impl DynWarp {
         }
     }
 
-    /// Create from a specific mask.
+    /// Create a 32-lane `DynWarp` from a specific mask.
+    ///
+    /// The mask must fit in 32 bits (`mask <= 0xFFFFFFFF`). For 64-lane
+    /// masks, use [`from_mask_64`](Self::from_mask_64).
+    pub fn from_mask_32(mask: u32) -> Self {
+        DynWarp {
+            active_mask: mask as u64,
+            full_mask: 0xFFFFFFFF,
+        }
+    }
+
+    /// Create a 64-lane `DynWarp` from a specific mask.
+    pub fn from_mask_64(mask: u64) -> Self {
+        DynWarp {
+            active_mask: mask,
+            full_mask: 0xFFFFFFFFFFFFFFFF,
+        }
+    }
+
+    /// Create from a specific mask, inferring warp width.
     ///
     /// Infers warp width from the mask: if all set bits fit in 32 bits,
     /// uses 32-lane (NVIDIA); otherwise 64-lane (AMD).
     ///
-    /// **Note:** A zero mask (`from_mask(0)`) infers 32-lane width. For an
-    /// empty 64-lane warp, use `DynWarp::all_64()` then `diverge()` with
-    /// an empty predicate, or construct with a mask that has bit 32+ set.
+    /// **Ambiguity warning:** A mask that fits in 32 bits is always inferred
+    /// as 32-lane, even if the caller intended 64-lane. This includes
+    /// `from_mask(0)` → 32-lane. For unambiguous construction, prefer
+    /// [`from_mask_32`](Self::from_mask_32) or [`from_mask_64`](Self::from_mask_64).
     ///
-    /// Useful for testing or constructing `DynWarp`s with known masks.
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
     pub fn from_mask(mask: u64) -> Self {
         let full = if mask <= 0xFFFFFFFF {

@@ -133,7 +133,6 @@ impl<T: Copy, P: AccessPattern> WarpPtr<T, P> {
 }
 
 /// A mutable pointer with known access pattern
-#[derive(Clone)]
 pub struct WarpPtrMut<T: Copy, P: AccessPattern> {
     base: *mut T,
     _pattern: PhantomData<P>,

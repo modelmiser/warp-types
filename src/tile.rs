@@ -142,7 +142,7 @@ where
     /// On GPU: emits `shfl.sync.bfly.b32` with `c = ((32-SIZE)<<8)|0x1F`,
     /// confining the shuffle to SIZE-lane segments.
     pub fn shuffle_xor<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
-        debug_assert!(
+        assert!(
             mask < SIZE as u32,
             "shuffle_xor: mask {mask} >= tile SIZE {SIZE}"
         );
@@ -155,7 +155,7 @@ where
         data: PerLane<T>,
         delta: u32,
     ) -> PerLane<T> {
-        debug_assert!(
+        assert!(
             delta < SIZE as u32,
             "shuffle_down: delta {delta} >= tile SIZE {SIZE}"
         );
