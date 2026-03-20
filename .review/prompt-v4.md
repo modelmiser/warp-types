@@ -48,11 +48,17 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - DynDiverge::diverge_dynamic used debug_assert for stray-bit mask validation (dynamic.rs:diverge_dynamic)
 - DynWarp::from_mask had ambiguous width inference for 32-bit masks; added from_mask_32/from_mask_64 (gradual.rs:from_mask)
 - WarpPtrMut derived Clone, enabling aliased mutable writes via shared ref (research/coalescing.rs:WarpPtrMut)
+- paper.md ballot typing rule used Warp<S> instead of Warp<All>, contradicting core-type-system.md and implementation (paper/paper.md:417)
+- cub.rs broadcast_lane used debug_assert for src_lane bounds (cub.rs:broadcast_lane)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - [DOCUMENTED] Warp::kernel_entry() can be called multiple times, bypassing linear typestate (warp.rs — fundamental affine vs linear limitation)
 - [PAPER-SCOPE] shuffle_xor_within is in paper §3.3 formal rules but only in research module, not public API
 - [PAPER-SCOPE] Loop typing rules (§5.1: LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) have no implementation
+- [PAPER-SCOPE] shuffle_xor uses &self (borrow) but Lean models linear consumption — gap wider than affine-vs-linear
+- [PAPER-SCOPE] proof.rs type checker does not enforce linearity (ctx.clone instead of ctx.remove)
+- [PAPER-SCOPE] References section is placeholder with many missing citations
+- [PAPER-SCOPE] Hazy "most sophisticated persistent thread program" claim should say "most sophisticated published"
 - [LEAN-SCOPE] Lean mergeVal hardcodes ActiveSet.all — nested merge (merge_within) has no formal backing (documented §4.8)
 - [LEAN-SCOPE] Lean substitution relies on value restriction for capture avoidance (sound but fragile)
 - [LEAN-SCOPE] Lean/Rust correspondence gap — independent formalizations, proofs don't directly certify Rust code

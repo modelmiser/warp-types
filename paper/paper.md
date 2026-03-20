@@ -414,8 +414,8 @@ The predicate `preserves_set(mask, S)` holds when XORing any lane in `S` with `m
 Ballot operations produce uniform results:
 
 ```
-Γ ⊢ w : Warp<S>    Γ ⊢ pred : PerLane<bool>
-────────────────────────────────────────────
+Γ ⊢ w : Warp<All>    Γ ⊢ pred : PerLane<bool>
+──────────────────────────────────────────────
 Γ ⊢ ballot(w, pred) : Uniform<u32>
 ```
 
