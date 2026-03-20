@@ -84,11 +84,11 @@ We presented **warp typestate**, a linear type system that makes lane-level dive
 
 4. **Shuffles require all lanes active**. The `shuffle_xor` method exists only on `Warp<All>`. Calling it on a diverged warp is not a runtime error—it is *unrepresentable*.
 
-The key insight is that GPU divergence has the *shape* of multiparty session type branching: diverging splits participants, reconverging requires a complement proof, and quiescence (temporarily inactive participants) is a phenomenon not captured by existing type disciplines. We formalize this as linear typestate over a Boolean lattice of active sets—not session types proper (there are no channels or protocol sequences), but motivated by the structural analogy. The analogy guided the design; the Boolean lattice and linear resource discipline provide the guarantees.
+The concept of tracking which lanes are active is not new. ISPC manages it via compiler-emitted masks, Cooperative Groups expose it as runtime objects, LLVM's uniformity analysis infers it during compilation, and NVIDIA's synccheck detects violations post-execution. What we add is a *type-level* encoding: the active lane mask is a type parameter (`Warp<S>`) on a Boolean lattice, reconvergence is verified by sealed complement traits, and operations requiring all lanes are structurally absent (not checked — absent) on sub-warps. This is the first system that makes shuffle-from-inactive-lane a *missing-method error* rather than a runtime fault, an API documentation warning, or a post-hoc sanitizer finding.
 
-Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
+Our implementation in Rust has **zero runtime overhead** — types are erased at compile time. For uniform programs (the dominant style, including state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The annotation burden is modest: 16.7% of source lines on average across our 8 examples (range 11.3%–25.3%).
 
-**The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
+**The takeaway**: The gap between "the compiler knows the active set" (ISPC, LLVM) and "the type system enforces active-set safety" (this work) is the difference between a tool that *could* catch the bug and a type that *cannot express* the bug. We close that gap.
 
 ---
 
