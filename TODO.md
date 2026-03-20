@@ -80,6 +80,17 @@ These are semver-sensitive and should be batched:
 - [x] OOPSLA 2023 lockstep verification — new paragraph in §8.5
 - [x] Hazy superlative removed
 
+## C++ Interop (v0.2.1 or v0.3.0 — additive, non-breaking)
+
+The architecture already supports C++ host code loading Rust-generated PTX.
+No Rust runtime in the C++ binary — types vanish completely at PTX level.
+
+- [ ] `#[repr(C)]` audit: verify `PerLane<T>`, `Uniform<T>`, `SingleLane<T,N>` are FFI-safe
+- [ ] CMake example project: C++ host + Rust kernel, build system glue
+- [ ] INTEGRATION.md: C++ section documenting the PTX-loading integration path
+- [ ] Document build split: `cargo build` → PTX → `cuModuleLoadData` / `cuLaunchKernel`
+- [ ] Consider a `warp-types-cxx` header or helper for kernel launch boilerplate
+
 ## Status
 
-**38/45 complete.** Remaining 7 are v0.3.0 API breaking changes (parked for next release).
+**38/49 complete.** 7 parked for v0.3.0 (API breaking), 4 new for C++ interop (additive).
