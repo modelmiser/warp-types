@@ -209,8 +209,10 @@ impl<const MASK: u32> HasDual for Xor<MASK> {
 
 /// Rotate down: lane i receives from lane (i + delta) mod 32.
 ///
-/// Consistent with CUDA `__shfl_down_sync`: data flows from higher-numbered
-/// lanes to lower. `forward(i)` returns the *destination* of lane i's value
+/// **Not the same as CUDA `__shfl_down_sync`**: this is a modular rotation
+/// (wraps around), whereas CUDA's `__shfl_down_sync` clamps (out-of-range
+/// lanes read their own value). Data flows from higher-numbered lanes to
+/// lower. `forward(i)` returns the *destination* of lane i's value
 /// (lane i - delta), while `inverse(i)` returns lane i's *source* (lane i + delta).
 #[derive(Copy, Clone, Debug)]
 pub struct RotateDown<const DELTA: u32>;

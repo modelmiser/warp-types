@@ -50,6 +50,8 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - WarpPtrMut derived Clone, enabling aliased mutable writes via shared ref (research/coalescing.rs:WarpPtrMut)
 - paper.md ballot typing rule used Warp<S> instead of Warp<All>, contradicting core-type-system.md and implementation (paper/paper.md:417)
 - cub.rs broadcast_lane used debug_assert for src_lane bounds (cub.rs:broadcast_lane)
+- RotateDown/RotateUp doc falsely claimed CUDA __shfl_down_sync consistency; it's a rotation (wraps), not a shift (clamps) (shuffle.rs:RotateDown)
+- core-type-system.md ballot relaxation had dangling §9 forward reference (paper/core-type-system.md:229)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - [DOCUMENTED] Warp::kernel_entry() can be called multiple times, bypassing linear typestate (warp.rs — fundamental affine vs linear limitation)
@@ -59,9 +61,12 @@ KNOWN UNTESTED (accepted — don't re-flag):
 - [PAPER-SCOPE] proof.rs type checker does not enforce linearity (ctx.clone instead of ctx.remove)
 - [PAPER-SCOPE] References section is placeholder with many missing citations
 - [PAPER-SCOPE] Hazy "most sophisticated persistent thread program" claim should say "most sophisticated published"
+- [DESIGN] reduce_sum overflow: Warp<All> uses standard + (panics in debug), DynWarp uses wrapping_mul (wraps). Different behavior for same operation — GPU semantics wraps, Rust convention panics
+- [LEAN-SCOPE] Lean fst/snd rules permit discarding a pair component (affine not linear for pairs) — fix requires letPair eliminator
 - [LEAN-SCOPE] Lean mergeVal hardcodes ActiveSet.all — nested merge (merge_within) has no formal backing (documented §4.8)
 - [LEAN-SCOPE] Lean substitution relies on value restriction for capture avoidance (sound but fragile)
 - [LEAN-SCOPE] Lean/Rust correspondence gap — independent formalizations, proofs don't directly certify Rust code
+- [LEAN-SCOPE] Lean lacks multi-step safety corollary (trivial to close, standard induction)
 
 REVIEW PROTOCOL (per file):
 1. Read end-to-end

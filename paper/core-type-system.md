@@ -226,7 +226,7 @@ Ballot operations require a fully-active warp (same as shuffle):
 Γ ⊢ ballot(w, pred) : Uniform<u32>
 ```
 
-The result is uniform because all lanes participate in the vote. While a ballot on a sub-warp is semantically meaningful (returning the votes of active lanes only), the implementation restricts ballot to `Warp<All>` for consistency with the GPU intrinsic `__ballot_sync(0xFFFFFFFF, pred)` which requires a full-warp mask. Relaxing this to `Warp<S>` is future work (§9).
+The result is uniform because all lanes participate in the vote. While a ballot on a sub-warp is semantically meaningful (returning the votes of active lanes only), the implementation restricts ballot to `Warp<All>` for consistency with the GPU intrinsic `__ballot_sync(0xFFFFFFFF, pred)` which requires a full-warp mask. Relaxing this to `Warp<S>` is future work.
 
 ### LINEAR WARP USAGE
 
