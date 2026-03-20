@@ -81,6 +81,7 @@ impl Warp<All> {
     /// let prefix = warp.inclusive_sum(data);
     /// // CPU emulation: NOT a correct inclusive scan (see doc)
     /// ```
+    #[deprecated(note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan.")]
     pub fn inclusive_sum<T>(&self, data: PerLane<T>) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,

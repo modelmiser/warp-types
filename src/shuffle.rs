@@ -306,7 +306,7 @@ pub type FullButterfly = Compose<
 pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32] {
     let mut result = values;
     for (i, slot) in result.iter_mut().enumerate() {
-        let src = P::inverse(i as u32) as usize;
+        let src = (P::inverse(i as u32) & 0x1F) as usize;
         *slot = values[src];
     }
     result

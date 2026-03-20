@@ -107,7 +107,7 @@ pub mod research;
 /// `PhantomData`, or active-set types. The type system is fully erased.
 /// Inspect with: `cargo rustc --release --lib -- --emit=llvm-ir`
 /// then search for `zero_overhead_butterfly` in the .ll file.
-#[no_mangle]
+#[export_name = "warp_types_zero_overhead_butterfly"]
 #[inline(never)]
 pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
     let warp: Warp<All> = Warp::kernel_entry();
@@ -129,7 +129,7 @@ pub fn zero_overhead_butterfly(data: data::PerLane<i32>) -> i32 {
 ///
 /// In optimized LLVM IR, this compiles to a no-op (returns input unchanged).
 /// The diverge, merge, and all warp handles are completely erased.
-#[no_mangle]
+#[export_name = "warp_types_zero_overhead_diverge_merge"]
 #[inline(never)]
 pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i32> {
     let warp: Warp<All> = Warp::kernel_entry();

@@ -185,6 +185,7 @@ where
     /// `lane_id < stride` get clamped (own value), doubling instead of
     /// preserving. Needs `if lane_id >= stride` guard (requires `lane_id()`).
     /// Retained for type-system demonstration.
+    #[deprecated(note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan.")]
     pub fn inclusive_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
