@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn bitonic_sort_random_pattern() {
         // Pseudo-random pattern: (i * 17 + 5) % 32
-        let sw = SimWarp::<i32>::new(|i| ((i as i32 * 17 + 5) % 32));
+        let sw = SimWarp::<i32>::new(|i| (i as i32 * 17 + 5) % 32);
         let sorted = bitonic_sort(&sw);
         // Verify monotonically non-decreasing
         for i in 1..32 {

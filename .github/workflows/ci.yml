@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-04-15
+          toolchain: nightly-2026-03-19
           components: rustfmt
       - name: Format check
         run: cargo fmt --check
@@ -37,7 +37,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-04-15
+          toolchain: nightly-2026-03-19
           components: clippy, rustfmt
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  toolchain-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check toolchain pin is less than 90 days old
+        run: |
+          PIN=$(grep '^channel' rust-toolchain.toml | grep -oP '\d{4}-\d{2}-\d{2}')
+          PIN_EPOCH=$(date -d "$PIN" +%s)
+          NOW_EPOCH=$(date +%s)
+          AGE_DAYS=$(( (NOW_EPOCH - PIN_EPOCH) / 86400 ))
+          echo "Pinned nightly: $PIN ($AGE_DAYS days old)"
+          if [ "$AGE_DAYS" -gt 90 ]; then
+            echo "::error::Toolchain pin '$PIN' is $AGE_DAYS days old (>90). Update rust-toolchain.toml and ci.yml."
+            exit 1
+          fi
