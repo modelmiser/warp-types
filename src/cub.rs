@@ -81,7 +81,9 @@ impl Warp<All> {
     /// let prefix = warp.inclusive_sum(data);
     /// // CPU emulation: NOT a correct inclusive scan (see doc)
     /// ```
-    #[deprecated(note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan.")]
+    #[deprecated(
+        note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan."
+    )]
     pub fn inclusive_sum<T>(&self, data: PerLane<T>) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
@@ -131,6 +133,7 @@ impl Warp<All> {
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
     {
         // Inclusive scan then shift down by 1
+        #[allow(deprecated)]
         let inclusive = self.inclusive_sum(data);
         let shifted = inclusive.get().gpu_shfl_up(1);
         // TODO: lane 0 should get `identity`, but we lack lane_id() on CPU.
@@ -236,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_inclusive_sum() {
         // TYPE-SYSTEM TEST: validates inclusive_sum compiles. The result (32) is
         // the INCORRECT CPU identity behavior (doubling per stage), not a correct
@@ -266,6 +270,7 @@ mod tests {
 
     // Verify CUB-equivalent methods are ONLY on Warp<All>
     #[test]
+    #[allow(deprecated)]
     fn test_cub_requires_all() {
         let warp: Warp<All> = Warp::kernel_entry();
         let data = PerLane::new(1i32);
