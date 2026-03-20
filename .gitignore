@@ -4,6 +4,5 @@ __pycache__
 reproduce/reduce7_bug
 reproduce/gpu_semantics_test
 .*crystal*/
-.review/
 COLD-REVIEW*
 INSIGHTS.md

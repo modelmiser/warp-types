@@ -9,6 +9,7 @@
 
 use crate::active_set::All;
 use crate::data::{LaneId, PerLane, Uniform};
+use crate::gpu::GpuShuffle;
 use crate::warp::Warp;
 use crate::GpuValue;
 use core::marker::PhantomData;
@@ -117,6 +118,11 @@ impl Warp<All> {
     ///
     /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
     /// On CPU: returns val × 32 (butterfly doubling via identity shuffle).
+    ///
+    /// **Overflow note:** GPU hardware wraps on integer overflow (two's complement,
+    /// verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`). This
+    /// function uses `+` (Rust's `Add` trait), which panics in debug on overflow.
+    /// For GPU-faithful wrapping semantics, use [`reduce_sum_wrapping`](Self::reduce_sum_wrapping).
     pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
@@ -127,6 +133,20 @@ impl Warp<All> {
         val = val + val.gpu_shfl_xor(4);
         val = val + val.gpu_shfl_xor(2);
         val = val + val.gpu_shfl_xor(1);
+        Uniform::from_const(val)
+    }
+
+    /// Wrapping butterfly reduce-sum matching GPU hardware overflow semantics.
+    ///
+    /// GPU integer arithmetic wraps on overflow (two's complement, no trap).
+    /// This variant uses `wrapping_add` to match that behavior exactly.
+    pub fn reduce_sum_wrapping(&self, data: PerLane<i32>) -> Uniform<i32> {
+        let mut val = data.get();
+        val = val.wrapping_add(val.gpu_shfl_xor(16));
+        val = val.wrapping_add(val.gpu_shfl_xor(8));
+        val = val.wrapping_add(val.gpu_shfl_xor(4));
+        val = val.wrapping_add(val.gpu_shfl_xor(2));
+        val = val.wrapping_add(val.gpu_shfl_xor(1));
         Uniform::from_const(val)
     }
 
@@ -374,6 +394,22 @@ mod tests {
         let ones_i64 = PerLane::new(1_i64);
         let sum = all.reduce_sum(ones_i64);
         assert_eq!(sum.get(), 32_i64); // 1 + 1 + ... (5 XOR stages)
+    }
+
+    #[test]
+    fn test_reduce_sum_wrapping() {
+        let all: Warp<All> = Warp::new();
+        // On CPU: identity shuffle → val doubles each stage → wrapping_add(MAX, MAX) wraps
+        let data = PerLane::new(i32::MAX);
+        let result = all.reduce_sum_wrapping(data);
+        // i32::MAX * 32 (via butterfly doubling) = wrapping result
+        // Stage 1: MAX + MAX = -2 (wraps)
+        // Stages 2-5 continue wrapping
+        let mut expected = i32::MAX;
+        for _ in 0..5 {
+            expected = expected.wrapping_add(expected);
+        }
+        assert_eq!(result.get(), expected);
     }
 
     #[test]

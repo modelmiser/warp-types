@@ -398,6 +398,38 @@ mod tests {
     }
 
     #[test]
+    fn from_mask_32_basic() {
+        let w = DynWarp::from_mask_32(0x0000FFFF);
+        assert_eq!(w.active_mask(), 0x0000FFFF);
+        assert_eq!(w.full_mask, 0xFFFFFFFF);
+        assert_eq!(w.population(), 16);
+    }
+
+    #[test]
+    fn from_mask_32_empty() {
+        let w = DynWarp::from_mask_32(0);
+        assert_eq!(w.active_mask(), 0);
+        assert_eq!(w.full_mask, 0xFFFFFFFF);
+        assert_eq!(w.population(), 0);
+    }
+
+    #[test]
+    fn from_mask_64_low_bits() {
+        // 32 active lanes in a 64-lane warp
+        let w = DynWarp::from_mask_64(0xFFFFFFFF);
+        assert_eq!(w.active_mask(), 0xFFFFFFFF);
+        assert_eq!(w.full_mask, 0xFFFFFFFFFFFFFFFF);
+        assert_eq!(w.population(), 32);
+    }
+
+    #[test]
+    fn from_mask_64_full() {
+        let w = DynWarp::from_mask_64(0xFFFFFFFFFFFFFFFF);
+        assert_eq!(w.active_mask(), 0xFFFFFFFFFFFFFFFF);
+        assert_eq!(w.full_mask, 0xFFFFFFFFFFFFFFFF);
+    }
+
+    #[test]
     fn ascribe_all_succeeds() {
         let w = DynWarp::all();
         let warp: Warp<All> = w.ascribe().unwrap();

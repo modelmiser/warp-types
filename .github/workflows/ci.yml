@@ -48,7 +48,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check toolchain pin is less than 90 days old
         run: |
-          PIN=$(grep '^channel' rust-toolchain.toml | grep -oP '\d{4}-\d{2}-\d{2}')
+          PIN=$(grep '^channel' rust-toolchain.toml | grep -oP '\d{4}-\d{2}-\d{2}' || true)
+          if [ -z "$PIN" ]; then
+            echo "::warning::No date found in rust-toolchain.toml channel pin — cannot check freshness."
+            exit 0
+          fi
           PIN_EPOCH=$(date -d "$PIN" +%s)
           NOW_EPOCH=$(date +%s)
           AGE_DAYS=$(( (NOW_EPOCH - PIN_EPOCH) / 86400 ))

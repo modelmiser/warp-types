@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 291 unit + 50 example + 28 doc tests (369 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
+**Status:** Research prototype with real GPU execution. 291 unit + 50 example + 29 doc tests (370 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
 
 ## The Problem
 
@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 291 unit + 28 doc tests
+cargo test                                    # 291 unit + 29 doc tests
 cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -116,7 +116,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't shuffle, merge requires complements) | 13 compile-fail doctests | `cargo test --doc` |
+| Type safety (diverged warp can't shuffle, merge requires complements) | 15 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
@@ -127,7 +127,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (25 tests) | `cargo test gradual` |
-| All claims | Full test suite (369 tests) | `cargo test && cargo test --examples` |
+| All claims | Full test suite (370 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 

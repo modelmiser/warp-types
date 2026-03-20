@@ -61,7 +61,8 @@ KNOWN UNTESTED (accepted — don't re-flag):
 - [PAPER-SCOPE] proof.rs type checker does not enforce linearity (ctx.clone instead of ctx.remove)
 - [PAPER-SCOPE] References section is placeholder with many missing citations
 - [PAPER-SCOPE] Hazy "most sophisticated persistent thread program" claim should say "most sophisticated published"
-- [DESIGN] reduce_sum overflow: Warp<All> uses standard + (panics in debug), DynWarp uses wrapping_mul (wraps). Different behavior for same operation — GPU semantics wraps, Rust convention panics
+- [RESOLVED] reduce_sum overflow: added reduce_sum_wrapping for GPU-faithful wrapping semantics; generic reduce_sum kept with Add trait for flexibility. Hardware-verified: GPU wraps (reproduce/gpu_semantics_test.cu).
+- [FALSE-FINDING] SimWarp::shuffle_idx wrapping mod WIDTH was reported as wrong (clamp expected) — hardware verified shuffle_idx WRAPS mod 32 on RTX 4000 Ada. SimWarp behavior is correct.
 - [LEAN-SCOPE] Lean fst/snd rules permit discarding a pair component (affine not linear for pairs) — fix requires letPair eliminator
 - [LEAN-SCOPE] Lean mergeVal hardcodes ActiveSet.all — nested merge (merge_within) has no formal backing (documented §4.8)
 - [LEAN-SCOPE] Lean substitution relies on value restriction for capture avoidance (sound but fragile)
