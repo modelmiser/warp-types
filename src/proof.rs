@@ -204,10 +204,12 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
             let t2 = type_check(ctx, w2)?;
             match (t1, t2) {
                 (Type::Warp(s1), Type::Warp(s2)) => {
-                    if s1.is_disjoint(&s2) {
-                        Ok(Type::Warp(s1.union(&s2)))
-                    } else {
+                    if !s1.is_disjoint(&s2) {
                         Err("merge requires disjoint active sets".to_string())
+                    } else if !s1.union(&s2).is_all() {
+                        Err("merge requires covering active sets (union must be All)".to_string())
+                    } else {
+                        Ok(Type::Warp(s1.union(&s2)))
                     }
                 }
                 _ => Err("merge requires two Warps".to_string()),
@@ -287,11 +289,11 @@ pub fn step(expr: &Expr) -> Option<Expr> {
         Expr::Merge(w1, w2) => {
             match (w1.as_ref(), w2.as_ref()) {
                 (Expr::WarpVal(s1), Expr::WarpVal(s2)) => {
-                    // Runtime check (type system should have verified disjointness)
-                    assert!(
-                        s1.is_disjoint(s2),
-                        "SOUNDNESS VIOLATION: merge of non-disjoint sets"
-                    );
+                    // Ill-typed merge: get stuck (return None) rather than panicking.
+                    // This allows type_safety_check to detect violations instead of crashing.
+                    if !s1.is_disjoint(s2) {
+                        return None; // stuck: non-disjoint merge
+                    }
                     Some(Expr::WarpVal(s1.union(s2)))
                 }
                 (Expr::WarpVal(_), _) => step(w2).map(|w2_| Expr::Merge(w1.clone(), Box::new(w2_))),
@@ -303,8 +305,10 @@ pub fn step(expr: &Expr) -> Option<Expr> {
         Expr::Shuffle(w, data, mask) => {
             match (w.as_ref(), data.as_ref()) {
                 (Expr::WarpVal(s), Expr::PerLaneVal(vals)) => {
-                    // Runtime check (type system should have verified All)
-                    assert!(s.is_all(), "SOUNDNESS VIOLATION: shuffle on non-All warp");
+                    // Ill-typed shuffle: get stuck (return None) rather than panicking.
+                    if !s.is_all() {
+                        return None; // stuck: shuffle on non-All warp
+                    }
                     assert_eq!(
                         vals.len(),
                         WARP_SIZE as usize,

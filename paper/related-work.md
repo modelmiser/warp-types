@@ -101,11 +101,37 @@ Linear logic [Girard 1987] provides the foundation for both session types [Caire
 
 CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit but still allow shuffling on groups where threads have diverged—we provide the missing types.
 
+### AMD DPP and Intel Subgroup Operations
+
+AMD's Data Parallel Primitives (DPP) instructions (`v_mov_b32_dpp`, `ds_swizzle_b32`) enable cross-lane communication within 64-lane wavefronts on RDNA/CDNA architectures. Unlike NVIDIA's explicit mask parameter, AMD's DPP operations are implicitly masked by the hardware execution mask — the programmer does not pass a mask, but the operation only executes for active lanes. The divergence risk is different: not a wrong mask, but an unexpected execution mask due to unstructured control flow. Our `u64` active-set masks and `GpuWarp64` platform abstraction are designed to support AMD wavefronts, though the GPU backend is not yet implemented.
+
+Intel's subgroup operations in SYCL/oneAPI (`sub_group::shuffle`, `sub_group::reduce`) and OpenCL (`sub_group_shuffle`) require that "all work-items in the sub-group execute the same call" — the same convergence requirement as NVIDIA's shuffle. Intel's subgroup size varies (8, 16, 32, or 64 depending on hardware), adding a portability dimension to the bug class. Our `Platform` trait and parameterized warp width address this through type-level abstraction.
+
+### Vulkan/SPIR-V Subgroup Operations
+
+Vulkan 1.1 (2018) introduced subgroup operations (`subgroupShuffle`, `subgroupBallot`, `subgroupBroadcast`) in SPIR-V/GLSL — the most widely deployed cross-vendor subgroup API. The GLSL specification explicitly states that subgroup operations have "undefined results if invocations are not converged." The WebGPU specification excluded indexed subgroup shuffles entirely due to this safety concern (Bug 21 in our survey). Our type system would prevent the undefined-results cases that the Vulkan specification warns about — the shuffle method is absent on diverged warps, not merely documented as "undefined."
+
 ### NVIDIA's `__shfl_sync` Migration (CUDA 9.0)
 
 NVIDIA deprecated the original `__shfl` family in CUDA 9.0, replacing it with `__shfl_sync` which requires an explicit mask parameter [CUDA Programming Guide §10.22]. This was a vendor acknowledgment that the bug class is severe enough to warrant a breaking API change across the ecosystem. However, the mask remains a runtime value—programmers can still pass the wrong mask, as documented bugs in NVIDIA's own cuda-samples and CUB demonstrate.
 
 **Relationship to our work**: `__shfl_sync` addresses the problem at the API level (require a mask). We address it at the type level (prove the mask correct). The approaches are complementary: `__shfl_sync` prevents *forgetting* the mask; our types prevent *getting it wrong*.
+
+### NVIDIA Cooperative Groups
+
+NVIDIA Cooperative Groups [2017] introduce `thread_block_tile<N>` for statically-sized sub-warp groups and `coalesced_threads()` for dynamically obtaining the set of converged threads — a runtime active-set mechanism. The `sync()` method enforces convergence before cross-lane operations. This is the closest vendor-provided abstraction to our type-level active sets. The key difference: Cooperative Groups track convergence at runtime (the group object is a runtime value), while our `Warp<S>` tracks it at compile time (the active set is a type parameter). A `thread_block_tile<16>` can call `shfl` and the hardware confines it to the tile — safe by construction. But `coalesced_threads()` returns a runtime group whose membership can change at each reconvergence point, and the programmer must ensure the group is still valid when cross-lane operations execute. Our type system would prevent using a stale group handle.
+
+### NVIDIA compute-sanitizer `synccheck`
+
+NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level synchronization errors at runtime, including mismatched masks in `__shfl_sync` calls. This is the closest dynamic analysis tool to our static approach. `synccheck` catches bugs post-compilation via instrumented execution; our types prevent them pre-compilation. The approaches are complementary: `synccheck` catches bugs in code that cannot be rewritten in our type system (legacy CUDA, inline PTX), while our types prevent the entire bug class at compile time for new code.
+
+### Scheduling Languages: Halide and TVM
+
+Halide [Ragan-Kelley et al., PLDI 2013] and TVM [Chen et al., OSDI 2018] separate algorithm from execution schedule, generating GPU code from high-level specifications. Both have encountered the shuffle-divergence bug in generated code (TVM#17307 is Bug 15 in our survey). Their scheduling model could in principle avoid generating divergent shuffles — a design-level alternative to type-checking them. We cite these as evidence that the bug class affects compiler-generated code, not just hand-written kernels.
+
+### Recent SIMT Verification (2023)
+
+Gu et al. [OOPSLA 2023] present lockstep execution semantics for SIMT programs and verify safety properties including convergence requirements. Their approach models the hardware execution semantics directly, while ours abstracts it into a type system. The two approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they require a separate verification pass; ours integrates with the compiler via trait resolution).
 
 ### Hazy Megakernel (2025)
 
@@ -118,9 +144,15 @@ The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persiste
 | Descend | Memory safety | We do divergence safety |
 | GPUVerify | External verification | We use types |
 | MPST | All parties active | We model quiescence |
-| ISPC | uniform/varying (value uniformity) | We track active sets (which lanes), not just uniformity |
+| ISPC | uniform/varying + runtime active set | We track active sets at compile time, not runtime |
 | Futhark | Avoids divergence | We embrace + type it |
 | `__shfl_sync` | Require mask (runtime) | We prove mask correct (compile-time) |
+| Cooperative Groups | Runtime group objects | We use compile-time type parameters |
+| Vulkan/SPIR-V subgroups | "Undefined if not converged" | We make diverged shuffle absent from the type |
+| AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |
+| synccheck | Runtime detection | We prevent at compile time |
+| Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
+| Gu et al. (OOPSLA 2023) | Lockstep verification | We integrate with the compiler via traits |
 | Hazy megakernel | Prohibit divergence | We make divergence safe |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |

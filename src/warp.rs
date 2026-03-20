@@ -16,6 +16,17 @@
 //!     let _ = warp.shuffle_xor(data, 1); // ERROR: use of moved value: `warp`
 //! }
 //! ```
+//!
+//! ## No duplication: Warp cannot be cloned (Lemma 4.8)
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//!
+//! fn warp_clone() {
+//!     let warp: Warp<All> = Warp::kernel_entry();
+//!     let warp2 = warp.clone(); // ERROR: no method named `clone` found for `Warp<All>`
+//! }
+//! ```
 
 use crate::active_set::ActiveSet;
 use core::marker::PhantomData;

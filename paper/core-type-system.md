@@ -44,12 +44,14 @@ A `Uniform<T>` can be converted to `PerLane<T>` (broadcasting), but the reverse 
 
 ### SingleLane<T, n>
 
-`SingleLane<T, n>` represents a value that exists only in lane `n`. This is the result type of reductions:
+`SingleLane<T, n>` represents a value that exists only in lane `n`. A single-lane-output reduction (e.g., `__reduce_add_sync` which returns in lane 0 only) would return `SingleLane<T, 0>`:
 
 ```rust
-let sum: SingleLane<i32, 0> = reduce_sum(data);  // Result in lane 0
-let broadcast: Uniform<i32> = sum.broadcast();   // Share with all lanes
+let sum: SingleLane<i32, 0> = reduce_lane0(data);  // Result in lane 0
+let broadcast: Uniform<i32> = sum.broadcast();      // Share with all lanes
 ```
+
+**Implementation note:** Our `reduce_sum` uses a butterfly pattern where all lanes receive the result, so it returns `Uniform<T>` directly — a simplification that skips the `SingleLane` → `broadcast` step.
 
 ## 3.2 Active Sets
 
@@ -216,15 +218,15 @@ The predicate `preserves_set(mask, S)` holds when XORing any lane in `S` with `m
 
 ### BALLOT
 
-Ballot operations produce uniform results:
+Ballot operations require a fully-active warp (same as shuffle):
 
 ```
-Γ ⊢ w : Warp<S>    Γ ⊢ pred : PerLane<bool>
-────────────────────────────────────────────
+Γ ⊢ w : Warp<All>    Γ ⊢ pred : PerLane<bool>
+──────────────────────────────────────────────
 Γ ⊢ ballot(w, pred) : Uniform<u32>
 ```
 
-The result is uniform because all (active) lanes see the same bitmask.
+The result is uniform because all lanes participate in the vote. While a ballot on a sub-warp is semantically meaningful (returning the votes of active lanes only), the implementation restricts ballot to `Warp<All>` for consistency with the GPU intrinsic `__ballot_sync(0xFFFFFFFF, pred)` which requires a full-warp mask. Relaxing this to `Warp<S>` is future work (§9).
 
 ### LINEAR WARP USAGE
 

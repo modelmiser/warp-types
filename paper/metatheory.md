@@ -255,4 +255,11 @@ Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances
 
 ### What Is Not Mechanized
 
-The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
+The following are not mechanized:
+
+- The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5).
+- The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems.
+- **Merge scope**: The Lean merge typing rule (`HasType.merge`) requires `IsComplementAll s1 s2` and always produces `Warp<All>`. The paper's general merge rule (`S₁ ∪ S₂`) and nested merge (`Warp<P>`) are not modeled — the Lean `Step.mergeVal` reduction hardcodes `ActiveSet.all`. Extending to nested merge requires parameterizing the merge typing rule by a parent set, which is straightforward but not yet done.
+- **Linearity**: Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) are enforced by the linear context threading mechanism (`letBind` checks freshness and consumption), but are not stated as standalone Lean theorems. The mechanism is sound; the explicit theorem statements are future work.
+
+We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.

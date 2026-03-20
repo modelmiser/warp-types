@@ -13,7 +13,7 @@ Lane 0:  val=7   ──shuffle_xor(1)──▸  reads Lane 1's value (3)
 Lane 1:  val=3   ──shuffle_xor(1)──▸  reads Lane 0's value (7)
 ```
 
-Shuffles power the fastest GPU algorithms: reductions, scans, sorts, histograms. They're the reason GPU matrix multiply reaches 90%+ of peak throughput.
+Shuffles power the fastest GPU algorithms: reductions, scans, sorts, histograms. They're a key building block in GPU matrix multiply, where intra-warp communication via shuffles and shared memory helps sustain 90%+ of peak throughput.
 
 ## The Bug
 
