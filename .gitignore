@@ -2,6 +2,7 @@
 __pycache__
 *.pyc
 reproduce/reduce7_bug
+reproduce/gpu_semantics_test
 .*crystal*/
 .review/
 COLD-REVIEW*
