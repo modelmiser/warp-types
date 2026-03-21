@@ -40,6 +40,9 @@ def subst (e : Expr) (x : String) (v : Expr) : Expr :=
   | .loopPhased n warpName w uBody vBody =>
       if warpName == x then .loopPhased n warpName (subst w x v) uBody vBody
       else .loopPhased n warpName (subst w x v) (subst uBody x v) vBody
+  | .loopConvergent n warpName w body =>
+      if warpName == x then .loopConvergent n warpName (subst w x v) body
+      else .loopConvergent n warpName (subst w x v) (subst body x v)
 
 -- ============================================================================
 -- Small-Step Reduction
@@ -118,6 +121,16 @@ inductive Step : Expr → Expr → Prop
   | loopPhasedCong (n : Nat) (warpName : String) (w w' uBody vBody : Expr) :
       Step w w' →
       Step (.loopPhased n warpName w uBody vBody) (.loopPhased n warpName w' uBody vBody)
+  | loopConvergentZero (warpName : String) (v body : Expr) :
+      isValue v = true →
+      Step (.loopConvergent 0 warpName v body) v
+  | loopConvergentSucc (warpName : String) (n : Nat) (v body : Expr) :
+      isValue v = true →
+      Step (.loopConvergent (n + 1) warpName v body)
+           (.loopConvergent n warpName (subst body warpName v) body)
+  | loopConvergentCong (n : Nat) (warpName : String) (w w' body : Expr) :
+      Step w w' →
+      Step (.loopConvergent n warpName w body) (.loopConvergent n warpName w' body)
 
 -- ============================================================================
 -- Values preserve contexts (values don't consume linear resources)
@@ -145,6 +158,7 @@ theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopPhased _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopConvergent _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 -- ============================================================================
 -- Canonical Forms
@@ -164,6 +178,7 @@ theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopPhased _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopConvergent _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 theorem canonical_perLane {e : Expr} {ctx' : Ctx}
     (ht : HasType [] e .perLane ctx') (hv : isValue e = true) :
@@ -306,6 +321,15 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
       | n' + 1 => exact .inr ⟨_, Step.loopSucc warpName n' w body hv⟩
     | .inr ⟨w', hw'⟩ =>
       exact .inr ⟨_, Step.loopCong n warpName w w' body hw'⟩
+  | .loopConvergent _ _ n warpName w body _ hw _ _ =>
+    have ihw := progress hw
+    match ihw with
+    | .inl hv =>
+      match n with
+      | 0 => exact .inr ⟨_, Step.loopConvergentZero warpName w body hv⟩
+      | n' + 1 => exact .inr ⟨_, Step.loopConvergentSucc warpName n' w body hv⟩
+    | .inr ⟨w', hw'⟩ =>
+      exact .inr ⟨_, Step.loopConvergentCong n warpName w w' body hw'⟩
   | .letPairE _ _ _ e _ _ body _ _ _ he _ _ _ hbody _ _ =>
     have ihe := progress he
     match ihe with
@@ -446,6 +470,7 @@ private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopPhased _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopConvergent _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 /-- Values can be typed in any context, producing the same context unchanged. -/
 theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
@@ -501,6 +526,7 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
   | loopUniform _ _ _ _ _ _ _ _ _ _ ih_w _ => exact ih_w hout
   | loopVarying _ _ _ _ _ _ _ ih_w => exact ih_w hout
   | loopPhased _ _ _ _ _ _ _ _ _ _ _ _ ih_w _ => exact ih_w hout
+  | loopConvergent _ _ _ _ _ _ _ _ _ _ ih_w _ => exact ih_w hout
   | letPairE ctx₀ ctx_mid ctx_body _ n1 n2 _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 ih_e ih_body =>
     have h_body := ih_body hout
     have hxn1 : x ≠ n1 := by intro h; subst h; rw [hcons1] at hout; simp at hout
@@ -655,6 +681,26 @@ theorem subst_typing
       have hbody' := subst_typing hv ht_v hbody hname_body
       rw [remove_cons_ne (Ne.symm hxn)] at hbody'
       exact HasType.loopUniform _ _ _ _ _ _ _ hw' hfresh' hbody'
+  | .loopConvergent _ ctx_mid _ warpName _ body s_loop hw hfresh hbody => by
+    simp only [subst]
+    by_cases hxn : warpName = nm
+    · simp [show (warpName == nm) = true from by simp [beq_iff_eq, hxn]]
+      have hfresh_nm : ctx_mid.lookup nm = none := hxn ▸ hfresh
+      have hw' := subst_typing hv ht_v hw hname
+      rw [remove_of_lookup_none hfresh_nm] at hw'
+      rw [remove_of_lookup_none hfresh_nm]
+      exact HasType.loopConvergent _ _ _ _ _ _ _ hw' hfresh hbody
+    · simp [show (warpName == nm) = false from by simp [beq_iff_eq, hxn]]
+      have hw' := subst_typing hv ht_v hw hname
+      have hfresh' : (ctx_mid.remove nm).lookup warpName = none := by
+        rw [remove_lookup_ne (Ne.symm hxn)]; exact hfresh
+      have hname_body : ∀ t', Ctx.lookup ((warpName, .warp s_loop) :: ctx_mid) nm = some t' → t' = t_v := by
+        intro t' hl
+        rw [lookup_cons_ne hxn] at hl
+        exact hname t' (output_binding_from_input hw hl)
+      have hbody' := subst_typing hv ht_v hbody hname_body
+      rw [remove_cons_ne (Ne.symm hxn)] at hbody'
+      exact HasType.loopConvergent _ _ _ _ _ _ _ hw' hfresh' hbody'
   | .letPairE _ ctx_mid ctx_body _ n1 n2 body t1 t2 _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 => by
     simp only [subst]
     by_cases hxn1 : n1 = nm
@@ -871,6 +917,20 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | loopPhased _ _ _ _ _ _ _ _ hw hfresh hbody hwf =>
       exact HasType.loopPhased _ _ _ _ _ _ _ _ (ih hw) hfresh hbody hwf
+  | loopConvergentZero warpName v body hv =>
+    cases ht with
+    | loopConvergent _ _ _ _ _ _ _ hw _ _ =>
+      have := value_preserves_ctx hw hv; subst this; exact hw
+  | loopConvergentSucc warpName n v body hv =>
+    cases ht with
+    | loopConvergent _ _ _ _ _ _ _ hw hfresh hbody =>
+      have hctx := value_preserves_ctx hw hv; subst hctx
+      have h_subst := subst_preserves_typing hw hfresh hbody hfresh hv
+      exact HasType.loopConvergent _ _ _ _ _ _ _ h_subst hfresh hbody
+  | loopConvergentCong n warpName w w' body _ ih =>
+    cases ht with
+    | loopConvergent _ _ _ _ _ _ _ hw hfresh hbody =>
+      exact HasType.loopConvergent _ _ _ _ _ _ _ (ih hw) hfresh hbody
 
 -- ============================================================================
 -- Multi-step Type Safety (Corollary 4.3)
