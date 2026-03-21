@@ -479,7 +479,10 @@ pub type ButterflyStage5 = Xor<32>;
 #[cfg(feature = "warp64")]
 pub type FullButterfly = Compose<
     Compose<
-        Compose<Compose<Compose<ButterflyStage0, ButterflyStage1>, ButterflyStage2>, ButterflyStage3>,
+        Compose<
+            Compose<Compose<ButterflyStage0, ButterflyStage1>, ButterflyStage2>,
+            ButterflyStage3,
+        >,
         ButterflyStage4,
     >,
     ButterflyStage5,
