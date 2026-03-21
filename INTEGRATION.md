@@ -75,7 +75,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-warp-types = { path = "path/to/warp-types" }
+warp-types = "0.2"
 ```
 
 **Kernel code (`my-kernels/src/lib.rs`):**
@@ -164,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 cudarc = { version = "0.19", features = ["driver", "cuda-12000"] }
 
 [build-dependencies]
-warp-types-builder = { path = "path/to/warp-types/warp-types-builder" }
+warp-types-builder = "0.2"
 ```
 
 **Requirements:**
@@ -330,7 +330,7 @@ Common CUDA patterns and their warp-types equivalents:
 A: The type system (Path 1) works on stable. GPU kernel compilation (Path 2) requires nightly for `abi_ptx` and `asm_experimental_arch`.
 
 **Q: What GPU hardware is supported?**
-A: Any NVIDIA GPU with a CUDA driver. Tested on RTX 4000 Ada (compute 8.9). AMD support is in progress (u64 masks and target stubs are ready).
+A: Any NVIDIA GPU with a CUDA driver. Tested on RTX 4000 Ada (compute 8.9). AMD MI300X (gfx942) verified for mask correctness. Full AMD GPU execution requires an amdgcn Rust target (not yet available).
 
 **Q: What's the runtime overhead?**
 A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.
@@ -339,7 +339,7 @@ A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.
 A: The type system (Path 1) works with any GPU framework. The kernel compilation pipeline (Path 2) currently targets NVIDIA PTX via cudarc. Vulkan/SPIR-V backend is future work.
 
 **Q: What about AMD GPUs?**
-A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. AMD inline assembly stubs exist but are untested without hardware. For AMD today, use Path 4 (`warp_types.h` with HIP).
+A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. MI300X mask correctness verified. For AMD GPU execution today, use Path 4 (`warp_types.h` with HIP) — Rust doesn't target amdgcn yet.
 
 **Q: Can I use warp-types from C++?**
 A: Two options. Path 3: write kernels in Rust, load PTX from C++ via `cuModuleLoad`. Path 4: write kernels in C++ using `include/warp_types.h` for compile-time safety. Both are zero overhead.
