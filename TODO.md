@@ -99,5 +99,6 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 
 - [x] `letPair` linear pair destructor — typing rule, reduction, full metatheory (9037aa6af)
 - [x] Nested merge — `IsComplement s1 s2 parent`, `mergeVal → s1|||s2`, EvenLow/EvenHigh instance (9037aa6af)
-- [ ] Loop typing rules (§5.1) — LOOP-UNIFORM, CONVERGENT, VARYING, PHASED
-- [ ] 64-lane AMD wavefronts — ActiveSet → BitVec 64 / warp_size generalization
+- [x] LOOP-UNIFORM — §5.1 uniform loop, body preserves context, self-referential preservation (0bac23fc9)
+- [ ] LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — remaining §5.1 rules (lower priority)
+- [ ] 64-lane AMD wavefronts — ActiveSet → BitVec 64 / warp_size generalization (Rust-side)
