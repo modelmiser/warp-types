@@ -26,6 +26,8 @@ jobs:
         run: cargo build --workspace --verbose
       - name: Unit tests
         run: cargo test --workspace --lib --verbose
+      - name: Unit tests (all features)
+        run: cargo test --workspace --lib --all-features --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests

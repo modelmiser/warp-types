@@ -239,12 +239,14 @@ A `Uniform<T>` can be converted to `PerLane<T>` (broadcasting), but the reverse 
 
 ### SingleLane<T, n>
 
-`SingleLane<T, n>` represents a value that exists only in lane `n`. This is the result type of reductions:
+`SingleLane<T, n>` represents a value that exists only in lane `n`. A tree reduction to a single lane would produce this type:
 
 ```rust
-let sum: SingleLane<i32, 0> = reduce_sum(data);  // Result in lane 0
-let broadcast: Uniform<i32> = sum.broadcast();   // Share with all lanes
+let sum: SingleLane<i32, 0> = tree_reduce(data);  // Result in lane 0 only
+let broadcast: Uniform<i32> = sum.broadcast();     // Share with all lanes
 ```
+
+Note: Our implementation's `reduce_sum` uses a butterfly pattern where all lanes receive the result, so it returns `Uniform<T>` directly (skipping the broadcast step). `SingleLane` is used for asymmetric reductions where only one lane holds the result.
 
 ## 3.2 Active Sets
 

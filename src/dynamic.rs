@@ -109,6 +109,10 @@ impl DynDiverge {
     ///
     /// This always succeeds because the complement is guaranteed by construction.
     /// Consumes the `DynDiverge` — you can't use the branches after merging.
+    ///
+    /// **Design note:** Returns `Warp<All>` because `diverge_dynamic` is only
+    /// available on `Warp<All>`. If extended to sub-warps in the future, the
+    /// return type must be parameterized by the parent set.
     pub fn merge(self) -> Warp<All> {
         debug_assert_eq!(
             self.true_mask | self.false_mask,

@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 296 unit + 50 example + 29 doc tests (375 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
+**Status:** Research prototype with real GPU execution. 297 unit + 50 example + 29 doc tests (376 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
 
 ## The Problem
 
@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 296 unit + 29 doc tests
+cargo test                                    # 297 unit + 29 doc tests
 cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```

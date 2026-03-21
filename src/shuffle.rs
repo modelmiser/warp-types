@@ -140,7 +140,41 @@ impl Warp<All> {
     ///
     /// GPU integer arithmetic wraps on overflow (two's complement, no trap).
     /// This variant uses `wrapping_add` to match that behavior exactly.
-    pub fn reduce_sum_wrapping(&self, data: PerLane<i32>) -> Uniform<i32> {
+    /// Hardware-verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`.
+    pub fn reduce_sum_wrapping_i32(&self, data: PerLane<i32>) -> Uniform<i32> {
+        let mut val = data.get();
+        val = val.wrapping_add(val.gpu_shfl_xor(16));
+        val = val.wrapping_add(val.gpu_shfl_xor(8));
+        val = val.wrapping_add(val.gpu_shfl_xor(4));
+        val = val.wrapping_add(val.gpu_shfl_xor(2));
+        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        Uniform::from_const(val)
+    }
+
+    /// Wrapping reduce-sum for `u32` — GPU hardware overflow semantics.
+    pub fn reduce_sum_wrapping_u32(&self, data: PerLane<u32>) -> Uniform<u32> {
+        let mut val = data.get();
+        val = val.wrapping_add(val.gpu_shfl_xor(16));
+        val = val.wrapping_add(val.gpu_shfl_xor(8));
+        val = val.wrapping_add(val.gpu_shfl_xor(4));
+        val = val.wrapping_add(val.gpu_shfl_xor(2));
+        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        Uniform::from_const(val)
+    }
+
+    /// Wrapping reduce-sum for `i64` — GPU hardware overflow semantics.
+    pub fn reduce_sum_wrapping_i64(&self, data: PerLane<i64>) -> Uniform<i64> {
+        let mut val = data.get();
+        val = val.wrapping_add(val.gpu_shfl_xor(16));
+        val = val.wrapping_add(val.gpu_shfl_xor(8));
+        val = val.wrapping_add(val.gpu_shfl_xor(4));
+        val = val.wrapping_add(val.gpu_shfl_xor(2));
+        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        Uniform::from_const(val)
+    }
+
+    /// Wrapping reduce-sum for `u64` — GPU hardware overflow semantics.
+    pub fn reduce_sum_wrapping_u64(&self, data: PerLane<u64>) -> Uniform<u64> {
         let mut val = data.get();
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
@@ -397,15 +431,23 @@ mod tests {
     }
 
     #[test]
-    fn test_reduce_sum_wrapping() {
+    fn test_reduce_sum_wrapping_i32() {
         let all: Warp<All> = Warp::new();
-        // On CPU: identity shuffle → val doubles each stage → wrapping_add(MAX, MAX) wraps
         let data = PerLane::new(i32::MAX);
-        let result = all.reduce_sum_wrapping(data);
-        // i32::MAX * 32 (via butterfly doubling) = wrapping result
-        // Stage 1: MAX + MAX = -2 (wraps)
-        // Stages 2-5 continue wrapping
+        let result = all.reduce_sum_wrapping_i32(data);
         let mut expected = i32::MAX;
+        for _ in 0..5 {
+            expected = expected.wrapping_add(expected);
+        }
+        assert_eq!(result.get(), expected);
+    }
+
+    #[test]
+    fn test_reduce_sum_wrapping_u32() {
+        let all: Warp<All> = Warp::new();
+        let data = PerLane::new(u32::MAX);
+        let result = all.reduce_sum_wrapping_u32(data);
+        let mut expected = u32::MAX;
         for _ in 0..5 {
             expected = expected.wrapping_add(expected);
         }
