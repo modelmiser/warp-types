@@ -238,8 +238,14 @@ pub mod load {
         result
     }
 
-    /// Generic load (for any pattern)
-    pub fn generic<T: Copy + Default, P: AccessPattern>(
+    /// Generic load (for any pattern).
+    ///
+    /// # Safety
+    ///
+    /// Each `indices[lane]` must be a valid offset from `ptr.base()` —
+    /// i.e., `ptr.base().add(indices[lane])` must be in-bounds of the
+    /// original allocation.
+    pub unsafe fn generic<T: Copy + Default, P: AccessPattern>(
         ptr: &WarpPtr<T, P>,
         indices: &[usize; 32],
     ) -> [T; 32] {
@@ -257,16 +263,18 @@ pub mod load {
 pub mod store {
     use super::*;
 
-    /// Uniform store: all lanes write same value to same address
-    /// Note: This is safe because all lanes write the same value
-    pub fn uniform<T: Copy>(ptr: &WarpPtrMut<T, Uniform>, value: T) {
+    /// Uniform store: all lanes write same value to same address.
+    /// Takes `&mut` to satisfy Rust's aliasing rules — writing through
+    /// a `*mut T` requires exclusive access to the pointer wrapper.
+    pub fn uniform<T: Copy>(ptr: &mut WarpPtrMut<T, Uniform>, value: T) {
         unsafe {
             *ptr.base() = value;
         }
     }
 
-    /// Consecutive store: lane i writes to base[i]
-    pub fn consecutive<T: Copy>(ptr: &WarpPtrMut<T, Consecutive>, values: &[T; 32]) {
+    /// Consecutive store: lane i writes to base[i].
+    /// Takes `&mut` to satisfy Rust's aliasing rules.
+    pub fn consecutive<T: Copy>(ptr: &mut WarpPtrMut<T, Consecutive>, values: &[T; 32]) {
         for lane in 0..32 {
             unsafe {
                 *ptr.base().add(lane) = values[lane];

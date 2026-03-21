@@ -108,11 +108,19 @@ struct Odd64    { static constexpr uint64_t MASK = 0xAAAA'AAAA'AAAA'AAAA;
 // Complement relationship (compile-time)
 // ============================================================================
 
-/// Two sets are complements if they cover All and don't overlap.
-template<typename S1, typename S2>
-concept ComplementOf = ActiveSet<S1> && ActiveSet<S2>
-    && (S1::MASK | S2::MASK) == All::MASK
+/// Two sets are complements within a parent if they cover it and don't overlap.
+template<typename S1, typename S2, typename Parent>
+concept ComplementWithin = ActiveSet<S1> && ActiveSet<S2> && ActiveSet<Parent>
+    && (S1::MASK | S2::MASK) == Parent::MASK
     && (S1::MASK & S2::MASK) == 0;
+
+/// Two sets are complements within All (32-lane).
+template<typename S1, typename S2>
+concept ComplementOf = ComplementWithin<S1, S2, All>;
+
+/// Two sets are complements within All64 (64-lane AMD wavefront).
+template<typename S1, typename S2>
+concept ComplementOf64 = ComplementWithin<S1, S2, All64>;
 
 // ============================================================================
 // Data value types — thin wrappers matching Rust's repr(transparent) types
@@ -251,11 +259,18 @@ public:
 // Merge — rejoin complementary sub-warps
 // ============================================================================
 
-/// Merge two complementary sub-warps back into Warp<All>.
+/// Merge two complementary sub-warps back into Warp<All> (32-lane).
 /// Compile error if the sets don't complement (e.g., merging Even + LowHalf).
 template<ActiveSet S1, ActiveSet S2>
     requires ComplementOf<S1, S2>
 WT_HOST_DEVICE constexpr Warp<All> merge(Warp<S1>, Warp<S2>) {
+    return {};
+}
+
+/// Merge two complementary sub-warps back into Warp<All64> (64-lane AMD).
+template<ActiveSet S1, ActiveSet S2>
+    requires ComplementOf64<S1, S2>
+WT_HOST_DEVICE constexpr Warp<All64> merge64(Warp<S1>, Warp<S2>) {
     return {};
 }
 

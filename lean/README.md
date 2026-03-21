@@ -33,7 +33,9 @@ Core theorems are fully machine-checked. Zero sorry, zero axioms.
 
 ### Scope
 
-The Lean model focuses on active-set tracking — the core safety mechanism. It uses a pure expression calculus (no store/configuration triples) with `PerLane` as an opaque type (no data payload). The merge rule handles top-level merge (back to `All`); the nested merge rule is defined (`IsComplement`) but not used in the typing judgment. These simplifications are intentional: the mechanization proves that the active-set discipline prevents shuffle on diverged warps, which is the paper's central claim. See §4.8 of the paper for the full mechanization scope.
+The Lean model focuses on active-set tracking — the core safety mechanism. It uses a pure expression calculus (no store/configuration triples) with `PerLane` as an opaque type (no data payload). The merge rule uses `IsComplement s1 s2 parent` (general parent set, not restricted to `All`), supporting nested divergence. All four loop typing rules from §5.1 (LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) are mechanized with full progress, preservation, and substitution coverage.
+
+**LOOP-CONVERGENT note:** The Lean model uses fuel (`Nat` bound) rather than the paper's collective-predicate exit condition. The typing rule is structurally identical to LOOP-UNIFORM. This proves type safety regardless of exit timing but does not model the collective-predicate requirement. See §4.8 of the paper for the full mechanization scope.
 
 ## Key Design Decisions
 
@@ -66,13 +68,11 @@ lean/
   WarpTypes/
     Basic.lean           Type system: active sets, types, expressions,
                          typing rules, diverge/complement/shuffle theorems,
-                         value predicate (194 lines)
+                         warpFree predicate, loop rules, value predicate
     Metatheory.lean      Metatheory: substitution, reduction, canonical
                          forms, progress, preservation, context lemmas,
-                         substitution lemma, 5 bug proofs (702 lines)
+                         substitution lemma, 5 bug proofs
 ```
-
-896 lines across the two core files.
 
 ## Provenance
 

@@ -253,13 +253,19 @@ Each factors through `shuffle_diverged_untypable`: if the active set after diver
 
 Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, directly encoding Rust's move semantics. The mechanization has no trusted assumptions beyond Lean's kernel.
 
+### What Is Mechanized
+
+The following are fully mechanized with zero sorry, zero axioms:
+
+- **Core type system** (§3–4): diverge, merge, shuffle, letBind, letPair, fst/snd, pairs — with progress, preservation, and substitution.
+- **Extension typing rules** (§5.1): all four loop typing rules — LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — with full progress, preservation, and substitution coverage.
+- **Nested merge**: `HasType.merge` uses `IsComplement s1 s2 parent` (parameterized by a general parent set, not restricted to `All`). `Step.mergeVal` produces `s1 ||| s2`. Concrete instance: `evenLow_evenHigh_complement_within_even`.
+- **Five untypability proofs**: real GPU bugs (cuda-samples #398, CUB/CCCL #854, PIConGPU #2514, LLVM #155682, demo) proved unreachable in the type system.
+
 ### What Is Not Mechanized
 
-The following are not mechanized:
-
-- The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5).
-- The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems.
-- **Merge scope**: The Lean merge typing rule (`HasType.merge`) requires `IsComplementAll s1 s2` and always produces `Warp<All>`. The paper's general merge rule (`S₁ ∪ S₂`) and nested merge (`Warp<P>`) are not modeled — the Lean `Step.mergeVal` reduction hardcodes `ActiveSet.all`. Extending to nested merge requires parameterizing the merge typing rule by a parent set, which is straightforward but not yet done.
+- The operational semantics for `shuffle_within` (§4.6, set-preserving masks). The Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`); the Lean model does not include this construct.
+- **LOOP-CONVERGENT modeling note**: The Lean `loopConvergent` uses fuel (`Nat` bound) rather than modeling the paper's collective-predicate exit condition (`p : Warp<S> → Bool` where `p` uses ballot/all/any). The typing rule is structurally identical to `loopUniform` — body preserves active set `S`. This proves type safety regardless of when the loop exits (a strictly stronger guarantee), but does not model the collective-predicate requirement that distinguishes LOOP-CONVERGENT from LOOP-UNIFORM in the paper.
 - **Linearity**: Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) are enforced by the linear context threading mechanism (`letBind` checks freshness and consumption), but are not stated as standalone Lean theorems. The mechanism is sound; the explicit theorem statements are future work.
 
 We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
