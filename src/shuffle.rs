@@ -714,7 +714,7 @@ mod tests {
 
         // Lane 0 gets lane 2's value, lane 2 gets lane 0's value.
         assert_eq!(shuffled.lane(0), 20); // was 0, now 2*10
-        assert_eq!(shuffled.lane(2), 0);  // was 20, now 0*10
+        assert_eq!(shuffled.lane(2), 0); // was 20, now 0*10
         assert_eq!(shuffled.lane(4), 60); // was 40, now 6*10
         assert_eq!(shuffled.lane(6), 40); // was 60, now 4*10
 
@@ -722,7 +722,11 @@ mod tests {
         // every even lane's partner (lane ^ 2) is also even.
         for lane in (0..32).step_by(2) {
             let partner = lane ^ 2;
-            assert_eq!(partner % 2, 0, "lane {lane}'s partner {partner} should be even");
+            assert_eq!(
+                partner % 2,
+                0,
+                "lane {lane}'s partner {partner} should be even"
+            );
         }
     }
 
@@ -743,7 +747,11 @@ mod tests {
         // Verify: for Odd lanes and mask 2, every odd partner is odd.
         for lane in (1..32).step_by(2) {
             let partner = lane ^ 2;
-            assert_ne!(partner % 2, 0, "lane {lane}'s partner {partner} should be odd");
+            assert_ne!(
+                partner % 2,
+                0,
+                "lane {lane}'s partner {partner} should be odd"
+            );
         }
     }
 
@@ -756,14 +764,17 @@ mod tests {
         let shuffled = sw.shuffle_xor(8);
 
         // All partners stay within 0..15.
-        assert_eq!(shuffled.lane(0), 24);  // lane 8's value: 8*3
-        assert_eq!(shuffled.lane(8), 0);   // lane 0's value: 0*3
-        assert_eq!(shuffled.lane(7), 45);  // lane 15's value: 15*3
+        assert_eq!(shuffled.lane(0), 24); // lane 8's value: 8*3
+        assert_eq!(shuffled.lane(8), 0); // lane 0's value: 0*3
+        assert_eq!(shuffled.lane(7), 45); // lane 15's value: 15*3
         assert_eq!(shuffled.lane(15), 21); // lane 7's value: 7*3
 
         for lane in 0..16u32 {
             let partner = lane ^ 8;
-            assert!(partner < 16, "lane {lane}'s partner {partner} should be in LowHalf");
+            assert!(
+                partner < 16,
+                "lane {lane}'s partner {partner} should be in LowHalf"
+            );
         }
     }
 

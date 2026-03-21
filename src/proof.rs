@@ -257,10 +257,7 @@ pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
             let t2 = type_check(ctx, e2)?;
             // Linearity check: x must have been consumed by the body
             if ctx.remove(x).is_some() {
-                return Err(format!(
-                    "Linear variable '{}' not consumed in let body",
-                    x
-                ));
+                return Err(format!("Linear variable '{}' not consumed in let body", x));
             }
             Ok(t2)
         }

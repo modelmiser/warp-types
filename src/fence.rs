@@ -413,8 +413,7 @@ mod tests {
             let (_eh, p_eh) = even_high.global_store(a2);
             let (_odds, p_odd) = odds.global_store(b);
 
-            let even_partial: GlobalRegion<PartialWrite<Even>> =
-                merge_writes_within(p_el, p_eh);
+            let even_partial: GlobalRegion<PartialWrite<Even>> = merge_writes_within(p_el, p_eh);
             let full = merge_writes(even_partial, p_odd);
             let _fenced = threadfence(full);
         });
