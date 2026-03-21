@@ -7,7 +7,7 @@
 //! 2. **`Warp<All>`-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 
-use crate::active_set::All;
+use crate::active_set::{ActiveSet, All};
 use crate::data::{LaneId, PerLane, Uniform};
 use crate::gpu::GpuShuffle;
 use crate::warp::Warp;
@@ -79,6 +79,84 @@ impl BallotResult {
 pub trait ShuffleSafe {}
 
 impl ShuffleSafe for Warp<All> {}
+
+// ============================================================================
+// Shuffle XOR within a sub-warp (§3.3 SHUFFLE-WITHIN typing rule)
+// ============================================================================
+
+/// Check that an XOR shuffle mask preserves an active set.
+///
+/// Returns `true` if for every active lane `i` (bit set in `active_mask`),
+/// lane `i ^ xor_mask` is also active. This means the XOR permutation
+/// maps the active set to itself — no lane reads from an inactive partner.
+///
+/// The check works by computing the XOR-permuted bitmask and verifying it
+/// equals the original. For the lower 32 bits (NVIDIA warp width):
+/// bit `j` of the permuted mask is set iff bit `(j ^ xor_mask)` is set
+/// in the original.
+#[inline]
+fn xor_mask_preserves_active_set(active_mask: u64, xor_mask: u32) -> bool {
+    let mask32 = active_mask as u32;
+    let xor = xor_mask & 0x1F; // Only 5 bits matter for 32-lane warps
+    let mut permuted = 0u32;
+    // Compute XOR permutation of the bitmask:
+    // For each lane j, the permuted mask has bit j set iff bit (j ^ xor) was set.
+    let mut j = 0u32;
+    while j < 32 {
+        if mask32 & (1u32 << (j ^ xor)) != 0 {
+            permuted |= 1u32 << j;
+        }
+        j += 1;
+    }
+    permuted == mask32
+}
+
+impl<S: ActiveSet> Warp<S> {
+    /// Shuffle XOR within a sub-warp, when the mask preserves the active set.
+    ///
+    /// This implements the §3.3 SHUFFLE-WITHIN typing rule: an XOR shuffle
+    /// is safe on `Warp<S>` (not just `Warp<All>`) when the XOR mask maps
+    /// every active lane to another active lane. Formally: for every lane `i`
+    /// in `S`, lane `(i ^ mask)` is also in `S`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use warp_types::*;
+    ///
+    /// let warp: Warp<All> = Warp::kernel_entry();
+    /// let (evens, odds) = warp.diverge_even_odd();
+    ///
+    /// let data = PerLane::new(42i32);
+    ///
+    /// // XOR mask 2 on Even lanes: lane 0↔2, 4↔6, etc. — stays within Even.
+    /// let _shuffled = evens.shuffle_xor_within(data, 2);
+    ///
+    /// // XOR mask 1 would map even→odd — panics!
+    /// // evens.shuffle_xor_within(data, 1); // panic
+    /// #
+    /// # drop(odds); // suppress must_use
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mask` does not preserve `S`, i.e., there exists an active
+    /// lane `i` where lane `(i ^ mask)` is not active.
+    pub fn shuffle_xor_within<T: GpuValue + GpuShuffle>(
+        &self,
+        data: PerLane<T>,
+        mask: u32,
+    ) -> PerLane<T> {
+        assert!(
+            xor_mask_preserves_active_set(S::MASK, mask),
+            "shuffle_xor_within: XOR mask {} does not preserve active set {} (mask={:#010X})",
+            mask,
+            S::NAME,
+            S::MASK as u32,
+        );
+        PerLane::new(data.get().gpu_shfl_xor(mask))
+    }
+}
 
 // ============================================================================
 // Shuffle operations restricted to Warp<All>
@@ -496,5 +574,212 @@ mod tests {
             let a_bc = Compose::<Xor<3>, Compose<Xor<5>, Xor<7>>>::forward(i);
             assert_eq!(ab_c, a_bc);
         }
+    }
+
+    // ========================================================================
+    // shuffle_xor_within tests (§3.3 SHUFFLE-WITHIN typing rule)
+    // ========================================================================
+
+    #[test]
+    fn test_xor_mask_preserves_active_set_all() {
+        // All lanes active: any mask preserves the set.
+        for mask in 0..32u32 {
+            assert!(
+                xor_mask_preserves_active_set(crate::active_set::All::MASK, mask),
+                "All should accept mask {mask}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_xor_mask_preserves_even() {
+        use crate::active_set::Even;
+        // Even: mask 2 maps 0↔2, 4↔6, etc. — stays within Even.
+        assert!(xor_mask_preserves_active_set(Even::MASK, 2));
+        assert!(xor_mask_preserves_active_set(Even::MASK, 4));
+        assert!(xor_mask_preserves_active_set(Even::MASK, 6));
+        // Even: mask 0 is identity — always preserves.
+        assert!(xor_mask_preserves_active_set(Even::MASK, 0));
+        // Even: mask 1 maps even→odd — does NOT preserve.
+        assert!(!xor_mask_preserves_active_set(Even::MASK, 1));
+        assert!(!xor_mask_preserves_active_set(Even::MASK, 3));
+        assert!(!xor_mask_preserves_active_set(Even::MASK, 5));
+    }
+
+    #[test]
+    fn test_xor_mask_preserves_odd() {
+        use crate::active_set::Odd;
+        // Odd: even masks preserve (same group structure as Even).
+        assert!(xor_mask_preserves_active_set(Odd::MASK, 2));
+        assert!(xor_mask_preserves_active_set(Odd::MASK, 4));
+        // Odd: odd masks do NOT preserve.
+        assert!(!xor_mask_preserves_active_set(Odd::MASK, 1));
+        assert!(!xor_mask_preserves_active_set(Odd::MASK, 3));
+    }
+
+    #[test]
+    fn test_xor_mask_preserves_low_half() {
+        use crate::active_set::LowHalf;
+        // LowHalf: lanes 0..15. Masks < 16 stay within LowHalf.
+        for mask in 0..16u32 {
+            assert!(
+                xor_mask_preserves_active_set(LowHalf::MASK, mask),
+                "LowHalf should accept mask {mask}"
+            );
+        }
+        // Mask 16 maps lane 0→16 (outside LowHalf) — does NOT preserve.
+        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, 16));
+        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, 17));
+    }
+
+    #[test]
+    fn test_xor_mask_preserves_high_half() {
+        use crate::active_set::HighHalf;
+        // HighHalf: lanes 16..31. Masks < 16 stay within HighHalf.
+        for mask in 0..16u32 {
+            assert!(
+                xor_mask_preserves_active_set(HighHalf::MASK, mask),
+                "HighHalf should accept mask {mask}"
+            );
+        }
+        // Mask 16 maps lane 16→0 (outside HighHalf) — does NOT preserve.
+        assert!(!xor_mask_preserves_active_set(HighHalf::MASK, 16));
+    }
+
+    #[test]
+    fn test_xor_mask_preserves_even_low() {
+        use crate::active_set::EvenLow;
+        // EvenLow: even lanes in 0..15. Must be even AND < 16.
+        assert!(xor_mask_preserves_active_set(EvenLow::MASK, 2));
+        assert!(xor_mask_preserves_active_set(EvenLow::MASK, 4));
+        assert!(xor_mask_preserves_active_set(EvenLow::MASK, 6));
+        // Mask 1 would go even→odd — fails.
+        assert!(!xor_mask_preserves_active_set(EvenLow::MASK, 1));
+        // Mask 16 would go low→high — fails.
+        assert!(!xor_mask_preserves_active_set(EvenLow::MASK, 16));
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_on_warp_all() {
+        // Warp<All> should accept any mask via shuffle_xor_within.
+        let warp: Warp<All> = Warp::new();
+        let data = PerLane::new(42i32);
+        for mask in [0, 1, 2, 5, 16, 31] {
+            let result = warp.shuffle_xor_within(data, mask);
+            // CPU identity: shuffle returns input.
+            assert_eq!(result.get(), 42);
+        }
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_on_even() {
+        use crate::active_set::Even;
+        let warp: Warp<Even> = Warp::new();
+        let data = PerLane::new(99i32);
+        // Even masks (2, 4, 6) should succeed.
+        let r = warp.shuffle_xor_within(data, 2);
+        assert_eq!(r.get(), 99); // CPU identity
+        let r = warp.shuffle_xor_within(data, 4);
+        assert_eq!(r.get(), 99);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not preserve active set")]
+    fn test_shuffle_xor_within_even_rejects_odd_mask() {
+        use crate::active_set::Even;
+        let warp: Warp<Even> = Warp::new();
+        let data = PerLane::new(99i32);
+        // Mask 1 maps even→odd — should panic.
+        let _ = warp.shuffle_xor_within(data, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not preserve active set")]
+    fn test_shuffle_xor_within_low_half_rejects_high_mask() {
+        use crate::active_set::LowHalf;
+        let warp: Warp<LowHalf> = Warp::new();
+        let data = PerLane::new(7i32);
+        // Mask 16 maps low→high — should panic.
+        let _ = warp.shuffle_xor_within(data, 16);
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_simwarp_even_mask2() {
+        // Verify real lane exchange using SimWarp.
+        // Even lanes: {0, 2, 4, 6, 8, ...}. XOR mask 2: 0↔2, 4↔6, 8↔10, ...
+        use crate::simwarp::SimWarp;
+
+        let sw = SimWarp::<i32>::new(|i| i as i32 * 10);
+        let shuffled = sw.shuffle_xor(2);
+
+        // Lane 0 gets lane 2's value, lane 2 gets lane 0's value.
+        assert_eq!(shuffled.lane(0), 20); // was 0, now 2*10
+        assert_eq!(shuffled.lane(2), 0);  // was 20, now 0*10
+        assert_eq!(shuffled.lane(4), 60); // was 40, now 6*10
+        assert_eq!(shuffled.lane(6), 40); // was 60, now 4*10
+
+        // Verify the preservation property: for Even lanes and mask 2,
+        // every even lane's partner (lane ^ 2) is also even.
+        for lane in (0..32).step_by(2) {
+            let partner = lane ^ 2;
+            assert_eq!(partner % 2, 0, "lane {lane}'s partner {partner} should be even");
+        }
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_simwarp_odd_mask2() {
+        // Odd lanes: {1, 3, 5, 7, ...}. XOR mask 2: 1↔3, 5↔7, 9↔11, ...
+        use crate::simwarp::SimWarp;
+
+        let sw = SimWarp::<i32>::new(|i| i as i32);
+        let shuffled = sw.shuffle_xor(2);
+
+        // Lane 1 gets lane 3's value, lane 3 gets lane 1's value.
+        assert_eq!(shuffled.lane(1), 3);
+        assert_eq!(shuffled.lane(3), 1);
+        assert_eq!(shuffled.lane(5), 7);
+        assert_eq!(shuffled.lane(7), 5);
+
+        // Verify: for Odd lanes and mask 2, every odd partner is odd.
+        for lane in (1..32).step_by(2) {
+            let partner = lane ^ 2;
+            assert_ne!(partner % 2, 0, "lane {lane}'s partner {partner} should be odd");
+        }
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_simwarp_low_half() {
+        // LowHalf: lanes 0..15. XOR mask 8: 0↔8, 1↔9, 2↔10, ..., 7↔15.
+        use crate::simwarp::SimWarp;
+
+        let sw = SimWarp::<i32>::new(|i| i as i32 * 3);
+        let shuffled = sw.shuffle_xor(8);
+
+        // All partners stay within 0..15.
+        assert_eq!(shuffled.lane(0), 24);  // lane 8's value: 8*3
+        assert_eq!(shuffled.lane(8), 0);   // lane 0's value: 0*3
+        assert_eq!(shuffled.lane(7), 45);  // lane 15's value: 15*3
+        assert_eq!(shuffled.lane(15), 21); // lane 7's value: 7*3
+
+        for lane in 0..16u32 {
+            let partner = lane ^ 8;
+            assert!(partner < 16, "lane {lane}'s partner {partner} should be in LowHalf");
+        }
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_after_diverge() {
+        // End-to-end: diverge, shuffle within sub-warp, merge.
+        let warp: Warp<All> = Warp::kernel_entry();
+        let data = PerLane::new(42i32);
+
+        let (evens, odds) = warp.diverge_even_odd();
+
+        // Both sub-warps can shuffle with even masks.
+        let _even_shuffled = evens.shuffle_xor_within(data, 2);
+        let _odd_shuffled = odds.shuffle_xor_within(data, 4);
+
+        // Merge back to All.
+        let _merged: Warp<All> = crate::merge::merge(evens, odds);
     }
 }
