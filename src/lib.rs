@@ -154,8 +154,21 @@ pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i3
 }
 
 // ============================================================================
-// GpuValue trait
+// GpuValue trait (with its own seal, separate from ActiveSet's seal)
 // ============================================================================
+
+/// Sealed trait module for GPU value types — separate from ActiveSet sealing.
+#[doc(hidden)]
+pub mod gpu_sealed {
+    #[doc(hidden)]
+    pub(crate) struct GpuSealToken;
+
+    #[allow(private_interfaces)]
+    pub trait GpuSealed {
+        #[doc(hidden)]
+        fn _gpu_sealed() -> GpuSealToken;
+    }
+}
 
 /// Marker trait for types that can live in GPU registers.
 ///
@@ -165,57 +178,23 @@ pub fn zero_overhead_diverge_merge(data: data::PerLane<i32>) -> data::PerLane<i3
 /// Sealed: only primitive GPU types implement this trait. External crates
 /// cannot add implementations, ensuring `PerLane<T>` and `Uniform<T>`
 /// only wrap types with known GPU register semantics.
-pub trait GpuValue: active_set::sealed::Sealed + Copy + Send + Sync + Default + 'static {}
+pub trait GpuValue: gpu_sealed::GpuSealed + Copy + Send + Sync + Default + 'static {}
 
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for i32 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
+macro_rules! impl_gpu_value {
+    ($($t:ty),*) => {
+        $(
+            #[allow(private_interfaces)]
+            impl gpu_sealed::GpuSealed for $t {
+                fn _gpu_sealed() -> gpu_sealed::GpuSealToken {
+                    gpu_sealed::GpuSealToken
+                }
+            }
+            impl GpuValue for $t {}
+        )*
+    };
 }
-impl GpuValue for i32 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for u32 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for u32 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for f32 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for f32 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for i64 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for i64 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for u64 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for u64 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for f64 {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for f64 {}
-#[allow(private_interfaces)]
-impl active_set::sealed::Sealed for bool {
-    fn _sealed() -> active_set::sealed::SealToken {
-        active_set::sealed::SealToken
-    }
-}
-impl GpuValue for bool {}
+
+impl_gpu_value!(i32, u32, f32, i64, u64, f64, bool);
 
 // ============================================================================
 // Re-exports — flat access to the most-used types
@@ -253,7 +232,8 @@ pub mod prelude {
     pub use crate::gpu::GpuShuffle;
     pub use crate::{
         merge, merge_within, ActiveSet, All, CanDiverge, ComplementOf, ComplementWithin,
-        DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, GpuValue, HighHalf, Lane0, LowHalf,
-        NotLane0, Odd, OddHigh, OddLow, PerLane, SingleLane, Tile, Uniform, Warp,
+        BallotResult, DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, Fenced, FullWrite,
+        GlobalRegion, GpuValue, HighHalf, Lane0, LowHalf, NotLane0, Odd, OddHigh, OddLow,
+        PartialWrite, PerLane, SingleLane, Tile, Uniform, Unwritten, Warp, WriteState,
     };
 }

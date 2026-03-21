@@ -29,35 +29,35 @@ use std::collections::HashSet;
 
 /// Lane identifiers (0..31 for 32-lane warp)
 pub type Lane = u32;
-pub const WARP_SIZE: u32 = 32;
+pub const WARP_SIZE: u32 = crate::WARP_SIZE;
 
 /// Active sets as explicit sets of lanes (for proof purposes)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActiveSet(HashSet<Lane>);
+pub struct ProofActiveSet(HashSet<Lane>);
 
-impl ActiveSet {
+impl ProofActiveSet {
     pub fn all() -> Self {
-        ActiveSet((0..WARP_SIZE).collect())
+        ProofActiveSet((0..WARP_SIZE).collect())
     }
 
     pub fn empty() -> Self {
-        ActiveSet(HashSet::new())
+        ProofActiveSet(HashSet::new())
     }
 
     pub fn from_predicate<F: Fn(Lane) -> bool>(pred: F) -> Self {
-        ActiveSet((0..WARP_SIZE).filter(|&l| pred(l)).collect())
+        ProofActiveSet((0..WARP_SIZE).filter(|&l| pred(l)).collect())
     }
 
     pub fn union(&self, other: &Self) -> Self {
-        ActiveSet(self.0.union(&other.0).copied().collect())
+        ProofActiveSet(self.0.union(&other.0).copied().collect())
     }
 
     pub fn intersection(&self, other: &Self) -> Self {
-        ActiveSet(self.0.intersection(&other.0).copied().collect())
+        ProofActiveSet(self.0.intersection(&other.0).copied().collect())
     }
 
     pub fn complement(&self) -> Self {
-        ActiveSet((0..WARP_SIZE).filter(|l| !self.0.contains(l)).collect())
+        ProofActiveSet((0..WARP_SIZE).filter(|l| !self.0.contains(l)).collect())
     }
 
     pub fn is_disjoint(&self, other: &Self) -> bool {
@@ -77,7 +77,7 @@ impl ActiveSet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     /// Warp with active set S
-    Warp(ActiveSet),
+    Warp(ProofActiveSet),
     /// Per-lane value
     PerLane,
     /// Unit
@@ -90,7 +90,7 @@ pub enum Type {
 #[derive(Clone, Debug)]
 pub enum Expr {
     /// A warp value with active set
-    WarpVal(ActiveSet),
+    WarpVal(ProofActiveSet),
     /// Per-lane value
     PerLaneVal(Vec<i32>),
     /// Unit
@@ -133,8 +133,8 @@ impl Predicate {
         }
     }
 
-    pub fn active_set(&self) -> ActiveSet {
-        ActiveSet::from_predicate(|l| self.eval(l))
+    pub fn active_set(&self) -> ProofActiveSet {
+        ProofActiveSet::from_predicate(|l| self.eval(l))
     }
 }
 
@@ -492,7 +492,7 @@ pub fn type_safety_check(expr: &Expr) -> bool {
 
 /// LEMMA: Diverge produces complements
 /// If diverge(Warp<S>, P) → (Warp<S1>, Warp<S2>), then S1 ∪ S2 = S and S1 ∩ S2 = ∅
-pub fn diverge_complement_lemma(s: &ActiveSet, pred: &Predicate) -> bool {
+pub fn diverge_complement_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
     let p = pred.active_set();
     let s1 = s.intersection(&p);
     let s2 = s.intersection(&p.complement());
@@ -509,7 +509,7 @@ pub fn diverge_complement_lemma(s: &ActiveSet, pred: &Predicate) -> bool {
 
 /// LEMMA: Merge restores original
 /// If (S1, S2) came from diverge(S, P), then merge produces S
-pub fn merge_restore_lemma(s: &ActiveSet, pred: &Predicate) -> bool {
+pub fn merge_restore_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
     let p = pred.active_set();
     let s1 = s.intersection(&p);
     let s2 = s.intersection(&p.complement());
@@ -521,7 +521,7 @@ pub fn merge_restore_lemma(s: &ActiveSet, pred: &Predicate) -> bool {
 /// LEMMA: Shuffle source validity
 /// shuffle_xor on Warp<All> only reads from lanes in All (trivially true)
 /// shuffle_xor on Warp<S> where S ≠ All would read from lanes not in S (unsafe)
-pub fn shuffle_source_lemma(s: &ActiveSet, mask: u32) -> bool {
+pub fn shuffle_source_lemma(s: &ProofActiveSet, mask: u32) -> bool {
     if !s.is_all() {
         // Check if any source lane is outside S
         for lane in 0..WARP_SIZE {
@@ -546,21 +546,21 @@ mod tests {
 
     #[test]
     fn test_diverge_complement() {
-        let all = ActiveSet::all();
+        let all = ProofActiveSet::all();
         assert!(diverge_complement_lemma(&all, &Predicate::Even));
         assert!(diverge_complement_lemma(&all, &Predicate::LessThan(16)));
     }
 
     #[test]
     fn test_merge_restore() {
-        let all = ActiveSet::all();
+        let all = ProofActiveSet::all();
         assert!(merge_restore_lemma(&all, &Predicate::Even));
         assert!(merge_restore_lemma(&all, &Predicate::LessThan(10)));
     }
 
     #[test]
     fn test_shuffle_source_all() {
-        let all = ActiveSet::all();
+        let all = ProofActiveSet::all();
         assert!(shuffle_source_lemma(&all, 1));
         assert!(shuffle_source_lemma(&all, 5));
         assert!(shuffle_source_lemma(&all, 31));
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_shuffle_source_even_fails() {
-        let even = ActiveSet::from_predicate(|l| l % 2 == 0);
+        let even = ProofActiveSet::from_predicate(|l| l % 2 == 0);
         // XOR with 1 reads from odd lanes - unsafe!
         assert!(!shuffle_source_lemma(&even, 1));
         // XOR with 2 stays within even lanes - safe!
@@ -581,7 +581,7 @@ mod tests {
         let program = Expr::Let(
             "pair".to_string(),
             Box::new(Expr::Diverge(
-                Box::new(Expr::WarpVal(ActiveSet::all())),
+                Box::new(Expr::WarpVal(ProofActiveSet::all())),
                 Predicate::Even,
             )),
             Box::new(Expr::Var("pair".to_string())),
@@ -594,8 +594,8 @@ mod tests {
     #[test]
     fn test_type_check_bad_shuffle() {
         // shuffle on non-All warp should fail
-        let even_warp = Expr::WarpVal(ActiveSet::from_predicate(|l| l % 2 == 0));
-        let data = Expr::PerLaneVal(vec![0; 32]);
+        let even_warp = Expr::WarpVal(ProofActiveSet::from_predicate(|l| l % 2 == 0));
+        let data = Expr::PerLaneVal(vec![0; WARP_SIZE as usize]);
         let bad_shuffle = Expr::Shuffle(Box::new(even_warp), Box::new(data), 1);
 
         let mut ctx = Context::new();
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_progress() {
-        let all_warp = Expr::WarpVal(ActiveSet::all());
+        let all_warp = Expr::WarpVal(ProofActiveSet::all());
         let diverge = Expr::Diverge(Box::new(all_warp), Predicate::Even);
 
         assert!(progress_check(&diverge));
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_preservation() {
-        let all_warp = Expr::WarpVal(ActiveSet::all());
+        let all_warp = Expr::WarpVal(ProofActiveSet::all());
         let diverge = Expr::Diverge(Box::new(all_warp), Predicate::Even);
 
         assert!(preservation_check(&diverge));
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn test_type_safety_good_program() {
         // Full program: diverge then merge
-        let all_warp = Expr::WarpVal(ActiveSet::all());
+        let all_warp = Expr::WarpVal(ProofActiveSet::all());
         let diverge = Expr::Diverge(Box::new(all_warp), Predicate::Even);
 
         assert!(type_safety_check(&diverge));

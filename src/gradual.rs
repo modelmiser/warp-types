@@ -102,7 +102,7 @@ impl std::error::Error for AscribeError {}
 ///
 /// Use `ascribe::<S>()` to promote to `Warp<S>` when the mask is known.
 /// Use `DynWarp::from_static()` to demote `Warp<S>` to `DynWarp`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DynWarp {
     active_mask: u64,
     /// The full mask representing "all lanes active" for this warp width.
@@ -652,11 +652,16 @@ mod tests {
     fn merge_mismatched_width_fails() {
         let a = DynWarp::all(); // 32-lane
         let b = DynWarp::all_64(); // 64-lane
-        let (a1, a2) = a.diverge(Even::MASK);
+        let (a1, _a2) = a.diverge(Even::MASK);
         let (b1, _b2) = b.diverge(Even::MASK);
         // Can't merge 32-lane and 64-lane halves
-        assert!(a1.clone().merge(b1).is_err());
-        // Can merge same-width halves
+        assert!(a1.merge(b1).is_err());
+    }
+
+    #[test]
+    fn merge_same_width_succeeds() {
+        let a = DynWarp::all();
+        let (a1, a2) = a.diverge(Even::MASK);
         assert!(a1.merge(a2).is_ok());
     }
 

@@ -287,7 +287,7 @@ pub fn exec_mask() -> u64 {
     label = "GpuShuffle is implemented for i32, u32, f32, i64, u64, f64, bool — use one of these types",
     note = "larger types require two shuffles; implement GpuShuffle manually for custom types"
 )]
-pub trait GpuShuffle: crate::active_set::sealed::Sealed + Copy + 'static {
+pub trait GpuShuffle: crate::gpu_sealed::GpuSealed + Copy + 'static {
     /// Butterfly shuffle: exchange with lane (lane_id XOR mask).
     fn gpu_shfl_xor(self, xor_mask: u32) -> Self;
 

@@ -144,8 +144,20 @@ impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
 /// `ActiveSet::MASK` width (supporting AMD 64-lane wavefronts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Role {
-    pub mask: u64,
-    pub name: &'static str,
+    mask: u64,
+    name: &'static str,
+}
+
+impl Role {
+    /// The bitmask of lanes in this role.
+    pub const fn mask(self) -> u64 {
+        self.mask
+    }
+
+    /// Human-readable role name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
 }
 
 impl Role {

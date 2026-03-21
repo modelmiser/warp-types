@@ -131,13 +131,41 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
 // ============================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BlockId(pub u32);
+pub struct BlockId(u32);
+
+impl BlockId {
+    pub const fn new(id: u32) -> Self {
+        BlockId(id)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ThreadId {
-    pub block: BlockId,
-    pub warp: crate::data::WarpId,
-    pub lane: crate::data::LaneId,
+    block: BlockId,
+    warp: crate::data::WarpId,
+    lane: crate::data::LaneId,
+}
+
+impl ThreadId {
+    pub const fn new(block: BlockId, warp: crate::data::WarpId, lane: crate::data::LaneId) -> Self {
+        ThreadId { block, warp, lane }
+    }
+
+    pub const fn block(self) -> BlockId {
+        self.block
+    }
+
+    pub const fn warp(self) -> crate::data::WarpId {
+        self.warp
+    }
+
+    pub const fn lane(self) -> crate::data::LaneId {
+        self.lane
+    }
 }
 
 // ============================================================================
@@ -319,9 +347,9 @@ mod tests {
 
     #[test]
     fn test_block_session() {
-        let leader: BlockSession<Leader, Initial, 4> = BlockSession::new(BlockId(0));
+        let leader: BlockSession<Leader, Initial, 4> = BlockSession::new(BlockId::new(0));
         assert_eq!(leader.block_id().0, 0);
-        let worker: BlockSession<Worker, Initial, 4> = BlockSession::new(BlockId(1));
+        let worker: BlockSession<Worker, Initial, 4> = BlockSession::new(BlockId::new(1));
         assert_eq!(worker.block_id().0, 1);
     }
 }
