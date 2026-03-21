@@ -211,9 +211,11 @@ pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
                 (Type::Warp(s1), Type::Warp(s2)) => {
                     if !s1.is_disjoint(&s2) {
                         Err("merge requires disjoint active sets".to_string())
-                    } else if !s1.union(&s2).is_all() {
-                        Err("merge requires covering active sets (union must be All)".to_string())
                     } else {
+                        // Accepts both top-level merge (S1 ∪ S2 = All) and
+                        // nested merge (S1 ∪ S2 = P for any parent P),
+                        // matching the paper's general MERGE rule and
+                        // the Lean formalization's IsComplement s1 s2 parent.
                         Ok(Type::Warp(s1.union(&s2)))
                     }
                 }

@@ -40,6 +40,7 @@ use core::marker::PhantomData;
 ///
 /// 4, 8, 16, 32 — matching NVIDIA's cooperative groups API.
 /// Only power-of-two sizes that divide 32 are valid.
+#[must_use = "a Tile represents a partitioned warp — dropping it silently discards the partition"]
 pub struct Tile<const SIZE: usize> {
     _phantom: PhantomData<()>,
 }

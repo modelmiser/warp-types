@@ -16,6 +16,12 @@
 set -e
 cd "$(dirname "$0")"
 
+# Ensure nvptx64-nvidia-cuda target is installed
+if ! rustup +nightly target list --installed | grep -q nvptx64-nvidia-cuda; then
+    echo "Installing nvptx64-nvidia-cuda target..."
+    rustup target add nvptx64-nvidia-cuda --toolchain nightly
+fi
+
 SRC="rust_ptx_typed.rs"
 PTX="rust_ptx_typed.ptx"
 

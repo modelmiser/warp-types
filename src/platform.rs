@@ -119,12 +119,12 @@ impl<T: GpuValue, const WIDTH: usize> SimdVector<T> for PortableVector<T, WIDTH>
     }
 
     fn extract(self, lane: usize) -> T {
-        debug_assert!(lane < WIDTH, "extract: lane {lane} >= WIDTH {WIDTH}");
+        assert!(lane < WIDTH, "extract: lane {lane} >= WIDTH {WIDTH}");
         self.data[lane]
     }
 
     fn insert(self, lane: usize, value: T) -> Self {
-        debug_assert!(lane < WIDTH, "insert: lane {lane} >= WIDTH {WIDTH}");
+        assert!(lane < WIDTH, "insert: lane {lane} >= WIDTH {WIDTH}");
         let mut result = self;
         result.data[lane] = value;
         result

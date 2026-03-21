@@ -11,8 +11,8 @@ authors:
   - family-names: Aldreda
     given-names: Chad
 license: MIT
-version: "0.2.0"
-date-released: "2026-03-18"
+version: "0.3.0"
+date-released: "2026-03-21"
 repository-code: "https://github.com/modelmiser/warp-types"
 doi: "10.5281/zenodo.19040615"
 identifiers:

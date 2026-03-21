@@ -114,7 +114,7 @@ impl DynDiverge {
     /// available on `Warp<All>`. If extended to sub-warps in the future, the
     /// return type must be parameterized by the parent set.
     pub fn merge(self) -> Warp<All> {
-        debug_assert_eq!(
+        assert_eq!(
             self.true_mask | self.false_mask,
             self.parent_mask,
             "DynDiverge invariant violated: true_mask | false_mask != parent_mask \

@@ -179,15 +179,9 @@ impl DynWarp {
     /// and move to runtime tracking. Always safe — going from more
     /// information to less.
     pub fn from_static<S: ActiveSet>(_warp: Warp<S>) -> Self {
-        // Determine warp width from mask: if it fits in 32 bits, use 32-lane
-        let full = if S::MASK <= 0xFFFFFFFF {
-            0xFFFFFFFF
-        } else {
-            0xFFFFFFFFFFFFFFFF
-        };
         DynWarp {
             active_mask: S::MASK,
-            full_mask: full,
+            full_mask: crate::active_set::All::MASK,
         }
     }
 

@@ -76,7 +76,7 @@ This paper makes the following contributions:
 
 2. **A soundness proof** (§4). We prove that well-typed programs satisfy progress and preservation, ensuring they never read from inactive lanes.
 
-3. **A zero-overhead implementation** (§6). We implement our type system as a Rust library using traits and generics. Types are erased at compile time—the generated code is identical to hand-written unsafe CUDA.
+3. **A zero-overhead implementation** (§6). We implement our type system as a Rust library using traits and generics. Types are erased at compile time—the generated code is identical to untyped Rust equivalents (byte-identical PTX verified).
 
 4. **Practical patterns for GPU programming** (§5). We show how to type common GPU idioms including reductions, scans, and filters, and extend the core system to handle loops and arbitrary predicates.
 
