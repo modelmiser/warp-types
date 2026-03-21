@@ -156,10 +156,10 @@ impl<S: ActiveSet> Warp<S> {
     ) -> PerLane<T> {
         assert!(
             xor_mask_preserves_active_set(S::MASK, mask),
-            "shuffle_xor_within: XOR mask {} does not preserve active set {} (mask={:#010X})",
+            "shuffle_xor_within: XOR mask {} does not preserve active set {} (mask={:#018X})",
             mask,
             S::NAME,
-            S::MASK as u32,
+            S::MASK,
         );
         PerLane::new(data.get().gpu_shfl_xor(mask))
     }

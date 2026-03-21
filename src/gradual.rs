@@ -333,6 +333,13 @@ impl DynWarp {
     /// Returns two `DynWarp`s with disjoint masks that together cover
     /// the original. This is the runtime equivalent of `warp.diverge()`.
     pub fn diverge(self, predicate_mask: u64) -> (DynWarp, DynWarp) {
+        debug_assert!(
+            predicate_mask & !self.active_mask == 0,
+            "DynWarp::diverge: predicate_mask has bits outside active lanes \
+             (stray={:#018X}, active={:#018X})",
+            predicate_mask & !self.active_mask,
+            self.active_mask,
+        );
         let true_mask = self.active_mask & predicate_mask;
         let false_mask = self.active_mask & !predicate_mask;
         (

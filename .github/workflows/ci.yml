@@ -42,7 +42,7 @@ jobs:
           toolchain: nightly-2026-03-19
           components: clippy, rustfmt
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   toolchain-freshness:
     runs-on: ubuntu-latest

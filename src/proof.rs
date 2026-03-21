@@ -483,7 +483,8 @@ pub fn type_safety_check(expr: &Expr) -> bool {
         }
     }
 
-    true
+    // Only safe if we reached a value, not if we hit the step limit
+    is_value(&current)
 }
 
 // ============================================================================
