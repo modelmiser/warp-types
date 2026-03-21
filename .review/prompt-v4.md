@@ -56,6 +56,7 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - CI missing --all-features testing (ci.yml)
 - paper.md §3.1 said reduce_sum returns SingleLane; clarified it returns Uniform via butterfly (paper/paper.md:242)
 - DynDiverge::merge() hardcodes Warp<All> without documenting the assumption (dynamic.rs:merge)
+- GpuWarp32::shuffle clamped OOB indices instead of wrapping mod 32 (platform.rs:shuffle — hardware wraps)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - [DOCUMENTED] Warp::kernel_entry() can be called multiple times, bypassing linear typestate (warp.rs — fundamental affine vs linear limitation)

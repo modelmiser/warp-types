@@ -260,15 +260,11 @@ impl Platform for GpuWarp32 {
         source: Self::Vector<T>,
         indices: Self::Vector<u32>,
     ) -> Self::Vector<T> {
-        // GPU shfl.sync.idx clamps: OOB indices read own lane (not % WIDTH).
+        // GPU shfl.sync.idx wraps: src_lane & 0x1F (hardware-verified on RTX 4000 Ada).
         let mut result = PortableVector::default();
         for i in 0..32 {
-            let src_idx = indices.data[i] as usize;
-            result.data[i] = if src_idx < 32 {
-                source.data[src_idx]
-            } else {
-                source.data[i]
-            };
+            let src_idx = indices.data[i] as usize % 32;
+            result.data[i] = source.data[src_idx];
         }
         result
     }
