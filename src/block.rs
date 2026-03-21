@@ -25,7 +25,7 @@ use core::marker::PhantomData;
 /// (which lanes belong to this role). These encode different concerns: OWNER
 /// prevents mixing regions at the type level; Role describes the lane geometry.
 pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
-    data: [T; 32],
+    data: [T; crate::WARP_SIZE as usize],
     owner: Role,
     _phantom: PhantomData<()>,
 }
@@ -33,7 +33,7 @@ pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
 impl<T: GpuValue + Default, const OWNER: u8> SharedRegion<T, OWNER> {
     pub fn new(owner: Role) -> Self {
         SharedRegion {
-            data: [T::default(); 32],
+            data: [T::default(); crate::WARP_SIZE as usize],
             owner,
             _phantom: PhantomData,
         }
@@ -42,12 +42,12 @@ impl<T: GpuValue + Default, const OWNER: u8> SharedRegion<T, OWNER> {
 
 impl<T: GpuValue, const OWNER: u8> SharedRegion<T, OWNER> {
     pub fn write(&mut self, index: usize, value: T) {
-        assert!(index < 32, "Index out of bounds");
+        assert!(index < crate::WARP_SIZE as usize, "Index out of bounds");
         self.data[index] = value;
     }
 
     pub fn read(&self, index: usize) -> T {
-        assert!(index < 32, "Index out of bounds");
+        assert!(index < crate::WARP_SIZE as usize, "Index out of bounds");
         self.data[index]
     }
 
@@ -77,8 +77,8 @@ impl<'a, T: GpuValue, const OWNER: u8> SharedView<'a, T, OWNER> {
 
 /// A work queue in shared memory with typed producer/consumer roles.
 ///
-/// Uses a circular buffer with 32 slots and one sentinel for full detection,
-/// giving an effective capacity of 31 items.
+/// Uses a circular buffer with `WARP_SIZE` slots and one sentinel for full
+/// detection, giving an effective capacity of `WARP_SIZE - 1` items.
 pub struct WorkQueue<T: GpuValue, const PRODUCER: u8, const CONSUMER: u8> {
     tasks: SharedRegion<T, PRODUCER>,
     head: usize,
@@ -100,7 +100,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
     }
 
     pub fn push(&mut self, task: T) -> Result<(), QueueFull> {
-        let next = (self.head + 1) % 32;
+        let next = (self.head + 1) % crate::WARP_SIZE as usize;
         if next == self.tail {
             return Err(QueueFull);
         }
@@ -114,7 +114,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
             return None;
         }
         let task = self.tasks.read(self.tail);
-        self.tail = (self.tail + 1) % 32;
+        self.tail = (self.tail + 1) % crate::WARP_SIZE as usize;
         Some(task)
     }
 
@@ -122,7 +122,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
         self.tail == self.head
     }
     pub fn is_full(&self) -> bool {
-        (self.head + 1) % 32 == self.tail
+        (self.head + 1) % crate::WARP_SIZE as usize == self.tail
     }
 }
 
@@ -327,12 +327,12 @@ mod tests {
         let mut queue: WorkQueue<i32, COORDINATOR, WORKER_ROLE> =
             WorkQueue::new(coordinator, worker);
 
-        // Ring buffer of size 32 has capacity 31 (one slot reserved for full detection)
-        for i in 0..31 {
+        // Ring buffer of WARP_SIZE has capacity WARP_SIZE-1 (one slot reserved for full detection)
+        for i in 0..(crate::WARP_SIZE as i32 - 1) {
             assert!(queue.push(i).is_ok());
         }
         assert!(queue.is_full());
-        assert!(queue.push(31).is_err());
+        assert!(queue.push(crate::WARP_SIZE as i32).is_err());
     }
 
     #[test]
