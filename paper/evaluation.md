@@ -82,7 +82,7 @@ Our implementation includes eleven compile-fail doctests covering shuffle on div
 
 ### Bug Pattern Coverage
 
-Our prototype includes 317 unit tests, 50 example tests across 8 worked bug examples, and 29 doc tests (11 compile-fail, 18 doc examples) covering the full type system (396 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 317 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (11 compile-fail, 18 doc examples) covering the full type system (395 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
@@ -169,7 +169,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
-| Type system tests | 317 unit + 50 example + 29 doc (396 total) |
+| Type system tests | 317 unit + 50 example + 28 doc (395 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 16.7% of source lines contain type annotations (range: 11.3%–25.3% across 8 examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, etc.) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 31 named theorems total including 14 infrastructure lemmas (§4.8) |
