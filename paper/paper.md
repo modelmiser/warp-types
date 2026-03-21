@@ -418,8 +418,10 @@ Ballot operations produce uniform results:
 ```
 Γ ⊢ w : Warp<All>    Γ ⊢ pred : PerLane<bool>
 ──────────────────────────────────────────────
-Γ ⊢ ballot(w, pred) : Uniform<u32>
+Γ ⊢ ballot(w, pred) : BallotResult    (wraps Uniform<u64>)
 ```
+
+The implementation uses `BallotResult` (a newtype around `Uniform<u64>`) rather than `Uniform<u32>` to accommodate AMD 64-lane wavefronts. A `.mask_u32()` accessor provides NVIDIA-compatible 32-bit access.
 
 The result is uniform because all (active) lanes see the same bitmask.
 
@@ -823,7 +825,7 @@ We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/Wa
 
 ### Scope
 
-The mechanization covers two files totaling 1329 lines of Lean:
+The mechanization covers two files totaling 1337 lines of Lean:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
@@ -851,7 +853,7 @@ Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances
 
 ### What Is Not Mechanized
 
-The operational semantics for `shuffle_within` (§4.6, set-preserving masks) and the extension typing rules (§5) are not mechanized. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
+The operational semantics for `shuffle_within` (§4.6, set-preserving masks) are not mechanized; the Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`). The `loopConvergent` rule (§5.1) is mechanized with a fuel bound rather than the paper's collective-predicate requirement; the Lean proof verifies termination and warp preservation but does not model the collective nature of the exit predicate. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. Standalone linearity theorems (Lemmas 4.8, 4.9) are enforced by the linear context mechanism but not stated as explicit Lean theorems.
 
 ---
 
@@ -1625,7 +1627,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 **Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence bugs across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of 21 bugs, 14 are fully caught by the type system.
 
-**GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents. We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Full Rust kernel execution is blocked by a missing `pred` register class in the Rust nvptx64 backend.
+**GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents. We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on RTX 4000 Ada via cudarc. The ballot codepath remains blocked by a missing `pred` register class in the Rust nvptx64 backend.
 
 **Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). We are not aware of shuffle-from-inactive-lane bugs that our type system would fail to catch at the source level.
 
@@ -1639,7 +1641,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Type system tests | 317 unit + 50 example + 28 doc (395 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
-| Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
+| Annotation burden | 16.7% of source lines contain type annotations (range: 11.3%–25.3% across 8 examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, etc.) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 31 named theorems total including 14 infrastructure lemmas (§4.8) |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
@@ -1806,9 +1808,9 @@ A future `#[warp_typed]` proc macro could further optimize this pattern by autom
 
 ## 9.2 Formal Mechanization
 
-Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Remaining future work:
-- Extend mechanization to nested divergence (generalize `IsComplementAll` to `IsComplement s1 s2 parent`)
-- Mechanize the loop typing rules (§5.1) and set-preserving shuffle (§4.6)
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
+- Mechanize set-preserving shuffle (§4.6)
+- Model `loopConvergent`'s collective-predicate requirement (currently uses fuel bound)
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 

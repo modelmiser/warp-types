@@ -72,7 +72,7 @@ let partner = full_warp.shuffle_xor(data, 1);  // OK
 2. **NVIDIA PTX** — byte-identical assembly from `rustc --target nvptx64-nvidia-cuda`
 3. **CPU LLVM IR** — typed functions compile to the same shuffle intrinsics as untyped (see `compare_ptx.sh`)
 
-The type system exists only at compile time. The generated GPU code is the same as hand-written CUDA.
+The type system exists only at compile time. The generated GPU code is identical to the untyped Rust equivalent.
 
 ## The Killer Demo
 

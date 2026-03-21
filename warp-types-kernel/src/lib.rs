@@ -49,6 +49,10 @@ use syn::{parse_macro_input, FnArg, ItemFn, Pat};
 /// - Raw pointers (`*const T`, `*mut T`) — for device memory
 /// - Scalars (`u32`, `i32`, `f32`, `u64`, `i64`, `f64`, `bool`) — passed by value
 ///
+/// Note: `usize`/`isize` are rejected because their width is platform-dependent.
+/// On nvptx64 they are 64-bit, but the host launcher may assume a different size,
+/// causing ABI mismatch. Use explicit-width types (`u32`, `u64`, etc.) instead.
+///
 /// # Compile-Time Safety
 ///
 /// The function body uses warp-types normally. `Warp::kernel_entry()` creates
@@ -93,8 +97,7 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), TokenStream> {
             if let Some(seg) = tp.path.segments.last() {
                 let name = seg.ident.to_string();
                 let valid_scalars = [
-                    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32",
-                    "f64", "bool",
+                    "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool",
                 ];
                 if !valid_scalars.contains(&name.as_str()) {
                     let msg = format!(

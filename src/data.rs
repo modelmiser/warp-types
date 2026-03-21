@@ -53,6 +53,7 @@ impl WarpId {
 /// You can only create `Uniform` values through operations that guarantee
 /// uniformity (broadcasts, constants, ballot results). This prevents the
 /// common bug of assuming a value is uniform when it isn't.
+#[must_use = "Uniform values represent warp-wide reduction results — dropping discards the result"]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Uniform<T: GpuValue> {

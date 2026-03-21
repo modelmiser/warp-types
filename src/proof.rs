@@ -212,10 +212,15 @@ pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
                     if !s1.is_disjoint(&s2) {
                         Err("merge requires disjoint active sets".to_string())
                     } else {
-                        // Accepts both top-level merge (S1 ∪ S2 = All) and
-                        // nested merge (S1 ∪ S2 = P for any parent P),
-                        // matching the paper's general MERGE rule and
-                        // the Lean formalization's IsComplement s1 s2 parent.
+                        // NOTE: This checks disjointness only, not covering.
+                        // The paper's top-level MERGE rule requires S1 ⊥ S2
+                        // (disjoint AND covering All). The Lean formalization
+                        // uses IsComplement s1 s2 parent (disjoint AND covering
+                        // parent). This evaluator is intentionally permissive:
+                        // it accepts merges of any disjoint sets, producing
+                        // their union. The production Rust API enforces the
+                        // full complement relation via sealed ComplementOf/
+                        // ComplementWithin traits.
                         Ok(Type::Warp(s1.union(&s2)))
                     }
                 }
