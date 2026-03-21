@@ -377,6 +377,23 @@ impl DynWarp {
             full_mask: self.full_mask,
         })
     }
+
+    /// Merge with covering check — requires disjointness AND that the merged
+    /// masks cover all lanes (equivalent to static `merge` which requires `ComplementOf`).
+    ///
+    /// Use this when you need the same guarantee as the static path.
+    /// For partial merges (accumulating sub-warps), use [`merge`](Self::merge).
+    pub fn merge_covering(self, other: DynWarp) -> Result<DynWarp, WarpError> {
+        let result = self.merge(other)?;
+        if result.active_mask != result.full_mask {
+            return Err(WarpError {
+                operation: "merge_covering (not all lanes covered)",
+                expected_mask: result.full_mask,
+                actual_mask: result.active_mask,
+            });
+        }
+        Ok(result)
+    }
 }
 
 // ============================================================================
@@ -636,5 +653,20 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("All"));
         assert!(msg.contains("00001234"));
+    }
+
+    #[test]
+    fn merge_covering_succeeds_on_complements() {
+        let a = DynWarp::from_mask_32(0x55555555); // Even
+        let b = DynWarp::from_mask_32(0xAAAAAAAA); // Odd
+        let merged = a.merge_covering(b).unwrap();
+        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+    }
+
+    #[test]
+    fn merge_covering_fails_on_partial() {
+        let a = DynWarp::from_mask_32(0x1);
+        let b = DynWarp::from_mask_32(0x2);
+        assert!(a.merge_covering(b).is_err());
     }
 }

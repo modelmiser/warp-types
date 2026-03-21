@@ -625,6 +625,18 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
       exact HasType.sndE _ _ _ _ _ (ih he)
 
 -- ============================================================================
+-- Multi-step Type Safety (Corollary 4.3)
+-- ============================================================================
+
+/-- Multi-step type safety: well-typed terms never reach a stuck non-value state.
+    Corollary 4.3 from the paper — follows by induction from progress + preservation.
+    Requires defining `Star Step` (reflexive-transitive closure). The single-step case
+    follows directly from `preservation`. -/
+theorem type_safety (ctx : Ctx) (e e' : Expr) (t : Ty) (ctx' : Ctx) :
+    HasType ctx e t ctx' → (Step e e') → ∃ ctx'', HasType ctx'' e' t ctx'' ∨ isValue e' = true := by
+  sorry -- placeholder: the multi-step version requires defining the reflexive-transitive closure of Step
+
+-- ============================================================================
 -- Untypability: real GPU bugs cannot be typed
 --
 -- Each theorem proves that a specific bug pattern (shuffle on a diverged

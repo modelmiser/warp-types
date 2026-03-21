@@ -148,10 +148,14 @@ pub type Context = std::collections::HashMap<String, Type>;
 /// Type checking result
 pub type TypeResult = Result<Type, String>;
 
-/// Type check an expression
-pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
+/// Type check an expression with linear context threading.
+///
+/// The context is consumed linearly: variable lookup removes the binding,
+/// let-binding checks freshness, and the body must consume the bound variable.
+/// This matches the Lean formalization's `HasType : Ctx → Expr → Ty → Ctx → Prop`.
+pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
     match expr {
-        // Values have their literal types
+        // Values have their literal types (context passes through unchanged)
         Expr::WarpVal(s) => Ok(Type::Warp(s.clone())),
         Expr::PerLaneVal(vals) => {
             if vals.len() != WARP_SIZE as usize {
@@ -164,21 +168,22 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
         }
         Expr::UnitVal => Ok(Type::Unit),
         Expr::PairVal(e1, e2) => {
+            // Thread context through left then right (linear)
             let t1 = type_check(ctx, e1)?;
             let t2 = type_check(ctx, e2)?;
             Ok(Type::Pair(Box::new(t1), Box::new(t2)))
         }
 
-        // Variable lookup
+        // LINEAR VARIABLE RULE:
+        // Γ, x:τ ⊢ x : τ ⊣ Γ    (x is removed from context)
         Expr::Var(x) => ctx
-            .get(x)
-            .cloned()
+            .remove(x)
             .ok_or_else(|| format!("Unbound variable: {}", x)),
 
         // DIVERGE RULE:
-        // Γ ⊢ w : Warp<S>
+        // Γ ⊢ w : Warp<S> ⊣ Γ'
         // ─────────────────────────────────────────────────
-        // Γ ⊢ diverge(w, P) : (Warp<S∩P>, Warp<S∩¬P>)
+        // Γ ⊢ diverge(w, P) : (Warp<S∩P>, Warp<S∩¬P>) ⊣ Γ'
         Expr::Diverge(w, pred) => {
             let warp_type = type_check(ctx, w)?;
             match warp_type {
@@ -195,10 +200,10 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
             }
         }
 
-        // MERGE RULE:
-        // Γ ⊢ w1 : Warp<S1>    Γ ⊢ w2 : Warp<S2>    S1 ∩ S2 = ∅
+        // MERGE RULE (linear threading):
+        // Γ ⊢ w1 : Warp<S1> ⊣ Γ'    Γ' ⊢ w2 : Warp<S2> ⊣ Γ''    S1 ∩ S2 = ∅
         // ──────────────────────────────────────────────────────
-        // Γ ⊢ merge(w1, w2) : Warp<S1 ∪ S2>
+        // Γ ⊢ merge(w1, w2) : Warp<S1 ∪ S2> ⊣ Γ''
         Expr::Merge(w1, w2) => {
             let t1 = type_check(ctx, w1)?;
             let t2 = type_check(ctx, w2)?;
@@ -216,10 +221,10 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
             }
         }
 
-        // SHUFFLE RULE:
-        // Γ ⊢ w : Warp<All>    Γ ⊢ data : PerLane
+        // SHUFFLE RULE (linear threading):
+        // Γ ⊢ w : Warp<All> ⊣ Γ'    Γ' ⊢ data : PerLane ⊣ Γ''
         // ─────────────────────────────────────────
-        // Γ ⊢ shuffle(w, data, mask) : PerLane
+        // Γ ⊢ shuffle(w, data, mask) : PerLane ⊣ Γ''
         Expr::Shuffle(w, data, _mask) => {
             let warp_type = type_check(ctx, w)?;
             let data_type = type_check(ctx, data)?;
@@ -235,15 +240,29 @@ pub fn type_check(ctx: &Context, expr: &Expr) -> TypeResult {
             }
         }
 
-        // LET RULE:
-        // Γ ⊢ e1 : τ1    Γ, x:τ1 ⊢ e2 : τ2
-        // ─────────────────────────────────
-        // Γ ⊢ let x = e1 in e2 : τ2
+        // LINEAR LET RULE:
+        // Γ ⊢ e1 : τ1 ⊣ Γ'    x ∉ Γ'    Γ', x:τ1 ⊢ e2 : τ2 ⊣ Γ''    x ∉ Γ''
+        // ─────────────────────────────────────────────────────────────────────
+        // Γ ⊢ let x = e1 in e2 : τ2 ⊣ Γ''
         Expr::Let(x, e1, e2) => {
             let t1 = type_check(ctx, e1)?;
-            let mut ctx2 = ctx.clone();
-            ctx2.insert(x.clone(), t1);
-            type_check(&ctx2, e2)
+            // Freshness check: x must not already be in the residual context
+            if ctx.contains_key(x) {
+                return Err(format!(
+                    "Let binding '{}' shadows existing variable (not fresh)",
+                    x
+                ));
+            }
+            ctx.insert(x.clone(), t1);
+            let t2 = type_check(ctx, e2)?;
+            // Linearity check: x must have been consumed by the body
+            if ctx.remove(x).is_some() {
+                return Err(format!(
+                    "Linear variable '{}' not consumed in let body",
+                    x
+                ));
+            }
+            Ok(t2)
         }
     }
 }
@@ -400,8 +419,8 @@ fn substitute(expr: &Expr, var: &str, val: &Expr) -> Expr {
 /// - Case Shuffle: if both values, can step (All from typing); else IH
 /// - Case Let: if e1 is value, can substitute; else IH on e1
 pub fn progress_check(expr: &Expr) -> bool {
-    let ctx = Context::new();
-    if type_check(&ctx, expr).is_ok() {
+    let mut ctx = Context::new();
+    if type_check(&mut ctx, expr).is_ok() {
         is_value(expr) || step(expr).is_some()
     } else {
         true // Ill-typed terms vacuously satisfy progress
@@ -418,11 +437,12 @@ pub fn progress_check(expr: &Expr) -> bool {
 /// - Case Shuffle: result type is PerLane ✓
 /// - Case Let/substitution: standard substitution lemma
 pub fn preservation_check(expr: &Expr) -> bool {
-    let ctx = Context::new();
-    let original_type = type_check(&ctx, expr);
+    let mut ctx = Context::new();
+    let original_type = type_check(&mut ctx, expr);
 
     if let Some(stepped) = step(expr) {
-        let stepped_type = type_check(&ctx, &stepped);
+        let mut ctx2 = Context::new();
+        let stepped_type = type_check(&mut ctx2, &stepped);
         original_type == stepped_type
     } else {
         true // No step means preservation holds vacuously
@@ -436,8 +456,8 @@ pub fn preservation_check(expr: &Expr) -> bool {
 ///
 /// Proof: By Progress, well-typed closed terms are never stuck.
 pub fn type_safety_check(expr: &Expr) -> bool {
-    let ctx = Context::new();
-    if type_check(&ctx, expr).is_err() {
+    let mut ctx = Context::new();
+    if type_check(&mut ctx, expr).is_err() {
         return true; // Ill-typed, not our concern
     }
 
@@ -449,9 +469,11 @@ pub fn type_safety_check(expr: &Expr) -> bool {
     while !is_value(&current) && steps < MAX_STEPS {
         match step(&current) {
             Some(next) => {
-                // Check preservation
-                let t1 = type_check(&ctx, &current);
-                let t2 = type_check(&ctx, &next);
+                // Check preservation (fresh contexts each time for linear checking)
+                let mut ctx1 = Context::new();
+                let mut ctx2 = Context::new();
+                let t1 = type_check(&mut ctx1, &current);
+                let t2 = type_check(&mut ctx2, &next);
                 if t1 != t2 {
                     return false; // Preservation violated!
                 }
@@ -558,18 +580,18 @@ mod tests {
 
     #[test]
     fn test_type_check_good_program() {
-        // let (evens, odds) = diverge(warp_all, even) in merge(evens, odds)
+        // let pair = diverge(warp_all, even) in pair  (uses pair exactly once)
         let program = Expr::Let(
             "pair".to_string(),
             Box::new(Expr::Diverge(
                 Box::new(Expr::WarpVal(ActiveSet::all())),
                 Predicate::Even,
             )),
-            Box::new(Expr::Var("pair".to_string())), // Simplified
+            Box::new(Expr::Var("pair".to_string())),
         );
 
-        let ctx = Context::new();
-        assert!(type_check(&ctx, &program).is_ok());
+        let mut ctx = Context::new();
+        assert!(type_check(&mut ctx, &program).is_ok());
     }
 
     #[test]
@@ -579,8 +601,8 @@ mod tests {
         let data = Expr::PerLaneVal(vec![0; 32]);
         let bad_shuffle = Expr::Shuffle(Box::new(even_warp), Box::new(data), 1);
 
-        let ctx = Context::new();
-        let result = type_check(&ctx, &bad_shuffle);
+        let mut ctx = Context::new();
+        let result = type_check(&mut ctx, &bad_shuffle);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Warp<All>"));
     }

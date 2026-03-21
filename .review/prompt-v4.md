@@ -64,17 +64,17 @@ KNOWN UNTESTED (accepted — don't re-flag):
 - [PAPER-SCOPE] shuffle_xor_within is in paper §3.3 formal rules but only in research module, not public API
 - [PAPER-SCOPE] Loop typing rules (§5.1: LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) have no implementation
 - [PAPER-SCOPE] shuffle_xor uses &self (borrow) but Lean models linear consumption — gap wider than affine-vs-linear
-- [PAPER-SCOPE] proof.rs type checker does not enforce linearity (ctx.clone instead of ctx.remove)
-- [PAPER-SCOPE] References section is placeholder with many missing citations
-- [PAPER-SCOPE] Hazy "most sophisticated persistent thread program" claim should say "most sophisticated published"
+- [RESOLVED] proof.rs type checker now enforces linearity (var consumed on use, let checks freshness + consumption)
+- [RESOLVED] References section populated with 37 academic refs + 4 bug reports
+- [RESOLVED] Hazy "most sophisticated" → "most sophisticated published"
 - [RESOLVED] reduce_sum overflow: added reduce_sum_wrapping for GPU-faithful wrapping semantics; generic reduce_sum kept with Add trait for flexibility. Hardware-verified: GPU wraps (reproduce/gpu_semantics_test.cu).
 - [FALSE-FINDING] SimWarp::shuffle_idx wrapping mod WIDTH was reported as wrong (clamp expected) — hardware verified shuffle_idx WRAPS mod 32 on RTX 4000 Ada. SimWarp behavior is correct.
 - [LEAN-SCOPE] Lean fst/snd rules permit discarding a pair component (affine not linear for pairs) — fix requires letPair eliminator
 - [LEAN-SCOPE] Lean mergeVal hardcodes ActiveSet.all — nested merge (merge_within) has no formal backing (documented §4.8)
 - [LEAN-SCOPE] Lean substitution relies on value restriction for capture avoidance (sound but fragile)
 - [LEAN-SCOPE] Lean/Rust correspondence gap — independent formalizations, proofs don't directly certify Rust code
-- [LEAN-SCOPE] Lean lacks multi-step safety corollary (trivial to close, standard induction)
-- [LEAN-SCOPE] Paper Lemma 4.6 (lane-level source validity) has no direct Lean theorem — connection from Warp<All> to all-bits-set is definitional but unstated
+- [RESOLVED] Lean all_lanes_active theorem added (Lemma 4.6 — fully proved, no sorry)
+- [PARTIAL] Lean type_safety theorem stated (Corollary 4.3 — sorry, needs Star Step definition)
 - [LEAN-SCOPE] Lean Step.mergeVal/shuffleVal reductions are "untyped" — don't enforce typing constraints (sound by progress+preservation, standard PL design)
 - [DESIGN] fence.rs GlobalRegion::new() can create multiple independent regions; merge_writes checks set-level complement but not region identity (would need phantom region tokens to fix)
 

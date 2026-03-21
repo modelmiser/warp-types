@@ -12,6 +12,7 @@ import Std.Tactic.BVDecide
   3. shuffle_requires_all: shuffle typing requires Warp<All>
   4. even_odd_complement: Even ∧ Odd are complements
   5. lowHalf_highHalf_complement: LowHalf ∧ HighHalf are complements
+  6. all_lanes_active: every lane is active in `all` (Lemma 4.6)
 -/
 
 -- ============================================================================
@@ -180,6 +181,14 @@ theorem lowHalf_highHalf_complement :
   unfold ActiveSet.Disjoint ActiveSet.Covers
   unfold ActiveSet.lowHalf ActiveSet.highHalf ActiveSet.all ActiveSet.none
   constructor <;> decide
+
+-- ============================================================================
+-- Theorem: All Lanes Active (Lemma 4.6 correspondence)
+-- ============================================================================
+
+/-- Every lane is active in the `all` set (Lemma 4.6 correspondence). -/
+theorem all_lanes_active (i : Fin 32) : ActiveSet.all[i] = true := by
+  revert i; decide
 
 -- ============================================================================
 -- Values
