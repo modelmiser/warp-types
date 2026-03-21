@@ -143,7 +143,7 @@ Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined
 - 395 tests (317 unit + 50 example + 28 doc), all passing on both NVIDIA and AMD
 - 31 Lean 4 theorems (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`)
 - 21 documented bugs across 16 real-world projects
-- Real GPU execution on NVIDIA RTX 4000 Ada; AMD MI300X mask-correctness verified via HIP
+- Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada; AMD MI300X mask-correctness verified via HIP
 - Cargo-integrated pipeline: `cargo run` from source to GPU
 - `--features warp64`: full 64-lane AMD wavefront support
 

@@ -118,8 +118,9 @@ fn main() {
 |-------|----------|---------|
 | Type safety (diverged warp can't shuffle, merge requires complements) | 11 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
-| Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
+| Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
+| Shuffle semantics | Verified on H200 (sm_90), RTX 4000 Ada (sm_89), MI300X (gfx942) | `bash reproduce/runpod-h200.sh` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
 | Soundness (progress + preservation) | Full Lean 4 mechanization (31 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
@@ -183,7 +184,7 @@ warp-types/
 ## Limitations
 
 - **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
-- **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness. Full GPU execution path untested (no amdgcn Rust target yet).
+- **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9).
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 
 ## License

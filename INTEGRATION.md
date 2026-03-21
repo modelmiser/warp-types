@@ -330,7 +330,7 @@ Common CUDA patterns and their warp-types equivalents:
 A: The type system (Path 1) works on stable. GPU kernel compilation (Path 2) requires nightly for `abi_ptx` and `asm_experimental_arch`.
 
 **Q: What GPU hardware is supported?**
-A: Any NVIDIA GPU with a CUDA driver. Tested on RTX 4000 Ada (compute 8.9). AMD MI300X (gfx942) verified for mask correctness. Full AMD GPU execution requires an amdgcn Rust target (not yet available).
+A: Any NVIDIA GPU with a CUDA driver. Tested on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9). AMD MI300X (gfx942) verified for mask correctness via HIP. Full AMD GPU execution requires an amdgcn Rust target (not yet available).
 
 **Q: What's the runtime overhead?**
 A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.

@@ -167,7 +167,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 |--------|--------|
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation, 1 vendor response) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
-| Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
+| Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
 | Type system tests | 317 unit + 50 example + 28 doc (395 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
