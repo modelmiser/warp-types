@@ -628,13 +628,17 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
 -- Multi-step Type Safety (Corollary 4.3)
 -- ============================================================================
 
-/-- Multi-step type safety: well-typed terms never reach a stuck non-value state.
-    Corollary 4.3 from the paper — follows by induction from progress + preservation.
-    Requires defining `Star Step` (reflexive-transitive closure). The single-step case
-    follows directly from `preservation`. -/
-theorem type_safety (ctx : Ctx) (e e' : Expr) (t : Ty) (ctx' : Ctx) :
-    HasType ctx e t ctx' → (Step e e') → ∃ ctx'', HasType ctx'' e' t ctx'' ∨ isValue e' = true := by
-  sorry -- placeholder: the multi-step version requires defining the reflexive-transitive closure of Step
+/-- Multi-step type safety: a closed well-typed term that reduces in zero or more
+    steps never reaches a stuck non-value state. That is, every reachable
+    expression is either a value or can take another step.
+    Corollary 4.3 from the paper — follows by induction on `Star Step` from
+    progress + preservation. -/
+theorem type_safety {e e' : Expr} {t : Ty} {ctx' : Ctx}
+    (ht : HasType [] e t ctx') (hstar : Star Step e e') :
+    (isValue e' = true) ∨ (∃ e'', Step e' e'') := by
+  induction hstar with
+  | refl => exact progress ht
+  | step h1 _ ih => exact ih (preservation ht h1)
 
 -- ============================================================================
 -- Untypability: real GPU bugs cannot be typed

@@ -201,3 +201,12 @@ def isValue : Expr → Bool
   | .pairVal a b => isValue a && isValue b
   | _ => false
 
+-- ============================================================================
+-- Reflexive-Transitive Closure
+-- ============================================================================
+
+/-- Reflexive-transitive closure of a relation. Used for multi-step reduction. -/
+inductive Star (R : α → α → Prop) : α → α → Prop
+  | refl : Star R a a
+  | step : R a b → Star R b c → Star R a c
+
