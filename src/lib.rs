@@ -231,8 +231,8 @@ pub mod prelude {
     pub use crate::data;
     pub use crate::gpu::GpuShuffle;
     pub use crate::{
-        merge, merge_within, ActiveSet, All, CanDiverge, ComplementOf, ComplementWithin,
-        BallotResult, DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, Fenced, FullWrite,
+        merge, merge_within, ActiveSet, All, BallotResult, CanDiverge, ComplementOf,
+        ComplementWithin, DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, Fenced, FullWrite,
         GlobalRegion, GpuValue, HighHalf, Lane0, LowHalf, NotLane0, Odd, OddHigh, OddLow,
         PartialWrite, PerLane, SingleLane, Tile, Uniform, Unwritten, Warp, WriteState,
     };
