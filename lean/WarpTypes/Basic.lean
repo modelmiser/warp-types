@@ -70,6 +70,7 @@ inductive Expr
   | fst (e : Expr)        -- First projection
   | snd (e : Expr)        -- Second projection
   | letPair (e : Expr) (name1 name2 : String) (body : Expr)  -- Linear pair destructor
+  | loopUniform (n : Nat) (warpName : String) (warp body : Expr)  -- §5.1 uniform loop
 
 -- ============================================================================
 -- Typing Context (linear)
@@ -137,6 +138,12 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       ctx''.lookup name1 = none →
       ctx''.lookup name2 = none →
       HasType ctx (.letPair e name1 name2 body) t ctx''
+  | loopUniform (ctx ctx' : Ctx) (n : Nat) (warpName : String)
+      (warp body : Expr) (s : ActiveSet) :
+      HasType ctx warp (.warp s) ctx' →
+      ctx'.lookup warpName = none →
+      HasType ((warpName, .warp s) :: ctx') body (.warp s) ctx' →
+      HasType ctx (.loopUniform n warpName warp body) (.warp s) ctx'
 
 -- ============================================================================
 -- Theorem 4.1: Diverge Partition
@@ -234,6 +241,7 @@ def isValue : Expr → Bool
   | .unitVal => true
   | .pairVal a b => isValue a && isValue b
   | .letPair _ _ _ _ => false
+  | .loopUniform _ _ _ _ => false
   | _ => false
 
 -- ============================================================================
