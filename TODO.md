@@ -48,7 +48,8 @@ Code fixes committed (`e2b0094ef`). Paper/doc/API fixes across 3 commits.
 - [x] `paper/future-and-conclusion.md:38` — gradual.rs test count updated: 16 → 25
 - [x] `paper/future-and-conclusion.md:36` — protocol inference: verified correct at 14
 - [x] `INSIGHTS.md:165` — LLVM IR claim corrected (shl, not ret)
-- [ ] `blog/post.md:73` — "Identical output for typed vs. untyped" imprecise — true for PTX target, not CPU LLVM IR
+- [x] `blog/post.md:73` — "Identical output for typed vs. untyped" imprecise — fixed ordering, PTX first
+- [x] `blog/post.md` — AMD MI300X section added, artifact counts updated
 
 ### Stale Content
 - [x] `README.md:134-176` — Project structure tree: added simwarp.rs
@@ -101,4 +102,4 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 - [x] Nested merge — `IsComplement s1 s2 parent`, `mergeVal → s1|||s2`, EvenLow/EvenHigh instance (9037aa6af)
 - [x] LOOP-UNIFORM — §5.1 uniform loop, body preserves context, self-referential preservation (0bac23fc9)
 - [ ] LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — remaining §5.1 rules (lower priority)
-- [ ] 64-lane AMD wavefronts — ActiveSet → BitVec 64 / warp_size generalization (Rust-side)
+- [x] 64-lane AMD wavefronts — `warp64` feature, MI300X verified (20acc0e08, 373e5ba69)

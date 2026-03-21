@@ -6,7 +6,7 @@ This post is about that bug, and a type system that makes it impossible.
 
 ## The Setup
 
-Modern GPUs execute 32 threads in lockstep — a **warp**. These threads share a register file and can exchange data instantly via **shuffle** instructions, avoiding slow memory round-trips:
+Modern GPUs execute threads in lockstep groups — a **warp** (32 threads on NVIDIA, 64 on AMD). These threads share a register file and can exchange data instantly via **shuffle** instructions, avoiding slow memory round-trips:
 
 ```
 Lane 0:  val=7   ──shuffle_xor(1)──▸  reads Lane 1's value (3)
@@ -69,8 +69,8 @@ let partner = full_warp.shuffle_xor(data, 1);  // OK
 `Warp<S>` is a zero-sized type containing only `PhantomData<S>`. The type parameter is erased completely by the compiler. We verified this at three levels:
 
 1. **Rust MIR** — no trace of `Warp` or `PhantomData`
-2. **LLVM IR** — identical output for typed vs. untyped
-3. **NVIDIA PTX** — byte-identical assembly from `rustc --target nvptx64-nvidia-cuda`
+2. **NVIDIA PTX** — byte-identical assembly from `rustc --target nvptx64-nvidia-cuda`
+3. **CPU LLVM IR** — typed functions compile to the same shuffle intrinsics as untyped (see `compare_ptx.sh`)
 
 The type system exists only at compile time. The generated GPU code is the same as hand-written CUDA.
 
@@ -125,14 +125,27 @@ Our type system is **strictly more permissive**: you CAN diverge, you CAN have s
 
 The core insight is transferable to any language with phantom types or zero-cost abstractions. The `ComplementOf` pattern (compile-time proof of set complement) works in Rust, Haskell, Scala, Swift, and potentially C++ with concepts.
 
+## AMD: Same Bugs, Wider Warps
+
+AMD GPUs use 64-lane wavefronts — twice NVIDIA's width. We verified on an MI300X (gfx942):
+
+```
+6-stage butterfly (64-lane):  sum = 2016  ✓
+5-stage butterfly (NVIDIA):   sum = 496   ✗ (only reduces within 32-lane halves)
+```
+
+The NVIDIA-style 5-stage reduce silently produces half-sums on AMD. No crash, no error — just wrong answers. Our type system catches this: `Warp<All>` on AMD requires 6 stages, and the `warp64` feature flag switches the active set masks from 32-bit to 64-bit.
+
+Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined). Wrong either way. The type system catches both.
+
 ## The Artifact
 
-- 369 tests (291 unit + 50 example + 28 doc)
-- 28 Lean 4 theorems (progress + preservation: zero `sorry`, zero axioms)
+- 348 tests (316 unit + 32 doc), all passing on both NVIDIA and AMD
+- 31+ Lean 4 theorems (progress + preservation + letPair + nested merge + LOOP-UNIFORM: zero `sorry`)
 - 21 documented bugs across 16 real-world projects
-- Real GPU execution on NVIDIA RTX 4000 Ada
+- Real GPU execution on NVIDIA RTX 4000 Ada and AMD MI300X
 - Cargo-integrated pipeline: `cargo run` from source to GPU
-- AMD-ready: u64 masks, `amdgpu` target stubs
+- `--features warp64`: full 64-lane AMD wavefront support
 
 The code is at [github.com/modelmiser/warp-types](https://github.com/modelmiser/warp-types).
 
