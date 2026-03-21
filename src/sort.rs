@@ -80,7 +80,7 @@ fn compare_swap<T: GpuValue + GpuShuffle + Ord>(
 // ============================================================================
 
 impl Warp<All> {
-    /// Full warp-level bitonic sort of 32 elements (one per lane).
+    /// Full warp-level bitonic sort (one element per lane).
     ///
     /// Sorts in ascending order across lane indices. After sorting:
     /// - Lane 0 has the minimum
@@ -134,12 +134,23 @@ impl Warp<All> {
         val = compare_swap(self, val, 2, 16);
         val = compare_swap(self, val, 1, 16);
 
-        // Stage 5: blocks of 32 (full warp)
+        // Stage 5: blocks of 32 (full warp for 32-lane)
         val = compare_swap(self, val, 16, 32);
         val = compare_swap(self, val, 8, 32);
         val = compare_swap(self, val, 4, 32);
         val = compare_swap(self, val, 2, 32);
         val = compare_swap(self, val, 1, 32);
+
+        // Stage 6: blocks of 64 (full warp for 64-lane)
+        #[cfg(feature = "warp64")]
+        {
+            val = compare_swap(self, val, 32, 64);
+            val = compare_swap(self, val, 16, 64);
+            val = compare_swap(self, val, 8, 64);
+            val = compare_swap(self, val, 4, 64);
+            val = compare_swap(self, val, 2, 64);
+            val = compare_swap(self, val, 1, 64);
+        }
 
         val
     }
@@ -197,6 +208,17 @@ impl Warp<All> {
         val = cas(self, val, 4, 32);
         val = cas(self, val, 2, 32);
         val = cas(self, val, 1, 32);
+
+        // Stage 6 (64-lane wavefronts)
+        #[cfg(feature = "warp64")]
+        {
+            val = cas(self, val, 32, 64);
+            val = cas(self, val, 16, 64);
+            val = cas(self, val, 8, 64);
+            val = cas(self, val, 4, 64);
+            val = cas(self, val, 2, 64);
+            val = cas(self, val, 1, 64);
+        }
 
         val
     }
@@ -272,6 +294,17 @@ impl Warp<All> {
         (k, v) = cas_kv(self, k, v, 4, 32);
         (k, v) = cas_kv(self, k, v, 2, 32);
         (k, v) = cas_kv(self, k, v, 1, 32);
+
+        // Stage 6 (64-lane wavefronts)
+        #[cfg(feature = "warp64")]
+        {
+            (k, v) = cas_kv(self, k, v, 32, 64);
+            (k, v) = cas_kv(self, k, v, 16, 64);
+            (k, v) = cas_kv(self, k, v, 8, 64);
+            (k, v) = cas_kv(self, k, v, 4, 64);
+            (k, v) = cas_kv(self, k, v, 2, 64);
+            (k, v) = cas_kv(self, k, v, 1, 64);
+        }
 
         (k, v)
     }

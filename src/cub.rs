@@ -30,7 +30,7 @@ impl Warp<All> {
     /// Reduce with a custom binary operator across all lanes.
     ///
     /// Equivalent to `cub::WarpReduce<T>::Reduce(val, op)`.
-    /// Uses butterfly reduction (5 stages for 32 lanes).
+    /// Uses butterfly reduction (log₂(WARP_SIZE) stages).
     ///
     /// Every lane gets the result (unlike CUB where only lane 0 does).
     ///
@@ -47,6 +47,10 @@ impl Warp<All> {
         F: Fn(T, T) -> T,
     {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        {
+            val = op(val, val.gpu_shfl_xor(32));
+        }
         val = op(val, val.gpu_shfl_xor(16));
         val = op(val, val.gpu_shfl_xor(8));
         val = op(val, val.gpu_shfl_xor(4));
@@ -181,7 +185,11 @@ impl Warp<All> {
         data: PerLane<T>,
         src_lane: u32,
     ) -> PerLane<T> {
-        assert!(src_lane < 32, "broadcast_lane: src_lane {src_lane} >= 32");
+        assert!(
+            src_lane < crate::WARP_SIZE,
+            "broadcast_lane: src_lane {src_lane} >= {}",
+            crate::WARP_SIZE
+        );
         PerLane::new(data.get().gpu_shfl_idx(src_lane))
     }
 

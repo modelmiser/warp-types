@@ -327,7 +327,7 @@ impl Warp<All> {
 // Permutation algebra (from shuffle duality research)
 // ============================================================================
 
-/// A permutation on lane indices [0, 32).
+/// A permutation on lane indices [0, WARP_SIZE).
 pub trait Permutation: Copy + Clone {
     /// Where does lane `i` send its value?
     fn forward(i: u32) -> u32;
@@ -335,7 +335,7 @@ pub trait Permutation: Copy + Clone {
     fn inverse(i: u32) -> u32;
     /// Is this permutation its own inverse (involution)?
     fn is_self_dual() -> bool {
-        (0..32).all(|i| Self::forward(i) == Self::inverse(i))
+        (0..crate::WARP_SIZE).all(|i| Self::forward(i) == Self::inverse(i))
     }
 }
 
@@ -352,10 +352,10 @@ pub struct Xor<const MASK: u32>;
 
 impl<const MASK: u32> Permutation for Xor<MASK> {
     fn forward(i: u32) -> u32 {
-        (i ^ MASK) & 0x1F
+        (i ^ MASK) & (crate::WARP_SIZE - 1)
     }
     fn inverse(i: u32) -> u32 {
-        (i ^ MASK) & 0x1F
+        (i ^ MASK) & (crate::WARP_SIZE - 1)
     }
     fn is_self_dual() -> bool {
         true
@@ -366,7 +366,7 @@ impl<const MASK: u32> HasDual for Xor<MASK> {
     type Dual = Xor<MASK>;
 }
 
-/// Rotate down: lane i receives from lane (i + delta) mod 32.
+/// Rotate down: lane i receives from lane (i + delta) mod WARP_SIZE.
 ///
 /// **Not the same as CUDA `__shfl_down_sync`**: this is a modular rotation
 /// (wraps around), whereas CUDA's `__shfl_down_sync` clamps (out-of-range
@@ -376,7 +376,7 @@ impl<const MASK: u32> HasDual for Xor<MASK> {
 #[derive(Copy, Clone, Debug)]
 pub struct RotateDown<const DELTA: u32>;
 
-/// Rotate up: lane i receives from lane (i - delta) mod 32.
+/// Rotate up: lane i receives from lane (i - delta) mod WARP_SIZE.
 ///
 /// Dual of `RotateDown`. Data flows from lower-numbered lanes to higher.
 #[derive(Copy, Clone, Debug)]
@@ -384,25 +384,31 @@ pub struct RotateUp<const DELTA: u32>;
 
 impl<const DELTA: u32> Permutation for RotateDown<DELTA> {
     fn forward(i: u32) -> u32 {
-        (i + 32 - (DELTA & 0x1F)) & 0x1F
+        let mask = crate::WARP_SIZE - 1;
+        (i + crate::WARP_SIZE - (DELTA & mask)) & mask
     }
     fn inverse(i: u32) -> u32 {
-        (i + (DELTA & 0x1F)) & 0x1F
+        let mask = crate::WARP_SIZE - 1;
+        (i + (DELTA & mask)) & mask
     }
     fn is_self_dual() -> bool {
-        (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16
+        let mask = crate::WARP_SIZE - 1;
+        (DELTA & mask) == 0 || (DELTA & mask) == crate::WARP_SIZE / 2
     }
 }
 
 impl<const DELTA: u32> Permutation for RotateUp<DELTA> {
     fn forward(i: u32) -> u32 {
-        (i + (DELTA & 0x1F)) & 0x1F
+        let mask = crate::WARP_SIZE - 1;
+        (i + (DELTA & mask)) & mask
     }
     fn inverse(i: u32) -> u32 {
-        (i + 32 - (DELTA & 0x1F)) & 0x1F
+        let mask = crate::WARP_SIZE - 1;
+        (i + crate::WARP_SIZE - (DELTA & mask)) & mask
     }
     fn is_self_dual() -> bool {
-        (DELTA & 0x1F) == 0 || (DELTA & 0x1F) == 16
+        let mask = crate::WARP_SIZE - 1;
+        (DELTA & mask) == 0 || (DELTA & mask) == crate::WARP_SIZE / 2
     }
 }
 
@@ -420,10 +426,10 @@ pub struct Identity;
 
 impl Permutation for Identity {
     fn forward(i: u32) -> u32 {
-        i & 0x1F
+        i & (crate::WARP_SIZE - 1)
     }
     fn inverse(i: u32) -> u32 {
-        i & 0x1F
+        i & (crate::WARP_SIZE - 1)
     }
     fn is_self_dual() -> bool {
         true
@@ -458,16 +464,44 @@ pub type ButterflyStage2 = Xor<4>;
 pub type ButterflyStage3 = Xor<8>;
 pub type ButterflyStage4 = Xor<16>;
 
+/// 32-lane full butterfly: XOR stages 1|2|4|8|16.
+#[cfg(not(feature = "warp64"))]
 pub type FullButterfly = Compose<
     Compose<Compose<Compose<ButterflyStage0, ButterflyStage1>, ButterflyStage2>, ButterflyStage3>,
     ButterflyStage4,
 >;
 
+/// 64-lane butterfly adds XOR<32> as the 6th stage.
+#[cfg(feature = "warp64")]
+pub type ButterflyStage5 = Xor<32>;
+
+/// 64-lane full butterfly: XOR stages 1|2|4|8|16|32.
+#[cfg(feature = "warp64")]
+pub type FullButterfly = Compose<
+    Compose<
+        Compose<Compose<Compose<ButterflyStage0, ButterflyStage1>, ButterflyStage2>, ButterflyStage3>,
+        ButterflyStage4,
+    >,
+    ButterflyStage5,
+>;
+
 /// Apply a permutation to an array of values.
+#[cfg(not(feature = "warp64"))]
 pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32] {
     let mut result = values;
     for (i, slot) in result.iter_mut().enumerate() {
-        let src = (P::inverse(i as u32) & 0x1F) as usize;
+        let src = (P::inverse(i as u32) & (crate::WARP_SIZE - 1)) as usize;
+        *slot = values[src];
+    }
+    result
+}
+
+/// Apply a permutation to an array of values.
+#[cfg(feature = "warp64")]
+pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 64], _perm: P) -> [T; 64] {
+    let mut result = values;
+    for (i, slot) in result.iter_mut().enumerate() {
+        let src = (P::inverse(i as u32) & (crate::WARP_SIZE - 1)) as usize;
         *slot = values[src];
     }
     result
@@ -564,9 +598,11 @@ mod tests {
     #[test]
     fn test_xor_self_dual() {
         assert!(Xor::<5>::is_self_dual());
-        for mask in 0..32u32 {
-            for lane in 0..32u32 {
-                let after_two = (((lane ^ mask) & 0x1F) ^ mask) & 0x1F;
+        let ws = crate::WARP_SIZE;
+        let mask_bits = ws - 1;
+        for mask in 0..ws {
+            for lane in 0..ws {
+                let after_two = (((lane ^ mask) & mask_bits) ^ mask) & mask_bits;
                 assert_eq!(after_two, lane);
             }
         }
@@ -574,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_rotate_duality() {
-        for lane in 0..32u32 {
+        for lane in 0..crate::WARP_SIZE {
             let down_then_up = RotateUp::<1>::forward(RotateDown::<1>::forward(lane));
             assert_eq!(down_then_up, lane);
         }
@@ -582,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_shuffle_roundtrip() {
-        let original: [i32; 32] = core::array::from_fn(|i| i as i32);
+        let original: [i32; crate::WARP_SIZE as usize] = core::array::from_fn(|i| i as i32);
         let shuffled = shuffle_by(original, Xor::<5>);
         let unshuffled = shuffle_by(shuffled, Xor::<5>);
         assert_eq!(unshuffled, original);
@@ -590,15 +626,16 @@ mod tests {
 
     #[test]
     fn test_butterfly_permutation() {
-        // Full butterfly: XOR with 1|2|4|8|16 = 31, so maps i → i ^ 31
-        for i in 0..32u32 {
-            assert_eq!(FullButterfly::forward(i), i ^ 31);
+        // Full butterfly: XOR with all stages = WARP_SIZE-1, so maps i → i ^ (WARP_SIZE-1)
+        let ws = crate::WARP_SIZE;
+        for i in 0..ws {
+            assert_eq!(FullButterfly::forward(i), i ^ (ws - 1));
         }
     }
 
     #[test]
     fn test_compose_associative() {
-        for i in 0..32u32 {
+        for i in 0..crate::WARP_SIZE {
             let ab_c = Compose::<Compose<Xor<3>, Xor<5>>, Xor<7>>::forward(i);
             let a_bc = Compose::<Xor<3>, Compose<Xor<5>, Xor<7>>>::forward(i);
             assert_eq!(ab_c, a_bc);
@@ -612,7 +649,7 @@ mod tests {
     #[test]
     fn test_xor_mask_preserves_active_set_all() {
         // All lanes active: any mask preserves the set.
-        for mask in 0..32u32 {
+        for mask in 0..crate::WARP_SIZE {
             assert!(
                 xor_mask_preserves_active_set(crate::active_set::All::MASK, mask),
                 "All should accept mask {mask}"
@@ -752,7 +789,7 @@ mod tests {
 
         // Verify the preservation property: for Even lanes and mask 2,
         // every even lane's partner (lane ^ 2) is also even.
-        for lane in (0..32).step_by(2) {
+        for lane in (0..crate::WARP_SIZE).step_by(2) {
             let partner = lane ^ 2;
             assert_eq!(
                 partner % 2,
@@ -777,7 +814,7 @@ mod tests {
         assert_eq!(shuffled.lane(7), 5);
 
         // Verify: for Odd lanes and mask 2, every odd partner is odd.
-        for lane in (1..32).step_by(2) {
+        for lane in (1..crate::WARP_SIZE).step_by(2) {
             let partner = lane ^ 2;
             assert_ne!(
                 partner % 2,
