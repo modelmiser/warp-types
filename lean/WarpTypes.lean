@@ -2,3 +2,4 @@
 -- Import modules here that should be built as part of the library.
 import WarpTypes.Basic
 import WarpTypes.Metatheory
+import WarpTypes.SolExperiment
