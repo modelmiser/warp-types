@@ -94,7 +94,7 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 
 ## Status
 
-**48/49 complete.** 3 remaining for v0.3.0 (GpuValue seal reuse, proof module name-shadow, prelude gaps).
+**51/55 complete.** 4 remaining: GpuValue seal reuse (v0.3.0), proof module name-shadow (v0.3.0), prelude gaps (v0.3.0), `#[must_use]` warning test (untestable — Rust limitation).
 
 ## Lean Formalization — Completed (2026-03-20)
 

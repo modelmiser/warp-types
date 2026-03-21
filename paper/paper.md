@@ -1546,7 +1546,7 @@ The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes thirteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes fifteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
