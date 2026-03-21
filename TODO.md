@@ -86,15 +86,15 @@ These are semver-sensitive and should be batched:
 The architecture already supports C++ host code loading Rust-generated PTX.
 No Rust runtime in the C++ binary — types vanish completely at PTX level.
 
-- [ ] `#[repr(C)]` audit: verify `PerLane<T>`, `Uniform<T>`, `SingleLane<T,N>` are FFI-safe
+- [x] `#[repr(C)]` audit: `repr(transparent)` on LaneId, WarpId, BlockId, Uniform, PerLane, SingleLane, BallotResult; `repr(C)` on ThreadId
 - [ ] CMake example project: C++ host + Rust kernel, build system glue
 - [ ] INTEGRATION.md: C++ section documenting the PTX-loading integration path
-- [ ] Document build split: `cargo build` → PTX → `cuModuleLoadData` / `cuLaunchKernel`
-- [ ] Consider a `warp-types-cxx` header or helper for kernel launch boilerplate
+- [x] Document build split: `examples/cuda/main.cu` + `Makefile` — `cargo build` → PTX → `cuModuleLoad` / `cuLaunchKernel`
+- [x] `include/warp_types.h` — C++20 header: concepts, requires clauses, CUDA/HIP/host-only modes, compile-time safety verified
 
 ## Status
 
-**38/49 complete.** 7 parked for v0.3.0 (API breaking), 4 new for C++ interop (additive).
+**41/49 complete.** 7 parked for v0.3.0 (API breaking), 1 remaining for C++ interop (CMake + INTEGRATION.md).
 
 ## Lean Formalization — Completed (2026-03-20)
 

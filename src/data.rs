@@ -12,6 +12,7 @@ use crate::GpuValue;
 /// Type-safe: you can't accidentally use an arbitrary int as a lane id.
 /// Supports up to 64 lanes to accommodate AMD wavefronts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct LaneId(u8);
 
 impl LaneId {
@@ -34,6 +35,7 @@ impl LaneId {
 
 /// A warp identifier within a thread block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct WarpId(u16);
 
 impl WarpId {
@@ -52,6 +54,7 @@ impl WarpId {
 /// uniformity (broadcasts, constants, ballot results). This prevents the
 /// common bug of assuming a value is uniform when it isn't.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
 pub struct Uniform<T: GpuValue> {
     value: T,
 }
@@ -80,6 +83,7 @@ impl<T: GpuValue> Uniform<T> {
 /// shuffle operations.
 #[must_use = "PerLane values carry per-lane GPU data — dropping discards computation"]
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
 pub struct PerLane<T: GpuValue> {
     value: T,
 }
@@ -117,6 +121,7 @@ impl<T: GpuValue + core::ops::Add<Output = T>> core::ops::Add for PerLane<T> {
 /// Prevents the common bug of reading a reduction result from all lanes
 /// (undefined behavior in CUDA).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
 pub struct SingleLane<T: GpuValue, const LANE: u8> {
     value: T,
 }

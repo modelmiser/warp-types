@@ -22,6 +22,7 @@ use core::marker::PhantomData;
 /// The mask is `u64` — covers both NVIDIA 32-lane (upper 32 bits zero)
 /// and AMD 64-lane wavefronts.
 #[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct BallotResult {
     mask: Uniform<u64>,
 }

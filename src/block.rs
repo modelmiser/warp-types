@@ -131,6 +131,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
 // ============================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct BlockId(u32);
 
 impl BlockId {
@@ -144,6 +145,7 @@ impl BlockId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(C)]
 pub struct ThreadId {
     block: BlockId,
     warp: crate::data::WarpId,
