@@ -71,6 +71,7 @@ inductive Expr
   | snd (e : Expr)        -- Second projection
   | letPair (e : Expr) (name1 name2 : String) (body : Expr)  -- Linear pair destructor
   | loopUniform (n : Nat) (warpName : String) (warp body : Expr)  -- §5.1 uniform loop
+  | loopVarying (warp body : Expr)  -- §5.1 varying loop (warp-free body)
 
 -- ============================================================================
 -- Typing Context (linear)
@@ -83,6 +84,29 @@ def Ctx.lookup (ctx : Ctx) (name : String) : Option Ty :=
 
 def Ctx.remove (ctx : Ctx) (name : String) : Ctx :=
   ctx.filter (fun p => p.1 != name)
+
+-- ============================================================================
+-- Warp-free predicate (§5.1 LOOP-VARYING)
+-- ============================================================================
+
+/-- An expression is warp-free if it contains no warp operations.
+    Such expressions cannot introduce divergence bugs — the warp
+    passes through unchanged. -/
+def warpFree : Expr → Bool
+  | .warpVal _ => false
+  | .diverge _ _ => false
+  | .merge _ _ => false
+  | .shuffle _ _ => false
+  | .loopUniform _ _ _ _ => false
+  | .loopVarying _ _ => false
+  | .perLaneVal => true
+  | .unitVal => true
+  | .var _ => true
+  | .letBind _ val body => warpFree val && warpFree body
+  | .pairVal a b => warpFree a && warpFree b
+  | .fst e => warpFree e
+  | .snd e => warpFree e
+  | .letPair e _ _ body => warpFree e && warpFree body
 
 -- ============================================================================
 -- Typing Rules (§3.3)
@@ -144,6 +168,10 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       ctx'.lookup warpName = none →
       HasType ((warpName, .warp s) :: ctx') body (.warp s) ctx' →
       HasType ctx (.loopUniform n warpName warp body) (.warp s) ctx'
+  | loopVarying (ctx ctx' : Ctx) (warp body : Expr) (s : ActiveSet) :
+      HasType ctx warp (.warp s) ctx' →
+      warpFree body = true →
+      HasType ctx (.loopVarying warp body) (.warp s) ctx'
 
 -- ============================================================================
 -- Theorem 4.1: Diverge Partition
@@ -242,6 +270,7 @@ def isValue : Expr → Bool
   | .pairVal a b => isValue a && isValue b
   | .letPair _ _ _ _ => false
   | .loopUniform _ _ _ _ => false
+  | .loopVarying _ _ => false
   | _ => false
 
 -- ============================================================================

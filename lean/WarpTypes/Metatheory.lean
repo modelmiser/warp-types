@@ -36,6 +36,7 @@ def subst (e : Expr) (x : String) (v : Expr) : Expr :=
   | .loopUniform n warpName w body =>
       if warpName == x then .loopUniform n warpName (subst w x v) body
       else .loopUniform n warpName (subst w x v) (subst body x v)
+  | .loopVarying w body => .loopVarying (subst w x v) body
 
 -- ============================================================================
 -- Small-Step Reduction
@@ -98,6 +99,12 @@ inductive Step : Expr → Expr → Prop
   | loopCong (n : Nat) (warpName : String) (w w' body : Expr) :
       Step w w' →
       Step (.loopUniform n warpName w body) (.loopUniform n warpName w' body)
+  | loopVaryingVal (v body : Expr) :
+      isValue v = true →
+      Step (.loopVarying v body) v
+  | loopVaryingCong (w w' body : Expr) :
+      Step w w' →
+      Step (.loopVarying w body) (.loopVarying w' body)
 
 -- ============================================================================
 -- Values preserve contexts (values don't consume linear resources)
@@ -123,6 +130,7 @@ theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
   | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
 
 -- ============================================================================
 -- Canonical Forms
@@ -140,6 +148,7 @@ theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
   | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
 
 theorem canonical_perLane {e : Expr} {ctx' : Ctx}
     (ht : HasType [] e .perLane ctx') (hv : isValue e = true) :
@@ -259,6 +268,11 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
       exact .inr ⟨v2, Step.sndVal v1 v2 hv1 hv2⟩
     | .inr ⟨e', he'⟩ =>
       exact .inr ⟨_, Step.sndCong e e' he'⟩
+  | .loopVarying _ _ w body _ hw _ =>
+    have ihw := progress hw
+    match ihw with
+    | .inl hv => exact .inr ⟨_, Step.loopVaryingVal w body hv⟩
+    | .inr ⟨w', hw'⟩ => exact .inr ⟨_, Step.loopVaryingCong w w' body hw'⟩
   | .loopUniform _ _ n warpName w body _ hw _ _ =>
     have ihw := progress hw
     match ihw with
@@ -406,6 +420,7 @@ private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
   | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopUniform _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .loopVarying _ _ _ _ _ _ _ => simp [isValue] at hv
 
 /-- Values can be typed in any context, producing the same context unchanged. -/
 theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
@@ -459,6 +474,7 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
   | fstE _ _ _ _ _ _ ih => exact ih hout
   | sndE _ _ _ _ _ _ ih => exact ih hout
   | loopUniform _ _ _ _ _ _ _ _ _ _ ih_w _ => exact ih_w hout
+  | loopVarying _ _ _ _ _ _ _ ih_w => exact ih_w hout
   | letPairE ctx₀ ctx_mid ctx_body _ n1 n2 _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 ih_e ih_body =>
     have h_body := ih_body hout
     have hxn1 : x ≠ n1 := by intro h; subst h; rw [hcons1] at hout; simp at hout
@@ -568,6 +584,9 @@ theorem subst_typing
     simp [subst]; exact HasType.fstE _ _ _ _ _ (subst_typing hv ht_v he hname)
   | .sndE _ _ _ _ _ he => by
     simp [subst]; exact HasType.sndE _ _ _ _ _ (subst_typing hv ht_v he hname)
+  | .loopVarying _ _ _ body _ hw hwf => by
+    simp [subst]
+    exact HasType.loopVarying _ _ _ _ _ (subst_typing hv ht_v hw hname) hwf
   | .loopUniform _ ctx_mid _ warpName _ body s_loop hw hfresh hbody => by
     simp only [subst]
     by_cases hxn : warpName = nm
@@ -784,6 +803,14 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | loopUniform _ _ _ _ _ _ _ hw hfresh hbody =>
       exact HasType.loopUniform _ _ _ _ _ _ _ (ih hw) hfresh hbody
+  | loopVaryingVal v body hv =>
+    cases ht with
+    | loopVarying _ _ _ _ _ hw _ =>
+      have := value_preserves_ctx hw hv; subst this; exact hw
+  | loopVaryingCong w w' body _ ih =>
+    cases ht with
+    | loopVarying _ _ _ _ _ hw hwf =>
+      exact HasType.loopVarying _ _ _ _ _ (ih hw) hwf
 
 -- ============================================================================
 -- Multi-step Type Safety (Corollary 4.3)
