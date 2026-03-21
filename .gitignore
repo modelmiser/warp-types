@@ -7,3 +7,4 @@ reproduce/gpu_semantics_test
 .review/
 COLD-REVIEW*
 INSIGHTS.md
+scripts/
