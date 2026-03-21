@@ -276,13 +276,13 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test && cargo test --examples` (291 unit + 28 doc + 50 example = 369 total)
+- Clone the repo and run `cargo test && cargo test --examples` (317 unit + 32 doc + 50 example = 399 total)
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`
 
 ### For Researchers
-- The Lean 4 formalization is in `lean/` (28 theorems, all zero `sorry`, zero axioms — including progress, preservation, and 5 bug untypability proofs)
+- The Lean 4 formalization is in `lean/` (31 named theorems, all zero `sorry`, zero axioms — including progress, preservation, and 5 bug untypability proofs)
 - Active set masks are `u64` — ready for AMD 64-lane wavefronts
 - The `Platform` trait in the builder supports future backends
 - The tile system opens cooperative groups to formal typing
