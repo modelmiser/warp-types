@@ -94,3 +94,10 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 ## Status
 
 **38/49 complete.** 7 parked for v0.3.0 (API breaking), 4 new for C++ interop (additive).
+
+## Lean Formalization — Completed (2026-03-20)
+
+- [x] `letPair` linear pair destructor — typing rule, reduction, full metatheory (9037aa6af)
+- [x] Nested merge — `IsComplement s1 s2 parent`, `mergeVal → s1|||s2`, EvenLow/EvenHigh instance (9037aa6af)
+- [ ] Loop typing rules (§5.1) — LOOP-UNIFORM, CONVERGENT, VARYING, PHASED
+- [ ] 64-lane AMD wavefronts — ActiveSet → BitVec 64 / warp_size generalization
