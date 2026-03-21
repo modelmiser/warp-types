@@ -113,6 +113,16 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), TokenStream> {
         syn::Type::Ptr(_) => Ok(()),
         // Path types: check if they're known scalars
         syn::Type::Path(tp) => {
+            // Reject qualified paths (e.g., my_crate::u32) — kernel params must be plain scalars
+            if tp.path.segments.len() > 1 {
+                let msg = format!(
+                    "warp_kernel: parameter `{}` uses qualified type `{}`. \
+                     Use unqualified scalar types (u32, i32, f32, etc.) for kernel parameters.",
+                    quote!(#pat),
+                    quote!(#ty)
+                );
+                return Err(syn::Error::new_spanned(ty, msg).to_compile_error().into());
+            }
             if let Some(seg) = tp.path.segments.last() {
                 let name = seg.ident.to_string();
                 let valid_scalars = [
