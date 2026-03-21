@@ -21,6 +21,7 @@ use core::marker::PhantomData;
 ///
 /// The mask is `u64` — covers both NVIDIA 32-lane (upper 32 bits zero)
 /// and AMD 64-lane wavefronts.
+#[must_use = "BallotResult carries lane vote data — dropping discards the ballot"]
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct BallotResult {

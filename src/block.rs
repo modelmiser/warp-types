@@ -230,6 +230,7 @@ pub struct BlockPhase;
 pub struct GridPhase;
 pub struct Complete;
 
+#[must_use = "ReductionSession is a linear state machine — dropping abandons the reduction"]
 pub struct ReductionSession<Phase> {
     value: u32,
     _phase: PhantomData<Phase>,

@@ -47,7 +47,7 @@ use syn::{parse_macro_input, FnArg, ItemFn, Pat};
 ///
 /// Kernel parameters must be one of:
 /// - Raw pointers (`*const T`, `*mut T`) — for device memory
-/// - Scalars (`u32`, `i32`, `f32`, `u64`, `i64`, `f64`, `bool`) — passed by value
+/// - Scalars (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`) — passed by value
 ///
 /// Note: `usize`/`isize` are rejected because their width is platform-dependent.
 /// On nvptx64 they are 64-bit, but the host launcher may assume a different size,

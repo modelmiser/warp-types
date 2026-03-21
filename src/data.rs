@@ -121,6 +121,7 @@ impl<T: GpuValue + core::ops::Add<Output = T>> core::ops::Add for PerLane<T> {
 /// Models the result of a reduction — only one lane has the answer.
 /// Prevents the common bug of reading a reduction result from all lanes
 /// (undefined behavior in CUDA).
+#[must_use = "SingleLane values exist in one lane only — dropping discards the reduction result"]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct SingleLane<T: GpuValue, const LANE: u8> {

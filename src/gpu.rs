@@ -130,6 +130,7 @@ pub fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32) -> i32 {
+    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
     let c = ((32 - width) << 8) | 0x1F;
     let result: i32;
     unsafe {
@@ -150,6 +151,7 @@ pub fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32)
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
+    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
     let c = ((32 - width) << 8) | (width - 1);
     let result: i32;
     unsafe {
@@ -170,6 +172,7 @@ pub fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> 
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
+    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
     let c = (32 - width) << 8;
     let result: i32;
     unsafe {

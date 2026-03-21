@@ -332,12 +332,9 @@ pub fn step(expr: &Expr) -> Option<Expr> {
                     if !s.is_all() {
                         return None; // stuck: shuffle on non-All warp
                     }
-                    assert_eq!(
-                        vals.len(),
-                        WARP_SIZE as usize,
-                        "PerLaneVal must have exactly {WARP_SIZE} elements, got {}",
-                        vals.len()
-                    );
+                    if vals.len() != WARP_SIZE as usize {
+                        return None; // stuck: wrong-length PerLaneVal
+                    }
 
                     // Perform the shuffle
                     let mut result = vals.clone();

@@ -127,7 +127,7 @@ The core insight is transferable to any language with phantom types or zero-cost
 
 ## AMD: Same Bugs, Wider Warps
 
-AMD GPUs use 64-lane wavefronts — twice NVIDIA's width. We verified on an MI300X (gfx942):
+AMD GPUs use 64-lane wavefronts — twice NVIDIA's width. We verified mask correctness on an MI300X (gfx942) via HIP:
 
 ```
 6-stage butterfly (64-lane):  sum = 2016  ✓
