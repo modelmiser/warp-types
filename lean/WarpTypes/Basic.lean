@@ -72,6 +72,7 @@ inductive Expr
   | letPair (e : Expr) (name1 name2 : String) (body : Expr)  -- Linear pair destructor
   | loopUniform (n : Nat) (warpName : String) (warp body : Expr)  -- §5.1 uniform loop
   | loopVarying (warp body : Expr)  -- §5.1 varying loop (warp-free body)
+  | loopPhased (n : Nat) (warpName : String) (warp uniformBody varyingBody : Expr)  -- §5.1 phased
 
 -- ============================================================================
 -- Typing Context (linear)
@@ -99,6 +100,7 @@ def warpFree : Expr → Bool
   | .shuffle _ _ => false
   | .loopUniform _ _ _ _ => false
   | .loopVarying _ _ => false
+  | .loopPhased _ _ _ _ _ => false
   | .perLaneVal => true
   | .unitVal => true
   | .var _ => true
@@ -172,6 +174,13 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       HasType ctx warp (.warp s) ctx' →
       warpFree body = true →
       HasType ctx (.loopVarying warp body) (.warp s) ctx'
+  | loopPhased (ctx ctx' : Ctx) (n : Nat) (warpName : String)
+      (warp uniformBody varyingBody : Expr) (s : ActiveSet) :
+      HasType ctx warp (.warp s) ctx' →
+      ctx'.lookup warpName = none →
+      HasType ((warpName, .warp s) :: ctx') uniformBody (.warp s) ctx' →
+      warpFree varyingBody = true →
+      HasType ctx (.loopPhased n warpName warp uniformBody varyingBody) (.warp s) ctx'
 
 -- ============================================================================
 -- Theorem 4.1: Diverge Partition
@@ -271,6 +280,7 @@ def isValue : Expr → Bool
   | .letPair _ _ _ _ => false
   | .loopUniform _ _ _ _ => false
   | .loopVarying _ _ => false
+  | .loopPhased _ _ _ _ _ => false
   | _ => false
 
 -- ============================================================================
