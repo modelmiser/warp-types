@@ -57,6 +57,7 @@ KNOWN PATTERNS (already fixed — don't re-flag):
 - paper.md §3.1 said reduce_sum returns SingleLane; clarified it returns Uniform via butterfly (paper/paper.md:242)
 - DynDiverge::merge() hardcodes Warp<All> without documenting the assumption (dynamic.rs:merge)
 - GpuWarp32::shuffle clamped OOB indices instead of wrapping mod 32 (platform.rs:shuffle — hardware wraps)
+- paper.md Hazy "most sophisticated" → "most sophisticated published" (paper/paper.md:24,1588)
 
 KNOWN UNTESTED (accepted — don't re-flag):
 - [DOCUMENTED] Warp::kernel_entry() can be called multiple times, bypassing linear typestate (warp.rs — fundamental affine vs linear limitation)
@@ -75,6 +76,7 @@ KNOWN UNTESTED (accepted — don't re-flag):
 - [LEAN-SCOPE] Lean lacks multi-step safety corollary (trivial to close, standard induction)
 - [LEAN-SCOPE] Paper Lemma 4.6 (lane-level source validity) has no direct Lean theorem — connection from Warp<All> to all-bits-set is definitional but unstated
 - [LEAN-SCOPE] Lean Step.mergeVal/shuffleVal reductions are "untyped" — don't enforce typing constraints (sound by progress+preservation, standard PL design)
+- [DESIGN] fence.rs GlobalRegion::new() can create multiple independent regions; merge_writes checks set-level complement but not region identity (would need phantom region tokens to fix)
 
 REVIEW PROTOCOL (per file):
 1. Read end-to-end
