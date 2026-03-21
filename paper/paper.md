@@ -825,7 +825,7 @@ We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/Wa
 
 ### Scope
 
-The mechanization covers two files totaling 1337 lines of Lean:
+The mechanization covers two files totaling 1329 lines of Lean:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.

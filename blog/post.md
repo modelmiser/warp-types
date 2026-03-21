@@ -70,7 +70,7 @@ let partner = full_warp.shuffle_xor(data, 1);  // OK
 
 1. **Rust MIR** — no trace of `Warp` or `PhantomData`
 2. **NVIDIA PTX** — byte-identical assembly from `rustc --target nvptx64-nvidia-cuda`
-3. **CPU LLVM IR** — typed functions compile to the same shuffle intrinsics as untyped (see `compare_ptx.sh`)
+3. **CPU LLVM IR** — typed functions compile to the same shuffle intrinsics as untyped
 
 The type system exists only at compile time. The generated GPU code is identical to the untyped Rust equivalent.
 
