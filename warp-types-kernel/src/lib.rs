@@ -66,6 +66,23 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let params = &input.sig.inputs;
     let body = &input.block;
     let vis = &input.vis;
+    let attrs = &input.attrs;
+
+    // PTX kernels must be void — reject non-unit return types
+    if let syn::ReturnType::Type(_, ref ty) = input.sig.output {
+        let msg = "warp_kernel: GPU kernels must return `()`. \
+                   PTX kernel entry points are always void.";
+        return syn::Error::new_spanned(ty, msg).to_compile_error().into();
+    }
+
+    // PTX kernels cannot be generic
+    if !input.sig.generics.params.is_empty() {
+        let msg = "warp_kernel: GPU kernels cannot be generic. \
+                   PTX entry points require concrete types.";
+        return syn::Error::new_spanned(&input.sig.generics, msg)
+            .to_compile_error()
+            .into();
+    }
 
     // Validate parameters: must be raw pointers or scalars
     for param in params.iter() {
@@ -77,7 +94,9 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     // Generate the kernel function for nvptx64
+    // Preserve outer attributes (doc comments, #[cfg], etc.)
     let expanded = quote! {
+        #(#attrs)*
         #[no_mangle]
         #vis unsafe extern "ptx-kernel" fn #name(#params) #body
     };
