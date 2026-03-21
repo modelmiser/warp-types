@@ -1,6 +1,6 @@
 # Integrating warp-types Into Your Project
 
-Three paths, from lowest friction to highest benefit.
+Five paths, from lowest friction to highest benefit.
 
 ## Path 1: Model Your GPU Logic (No Nightly, No GPU Compilation)
 
@@ -175,7 +175,127 @@ warp-types-builder = { path = "path/to/warp-types/warp-types-builder" }
 
 **Effort:** 1-2 hours for first kernel. Then identical to normal Rust development.
 
-## Path 3: Mixed (Gradual Migration)
+## Path 3: C++ Host with Rust Kernels
+
+**Use case:** Your project is C++ but you want type-safe GPU kernels. Write kernels in Rust, load the PTX from C++.
+
+**How it works:** Rust compiles kernels to PTX (same output as nvcc). Your C++ host loads the PTX at runtime via CUDA Driver API or HIP — identical to loading any PTX module.
+
+**Setup:**
+
+```
+my-project/
+├── CMakeLists.txt       # or Makefile
+├── src/main.cu          # C++ host: load PTX, launch kernels
+└── kernels/             # Rust kernel crate
+    ├── Cargo.toml
+    └── src/lib.rs       # #[warp_kernel] functions
+```
+
+**C++ host (`src/main.cu`):**
+```cpp
+#include <cuda.h>
+
+int main() {
+    cuInit(0);
+    CUdevice dev; cuDeviceGet(&dev, 0);
+    CUcontext ctx; cuCtxCreate(&ctx, 0, dev);
+
+    // Load Rust-compiled PTX
+    CUmodule mod;
+    cuModuleLoad(&mod, "kernels/target/nvptx64-nvidia-cuda/release/my_kernels.ptx");
+
+    // Get kernel function (name matches #[warp_kernel] fn name)
+    CUfunction kernel;
+    cuModuleGetFunction(&kernel, mod, "reduce_n");
+
+    // Allocate, copy, launch — standard CUDA Driver API
+    CUdeviceptr d_in, d_out;
+    cuMemAlloc(&d_in, 32 * sizeof(int));
+    cuMemAlloc(&d_out, sizeof(int));
+
+    int input[32]; for (int i = 0; i < 32; i++) input[i] = 1;
+    cuMemcpyHtoD(d_in, input, sizeof(input));
+
+    unsigned int n = 32;
+    void* args[] = { &d_in, &d_out, &n };
+    cuLaunchKernel(kernel, 1,1,1, 32,1,1, 0, 0, args, nullptr);
+    cuCtxSynchronize();
+
+    int result;
+    cuMemcpyDtoH(&result, d_out, sizeof(int));
+    printf("Sum: %d\n", result);  // 32
+}
+```
+
+**Build:**
+```bash
+# Build Rust kernels to PTX
+cd kernels && cargo +nightly build --release
+
+# Build C++ host
+nvcc --std=c++20 -o demo src/main.cu -lcuda
+
+# Or with CMake (see examples/cuda/CMakeLists.txt)
+mkdir build && cd build && cmake .. && make
+```
+
+**HIP equivalent:** Replace `cuInit` → `hipInit`, `cuModuleLoad` → `hipModuleLoad`, etc. The API shape is 1:1. HIP on NVIDIA can load PTX directly.
+
+**Effort:** 30 minutes if you know the CUDA Driver API.
+
+## Path 4: C++ Kernels with `warp_types.h`
+
+**Use case:** You write CUDA or HIP kernels in C++ and want the same compile-time safety as the Rust version. No Rust toolchain required.
+
+**How it works:** `include/warp_types.h` is a standalone C++20 header that mirrors the Rust type system using concepts and `requires` clauses. `Warp<All>` has shuffle methods; `Warp<Even>` doesn't. Same guarantee, zero overhead.
+
+```cpp
+#include "warp_types.h"
+using namespace warp_types;
+
+__global__ void safe_reduce(int* data) {
+    auto warp = Warp<All>::kernel_entry();
+    auto val = PerLane<int>::from(data[threadIdx.x]);
+
+    // OK: shuffle on Warp<All>
+    auto sum = warp.reduce_sum(val);
+    if (threadIdx.x == 0) data[0] = sum.get();
+}
+
+__global__ void buggy_reduce(int* data) {
+    auto warp = Warp<All>::kernel_entry();
+    auto [evens, odds] = warp.diverge_even_odd();
+
+    auto val = PerLane<int>::from(data[threadIdx.x]);
+    // COMPILE ERROR: shuffle_xor requires same_as<S, All>
+    // auto result = evens.shuffle_xor(val, 1);
+
+    // Fix: merge first
+    auto merged = merge(evens, odds);
+    auto result = merged.shuffle_xor(val, 1);  // OK
+    (void)result;
+}
+```
+
+**What you get:**
+- Shuffle/reduce/ballot only on `Warp<All>` — diverged warps can't shuffle
+- `merge()` requires `ComplementOf` — can't merge `Even + LowHalf`
+- Works with CUDA (`__shfl_xor_sync`), HIP (`__shfl_xor`), and host-only (modeling)
+- Zero runtime overhead — `Warp<S>` is empty
+
+**Build:**
+```bash
+nvcc --std=c++20 -I path/to/warp-types/include -o demo my_kernel.cu
+# or
+hipcc --std=c++20 -I path/to/warp-types/include -o demo my_kernel.cu
+```
+
+**Limitation vs Rust:** C++ can't enforce linear types (move-only empty structs). After `diverge_even_odd()`, you *can* still use the original warp handle — C++ trusts you not to. Rust makes this a compile error.
+
+**Effort:** 10 minutes. Copy the header, add `-I` flag, use the API.
+
+## Path 5: Mixed (Gradual Migration)
 
 **Use case:** Large existing CUDA codebase. Migrate incrementally.
 
@@ -219,4 +339,13 @@ A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.
 A: The type system (Path 1) works with any GPU framework. The kernel compilation pipeline (Path 2) currently targets NVIDIA PTX via cudarc. Vulkan/SPIR-V backend is future work.
 
 **Q: What about AMD GPUs?**
-A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. AMD inline assembly stubs exist but are untested without hardware.
+A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. AMD inline assembly stubs exist but are untested without hardware. For AMD today, use Path 4 (`warp_types.h` with HIP).
+
+**Q: Can I use warp-types from C++?**
+A: Two options. Path 3: write kernels in Rust, load PTX from C++ via `cuModuleLoad`. Path 4: write kernels in C++ using `include/warp_types.h` for compile-time safety. Both are zero overhead.
+
+**Q: Does the C++ header require Rust?**
+A: No. `warp_types.h` is a standalone C++20 header. It requires `--std=c++20` (nvcc or hipcc) but no Rust toolchain. It provides the same type-level guarantees as the Rust version.
+
+**Q: What C++ standard is required?**
+A: C++20. The header uses `concept`, `requires` clauses, and `std::same_as` — these don't exist in C++17. CUDA 12+ and ROCm 5+ support C++20.
