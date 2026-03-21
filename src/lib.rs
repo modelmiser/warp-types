@@ -89,11 +89,12 @@ pub mod warp;
 // Research explorations (compiled, not re-exported)
 // ============================================================================
 
+#[cfg(any(test, feature = "research"))]
 #[cfg(not(target_arch = "nvptx64"))]
 #[allow(dead_code)]
-// Research modules contain experimental prototypes with unused code
-// Research modules: exploratory demos, not production API.
-// Suppress clippy lints inappropriate for proof-of-concept code.
+// Research modules: design-space explorations and prototypes.
+// Not part of the production API — gated behind `research` feature.
+// Always compiled during `cargo test` so research tests stay exercised.
 #[allow(
     clippy::new_without_default,
     clippy::needless_range_loop,
@@ -231,9 +232,9 @@ pub mod prelude {
     pub use crate::data;
     pub use crate::gpu::GpuShuffle;
     pub use crate::{
-        merge, merge_within, ActiveSet, All, BallotResult, CanDiverge, ComplementOf,
+        merge, merge_within, warp_kernel, ActiveSet, All, BallotResult, CanDiverge, ComplementOf,
         ComplementWithin, DynDiverge, DynWarp, Empty, Even, EvenHigh, EvenLow, Fenced, FullWrite,
-        GlobalRegion, GpuValue, HighHalf, Lane0, LowHalf, NotLane0, Odd, OddHigh, OddLow,
-        PartialWrite, PerLane, SingleLane, Tile, Uniform, Unwritten, Warp, WriteState,
+        GlobalRegion, GpuValue, HighHalf, Lane0, LaneId, LowHalf, NotLane0, Odd, OddHigh, OddLow,
+        PartialWrite, PerLane, SingleLane, Tile, Uniform, Unwritten, Warp, WarpId, WriteState,
     };
 }

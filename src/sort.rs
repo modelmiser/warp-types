@@ -9,18 +9,19 @@
 //! 2. **The mask sequence is structured** — each stage is a typed function
 //!    with the correct XOR distances, not a bag of magic numbers
 //!
-//! # Bitonic Sort Algorithm (32 elements, 1 per lane)
+//! # Bitonic Sort Algorithm (WARP_SIZE elements, 1 per lane)
 //!
-//! 5 stages, each with increasing substages:
+//! log₂(WARP_SIZE) stages, each with increasing substages:
 //! ```text
 //! Stage 1: compare-swap at distance 1           (1 substage)
 //! Stage 2: compare-swap at distances 2, 1       (2 substages)
 //! Stage 3: compare-swap at distances 4, 2, 1    (3 substages)
 //! Stage 4: compare-swap at distances 8, 4, 2, 1 (4 substages)
 //! Stage 5: compare-swap at distances 16, 8, 4, 2, 1 (5 substages)
+//! Stage 6 (warp64): compare-swap at distances 32, 16, ..., 1 (6 substages)
 //! ```
 //!
-//! Total: 15 compare-and-swap operations using shuffle-XOR.
+//! Total: 15 compare-and-swap operations (32-lane) or 21 (64-lane).
 
 use crate::active_set::All;
 use crate::data::PerLane;
@@ -84,14 +85,14 @@ impl Warp<All> {
     ///
     /// Sorts in ascending order across lane indices. After sorting:
     /// - Lane 0 has the minimum
-    /// - Lane 31 has the maximum
+    /// - Lane WARP_SIZE-1 has the maximum
     ///
-    /// Uses exactly 15 compare-and-swap operations via shuffle-XOR.
+    /// Uses log₂(WARP_SIZE) stages of compare-and-swap via shuffle-XOR
+    /// (15 ops for 32-lane, 21 for 64-lane).
     /// The type system guarantees:
     /// - All shuffles operate on a full warp (no inactive lanes)
     /// - The mask sequence is correct (each stage properly structured)
     ///
-    /// On GPU: 15 `shfl.sync.bfly.b32` instructions + 15 min/max comparisons.
     /// Zero overhead from the type system.
     ///
     /// Uses direction-aware compare-and-swap via `lane_id()` — correct on GPU.

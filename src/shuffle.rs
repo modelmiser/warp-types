@@ -346,7 +346,7 @@ pub trait HasDual: Permutation {
 
 /// XOR shuffle: lane i exchanges with lane i ⊕ mask.
 ///
-/// XOR shuffles are involutions (self-dual) and form the group (Z₂)⁵.
+/// XOR shuffles are involutions (self-dual) and form the group (Z₂)^log₂(WARP_SIZE).
 #[derive(Copy, Clone, Debug)]
 pub struct Xor<const MASK: u32>;
 

@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 317 unit + 50 example + 32 doc tests (399 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
+**Status:** Research prototype with real GPU execution. 317 unit + 50 example + 29 doc tests (396 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 
@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 317 unit + 32 doc tests
+cargo test                                    # 317 unit + 29 doc tests
 cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -116,7 +116,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't shuffle, merge requires complements) | 15 compile-fail doctests | `cargo test --doc` |
+| Type safety (diverged warp can't shuffle, merge requires complements) | 11 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
@@ -125,9 +125,9 @@ fn main() {
 | Soundness (progress + preservation) | Full Lean 4 mechanization (31 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` |
-| Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (32 tests) | `cargo test gradual` |
-| All claims | Full test suite (399 tests) | `cargo test && cargo test --examples` |
+| Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (29 tests) | `cargo test gradual` |
+| All claims | Full test suite (396 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 

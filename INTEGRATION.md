@@ -11,7 +11,7 @@ Five paths, from lowest friction to highest benefit.
 ```toml
 # Cargo.toml
 [dependencies]
-warp-types = "0.2"
+warp-types = "0.3"
 ```
 
 ```rust
@@ -75,7 +75,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-warp-types = "0.2"
+warp-types = "0.3"
 ```
 
 **Kernel code (`my-kernels/src/lib.rs`):**
@@ -164,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 cudarc = { version = "0.19", features = ["driver", "cuda-12000"] }
 
 [build-dependencies]
-warp-types-builder = "0.2"
+warp-types-builder = "0.3"
 ```
 
 **Requirements:**

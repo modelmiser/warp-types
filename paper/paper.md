@@ -1065,7 +1065,7 @@ We compose the two levels hierarchically: warp protocols use our typestate withi
 
 ### Why This Matters
 
-The novel contribution of this paper is *warp-level* session types with quiescence. This is the gap in prior work:
+The novel contribution of this paper is *linear typestate with quiescent participants*. This is the gap in prior work:
 
 - Traditional session types: all parties active or failed
 - Our extension: parties can go quiescent and resume
@@ -1546,11 +1546,11 @@ The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes fifteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes eleven compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
-Our prototype includes 317 unit tests, 50 example tests across 8 worked bug examples, and 32 doc tests (15 compile-fail, 17 doc examples) covering the full type system (399 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 317 unit tests, 50 example tests across 8 worked bug examples, and 29 doc tests (11 compile-fail, 18 doc examples) covering the full type system (396 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
@@ -1637,7 +1637,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
-| Type system tests | 317 unit + 50 example + 32 doc (399 total) |
+| Type system tests | 317 unit + 50 example + 29 doc (396 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 31 named theorems total including 14 infrastructure lemmas (§4.8) |
@@ -1816,7 +1816,7 @@ Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservatio
 
 Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`).
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 16 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 29 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path:
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -1830,7 +1830,7 @@ Remaining future work:
 
 ## 9.4 Beyond SIMT
 
-The core idea—session types with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
+The core idea—linear typestate with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
 
 **FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.5). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
 

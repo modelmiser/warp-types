@@ -56,7 +56,7 @@ Code fixes committed (`e2b0094ef`). Paper/doc/API fixes across 3 commits.
 - [x] `INTEGRATION.md` — Path deps updated to crates.io
 - [x] `cub.rs:241` — inclusive_sum IS now #[deprecated] after our fix, comment is now correct
 
-## API Design — Future Release (v0.3.0)
+## API Design — Future Release (v0.4.0)
 
 These are semver-sensitive and should be batched:
 
@@ -64,9 +64,9 @@ These are semver-sensitive and should be batched:
 - [x] `block.rs:134` — `BlockId` field now private (consistent with LaneId/WarpId)
 - [x] `block.rs:137-141` — `ThreadId` fields now private (accessor methods provided)
 - [x] `gradual.rs:105` — `DynWarp` no longer derives `Clone` (only `Debug`)
-- [ ] `lib.rs:153` — `GpuValue` reuses `ActiveSet::sealed::Sealed` for sealing
-- [ ] `lib.rs:65-66` — `proof` module pub under feature, name-shadows ActiveSet
-- [ ] `lib.rs:236-244` — Prelude missing BallotResult, Fenced, GlobalRegion, etc.
+- [x] `lib.rs:153` — `GpuValue` seal: WON'T MERGE — intentionally separate from ActiveSet seal (different concerns)
+- [x] `lib.rs:65-66` — proof module: STALE — already uses `ProofActiveSet`, no name shadow
+- [x] `lib.rs:236-244` — Prelude: STALE — BallotResult, Fenced, GlobalRegion already present; added LaneId, WarpId, warp_kernel
 
 ## Missing Tests — Linearity
 
@@ -81,7 +81,7 @@ These are semver-sensitive and should be batched:
 - [x] OOPSLA 2023 lockstep verification — new paragraph in §8.5
 - [x] Hazy superlative removed
 
-## C++ Interop (v0.2.1 or v0.3.0 — additive, non-breaking)
+## C++ Interop (completed in v0.2.0)
 
 The architecture already supports C++ host code loading Rust-generated PTX.
 No Rust runtime in the C++ binary — types vanish completely at PTX level.
@@ -94,7 +94,7 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 
 ## Status
 
-**51/55 complete.** 4 remaining: GpuValue seal reuse (v0.3.0), proof module name-shadow (v0.3.0), prelude gaps (v0.3.0), `#[must_use]` warning test (untestable — Rust limitation).
+**54/55 complete.** 1 remaining: `#[must_use]` warning test (untestable — Rust limitation).
 
 ## Lean Formalization — Completed (2026-03-20)
 

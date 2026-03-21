@@ -111,7 +111,7 @@ pub fn butterfly_reduce(data: *mut i32) {
 `cargo run` compiles this to PTX and launches it on your GPU. The type system catches bugs at build time. The generated code contains real `shfl.sync.bfly.b32` instructions.
 
 We also implemented:
-- **Bitonic sort** — 15 type-safe shuffle-XOR steps (ascending-only; directional sort requires `lane_id()`)
+- **Bitonic sort** — direction-aware type-safe shuffle-XOR (15 steps for 32-lane, 21 for 64-lane)
 - **CUB-equivalent primitives** — typed reduce, scan, broadcast
 - **Cooperative groups** — thread block tiles with typed safety
 - **64-bit shuffles** — automatic two-pass for i64/f64/u64
@@ -140,7 +140,7 @@ Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined
 
 ## The Artifact
 
-- 399 tests (317 unit + 50 example + 32 doc), all passing on both NVIDIA and AMD
+- 396 tests (317 unit + 50 example + 29 doc), all passing on both NVIDIA and AMD
 - 31 Lean 4 theorems (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`)
 - 21 documented bugs across 16 real-world projects
 - Real GPU execution on NVIDIA RTX 4000 Ada and AMD MI300X
