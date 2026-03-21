@@ -1,6 +1,6 @@
 {
   "title": "warp-types: Type-Safe GPU Warp Programming via Linear Typestate",
-  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps literally cannot call shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution confirmed on NVIDIA RTX 4000 Ada.",
+  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps literally cannot call shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA RTX 4000 Ada; AMD MI300X mask-correctness verified via HIP. v0.3.0 adds 64-lane AMD wavefront support (--features warp64), C++20 interop header, and Lean 4 loop typing rules.",
   "creators": [
     {
       "name": "Aldreda, Chad"
@@ -9,7 +9,7 @@
   "license": "MIT",
   "upload_type": "software",
   "access_right": "open",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "keywords": [
     "linear typestate",
     "GPU programming",
@@ -19,7 +19,9 @@
     "SIMT",
     "Rust",
     "compile-time verification",
-    "zero overhead abstraction"
+    "zero overhead abstraction",
+    "AMD wavefront",
+    "Lean 4"
   ],
   "related_identifiers": [
     {
@@ -27,5 +29,5 @@
       "identifier": "https://github.com/modelmiser/warp-types"
     }
   ],
-  "notes": "Includes: Rust implementation (291 unit + 50 example + 28 doc = 369 tests), SimWarp multi-lane simulator, Lean 4 formalization (zero sorry, zero axioms — full progress, preservation, substitution, bug untypability proofs), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
+  "notes": "Includes: Rust implementation (317 unit + 50 example + 28 doc = 395 tests), SimWarp multi-lane simulator, Lean 4 formalization (31 theorems, zero sorry, zero axioms — progress, preservation, all four §5.1 loop rules, nested merge, letPair), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), C++20 interop header (include/warp_types.h), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
 }
