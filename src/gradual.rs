@@ -35,11 +35,11 @@
 //! // Phase 2: Ascribe to static type at boundary
 //! let merged = DynWarp::all();
 //! let warp: Warp<All> = merged.ascribe::<All>().unwrap();
-//! assert_eq!(warp.active_mask(), 0xFFFFFFFF);
+//! assert_eq!(warp.active_mask(), All::MASK);
 //!
 //! // Phase 3: Erase back to dynamic for interop with untyped code
 //! let dyn_again = DynWarp::from_static(warp);
-//! assert_eq!(dyn_again.active_mask(), 0xFFFFFFFF);
+//! assert_eq!(dyn_again.active_mask(), All::MASK);
 //! ```
 
 use crate::active_set::ActiveSet;
@@ -116,8 +116,8 @@ impl DynWarp {
     /// For AMD 64-lane wavefronts, use `DynWarp::all_64()`.
     pub fn all() -> Self {
         DynWarp {
-            active_mask: 0xFFFFFFFF,
-            full_mask: 0xFFFFFFFF,
+            active_mask: crate::active_set::All::MASK,
+            full_mask: crate::active_set::All::MASK,
         }
     }
 
@@ -408,25 +408,28 @@ mod tests {
     // --- Construction and ascription ---
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn dyn_warp_all() {
         let w = DynWarp::all();
-        assert_eq!(w.active_mask(), 0xFFFFFFFF);
-        assert_eq!(w.population(), 32);
+        assert_eq!(w.active_mask(), All::MASK);
+        assert_eq!(w.population(), crate::WARP_SIZE);
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn from_mask_32_basic() {
-        let w = DynWarp::from_mask_32(0x0000FFFF);
-        assert_eq!(w.active_mask(), 0x0000FFFF);
-        assert_eq!(w.full_mask, 0xFFFFFFFF);
-        assert_eq!(w.population(), 16);
+        let w = DynWarp::from_mask_32(LowHalf::MASK as u32);
+        assert_eq!(w.active_mask(), LowHalf::MASK);
+        assert_eq!(w.full_mask, All::MASK);
+        assert_eq!(w.population(), crate::WARP_SIZE / 2);
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn from_mask_32_empty() {
         let w = DynWarp::from_mask_32(0);
         assert_eq!(w.active_mask(), 0);
-        assert_eq!(w.full_mask, 0xFFFFFFFF);
+        assert_eq!(w.full_mask, All::MASK);
         assert_eq!(w.population(), 0);
     }
 
@@ -447,19 +450,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn ascribe_all_succeeds() {
         let w = DynWarp::all();
         let warp: Warp<All> = w.ascribe().unwrap();
-        assert_eq!(warp.active_mask(), 0xFFFFFFFF);
+        assert_eq!(warp.active_mask(), All::MASK);
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn ascribe_wrong_type_fails() {
         let w = DynWarp::all();
         let err = w.ascribe::<Even>().unwrap_err();
         assert_eq!(err.expected_name, "Even");
-        assert_eq!(err.expected_mask, 0x55555555);
-        assert_eq!(err.actual_mask, 0xFFFFFFFF);
+        assert_eq!(err.expected_mask, Even::MASK);
+        assert_eq!(err.actual_mask, All::MASK);
     }
 
     #[test]
@@ -491,16 +496,29 @@ mod tests {
     // --- Ballot safety ---
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn ballot_all_succeeds() {
         let w = DynWarp::all();
         let pred = [true; 32];
-        assert_eq!(w.ballot(&pred).unwrap(), 0xFFFFFFFF);
+        assert_eq!(w.ballot(&pred).unwrap(), All::MASK as u32);
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn ballot_partial_fails() {
+        // LowHalf is a subset of All in 32-lane mode — ballot requires All
         let w = DynWarp::from_mask(LowHalf::MASK);
         let pred = [true; 32];
+        assert!(w.ballot(&pred).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "warp64")]
+    fn ballot_partial_fails_64() {
+        // In 64-lane mode, from_mask_64 explicitly creates a 64-lane warp
+        let w = DynWarp::from_mask_64(LowHalf::MASK);
+        let pred = [true; 32];
+        // 64-lane warp with only 32 active → ballot fails (64-lane incompatible with u32)
         assert!(w.ballot(&pred).is_err());
     }
 
@@ -520,19 +538,20 @@ mod tests {
         let evens = DynWarp::from_mask(Even::MASK);
         let odds = DynWarp::from_mask(Odd::MASK);
         let merged = evens.merge(odds).unwrap();
-        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+        assert_eq!(merged.active_mask(), All::MASK);
     }
 
     #[test]
     fn merge_overlapping_fails() {
-        let a = DynWarp::from_mask(0x0000FFFF); // LowHalf
-        let b = DynWarp::from_mask(0x55555555); // Even — overlaps with LowHalf
+        let a = DynWarp::from_mask(LowHalf::MASK);
+        let b = DynWarp::from_mask(Even::MASK); // overlaps with LowHalf
         assert!(a.merge(b).is_err());
     }
 
     // --- Full migration workflow ---
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn gradual_migration_workflow() {
         // Phase 1: Dynamic — discover the bug at runtime
         let w = DynWarp::all();
@@ -545,21 +564,22 @@ mod tests {
         let all = DynWarp::all();
         let warp: Warp<All> = all.ascribe().unwrap();
         // Now we have compile-time safety: warp.shuffle_xor exists on Warp<All>
-        assert_eq!(warp.population(), 32);
+        assert_eq!(warp.population(), crate::WARP_SIZE);
 
         // Phase 3: Can go back to dynamic for interop
         let dyn_again = DynWarp::from_static(warp);
-        assert_eq!(dyn_again.active_mask(), 0xFFFFFFFF);
+        assert_eq!(dyn_again.active_mask(), All::MASK);
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn nested_diverge_merge_dynamic() {
         let w = DynWarp::all();
 
         // Diverge into halves
         let (low, high) = w.diverge(LowHalf::MASK);
-        assert_eq!(low.population(), 16);
-        assert_eq!(high.population(), 16);
+        assert_eq!(low.population(), crate::WARP_SIZE / 2);
+        assert_eq!(high.population(), crate::WARP_SIZE / 2);
 
         // Diverge low half further
         let (even_low, odd_low) = low.diverge(Even::MASK);
@@ -575,7 +595,7 @@ mod tests {
 
         // Merge back: low + high = all
         let all = low_restored.merge(high).unwrap();
-        assert_eq!(all.active_mask(), 0xFFFFFFFF);
+        assert_eq!(all.active_mask(), All::MASK);
 
         // Now ascribe to static type
         let _warp: Warp<All> = all.ascribe().unwrap();
@@ -656,11 +676,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "warp64"))]
     fn merge_covering_succeeds_on_complements() {
-        let a = DynWarp::from_mask_32(0x55555555); // Even
-        let b = DynWarp::from_mask_32(0xAAAAAAAA); // Odd
+        let a = DynWarp::from_mask_32(Even::MASK as u32);
+        let b = DynWarp::from_mask_32(Odd::MASK as u32);
         let merged = a.merge_covering(b).unwrap();
-        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+        assert_eq!(merged.active_mask(), All::MASK);
     }
 
     #[test]

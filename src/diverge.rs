@@ -96,16 +96,16 @@ mod tests {
         let (evens, odds) = all.diverge_even_odd();
         assert_eq!(evens.active_set_name(), "Even");
         assert_eq!(odds.active_set_name(), "Odd");
-        assert_eq!(evens.population(), 16);
-        assert_eq!(odds.population(), 16);
+        assert_eq!(evens.population(), crate::WARP_SIZE / 2);
+        assert_eq!(odds.population(), crate::WARP_SIZE / 2);
     }
 
     #[test]
     fn test_diverge_halves() {
         let all: Warp<All> = Warp::new();
         let (low, high) = all.diverge_halves();
-        assert_eq!(low.active_mask(), 0x0000FFFF);
-        assert_eq!(high.active_mask(), 0xFFFF0000);
+        assert_eq!(low.active_mask(), LowHalf::MASK);
+        assert_eq!(high.active_mask(), HighHalf::MASK);
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod tests {
         let all: Warp<All> = Warp::new();
         let (lane0, rest) = all.extract_lane0();
         assert_eq!(lane0.population(), 1);
-        assert_eq!(rest.population(), 31);
+        assert_eq!(rest.population(), crate::WARP_SIZE - 1);
     }
 
     #[test]
@@ -121,10 +121,10 @@ mod tests {
         let all: Warp<All> = Warp::new();
         let (evens, _odds) = all.diverge_even_odd();
         let (even_low, even_high) = evens.diverge_halves();
-        assert_eq!(even_low.active_mask(), 0x00005555);
-        assert_eq!(even_high.active_mask(), 0x55550000);
-        assert_eq!(even_low.population(), 8);
-        assert_eq!(even_high.population(), 8);
+        assert_eq!(even_low.active_mask(), EvenLow::MASK);
+        assert_eq!(even_high.active_mask(), EvenHigh::MASK);
+        assert_eq!(even_low.population(), crate::WARP_SIZE / 4);
+        assert_eq!(even_high.population(), crate::WARP_SIZE / 4);
     }
 
     #[test]
@@ -132,8 +132,8 @@ mod tests {
         let all: Warp<All> = Warp::new();
         let (_evens, odds) = all.diverge_even_odd();
         let (odd_low, odd_high) = odds.diverge_halves();
-        assert_eq!(odd_low.active_mask(), 0x0000AAAA);
-        assert_eq!(odd_high.active_mask(), 0xAAAA0000);
+        assert_eq!(odd_low.active_mask(), OddLow::MASK);
+        assert_eq!(odd_high.active_mask(), OddHigh::MASK);
     }
 
     #[test]

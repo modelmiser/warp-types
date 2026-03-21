@@ -217,9 +217,9 @@ mod tests {
         let warp: Warp<All> = Warp::kernel_entry();
         let data = PerLane::new(1i32);
         let result = warp.reduce_add(data);
-        // CPU emulation: each shfl_xor returns self
-        // 1 + 1 = 2, 2 + 2 = 4, ..., 16 + 16 = 32
-        assert_eq!(result, 32);
+        // CPU emulation: each shfl_xor returns self, so value doubles per stage
+        // 5 stages (32-lane): 1→2→4→8→16→32. 6 stages (64-lane): →64.
+        assert_eq!(result, crate::WARP_SIZE as i32);
     }
 
     #[test]

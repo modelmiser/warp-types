@@ -19,32 +19,41 @@ use core::marker::PhantomData;
 /// A ballot collects a predicate from all lanes into a bitmask.
 /// The result is Uniform because every lane gets the same bitmask.
 ///
-/// **Note:** The mask is `u32`, matching NVIDIA's `__ballot_sync` return type.
-/// For AMD 64-lane wavefronts, a `BallotResult64` variant would be needed.
-/// Lanes >= 32 always return `false` from `lane_voted()`.
+/// The mask is `u64` — covers both NVIDIA 32-lane (upper 32 bits zero)
+/// and AMD 64-lane wavefronts.
 #[derive(Clone, Copy, Debug)]
 pub struct BallotResult {
-    mask: Uniform<u32>,
+    mask: Uniform<u64>,
 }
 
 impl BallotResult {
     /// Create a ballot result from a uniform mask.
-    pub fn from_mask(mask: Uniform<u32>) -> Self {
+    pub fn from_mask(mask: Uniform<u64>) -> Self {
         BallotResult { mask }
     }
 
-    pub fn mask(self) -> Uniform<u32> {
+    /// Create from a 32-bit mask (NVIDIA compatibility).
+    pub fn from_mask_u32(mask: Uniform<u32>) -> Self {
+        BallotResult {
+            mask: Uniform::from_const(mask.get() as u64),
+        }
+    }
+
+    pub fn mask(self) -> Uniform<u64> {
         self.mask
+    }
+
+    /// Get the lower 32 bits (NVIDIA compatibility).
+    pub fn mask_u32(self) -> Uniform<u32> {
+        Uniform::from_const(self.mask.get() as u32)
     }
 
     pub fn lane_voted(self, lane: LaneId) -> Uniform<bool> {
         let id = lane.get();
-        // Guard: u32 mask only covers lanes 0..31. Lanes >= 32 are outside
-        // the ballot scope (would need BallotResult64 for AMD wavefronts).
-        if id >= 32 {
+        if id >= crate::WARP_SIZE as u8 {
             return Uniform::from_const(false);
         }
-        Uniform::from_const((self.mask.get() & (1u32 << id)) != 0)
+        Uniform::from_const((self.mask.get() & (1u64 << id)) != 0)
     }
 
     pub fn popcount(self) -> Uniform<u32> {
@@ -53,7 +62,7 @@ impl BallotResult {
 
     pub fn first_lane(self) -> Option<LaneId> {
         let tz = self.mask.get().trailing_zeros();
-        if tz < 32 {
+        if tz < crate::WARP_SIZE {
             Some(LaneId::new(tz as u8))
         } else {
             None
@@ -91,24 +100,21 @@ impl ShuffleSafe for Warp<All> {}
 /// maps the active set to itself — no lane reads from an inactive partner.
 ///
 /// The check works by computing the XOR-permuted bitmask and verifying it
-/// equals the original. For the lower 32 bits (NVIDIA warp width):
-/// bit `j` of the permuted mask is set iff bit `(j ^ xor_mask)` is set
-/// in the original.
+/// equals the original: bit `j` of the permuted mask is set iff bit
+/// `(j ^ xor_mask)` is set in the original.
 #[inline]
 fn xor_mask_preserves_active_set(active_mask: u64, xor_mask: u32) -> bool {
-    let mask32 = active_mask as u32;
-    let xor = xor_mask & 0x1F; // Only 5 bits matter for 32-lane warps
-    let mut permuted = 0u32;
-    // Compute XOR permutation of the bitmask:
-    // For each lane j, the permuted mask has bit j set iff bit (j ^ xor) was set.
+    let ws = crate::WARP_SIZE;
+    let xor = xor_mask & (ws - 1); // 5 bits for 32-lane, 6 bits for 64-lane
+    let mut permuted = 0u64;
     let mut j = 0u32;
-    while j < 32 {
-        if mask32 & (1u32 << (j ^ xor)) != 0 {
-            permuted |= 1u32 << j;
+    while j < ws {
+        if active_mask & (1u64 << (j ^ xor)) != 0 {
+            permuted |= 1u64 << j;
         }
         j += 1;
     }
-    permuted == mask32
+    permuted == active_mask
 }
 
 impl<S: ActiveSet> Warp<S> {
@@ -194,8 +200,8 @@ impl Warp<All> {
     /// Returns `Uniform<T>` because a full-warp reduction produces the same
     /// result in every lane.
     ///
-    /// On GPU: butterfly reduction using 5 shuffle-XOR + add steps.
-    /// On CPU: returns val × 32 (butterfly doubling via identity shuffle).
+    /// On GPU: butterfly reduction using log2(WARP_SIZE) shuffle-XOR + add steps.
+    /// On CPU: returns val × WARP_SIZE (butterfly doubling via identity shuffle).
     ///
     /// **Overflow note:** GPU hardware wraps on integer overflow (two's complement,
     /// verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`). This
@@ -206,6 +212,10 @@ impl Warp<All> {
         data: PerLane<T>,
     ) -> Uniform<T> {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        {
+            val = val + val.gpu_shfl_xor(32);
+        }
         val = val + val.gpu_shfl_xor(16);
         val = val + val.gpu_shfl_xor(8);
         val = val + val.gpu_shfl_xor(4);
@@ -221,6 +231,8 @@ impl Warp<All> {
     /// Hardware-verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`.
     pub fn reduce_sum_wrapping_i32(&self, data: PerLane<i32>) -> Uniform<i32> {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -232,6 +244,8 @@ impl Warp<All> {
     /// Wrapping reduce-sum for `u32` — GPU hardware overflow semantics.
     pub fn reduce_sum_wrapping_u32(&self, data: PerLane<u32>) -> Uniform<u32> {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -243,6 +257,8 @@ impl Warp<All> {
     /// Wrapping reduce-sum for `i64` — GPU hardware overflow semantics.
     pub fn reduce_sum_wrapping_i64(&self, data: PerLane<i64>) -> Uniform<i64> {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -254,6 +270,8 @@ impl Warp<All> {
     /// Wrapping reduce-sum for `u64` — GPU hardware overflow semantics.
     pub fn reduce_sum_wrapping_u64(&self, data: PerLane<u64>) -> Uniform<u64> {
         let mut val = data.get();
+        #[cfg(feature = "warp64")]
+        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -273,7 +291,7 @@ impl Warp<All> {
     /// On CPU: returns mask with bit 0 set if predicate is true (single-thread identity).
     pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
         // CPU emulation: single thread, so ballot = predicate in lane 0
-        let mask = if predicate.get() { 1u32 } else { 0u32 };
+        let mask = if predicate.get() { 1u64 } else { 0u64 };
         BallotResult::from_mask(Uniform::from_const(mask))
     }
 
@@ -505,7 +523,7 @@ mod tests {
         // Reduction works on 64-bit
         let ones_i64 = PerLane::new(1_i64);
         let sum = all.reduce_sum(ones_i64);
-        assert_eq!(sum.get(), 32_i64); // 1 + 1 + ... (5 XOR stages)
+        assert_eq!(sum.get(), crate::WARP_SIZE as i64);
     }
 
     #[test]
@@ -514,7 +532,8 @@ mod tests {
         let data = PerLane::new(i32::MAX);
         let result = all.reduce_sum_wrapping_i32(data);
         let mut expected = i32::MAX;
-        for _ in 0..5 {
+        let stages = crate::WARP_SIZE.trailing_zeros();
+        for _ in 0..stages {
             expected = expected.wrapping_add(expected);
         }
         assert_eq!(result.get(), expected);
@@ -526,7 +545,8 @@ mod tests {
         let data = PerLane::new(u32::MAX);
         let result = all.reduce_sum_wrapping_u32(data);
         let mut expected = u32::MAX;
-        for _ in 0..5 {
+        let stages = crate::WARP_SIZE.trailing_zeros();
+        for _ in 0..stages {
             expected = expected.wrapping_add(expected);
         }
         assert_eq!(result.get(), expected);
@@ -620,43 +640,46 @@ mod tests {
     #[test]
     fn test_xor_mask_preserves_low_half() {
         use crate::active_set::LowHalf;
-        // LowHalf: lanes 0..15. Masks < 16 stay within LowHalf.
-        for mask in 0..16u32 {
+        let half = crate::WARP_SIZE / 2;
+        // LowHalf: lanes 0..half-1. Masks < half stay within LowHalf.
+        for mask in 0..half {
             assert!(
                 xor_mask_preserves_active_set(LowHalf::MASK, mask),
                 "LowHalf should accept mask {mask}"
             );
         }
-        // Mask 16 maps lane 0→16 (outside LowHalf) — does NOT preserve.
-        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, 16));
-        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, 17));
+        // Mask = half maps lane 0 outside LowHalf — does NOT preserve.
+        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, half));
+        assert!(!xor_mask_preserves_active_set(LowHalf::MASK, half + 1));
     }
 
     #[test]
     fn test_xor_mask_preserves_high_half() {
         use crate::active_set::HighHalf;
-        // HighHalf: lanes 16..31. Masks < 16 stay within HighHalf.
-        for mask in 0..16u32 {
+        let half = crate::WARP_SIZE / 2;
+        // HighHalf: lanes half..WARP_SIZE-1. Masks < half stay within HighHalf.
+        for mask in 0..half {
             assert!(
                 xor_mask_preserves_active_set(HighHalf::MASK, mask),
                 "HighHalf should accept mask {mask}"
             );
         }
-        // Mask 16 maps lane 16→0 (outside HighHalf) — does NOT preserve.
-        assert!(!xor_mask_preserves_active_set(HighHalf::MASK, 16));
+        // Mask = half maps lane half→0 (outside HighHalf) — does NOT preserve.
+        assert!(!xor_mask_preserves_active_set(HighHalf::MASK, half));
     }
 
     #[test]
     fn test_xor_mask_preserves_even_low() {
         use crate::active_set::EvenLow;
-        // EvenLow: even lanes in 0..15. Must be even AND < 16.
+        let half = crate::WARP_SIZE / 2;
+        // EvenLow: even lanes in 0..half-1. Must be even AND < half.
         assert!(xor_mask_preserves_active_set(EvenLow::MASK, 2));
         assert!(xor_mask_preserves_active_set(EvenLow::MASK, 4));
         assert!(xor_mask_preserves_active_set(EvenLow::MASK, 6));
         // Mask 1 would go even→odd — fails.
         assert!(!xor_mask_preserves_active_set(EvenLow::MASK, 1));
-        // Mask 16 would go low→high — fails.
-        assert!(!xor_mask_preserves_active_set(EvenLow::MASK, 16));
+        // Mask = half would go low→high — fails.
+        assert!(!xor_mask_preserves_active_set(EvenLow::MASK, half));
     }
 
     #[test]
@@ -699,8 +722,8 @@ mod tests {
         use crate::active_set::LowHalf;
         let warp: Warp<LowHalf> = Warp::new();
         let data = PerLane::new(7i32);
-        // Mask 16 maps low→high — should panic.
-        let _ = warp.shuffle_xor_within(data, 16);
+        // Mask = half maps low→high — should panic.
+        let _ = warp.shuffle_xor_within(data, crate::WARP_SIZE / 2);
     }
 
     #[test]

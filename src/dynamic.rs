@@ -47,10 +47,10 @@
 //! }
 //!
 //! let all: Warp<All> = Warp::kernel_entry();
-//! assert_eq!(count_active(&all), 32);
+//! assert_eq!(count_active(&all), warp_types::WARP_SIZE);
 //!
 //! let (evens, _odds) = all.diverge_even_odd();
-//! assert_eq!(count_active(&evens), 16);
+//! assert_eq!(count_active(&evens), warp_types::WARP_SIZE / 2);
 //! ```
 //!
 //! For functions that REQUIRE `Warp<All>` (because they shuffle),
@@ -65,7 +65,7 @@
 //!
 //! let warp: Warp<All> = Warp::kernel_entry();
 //! let sum = my_reduce(&warp, data::PerLane::new(1));
-//! assert_eq!(sum, 32);
+//! assert_eq!(sum, warp_types::WARP_SIZE as i32);
 //! ```
 
 use crate::active_set::All;
@@ -208,31 +208,32 @@ impl Warp<All> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::active_set::{ActiveSet, Even, HighHalf, LowHalf, Odd};
     use crate::data::PerLane;
 
     #[test]
     fn test_diverge_dynamic_masks() {
         let warp: Warp<All> = Warp::kernel_entry();
-        let diverged = warp.diverge_dynamic(0x0000FFFF);
+        let diverged = warp.diverge_dynamic(LowHalf::MASK);
 
-        assert_eq!(diverged.true_mask(), 0x0000FFFF);
-        assert_eq!(diverged.false_mask(), 0xFFFF0000);
-        assert_eq!(diverged.true_count(), 16);
-        assert_eq!(diverged.false_count(), 16);
+        assert_eq!(diverged.true_mask(), LowHalf::MASK);
+        assert_eq!(diverged.false_mask(), HighHalf::MASK);
+        assert_eq!(diverged.true_count(), crate::WARP_SIZE / 2);
+        assert_eq!(diverged.false_count(), crate::WARP_SIZE / 2);
 
         // Complement by construction
-        assert_eq!(diverged.true_mask() | diverged.false_mask(), 0xFFFFFFFF);
+        assert_eq!(diverged.true_mask() | diverged.false_mask(), All::MASK);
         assert_eq!(diverged.true_mask() & diverged.false_mask(), 0);
     }
 
     #[test]
     fn test_diverge_dynamic_merge() {
         let warp: Warp<All> = Warp::kernel_entry();
-        let diverged = warp.diverge_dynamic(0x55555555); // even lanes
+        let diverged = warp.diverge_dynamic(Even::MASK); // even lanes
 
         // Merge recovers Warp<All>
         let merged = diverged.merge();
-        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+        assert_eq!(merged.active_mask(), All::MASK);
 
         // Can shuffle after merge
         let data = PerLane::new(1i32);
@@ -245,7 +246,11 @@ mod tests {
         let mut true_seen = 0u64;
         let mut false_seen = 0u64;
 
-        let merged = warp.diverge_dynamic(0x0F0F0F0F).with_branches(
+        // Use a pattern that works for both 32 and 64 lanes:
+        // Even::MASK selects every other lane regardless of warp size.
+        let even_mask = Even::MASK;
+        let odd_mask = Odd::MASK;
+        let merged = warp.diverge_dynamic(even_mask).with_branches(
             |t| {
                 true_seen = t;
             },
@@ -254,17 +259,17 @@ mod tests {
             },
         );
 
-        assert_eq!(true_seen, 0x0F0F0F0F);
-        assert_eq!(false_seen, 0xF0F0F0F0);
-        assert_eq!(merged.population(), 32);
+        assert_eq!(true_seen, even_mask);
+        assert_eq!(false_seen, odd_mask);
+        assert_eq!(merged.population(), crate::WARP_SIZE);
     }
 
     #[test]
     fn test_diverge_dynamic_empty_branch() {
         let warp: Warp<All> = Warp::kernel_entry();
-        let diverged = warp.diverge_dynamic(0xFFFFFFFF); // all lanes true
+        let diverged = warp.diverge_dynamic(All::MASK); // all lanes true
 
-        assert_eq!(diverged.true_count(), 32);
+        assert_eq!(diverged.true_count(), crate::WARP_SIZE);
         assert_eq!(diverged.false_count(), 0);
 
         let merged = diverged.merge();
@@ -276,13 +281,12 @@ mod tests {
     fn test_diverge_dynamic_arbitrary_predicate() {
         let warp: Warp<All> = Warp::kernel_entry();
 
-        // Simulate: diverge on data[lane] > 15
-        // Lanes 16-31 would be true (mask = 0xFFFF0000)
-        let predicate_mask = 0xFFFF0000_u64;
+        // Simulate: diverge on upper half
+        let predicate_mask = HighHalf::MASK;
         let diverged = warp.diverge_dynamic(predicate_mask);
 
-        assert_eq!(diverged.true_count(), 16);
-        assert_eq!(diverged.false_count(), 16);
+        assert_eq!(diverged.true_count(), crate::WARP_SIZE / 2);
+        assert_eq!(diverged.false_count(), crate::WARP_SIZE / 2);
 
         // Must merge before any warp collective
         let warp = diverged.merge();
@@ -304,16 +308,16 @@ mod tests {
         let warp: Warp<All> = Warp::kernel_entry();
 
         // Generic function — S inferred as All
-        assert_eq!(generic_helper(&warp), 32);
+        assert_eq!(generic_helper(&warp), crate::WARP_SIZE);
 
         // Warp<All>-specific function
         let sum = all_only_helper(&warp, PerLane::new(1i32));
-        assert_eq!(sum, 32);
+        assert_eq!(sum, crate::WARP_SIZE as i32);
 
         // After diverge, generic function infers S = Even
         let (evens, odds) = warp.diverge_even_odd();
-        assert_eq!(generic_helper(&evens), 16);
-        assert_eq!(generic_helper(&odds), 16);
+        assert_eq!(generic_helper(&evens), crate::WARP_SIZE / 2);
+        assert_eq!(generic_helper(&odds), crate::WARP_SIZE / 2);
 
         // all_only_helper(&evens, data)  // COMPILE ERROR — Warp<Even> ≠ Warp<All>
     }

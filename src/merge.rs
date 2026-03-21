@@ -71,7 +71,7 @@ use crate::warp::Warp;
 /// let all: Warp<All> = Warp::kernel_entry();
 /// let (evens, odds) = all.diverge_even_odd();
 /// let merged: Warp<All> = merge(evens, odds);
-/// assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+/// assert_eq!(merged.active_mask(), All::MASK);
 /// ```
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
 where
@@ -139,7 +139,7 @@ mod tests {
         let all: Warp<All> = Warp::new();
         let (low, high) = all.diverge_halves();
         let merged = merge(low, high);
-        assert_eq!(merged.active_mask(), 0xFFFFFFFF);
+        assert_eq!(merged.active_mask(), All::MASK);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         let all: Warp<All> = Warp::new();
         let (lane0, rest) = all.extract_lane0();
         let merged = merge(lane0, rest);
-        assert_eq!(merged.population(), 32);
+        assert_eq!(merged.population(), crate::WARP_SIZE);
     }
 
     #[test]
@@ -188,8 +188,8 @@ mod tests {
         let result2 = merge(low, high);
 
         // Both produce Warp<All>
-        assert_eq!(result1.population(), 32);
-        assert_eq!(result2.population(), 32);
+        assert_eq!(result1.population(), crate::WARP_SIZE);
+        assert_eq!(result2.population(), crate::WARP_SIZE);
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
         let result = all_restored.shuffle_xor(data, 1);
         assert_eq!(result.get(), 1); // CPU identity
         let sum = all_restored.reduce_sum(data);
-        assert_eq!(sum.get(), 32);
+        assert_eq!(sum.get(), crate::WARP_SIZE as i32);
     }
 
     #[test]
@@ -216,6 +216,6 @@ mod tests {
         let (a, b, merged) = with_diverged::<Even, Odd, i32, _, _>(warp, |_| 100, |_| 200);
         assert_eq!(a, 100);
         assert_eq!(b, 200);
-        assert_eq!(merged.population(), 32);
+        assert_eq!(merged.population(), crate::WARP_SIZE);
     }
 }

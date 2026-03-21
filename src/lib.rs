@@ -48,6 +48,21 @@
 // mark it #[allow(dead_code)] individually with a justification comment.
 
 // ============================================================================
+// Warp size configuration
+// ============================================================================
+
+/// Number of lanes per warp/wavefront.
+///
+/// - NVIDIA: 32 lanes (default)
+/// - AMD: 64 lanes (enable `warp64` feature)
+#[cfg(not(feature = "warp64"))]
+pub const WARP_SIZE: u32 = 32;
+
+/// Number of lanes per warp/wavefront (AMD 64-lane mode).
+#[cfg(feature = "warp64")]
+pub const WARP_SIZE: u32 = 64;
+
+// ============================================================================
 // Core modules (public API)
 // ============================================================================
 

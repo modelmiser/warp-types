@@ -136,21 +136,21 @@ mod tests {
     fn test_warp_all() {
         let w: Warp<All> = Warp::new();
         assert_eq!(w.active_set_name(), "All");
-        assert_eq!(w.active_mask(), 0xFFFFFFFF);
-        assert_eq!(w.population(), 32);
+        assert_eq!(w.active_mask(), All::MASK);
+        assert_eq!(w.population(), crate::WARP_SIZE);
     }
 
     #[test]
     fn test_warp_even() {
         let w: Warp<Even> = Warp::new();
         assert_eq!(w.active_set_name(), "Even");
-        assert_eq!(w.population(), 16);
+        assert_eq!(w.population(), crate::WARP_SIZE / 2);
     }
 
     #[test]
     fn test_warp_kernel_entry() {
         let w: Warp<All> = Warp::kernel_entry();
-        assert_eq!(w.population(), 32);
+        assert_eq!(w.population(), crate::WARP_SIZE);
     }
 
     #[test]
