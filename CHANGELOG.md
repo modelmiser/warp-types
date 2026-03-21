@@ -1,9 +1,9 @@
 # Changelog
 
-## [0.3.0] — 2026-03-20
+## [0.3.0] — 2026-03-21
 
 ### Added
-- `research` feature flag — gates experimental `research/` module (25 modules, 12K lines of design-space prototypes). Always compiled during `cargo test` but excluded from default `cargo doc` and downstream builds
+- `research` feature flag — gates experimental `research/` module (24 modules, 12K lines of design-space prototypes). Always compiled during `cargo test` but excluded from default `cargo doc` and downstream builds
 - Prelude: added `LaneId`, `WarpId`, `warp_kernel` to `prelude` module
 - Lean 4: all four §5.1 loop typing rules mechanized (LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) with full progress, preservation, and substitution coverage
 - Lean 4: nested merge mechanized — `IsComplement s1 s2 parent` (generalized from `IsComplementAll`)
@@ -20,6 +20,15 @@
 - FFI 64-lane: `warp_types.h` `ComplementOf` concept generalized via `ComplementWithin`
 - `GpuWarp32::shuffle` wraps mod 32 (hardware behavior), not clamp
 - Stale doc counts, version references, and terminology across README, paper, blog, tutorial
+- `DynWarp` now `#[must_use]` — matches `Warp<S>` and `DynDiverge` (warns on accidental drop)
+- `SharedRegion`/`WorkQueue` use `WARP_SIZE` instead of hardcoded `[T; 32]` (warp64 compatible)
+- `proof.rs` `type_safety_check` returns false on step limit (was incorrectly returning true)
+- `shuffle_xor_within` panic message shows full u64 mask on warp64 (was truncating via `as u32`)
+- `platform.rs` stale comment corrected (CpuSimd clamps, not wraps)
+- Blog AMD claim: "Real GPU execution" → "mask-correctness verified via HIP"
+
+### CI
+- Clippy job now runs `--all-features` — lints 12K lines of feature-gated code previously unchecked
 
 ### Changed
 - API encapsulation: `Role`, `BlockId`, `ThreadId` fields now private; `DynWarp` no longer derives `Clone`
