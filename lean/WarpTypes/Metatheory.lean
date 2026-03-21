@@ -30,6 +30,9 @@ def subst (e : Expr) (x : String) (v : Expr) : Expr :=
   | .pairVal a b => .pairVal (subst a x v) (subst b x v)
   | .fst e => .fst (subst e x v)
   | .snd e => .snd (subst e x v)
+  | .letPair e n1 n2 body =>
+      if n1 == x || n2 == x then .letPair (subst e x v) n1 n2 body
+      else .letPair (subst e x v) n1 n2 (subst body x v)
 
 -- ============================================================================
 -- Small-Step Reduction
@@ -40,7 +43,7 @@ inductive Step : Expr → Expr → Prop
       Step (.diverge (.warpVal s) pred)
            (.pairVal (.warpVal (s &&& pred)) (.warpVal (s &&& ~~~pred)))
   | mergeVal (s1 s2 : ActiveSet) :
-      Step (.merge (.warpVal s1) (.warpVal s2)) (.warpVal ActiveSet.all)
+      Step (.merge (.warpVal s1) (.warpVal s2)) (.warpVal (s1 ||| s2))
   | shuffleVal (s : ActiveSet) :
       Step (.shuffle (.warpVal s) .perLaneVal) .perLaneVal
   | letVal (name : String) (v body : Expr) :
@@ -76,6 +79,12 @@ inductive Step : Expr → Expr → Prop
       Step e e' → Step (.fst e) (.fst e')
   | sndCong (e e' : Expr) :
       Step e e' → Step (.snd e) (.snd e')
+  | letPairVal (name1 name2 : String) (v1 v2 body : Expr) :
+      isValue v1 = true → isValue v2 = true →
+      Step (.letPair (.pairVal v1 v2) name1 name2 body)
+           (subst (subst body name1 v1) name2 v2)
+  | letPairCong (e e' : Expr) (name1 name2 : String) (body : Expr) :
+      Step e e' → Step (.letPair e name1 name2 body) (.letPair e' name1 name2 body)
 
 -- ============================================================================
 -- Values preserve contexts (values don't consume linear resources)
@@ -94,11 +103,12 @@ theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
     subst h1; subst h2; rfl
   | .var _ _ _ _ => simp [isValue] at hv
   | .diverge _ _ _ _ _ _ => simp [isValue] at hv
-  | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .merge _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .shuffle _ _ _ _ _ _ _ => simp [isValue] at hv
   | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 -- ============================================================================
 -- Canonical Forms
@@ -110,10 +120,11 @@ theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
   match ht with
   | .warpVal _ _ => rfl
   | .var _ _ _ hlook => simp [Ctx.lookup, List.find?] at hlook
-  | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .merge _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 theorem canonical_perLane {e : Expr} {ctx' : Ctx}
     (ht : HasType [] e .perLane ctx') (hv : isValue e = true) :
@@ -125,6 +136,7 @@ theorem canonical_perLane {e : Expr} {ctx' : Ctx}
   | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
     (ht : HasType [] e (.pair t1 t2) ctx') (hv : isValue e = true) :
@@ -137,6 +149,7 @@ theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
   | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 -- ============================================================================
 -- Progress
@@ -159,7 +172,7 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
       exact .inr ⟨_, Step.divergeVal s pred⟩
     | .inr ⟨w', hw'⟩ =>
       exact .inr ⟨_, Step.divergeCong w w' pred hw'⟩
-  | .merge _ ctx_mid _ w1 w2 s1 s2 hw1 hw2 hcomp =>
+  | .merge _ ctx_mid _ w1 w2 s1 s2 _ hw1 hw2 hcomp =>
     have ih1 := progress hw1
     match ih1 with
     | .inr ⟨w1', hw1'⟩ =>
@@ -231,6 +244,15 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
       exact .inr ⟨v2, Step.sndVal v1 v2 hv1 hv2⟩
     | .inr ⟨e', he'⟩ =>
       exact .inr ⟨_, Step.sndCong e e' he'⟩
+  | .letPairE _ _ _ e _ _ body _ _ _ he _ _ _ hbody _ _ =>
+    have ihe := progress he
+    match ihe with
+    | .inl hv =>
+      have ⟨v1, v2, heq, hv1, hv2⟩ := canonical_pair he hv
+      subst heq
+      exact .inr ⟨_, Step.letPairVal _ _ v1 v2 body hv1 hv2⟩
+    | .inr ⟨e', he'⟩ =>
+      exact .inr ⟨_, Step.letPairCong e e' _ _ body he'⟩
 
 -- ============================================================================
 -- Preservation
@@ -353,11 +375,12 @@ private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
     exact HasType.pairVal ctx₃ ctx₃ ctx₃ a b _ _ (iha ctx₃) (ihb ctx₃)
   | .var _ _ _ _ => simp [isValue] at hv
   | .diverge _ _ _ _ _ _ => simp [isValue] at hv
-  | .merge _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .merge _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .shuffle _ _ _ _ _ _ _ => simp [isValue] at hv
   | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .fstE _ _ _ _ _ _ => simp [isValue] at hv
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 /-- Values can be typed in any context, producing the same context unchanged. -/
 theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
@@ -386,7 +409,7 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
     · subst hxn; rw [remove_lookup_self] at hout; exact absurd hout (by simp)
     · rwa [remove_lookup_ne (Ne.symm hxn)] at hout
   | diverge _ _ _ _ _ _ ih => exact ih hout
-  | merge _ _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | merge _ _ _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | shuffle _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | letBind ctx₀ ctx_mid ctx_body name' _ _ _ _ _ hfresh₀ _ hcons₀ ih_val ih_body =>
     -- ctx' = ctx_body, ctx = ctx₀
@@ -410,6 +433,12 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
   | pairVal _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | fstE _ _ _ _ _ _ ih => exact ih hout
   | sndE _ _ _ _ _ _ ih => exact ih hout
+  | letPairE ctx₀ ctx_mid ctx_body _ n1 n2 _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 ih_e ih_body =>
+    have h_body := ih_body hout
+    have hxn1 : x ≠ n1 := by intro h; subst h; rw [hcons1] at hout; simp at hout
+    have hxn2 : x ≠ n2 := by intro h; subst h; rw [hcons2] at hout; simp at hout
+    rw [lookup_cons_ne (Ne.symm hxn2), lookup_cons_ne (Ne.symm hxn1)] at h_body
+    exact ih_e h_body
 
 -- ============================================================================
 -- Generalized Substitution Lemma
@@ -465,11 +494,11 @@ theorem subst_typing
   | .diverge _ _ _ _ _ hw => by
     simp [subst]
     exact HasType.diverge _ _ _ _ _ (subst_typing hv ht_v hw hname)
-  | .merge _ ctx_mid _ _ _ _ _ hw1 hw2 hcomp => by
+  | .merge _ ctx_mid _ _ _ _ _ _ hw1 hw2 hcomp => by
     simp [subst]
     have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
       intro t' hl; exact hname t' (output_binding_from_input hw1 hl)
-    exact HasType.merge _ _ _ _ _ _ _
+    exact HasType.merge _ _ _ _ _ _ _ _
       (subst_typing hv ht_v hw1 hname) (subst_typing hv ht_v hw2 hname_mid) hcomp
   | .shuffle _ ctx_mid _ _ _ hw hd => by
     simp [subst]
@@ -513,6 +542,48 @@ theorem subst_typing
     simp [subst]; exact HasType.fstE _ _ _ _ _ (subst_typing hv ht_v he hname)
   | .sndE _ _ _ _ _ he => by
     simp [subst]; exact HasType.sndE _ _ _ _ _ (subst_typing hv ht_v he hname)
+  | .letPairE _ ctx_mid ctx_body _ n1 n2 body t1 t2 _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 => by
+    simp only [subst]
+    by_cases hxn1 : n1 = nm
+    · -- n1 = nm: body NOT substituted (shadowing by n1)
+      have hor : (n1 == nm || n2 == nm) = true := by simp [beq_iff_eq, hxn1]
+      simp only [hor]
+      have hfresh_nm1 : ctx_mid.lookup nm = none := hxn1 ▸ hfresh1
+      have hcons_nm1 : ctx_body.lookup nm = none := hxn1 ▸ hcons1
+      have he' := subst_typing hv ht_v he hname
+      rw [remove_of_lookup_none hfresh_nm1] at he'
+      rw [remove_of_lookup_none hcons_nm1]
+      exact HasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1 hfresh2 hbody hcons1 hcons2
+    · by_cases hxn2 : n2 = nm
+      · -- n2 = nm: body NOT substituted (shadowing by n2)
+        have hor : (n1 == nm || n2 == nm) = true := by simp [beq_iff_eq, hxn2]
+        simp only [hor]
+        have hfresh_nm2 : ctx_mid.lookup nm = none := hxn2 ▸ hfresh2
+        have hcons_nm2 : ctx_body.lookup nm = none := hxn2 ▸ hcons2
+        have he' := subst_typing hv ht_v he hname
+        rw [remove_of_lookup_none hfresh_nm2] at he'
+        rw [remove_of_lookup_none hcons_nm2]
+        exact HasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1 hfresh2 hbody hcons1 hcons2
+      · -- Neither n1 nor n2 = nm: both e and body substituted
+        have hor : (n1 == nm || n2 == nm) = false := by
+          simp [beq_iff_eq, hxn1, hxn2]
+        simp only [hor]
+        have he' := subst_typing hv ht_v he hname
+        have hfresh1' : (ctx_mid.remove nm).lookup n1 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn1)]; exact hfresh1
+        have hfresh2' : (ctx_mid.remove nm).lookup n2 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn2)]; exact hfresh2
+        have hname_body : ∀ t', Ctx.lookup ((n2, t2) :: (n1, t1) :: ctx_mid) nm = some t' → t' = t_v := by
+          intro t' hl
+          rw [lookup_cons_ne hxn2, lookup_cons_ne hxn1] at hl
+          exact hname t' (output_binding_from_input he hl)
+        have hbody' := subst_typing hv ht_v hbody hname_body
+        rw [remove_cons_ne (Ne.symm hxn2), remove_cons_ne (Ne.symm hxn1)] at hbody'
+        have hcons1' : (ctx_body.remove nm).lookup n1 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn1)]; exact hcons1
+        have hcons2' : (ctx_body.remove nm).lookup n2 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn2)]; exact hcons2
+        exact HasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1' hfresh2' hbody' hcons1' hcons2'
 
 -- ============================================================================
 -- Substitution preserves typing (wrapper for preservation)
@@ -553,11 +624,15 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
           (HasType.warpVal _ _) (HasType.warpVal _ _)
   | mergeVal s1 s2 =>
     cases ht with
-    | merge _ _ _ _ _ _ _ hw1 hw2 _ =>
+    | merge _ _ _ _ _ _ _ _ hw1 hw2 hcomp =>
       cases hw1 with
       | warpVal _ _ =>
         cases hw2 with
-        | warpVal _ _ => exact HasType.warpVal _ _
+        | warpVal _ _ =>
+          have ⟨_, hcov⟩ := hcomp
+          unfold ActiveSet.Covers at hcov
+          rw [hcov]
+          exact HasType.warpVal _ _
   | shuffleVal s =>
     cases ht with
     | shuffle _ _ _ _ _ hw hd =>
@@ -589,12 +664,12 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
       exact HasType.diverge _ _ _ _ _ (ih hw)
   | mergeLeft w1 w1' w2 _ ih =>
     cases ht with
-    | merge _ _ _ _ _ _ _ hw1 hw2 hcomp =>
-      exact HasType.merge _ _ _ _ _ _ _ (ih hw1) hw2 hcomp
+    | merge _ _ _ _ _ _ _ _ hw1 hw2 hcomp =>
+      exact HasType.merge _ _ _ _ _ _ _ _ (ih hw1) hw2 hcomp
   | mergeRight v1 w2 w2' _ _ ih =>
     cases ht with
-    | merge _ _ _ _ _ _ _ hw1 hw2 hcomp =>
-      exact HasType.merge _ _ _ _ _ _ _ hw1 (ih hw2) hcomp
+    | merge _ _ _ _ _ _ _ _ hw1 hw2 hcomp =>
+      exact HasType.merge _ _ _ _ _ _ _ _ hw1 (ih hw2) hcomp
   | shuffleLeft w w' data _ ih =>
     cases ht with
     | shuffle _ _ _ _ _ hw hd =>
@@ -623,6 +698,30 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | sndE _ _ _ _ _ he =>
       exact HasType.sndE _ _ _ _ _ (ih he)
+  | letPairVal name1 name2 v1 v2 body hv1 hv2 =>
+    cases ht with
+    | letPairE _ _ _ _ _ _ _ t1 t2 _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 =>
+      cases he with
+      | pairVal _ ctx_a _ _ _ _ _ ha hb =>
+        -- ha : HasType ctx v1 t1 ctx_a
+        -- hb : HasType ctx_a v2 t2 ctx_mid
+        -- Both values, so ctx = ctx_a = ctx_mid
+        have hctx_a := value_preserves_ctx ha hv1; subst hctx_a
+        have hctx_mid := value_preserves_ctx hb hv2; subst hctx_mid
+        -- Step 1: substitute name1 → v1 via subst_typing
+        have ht_v1 := value_any_ctx hv1 ha
+        have hname_top : ∀ t', Ctx.lookup ((name2, t2) :: (name1, t1) :: ctx) name1 = some t' → t' = t1 := by
+          intro t' h; rw [lookup_cons_ne (Ne.symm hdist)] at h; simp [lookup_cons_eq] at h; exact h.symm
+        have h1 := subst_typing hv1 ht_v1 hbody hname_top
+        rw [remove_cons_ne hdist, remove_cons_eq,
+            remove_of_lookup_none hfresh1] at h1
+        rw [remove_of_lookup_none hcons1] at h1
+        -- Step 2: substitute name2 → v2 via subst_preserves_typing
+        exact subst_preserves_typing hb hfresh2 h1 hcons2 hv2
+  | letPairCong e e' name1 name2 body _ ih =>
+    cases ht with
+    | letPairE _ _ _ _ _ _ _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 =>
+      exact HasType.letPairE _ _ _ _ _ _ _ _ _ _ (ih he) hdist hfresh1 hfresh2 hbody hcons1 hcons2
 
 -- ============================================================================
 -- Multi-step Type Safety (Corollary 4.3)

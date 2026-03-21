@@ -69,6 +69,7 @@ inductive Expr
   | pairVal (a b : Expr)  -- Pair constructor
   | fst (e : Expr)        -- First projection
   | snd (e : Expr)        -- Second projection
+  | letPair (e : Expr) (name1 name2 : String) (body : Expr)  -- Linear pair destructor
 
 -- ============================================================================
 -- Typing Context (linear)
@@ -101,11 +102,11 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
       HasType ctx w (.warp s) ctx' →
       HasType ctx (.diverge w pred)
         (.pair (.warp (s &&& pred)) (.warp (s &&& ~~~pred))) ctx'
-  | merge (ctx ctx' ctx'' : Ctx) (w1 w2 : Expr) (s1 s2 : ActiveSet) :
+  | merge (ctx ctx' ctx'' : Ctx) (w1 w2 : Expr) (s1 s2 parent : ActiveSet) :
       HasType ctx w1 (.warp s1) ctx' →
       HasType ctx' w2 (.warp s2) ctx'' →
-      ActiveSet.IsComplementAll s1 s2 →
-      HasType ctx (.merge w1 w2) (.warp ActiveSet.all) ctx''
+      ActiveSet.IsComplement s1 s2 parent →
+      HasType ctx (.merge w1 w2) (.warp parent) ctx''
   | shuffle (ctx ctx' ctx'' : Ctx) (w data : Expr) :
       HasType ctx w (.warp ActiveSet.all) ctx' →
       HasType ctx' data .perLane ctx'' →
@@ -126,6 +127,16 @@ inductive HasType : Ctx → Expr → Ty → Ctx → Prop
   | sndE (ctx ctx' : Ctx) (e : Expr) (t1 t2 : Ty) :
       HasType ctx e (.pair t1 t2) ctx' →
       HasType ctx (.snd e) t2 ctx'
+  | letPairE (ctx ctx' ctx'' : Ctx) (e : Expr) (name1 name2 : String)
+      (body : Expr) (t1 t2 t : Ty) :
+      HasType ctx e (.pair t1 t2) ctx' →
+      name1 ≠ name2 →
+      ctx'.lookup name1 = none →
+      ctx'.lookup name2 = none →
+      HasType ((name2, t2) :: (name1, t1) :: ctx') body t ctx'' →
+      ctx''.lookup name1 = none →
+      ctx''.lookup name2 = none →
+      HasType ctx (.letPair e name1 name2 body) t ctx''
 
 -- ============================================================================
 -- Theorem 4.1: Diverge Partition
@@ -183,6 +194,29 @@ theorem lowHalf_highHalf_complement :
   constructor <;> decide
 
 -- ============================================================================
+-- Nested Complement Instances (§3.4)
+-- ============================================================================
+
+namespace ActiveSet
+
+/-- EvenLow: lanes that are both even AND in the low half. -/
+def evenLow : ActiveSet := 0x00005555#32
+
+/-- EvenHigh: lanes that are both even AND in the high half. -/
+def evenHigh : ActiveSet := 0x55550000#32
+
+end ActiveSet
+
+/-- EvenLow and EvenHigh are complements within Even (NOT within All).
+    This demonstrates nested divergence: diverge into Even/Odd, then
+    further diverge Even into EvenLow/EvenHigh. -/
+theorem evenLow_evenHigh_complement_within_even :
+    ActiveSet.IsComplement ActiveSet.evenLow ActiveSet.evenHigh ActiveSet.even := by
+  unfold ActiveSet.IsComplement ActiveSet.Disjoint ActiveSet.Covers
+  unfold ActiveSet.evenLow ActiveSet.evenHigh ActiveSet.even ActiveSet.none
+  constructor <;> decide
+
+-- ============================================================================
 -- Theorem: All Lanes Active (Lemma 4.6 correspondence)
 -- ============================================================================
 
@@ -199,6 +233,7 @@ def isValue : Expr → Bool
   | .perLaneVal => true
   | .unitVal => true
   | .pairVal a b => isValue a && isValue b
+  | .letPair _ _ _ _ => false
   | _ => false
 
 -- ============================================================================
