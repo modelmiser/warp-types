@@ -103,6 +103,8 @@ impl std::error::Error for AscribeError {}
 /// Use `ascribe::<S>()` to promote to `Warp<S>` when the mask is known.
 /// Use `DynWarp::from_static()` to demote `Warp<S>` to `DynWarp`.
 #[derive(Debug)]
+#[must_use = "dropping a DynWarp without merging may indicate a missing merge — \
+              the compiler cannot enforce linear use, but this warns on accidental drops"]
 pub struct DynWarp {
     active_mask: u64,
     /// The full mask representing "all lanes active" for this warp width.
