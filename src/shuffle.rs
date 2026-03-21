@@ -232,7 +232,9 @@ impl Warp<All> {
     pub fn reduce_sum_wrapping_i32(&self, data: PerLane<i32>) -> Uniform<i32> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
-        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
+        {
+            val = val.wrapping_add(val.gpu_shfl_xor(32));
+        }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -245,7 +247,9 @@ impl Warp<All> {
     pub fn reduce_sum_wrapping_u32(&self, data: PerLane<u32>) -> Uniform<u32> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
-        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
+        {
+            val = val.wrapping_add(val.gpu_shfl_xor(32));
+        }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -258,7 +262,9 @@ impl Warp<All> {
     pub fn reduce_sum_wrapping_i64(&self, data: PerLane<i64>) -> Uniform<i64> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
-        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
+        {
+            val = val.wrapping_add(val.gpu_shfl_xor(32));
+        }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
@@ -271,7 +277,9 @@ impl Warp<All> {
     pub fn reduce_sum_wrapping_u64(&self, data: PerLane<u64>) -> Uniform<u64> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
-        { val = val.wrapping_add(val.gpu_shfl_xor(32)); }
+        {
+            val = val.wrapping_add(val.gpu_shfl_xor(32));
+        }
         val = val.wrapping_add(val.gpu_shfl_xor(16));
         val = val.wrapping_add(val.gpu_shfl_xor(8));
         val = val.wrapping_add(val.gpu_shfl_xor(4));
