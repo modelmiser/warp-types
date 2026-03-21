@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 316 unit + 50 example + 32 doc tests (398 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline.
+**Status:** Research prototype with real GPU execution. 317 unit + 50 example + 32 doc tests (399 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 
@@ -67,7 +67,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 316 unit + 32 doc tests
+cargo test                                    # 317 unit + 32 doc tests
 cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -124,10 +124,10 @@ fn main() {
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
 | Soundness (progress + preservation) | Full Lean 4 mechanization (28 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
-| Fence-divergence safety | Type-state write tracking (3 tests) | `cargo test fence` |
+| Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane stubs) | u64 masks, AMD stubs, Platform trait | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (25 tests) | `cargo test gradual` |
-| All claims | Full test suite (375 tests) | `cargo test && cargo test --examples` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (32 tests) | `cargo test gradual` |
+| All claims | Full test suite (399 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 
@@ -165,12 +165,15 @@ warp-types/
 │   ├── pytorch_98157.rs           # PyTorch __activemask() misuse
 │   ├── tvm_17307.rs               # TVM LowerThreadAllreduce H100 crash
 │   ├── demo_bug_that_types_catch.rs  # Synthetic demonstration
-│   └── gpu-project/               # End-to-end cargo→GPU example
+│   ├── gpu-project/               # End-to-end cargo→GPU example (Rust host)
+│   └── cuda/                      # C++ host loading Rust PTX (CUDA Driver API)
+├── include/
+│   └── warp_types.h               # C++20 header: type-safe warp programming for CUDA/HIP
 ├── reproduce/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (28 named theorems, zero sorry)
+├── lean/                   # Lean 4 formalization (31 named theorems, zero sorry)
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft

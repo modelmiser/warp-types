@@ -72,5 +72,5 @@ let partner = active.shuffle_xor(data, 1);
 ## Related Files
 
 - [../src/proof.rs](../src/proof.rs) — Executable proof sketch (9 tests)
-- [../lean/](../lean/) — Lean 4 formalization (28 named theorems, zero sorry, zero axioms)
+- [../lean/](../lean/) — Lean 4 formalization (31 named theorems, zero sorry, zero axioms)
 

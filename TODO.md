@@ -60,10 +60,10 @@ Code fixes committed (`e2b0094ef`). Paper/doc/API fixes across 3 commits.
 
 These are semver-sensitive and should be batched:
 
-- [ ] `data.rs:146` — `Role` has `pub` fields bypassing constructor validation
-- [ ] `block.rs:134` — `BlockId(pub u32)` inconsistent with LaneId/WarpId
-- [ ] `block.rs:137-141` — `ThreadId` all-public fields
-- [ ] `gradual.rs:105` — `DynWarp` derives `Clone`, widening affine escape hatch
+- [x] `data.rs:146` — `Role` fields now private (only accessible via constructors/accessors)
+- [x] `block.rs:134` — `BlockId` field now private (consistent with LaneId/WarpId)
+- [x] `block.rs:137-141` — `ThreadId` fields now private (accessor methods provided)
+- [x] `gradual.rs:105` — `DynWarp` no longer derives `Clone` (only `Debug`)
 - [ ] `lib.rs:153` — `GpuValue` reuses `ActiveSet::sealed::Sealed` for sealing
 - [ ] `lib.rs:65-66` — `proof` module pub under feature, name-shadows ActiveSet
 - [ ] `lib.rs:236-244` — Prelude missing BallotResult, Fenced, GlobalRegion, etc.
@@ -94,7 +94,7 @@ No Rust runtime in the C++ binary — types vanish completely at PTX level.
 
 ## Status
 
-**44/49 complete.** 7 parked for v0.3.0 (API breaking). C++ interop + Lean §5.1 complete.
+**48/49 complete.** 3 remaining for v0.3.0 (GpuValue seal reuse, proof module name-shadow, prelude gaps).
 
 ## Lean Formalization — Completed (2026-03-20)
 

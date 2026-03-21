@@ -823,7 +823,7 @@ We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/Wa
 
 ### Scope
 
-The mechanization covers two files totaling 896 lines of Lean:
+The mechanization covers two files totaling 1329 lines of Lean:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
@@ -1550,7 +1550,7 @@ Our implementation includes thirteen compile-fail doctests covering shuffle on d
 
 ### Bug Pattern Coverage
 
-Our prototype includes 291 unit tests, 50 example tests across 8 worked bug examples, and 28 doc tests (13 compile-fail, 15 doc examples) covering the full type system (369 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 317 unit tests, 50 example tests across 8 worked bug examples, and 32 doc tests (15 compile-fail, 17 doc examples) covering the full type system (399 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
@@ -1637,10 +1637,10 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on RTX 4000 Ada (compute 8.9) |
 | PTX verification | Rust type system compiles to identical PTX (nvptx64-nvidia-cuda) |
-| Type system tests | 291 unit + 50 example + 28 doc (369 total) |
+| Type system tests | 317 unit + 50 example + 32 doc (399 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 27.3% of algorithm lines (range: 12.5%–50%) |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 28 named theorems total including 14 infrastructure lemmas (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 31 named theorems total including 14 infrastructure lemmas (§4.8) |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
