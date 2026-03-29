@@ -190,19 +190,23 @@ pub fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i3
 
 /// Ballot: each thread votes, returns bitmask of votes.
 /// PTX: `vote.sync.ballot.b32`
+///
+/// Uses the setp/selp workaround for Rust's missing `pred` register class:
+/// declare `.reg .pred` inside the asm block, convert to/from u32 via setp,
+/// pass everything through reg32. Same pattern as Rust-CUDA's `cuda_std`.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn ballot_sync(mask: u32, predicate: bool) -> u32 {
     let result: u32;
     let pred_u32 = predicate as u32;
     unsafe {
-        // vote.sync.ballot.b32 requires a predicate register (%p), not a
-        // general-purpose register (%r).  Convert via setp first.
         core::arch::asm!(
-            "setp.ne.u32 {pred_p}, {pred_in}, 0;",
-            "vote.sync.ballot.b32 {result}, {pred_p}, {mask};",
+            "{{",
+            ".reg .pred %p_vote;",
+            "setp.ne.u32 %p_vote, {pred_in}, 0;",
+            "vote.sync.ballot.b32 {result}, %p_vote, {mask};",
+            "}}",
             pred_in = in(reg32) pred_u32,
-            pred_p = out(pred) _,
             result = out(reg32) result,
             mask = in(reg32) mask,
         );

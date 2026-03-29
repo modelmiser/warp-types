@@ -292,17 +292,24 @@ impl Warp<All> {
 
     /// Warp ballot: collect a predicate from all lanes into a bitmask.
     ///
-    /// Every lane gets the same bitmask — the result is `Uniform<u32>`.
+    /// Every lane gets the same bitmask — the result is `Uniform<u64>`.
     /// Requires `Warp<All>` because reading predicates from inactive lanes
     /// is undefined behavior.
     ///
-    /// **Note:** Currently CPU-emulation only on all targets. A GPU codepath
-    /// using `gpu::ballot_sync` requires `#[cfg(target_arch = "nvptx64")]` gating.
+    /// On GPU (nvptx64): calls `vote.sync.ballot.b32` via PTX inline asm.
     /// On CPU: returns mask with bit 0 set if predicate is true (single-thread identity).
     pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
-        // CPU emulation: single thread, so ballot = predicate in lane 0
-        let mask = if predicate.get() { 1u64 } else { 0u64 };
-        BallotResult::from_mask(Uniform::from_const(mask))
+        #[cfg(target_arch = "nvptx64")]
+        {
+            let mask = crate::gpu::ballot_sync(0xFFFFFFFF, predicate.get()) as u64;
+            BallotResult::from_mask(Uniform::from_const(mask))
+        }
+        #[cfg(not(target_arch = "nvptx64"))]
+        {
+            // CPU emulation: single thread, so ballot = predicate in lane 0
+            let mask = if predicate.get() { 1u64 } else { 0u64 };
+            BallotResult::from_mask(Uniform::from_const(mask))
+        }
     }
 
     /// Broadcast: all lanes get the same value.
