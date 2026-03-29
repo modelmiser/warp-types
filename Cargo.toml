@@ -4,7 +4,7 @@ exclude = ["examples/gpu-project"]
 
 [package]
 name = "warp-types"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Chad Aldreda"]
@@ -19,7 +19,7 @@ research = []     # Enable research explorations (design-space prototypes, not p
 warp64 = []       # AMD 64-lane wavefronts (default: NVIDIA 32-lane warps)
 
 [dependencies]
-warp-types-macros = { path = "warp-types-macros", version = "0.3.0" }
-warp-types-kernel = { path = "warp-types-kernel", version = "0.3.0" }
+warp-types-macros = { path = "warp-types-macros", version = "0.3.1" }
+warp-types-kernel = { path = "warp-types-kernel", version = "0.3.1" }
 
 [dev-dependencies]

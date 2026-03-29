@@ -1,14 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.1] — 2026-03-29
 
 ### Fixed
-- `WarpBuilder` now sets `-C target-cpu=sm_70` by default — previously defaulted to `sm_30` (PTX 3.2), which lacks `shfl.sync` (requires PTX 6.0). Users can override with `.sm_arch("sm_90")`.
-- `reproduce/runpod-h200.sh` installs `rust-src` for both pinned and generic nightly toolchains
+- **`WarpBuilder` target-cpu** — now sets `-C target-cpu=sm_70` by default. Previously defaulted to `sm_30` (PTX 3.2), which lacks `shfl.sync` (requires PTX 6.0). This caused `CUDA_ERROR_INVALID_PTX` at runtime for anyone using the gpu-project example. Users can override with `.sm_arch("sm_90")` for Hopper-specific codegen.
+- **Ballot `setp`/`selp` workaround** — `ballot_sync` now compiles for nvptx64 by declaring `.reg .pred` inside the asm block and converting to/from `u32`, sidestepping Rust's missing `pred` register class. PTX-verified, not yet exercised in a GPU kernel.
+- **`warp_kernel` macro hardening** — rejects qualified type paths, non-void return types, and generic parameters with clear error messages instead of generating broken PTX
+- **`DynWarp::reduce_sum_scalar`** — changed `wrapping_mul` to non-wrapping `*` (matches `reduce_sum` overflow semantics)
+- **Research `coalescing.rs`** — fixed hardcoded 32-lane constant to use `WARP_SIZE`
+- `reproduce/runpod-h200.sh` — installs `rust-src` for both pinned and generic nightly toolchains
 
 ### Changed
 - GPU kernels verified on H200 SXM (compute 9.0, Hopper) in addition to RTX 4000 Ada (compute 8.9): 4 typed kernels PASS, shuffle semantics confirmed, zero-overhead PTX on sm_90
 - Paper and docs updated with H200 verification results
+- Lean: closed `DivTree.leaves_cover_root` — zero sorries in SolExperiment
 
 ## [0.3.0] — 2026-03-21
 

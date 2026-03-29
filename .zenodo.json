@@ -1,6 +1,6 @@
 {
   "title": "warp-types: Type-Safe GPU Warp Programming via Linear Typestate",
-  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps literally cannot call shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA RTX 4000 Ada; AMD MI300X mask-correctness verified via HIP. v0.3.0 adds 64-lane AMD wavefront support (--features warp64), C++20 interop header, and Lean 4 loop typing rules.",
+  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps literally cannot call shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada (4 typed kernels PASS on both); AMD MI300X mask-correctness verified via HIP. v0.3.1 fixes WarpBuilder target-cpu (PTX 6.0 support), adds ballot setp/selp workaround, and hardens warp_kernel macro.",
   "creators": [
     {
       "name": "Aldreda, Chad"
@@ -9,7 +9,7 @@
   "license": "MIT",
   "upload_type": "software",
   "access_right": "open",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "keywords": [
     "linear typestate",
     "GPU programming",
