@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `WarpBuilder` now sets `-C target-cpu=sm_70` by default — previously defaulted to `sm_30` (PTX 3.2), which lacks `shfl.sync` (requires PTX 6.0). Users can override with `.sm_arch("sm_90")`.
+- `reproduce/runpod-h200.sh` installs `rust-src` for both pinned and generic nightly toolchains
+
+### Changed
+- GPU kernels verified on H200 SXM (compute 9.0, Hopper) in addition to RTX 4000 Ada (compute 8.9): 4 typed kernels PASS, shuffle semantics confirmed, zero-overhead PTX on sm_90
+- Paper and docs updated with H200 verification results
+
 ## [0.3.0] — 2026-03-21
 
 ### Added

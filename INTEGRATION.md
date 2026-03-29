@@ -330,7 +330,7 @@ Common CUDA patterns and their warp-types equivalents:
 A: The type system (Path 1) works on stable. GPU kernel compilation (Path 2) requires nightly for `abi_ptx` and `asm_experimental_arch`.
 
 **Q: What GPU hardware is supported?**
-A: Any NVIDIA GPU with a CUDA driver. Tested on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9). AMD MI300X (gfx942) verified for mask correctness via HIP. Full AMD GPU execution requires an amdgcn Rust target (not yet available).
+A: Any NVIDIA GPU with compute capability 7.0+ (Volta and later). Tested on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9): shuffle semantics, zero-overhead PTX, and 4 typed kernels verified on both. AMD MI300X (gfx942) verified for mask correctness via HIP. Full AMD GPU execution requires an amdgcn Rust target (not yet available). The `WarpBuilder` defaults to `sm_70`; use `.sm_arch("sm_90")` for Hopper-specific codegen.
 
 **Q: What's the runtime overhead?**
 A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.
