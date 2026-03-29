@@ -35,6 +35,10 @@ else
 fi
 rustup install nightly-2026-03-19
 rustup default nightly-2026-03-19
+# rust-src needed for -Z build-std=core (cross-compile core for nvptx64).
+# Install for both pinned and generic nightly (WarpBuilder uses generic).
+rustup component add rust-src --toolchain nightly-2026-03-19
+rustup component add rust-src --toolchain nightly 2>/dev/null || true
 rustc --version | tee -a "$RESULTS"
 echo "" | tee -a "$RESULTS"
 
