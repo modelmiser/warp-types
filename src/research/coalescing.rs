@@ -30,6 +30,8 @@
 
 use std::marker::PhantomData;
 
+use crate::WARP_SIZE;
+
 // ============================================================================
 // ACCESS PATTERN TYPES
 // ============================================================================
@@ -76,8 +78,8 @@ impl<const STRIDE: usize> AccessPattern for Strided<STRIDE> {
     }
     fn transactions_per_warp() -> usize {
         // Depends on cache line size and stride
-        // Rough estimate: stride 0 = uniform (1 txn), otherwise min(32, STRIDE)
-        std::cmp::max(1, std::cmp::min(32, STRIDE))
+        // Rough estimate: stride 0 = uniform (1 txn), otherwise min(WARP_SIZE, STRIDE)
+        std::cmp::max(1, std::cmp::min(WARP_SIZE as usize, STRIDE))
     }
 }
 
@@ -90,7 +92,7 @@ impl AccessPattern for Random {
         "Random"
     }
     fn transactions_per_warp() -> usize {
-        32
+        WARP_SIZE as usize
     } // Worst case
 }
 
@@ -228,9 +230,9 @@ pub mod load {
 
     /// Consecutive load: lane i gets base[i]
     /// Returns per-lane values
-    pub fn consecutive<T: Copy + Default>(ptr: &WarpPtr<T, Consecutive>) -> [T; 32] {
-        let mut result = [T::default(); 32];
-        for lane in 0..32 {
+    pub fn consecutive<T: Copy + Default>(ptr: &WarpPtr<T, Consecutive>) -> [T; WARP_SIZE as usize] {
+        let mut result = [T::default(); WARP_SIZE as usize];
+        for lane in 0..WARP_SIZE as usize {
             unsafe {
                 result[lane] = *ptr.base().add(lane);
             }
@@ -247,10 +249,10 @@ pub mod load {
     /// original allocation.
     pub unsafe fn generic<T: Copy + Default, P: AccessPattern>(
         ptr: &WarpPtr<T, P>,
-        indices: &[usize; 32],
-    ) -> [T; 32] {
-        let mut result = [T::default(); 32];
-        for lane in 0..32 {
+        indices: &[usize; WARP_SIZE as usize],
+    ) -> [T; WARP_SIZE as usize] {
+        let mut result = [T::default(); WARP_SIZE as usize];
+        for lane in 0..WARP_SIZE as usize {
             unsafe {
                 result[lane] = *ptr.base().add(indices[lane]);
             }
@@ -274,8 +276,8 @@ pub mod store {
 
     /// Consecutive store: lane i writes to base[i].
     /// Takes `&mut` to satisfy Rust's aliasing rules.
-    pub fn consecutive<T: Copy>(ptr: &mut WarpPtrMut<T, Consecutive>, values: &[T; 32]) {
-        for lane in 0..32 {
+    pub fn consecutive<T: Copy>(ptr: &mut WarpPtrMut<T, Consecutive>, values: &[T; WARP_SIZE as usize]) {
+        for lane in 0..WARP_SIZE as usize {
             unsafe {
                 *ptr.base().add(lane) = values[lane];
             }
@@ -338,7 +340,7 @@ mod tests {
         assert_eq!(Uniform::transactions_per_warp(), 1);
         assert_eq!(Consecutive::transactions_per_warp(), 1);
         assert_eq!(Strided::<4>::transactions_per_warp(), 4);
-        assert_eq!(Random::transactions_per_warp(), 32);
+        assert_eq!(Random::transactions_per_warp(), WARP_SIZE as usize);
     }
 
     #[test]
@@ -352,11 +354,11 @@ mod tests {
 
     #[test]
     fn test_consecutive_load() {
-        let data: [i32; 32] = core::array::from_fn(|i| i as i32);
+        let data: [i32; WARP_SIZE as usize] = core::array::from_fn(|i| i as i32);
         let ptr = unsafe { WarpPtr::<i32, Consecutive>::new(data.as_ptr()) };
 
         let values = load::consecutive(&ptr);
-        for lane in 0..32 {
+        for lane in 0..WARP_SIZE as usize {
             assert_eq!(values[lane], lane as i32);
         }
     }
