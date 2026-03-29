@@ -117,7 +117,7 @@ Our approach provides strictly more coverage at strictly less cost.
 
 ### The Hazy Argument
 
-The most sophisticated persistent thread program as of 2025—the Hazy megakernel [Stanford 2025]—prohibits lane-level divergence by design. Their on-GPU interpreter dispatches at warp granularity: all 32 lanes execute the same operation, and every shuffle uses `MASK_ALL = 0xFFFFFFFF`. They never allow different lanes to run different ops. This is *architectural avoidance*: state-of-the-art practitioners treat lane-level divergence as too dangerous to manage, even with `__shfl_sync`, and prohibit it entirely.
+The most sophisticated published persistent thread program as of 2025—the Hazy megakernel [Stanford 2025]—prohibits lane-level divergence by design. Their on-GPU interpreter dispatches at warp granularity: all 32 lanes execute the same operation, and every shuffle uses `MASK_ALL = 0xFFFFFFFF`. They never allow different lanes to run different ops. This is *architectural avoidance*: state-of-the-art practitioners treat lane-level divergence as too dangerous to manage, even with `__shfl_sync`, and prohibit it entirely.
 
 In our type system, Hazy-style programs type-check trivially: every warp is `Warp<All>`, every shuffle is permitted, and no diverge/merge annotations are needed. The type system is invisible for uniform programs.
 

@@ -161,6 +161,12 @@ impl<'r> GlobalRegion<'r, Unwritten> {
     /// This is the safe way to create two partial writes from one region
     /// when using `merge_writes` or `merge_writes_within` instead of
     /// the sequential `global_store` / `global_store_complement` path.
+    ///
+    /// **Note:** This is a type-level model — `GlobalRegion` is phantom
+    /// (zero-sized, no real memory). The lifetime brand `'r` ties the
+    /// halves together but does not track which memory addresses each
+    /// half covers. A real GPU memory model would need address-level
+    /// tracking to prevent combining writes to disjoint address ranges.
     pub fn split(self) -> (GlobalRegion<'r, Unwritten>, GlobalRegion<'r, Unwritten>) {
         (
             GlobalRegion {
@@ -185,8 +191,8 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// **Note:** Even `Warp<All>` produces `PartialWrite<All>`, not `FullWrite`.
     /// Use `global_store_complement` with the complement's partial write to
-    /// advance to `FullWrite`, or call this then `merge_writes` with a
-    /// `PartialWrite<Empty>` (which `Empty: ComplementOf<All>` satisfies).
+    /// advance to `FullWrite`. The sequential path is:
+    /// `warp.global_store(region)` → `warp.global_store_complement(partial)` → `FullWrite`.
     pub fn global_store<'r>(
         self,
         _region: GlobalRegion<'r, Unwritten>,

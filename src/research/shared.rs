@@ -5,7 +5,7 @@
 //! GPU shared memory is a common source of race conditions.
 //! This module explores how ownership/borrowing can prevent them.
 
-use crate::{data::Role, GpuValue};
+use crate::{data::Role, GpuValue, WARP_SIZE};
 use std::marker::PhantomData;
 
 /// A region of shared memory owned by a specific role
@@ -38,7 +38,7 @@ use std::marker::PhantomData;
 /// ```
 pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
     /// The actual storage (in real impl, this would be __shared__)
-    data: [T; 32],
+    data: [T; WARP_SIZE as usize],
     /// Which role owns this region
     owner: Role,
     _phantom: PhantomData<()>,
@@ -48,7 +48,7 @@ impl<T: GpuValue + Default, const OWNER: u8> SharedRegion<T, OWNER> {
     /// Create a new shared region owned by the specified role
     pub fn new(owner: Role) -> Self {
         SharedRegion {
-            data: [T::default(); 32],
+            data: [T::default(); WARP_SIZE as usize],
             owner,
             _phantom: PhantomData,
         }
@@ -135,7 +135,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
 
     /// Push a task (only producer can call)
     pub fn push(&mut self, task: T) -> Result<(), QueueFull> {
-        let next = (self.head + 1) % 32;
+        let next = (self.head + 1) % WARP_SIZE as usize;
         if next == self.tail {
             return Err(QueueFull);
         }
@@ -152,7 +152,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
             return None;
         }
         let task = self.tasks.read(self.tail);
-        self.tail = (self.tail + 1) % 32;
+        self.tail = (self.tail + 1) % WARP_SIZE as usize;
         Some(task)
     }
 
@@ -163,7 +163,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
 
     /// Check if queue is full (both roles can call)
     pub fn is_full(&self) -> bool {
-        (self.head + 1) % 32 == self.tail
+        (self.head + 1) % WARP_SIZE as usize == self.tail
     }
 }
 

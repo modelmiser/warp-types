@@ -401,19 +401,25 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         BuildError::PtxNotFound(format!("Can't read {}: {}", cargo_toml.display(), e))
     })?;
 
-    // Simple TOML parsing — find name = "..."
-    let crate_name = content
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.starts_with("name") {
-                let val = line.split('=').nth(1)?.trim().trim_matches('"');
-                Some(val.replace('-', "_"))
-            } else {
+    // Simple TOML parsing — find name under [package] section
+    let crate_name = {
+        let mut in_package = false;
+        content
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_package = line == "[package]";
+                    return None;
+                }
+                if in_package && line.starts_with("name") {
+                    let val = line.split('=').nth(1)?.trim().trim_matches('"');
+                    return Some(val.replace('-', "_"));
+                }
                 None
-            }
-        })
-        .unwrap_or_else(|| "kernels".to_string());
+            })
+            .unwrap_or_else(|| "kernels".to_string())
+    };
 
     // Check common locations for the .s file
     let candidates = [
@@ -451,22 +457,26 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         }
     }
 
-    // Last resort: any non-core .s file in deps/
+    // Last resort: any non-core .s file in deps/ (sorted for determinism)
     if let Ok(entries) = std::fs::read_dir(&deps) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().is_some_and(|e| e == "s") {
-                let fname = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if !fname.starts_with("core-")
-                    && !fname.starts_with("compiler_builtins-")
-                    && !fname.starts_with("warp_types-")
-                {
-                    return Ok(p);
+        let mut candidates: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "s") && {
+                    let fname = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    !fname.starts_with("core-")
+                        && !fname.starts_with("compiler_builtins-")
+                        && !fname.starts_with("warp_types-")
                 }
-            }
+            })
+            .collect();
+        candidates.sort();
+        if let Some(p) = candidates.into_iter().next() {
+            return Ok(p);
         }
     }
 

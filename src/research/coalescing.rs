@@ -223,7 +223,11 @@ impl WorstOf<Random> for Random {
 pub mod load {
     use super::*;
 
-    /// Uniform load: all lanes get same value
+    /// Uniform load: all lanes get same value.
+    ///
+    /// Safety relies on `WarpPtr::new`'s contract: the pointer must remain
+    /// valid for the lifetime of the `WarpPtr`. This is the standard Rust
+    /// "unsafe constructor, safe usage" pattern (cf. `Vec::from_raw_parts`).
     pub fn uniform<T: Copy>(ptr: &WarpPtr<T, Uniform>) -> T {
         unsafe { *ptr.base() }
     }

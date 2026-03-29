@@ -24,6 +24,11 @@ use core::marker::PhantomData;
 /// at compile time. The `owner` field carries the runtime lane range metadata
 /// (which lanes belong to this role). These encode different concerns: OWNER
 /// prevents mixing regions at the type level; Role describes the lane geometry.
+///
+/// Ownership is enforced at compile time only (const generic tag). The `owner`
+/// field is metadata for debugging — `write`/`read` do not verify the caller's
+/// role at runtime. In a real GPU implementation, kernel launch guarantees
+/// would replace runtime checks.
 pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
     data: [T; crate::WARP_SIZE as usize],
     owner: Role,

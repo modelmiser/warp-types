@@ -106,9 +106,12 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     }
 
     /// Indexed shuffle: all lanes read from lane[src_lane].
+    ///
+    /// Uses bitwise mask (`& (WIDTH-1)`) for out-of-range indices, matching
+    /// GPU hardware which masks to 5 bits (32-lane) or 6 bits (64-lane).
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
         let src = src_lane as usize;
-        let val = self.lanes[src % WIDTH];
+        let val = self.lanes[src & (WIDTH - 1)];
         SimWarp {
             lanes: [val; WIDTH],
         }

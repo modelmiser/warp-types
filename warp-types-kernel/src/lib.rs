@@ -28,9 +28,10 @@
 //! }
 //! ```
 //!
-//! The macro emits:
-//! - On nvptx64: `#[no_mangle] pub unsafe extern "ptx-kernel" fn butterfly_reduce(...)`
-//! - On host: nothing (kernel functions are only compiled for GPU)
+//! The macro always emits `#[no_mangle] pub unsafe extern "ptx-kernel" fn ...`
+//! regardless of target. Kernel crates should target nvptx64 exclusively —
+//! the `extern "ptx-kernel"` ABI requires nightly `abi_ptx` and is only
+//! meaningful on GPU targets.
 
 use proc_macro::TokenStream;
 use quote::quote;
