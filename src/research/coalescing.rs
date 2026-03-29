@@ -230,7 +230,9 @@ pub mod load {
 
     /// Consecutive load: lane i gets base[i]
     /// Returns per-lane values
-    pub fn consecutive<T: Copy + Default>(ptr: &WarpPtr<T, Consecutive>) -> [T; WARP_SIZE as usize] {
+    pub fn consecutive<T: Copy + Default>(
+        ptr: &WarpPtr<T, Consecutive>,
+    ) -> [T; WARP_SIZE as usize] {
         let mut result = [T::default(); WARP_SIZE as usize];
         for lane in 0..WARP_SIZE as usize {
             unsafe {
@@ -276,7 +278,10 @@ pub mod store {
 
     /// Consecutive store: lane i writes to base[i].
     /// Takes `&mut` to satisfy Rust's aliasing rules.
-    pub fn consecutive<T: Copy>(ptr: &mut WarpPtrMut<T, Consecutive>, values: &[T; WARP_SIZE as usize]) {
+    pub fn consecutive<T: Copy>(
+        ptr: &mut WarpPtrMut<T, Consecutive>,
+        values: &[T; WARP_SIZE as usize],
+    ) {
         for lane in 0..WARP_SIZE as usize {
             unsafe {
                 *ptr.base().add(lane) = values[lane];

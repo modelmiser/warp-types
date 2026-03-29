@@ -270,9 +270,10 @@ impl DynWarp {
             });
         }
         // CPU single-thread: butterfly doubling gives value * warp_width.
-        // wrapping_mul matches GPU hardware semantics (arithmetic wraps on overflow).
+        // Uses standard `*` (panics on debug overflow) to match Warp<All>::reduce_sum.
+        // GPU hardware wraps — for GPU-faithful wrapping, use wrapping arithmetic.
         let warp_width = full.count_ones() as i32;
-        Ok(value.wrapping_mul(warp_width))
+        Ok(value * warp_width)
     }
 
     /// Broadcast — runtime check for all-active.
