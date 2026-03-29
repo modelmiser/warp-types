@@ -1455,6 +1455,16 @@ Our Rust implementation handles static active sets (Even, Odd, LowHalf, etc.). R
 
 Programmers must call `diverge` and `merge` explicitly. Automatic insertion based on control flow is future work.
 
+### Affine, Not Linear
+
+Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` cannot be cloned, and diverge consumes the parent. But two gaps remain:
+
+1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
+
+2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.2, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
+
+Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
+
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
