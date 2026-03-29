@@ -69,6 +69,13 @@ pub struct WarpBuilder {
     features: Vec<String>,
     /// GPU target (default: NVIDIA).
     target: GpuTarget,
+    /// NVIDIA SM architecture (default: "sm_70").
+    ///
+    /// Controls the PTX ISA version emitted by LLVM. Must be at least `sm_70`
+    /// (Volta) because warp-types uses `shfl.sync.*` which requires PTX 6.0+.
+    /// Higher values enable newer instructions and may produce better code.
+    /// Common values: sm_70 (Volta), sm_80 (Ampere), sm_89 (Ada), sm_90 (Hopper).
+    sm_arch: String,
 }
 
 impl WarpBuilder {
@@ -83,6 +90,7 @@ impl WarpBuilder {
             release: true,
             features: Vec::new(),
             target: GpuTarget::Nvidia,
+            sm_arch: "sm_70".to_string(),
         }
     }
 
@@ -101,6 +109,15 @@ impl WarpBuilder {
     /// Set the GPU target (default: NVIDIA).
     pub fn target(mut self, target: GpuTarget) -> Self {
         self.target = target;
+        self
+    }
+
+    /// Set the NVIDIA SM architecture (default: "sm_70").
+    ///
+    /// Controls `-C target-cpu` passed to rustc, which determines the PTX ISA
+    /// version. Must be at least `sm_70` for `shfl.sync` support.
+    pub fn sm_arch(mut self, arch: impl Into<String>) -> Self {
+        self.sm_arch = arch.into();
         self
     }
 
@@ -153,7 +170,13 @@ impl WarpBuilder {
         }
 
         // After `--`, pass rustc flags: emit assembly (PTX for nvptx64)
-        cmd.arg("--").arg("--emit=asm");
+        // -C target-cpu sets the SM architecture, which determines the PTX ISA
+        // version. Without this, LLVM defaults to sm_30 / PTX 3.2, which lacks
+        // shfl.sync (requires PTX 6.0 / sm_70+).
+        cmd.arg("--")
+            .arg("--emit=asm")
+            .arg("-C")
+            .arg(format!("target-cpu={}", self.sm_arch));
 
         // Select nightly toolchain via env var (works inside build scripts).
         // CRITICAL: remove RUSTC — the parent cargo sets it to the absolute path
