@@ -41,10 +41,14 @@ pub enum BcpResult {
 /// A clause: a disjunction of literals.
 #[derive(Debug, Clone)]
 pub struct Clause {
+    /// The literals in this clause.
     pub literals: Vec<Lit>,
 }
 
-/// Clause database. Stores original and learned clauses.
+/// Clause database storing original and learned clauses.
+///
+/// Clauses are indexed by insertion order (0, 1, 2, ...).
+/// The solver appends learned clauses during conflict analysis.
 pub struct ClauseDb {
     clauses: Vec<Clause>,
 }
@@ -63,14 +67,17 @@ impl ClauseDb {
         idx
     }
 
+    /// Number of clauses (original + learned).
     pub fn len(&self) -> usize {
         self.clauses.len()
     }
 
+    /// Whether the database contains no clauses.
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
     }
 
+    /// Get a clause by index.
     pub fn clause(&self, idx: usize) -> &Clause {
         &self.clauses[idx]
     }

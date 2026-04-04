@@ -16,12 +16,20 @@ pub struct Lit(u32);
 
 impl Lit {
     /// Create a positive literal for variable `v`.
+    ///
+    /// # Panics
+    /// Debug-panics if `v > u32::MAX / 2` (would overflow the `var * 2` encoding).
     pub fn pos(v: Variable) -> Self {
+        debug_assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
         Lit(v * 2)
     }
 
     /// Create a negative literal for variable `v`.
+    ///
+    /// # Panics
+    /// Debug-panics if `v > u32::MAX / 2` (would overflow the `var * 2 + 1` encoding).
     pub fn neg(v: Variable) -> Self {
+        debug_assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
         Lit(v * 2 + 1)
     }
 

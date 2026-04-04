@@ -59,8 +59,15 @@ pub fn generate_k_sat(num_vars: u32, num_clauses: usize, k: usize, seed: u64) ->
 
     for _ in 0..num_clauses {
         let mut lits = Vec::with_capacity(k);
+        let mut used_vars = Vec::with_capacity(k);
         for _ in 0..k {
-            let var = rng.next_usize(num_vars as usize) as u32;
+            // Avoid duplicate variables within a clause (prevents tautologies
+            // like x ∨ ¬x and duplicate literals like x ∨ x).
+            let mut var = rng.next_usize(num_vars as usize) as u32;
+            while used_vars.contains(&var) {
+                var = rng.next_usize(num_vars as usize) as u32;
+            }
+            used_vars.push(var);
             let lit = if rng.next_bool() {
                 Lit::pos(var)
             } else {

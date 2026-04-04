@@ -29,7 +29,11 @@ pub struct TrailEntry {
     pub reason: Reason,
 }
 
-/// The assignment trail. Owns the variable assignment array.
+/// The assignment trail — single source of truth for variable assignments.
+///
+/// All assignment mutations go through `new_decision`, `record_propagation`,
+/// or `backtrack_to`. This prevents ghost assignments (values in the assignment
+/// array with no trail entry), which is the #1 CDCL implementation bug.
 pub struct Trail {
     entries: Vec<TrailEntry>,
     /// `level_starts[i]` = index in `entries` where decision level `i` begins.
@@ -133,9 +137,17 @@ impl Trail {
     }
 
     /// Extract the full assignment as a `Vec<bool>` (for SAT result output).
-    /// Panics if any variable is unassigned.
+    ///
+    /// # Panics
+    /// Panics if any variable is unassigned. Call `all_assigned()` first.
     pub fn assignment_vec(&self) -> Vec<bool> {
-        self.assignments.iter().map(|a| a.unwrap()).collect()
+        self.assignments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                a.unwrap_or_else(|| panic!("variable {i} is unassigned in assignment_vec()"))
+            })
+            .collect()
     }
 }
 
