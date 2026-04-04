@@ -4,6 +4,8 @@
 //! reclaims its token and assigns freed lanes to pending clauses.
 //! All propagations go through the Trail — no ghost assignments.
 
+use std::collections::VecDeque;
+
 use crate::bcp::{BcpResult, ClauseDb};
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseBatch, ClauseStatus, ClauseTile};
@@ -17,7 +19,7 @@ use crate::trail::Trail;
 /// Tracks which clauses need checking and redistributes work.
 pub struct ClauseScheduler {
     pool: ClausePool,
-    pending: Vec<usize>,
+    pending: VecDeque<usize>,
     done: Vec<usize>,
     num_clauses: usize,
 }
@@ -35,7 +37,7 @@ impl ClauseScheduler {
         let n = db.len();
         ClauseScheduler {
             pool: ClausePool::new(n),
-            pending: (0..n).collect(),
+            pending: (0..n).collect::<VecDeque<_>>(),
             done: Vec::new(),
             num_clauses: n,
         }
@@ -52,7 +54,7 @@ impl ClauseScheduler {
     pub fn reset_round(&mut self) {
         self.done.clear();
         self.pool = ClausePool::new(self.num_clauses);
-        self.pending = (0..self.num_clauses).collect();
+        self.pending = (0..self.num_clauses).collect::<VecDeque<_>>();
     }
 
     fn fill_batch(&mut self, db: &ClauseDb) -> Option<ClauseBatch> {
@@ -68,7 +70,7 @@ impl ClauseScheduler {
                 break;
             }
 
-            self.pending.remove(0);
+            self.pending.pop_front();
             let token = self
                 .pool
                 .acquire(clause_idx)

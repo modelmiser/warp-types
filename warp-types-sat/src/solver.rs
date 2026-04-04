@@ -40,11 +40,10 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
     }
 
     // Validate that clause database doesn't reference variables beyond num_vars.
+    let max_var = db.max_variable();
     assert!(
-        db.is_empty() || db.max_variable() < num_vars,
-        "clause database references variable {} but only {} variables declared",
-        db.max_variable(),
-        num_vars
+        db.is_empty() || max_var < num_vars,
+        "clause database references variable {max_var} but only {num_vars} variables declared",
     );
 
     let mut trail = Trail::new(num_vars as usize);
@@ -111,6 +110,10 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
 }
 
 /// Pick the next unassigned variable. Simple sequential scan.
+///
+/// Always decides positive polarity (`Lit::pos`). This is correct but naive —
+/// VSIDS or phase-saving heuristics would improve performance on hard instances.
+/// The solver backtracks and learns the correct polarity via conflict analysis.
 fn pick_variable(assignments: &[Option<bool>]) -> u32 {
     assignments
         .iter()

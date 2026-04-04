@@ -46,6 +46,11 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         if !seen[var as usize] {
             seen[var as usize] = true;
             let entry = trail.entry_for_var(var);
+            debug_assert!(
+                entry.is_some(),
+                "variable {} in conflict clause has no trail entry (unassigned in a conflict?)",
+                var
+            );
             match entry {
                 Some(e) if e.level == current_level => {
                     num_at_current_level += 1;

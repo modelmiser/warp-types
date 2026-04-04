@@ -1,6 +1,9 @@
 //! CLI entry point: solve a DIMACS CNF file.
 //!
 //! Usage: cargo run -p warp-types-sat --bin solve -- <file.cnf>
+//!
+//! Note: loads the entire file into memory via `fs::read_to_string`.
+//! Not suitable for adversarial input without external size limits.
 
 use std::env;
 use std::fs;

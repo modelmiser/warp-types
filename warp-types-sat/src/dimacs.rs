@@ -132,9 +132,8 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
                     });
                 }
                 let abs_var = abs_val as u32;
-                if abs_var == 0 {
-                    return Err(DimacsError::ZeroVariable);
-                }
+                // abs_var can't be 0 here: val != 0 (we're in the else branch),
+                // so unsigned_abs() >= 1, and we proved abs_val <= u32::MAX above.
                 if abs_var > num_vars {
                     return Err(DimacsError::VariableOutOfRange {
                         var: abs_var,

@@ -137,7 +137,10 @@ pub fn make_clause_tile<P: Phase>(
     let clause_len = deduped.len();
     let ts = tile_size_for(clause_len);
 
-    // Pad to tile size (padding lanes never reached in check())
+    // Pad to tile size. Padding lanes are never evaluated: check() breaks at
+    // clause_len, and eval_clause_direct is not used for tileable clauses.
+    // Sentinel variable u32::MAX/2 is chosen to avoid collision with real variables
+    // (any real variable this large would overflow Lit encoding, caught by debug_assert).
     deduped.resize(ts, Lit::pos(u32::MAX / 2));
 
     Some(ClauseTile {
