@@ -234,12 +234,13 @@ p cnf 3 2
             bcp::run_bcp(&inst.db, &mut assign, &p)
         });
 
-        assert_eq!(
-            result,
-            BcpResult::Ok {
-                propagated: vec![Lit::pos(1), Lit::pos(2)]
+        match result {
+            BcpResult::Ok { propagated } => {
+                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
+                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2)]);
             }
-        );
+            other => panic!("expected Ok, got {:?}", other),
+        }
         assert_eq!(assign, vec![Some(true), Some(true), Some(true)]);
     }
 

@@ -22,12 +22,19 @@ use crate::phase::Propagate;
 // BCP result
 // ============================================================================
 
+/// A single BCP implication: a literal and the clause that forced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Implication {
+    pub lit: Lit,
+    pub reason: usize, // clause index that forced this literal
+}
+
 /// Result of running BCP to fixpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BcpResult {
     /// Propagation completed without conflict.
-    /// Contains the list of propagated literals (the implication trail segment).
-    Ok { propagated: Vec<Lit> },
+    /// Contains the list of propagated literals with their reason clauses.
+    Ok { propagated: Vec<Implication> },
     /// A conflict was found. Contains the conflicting clause index.
     Conflict { clause_index: usize },
 }
@@ -113,7 +120,7 @@ pub fn run_bcp(
         assignments.resize(max_var as usize + 1, None);
     }
 
-    let mut propagated = Vec::new();
+    let mut propagated: Vec<Implication> = Vec::new();
 
     // Propagate to fixpoint
     loop {
@@ -155,7 +162,10 @@ pub fn run_bcp(
                         let value = !propagate.is_negated();
                         if assignments[var].is_none() {
                             assignments[var] = Some(value);
-                            propagated.push(*propagate);
+                            propagated.push(Implication {
+                                lit: *propagate,
+                                reason: db_index,
+                            });
                             found_unit = true;
                         }
                     }
@@ -202,12 +212,13 @@ mod tests {
         let mut assign = vec![Some(true), None, None]; // x0 = true
         let result = bcp_in_session(&db, &mut assign);
 
-        assert_eq!(
-            result,
-            BcpResult::Ok {
-                propagated: vec![Lit::pos(1), Lit::pos(2)]
+        match result {
+            BcpResult::Ok { propagated } => {
+                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
+                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2)]);
             }
-        );
+            other => panic!("expected Ok, got {:?}", other),
+        }
         assert_eq!(assign, vec![Some(true), Some(true), Some(true)]);
     }
 
@@ -251,12 +262,13 @@ mod tests {
         let mut assign = vec![Some(true), None, None, None];
         let result = bcp_in_session(&db, &mut assign);
 
-        assert_eq!(
-            result,
-            BcpResult::Ok {
-                propagated: vec![Lit::pos(1), Lit::pos(2), Lit::pos(3)]
+        match result {
+            BcpResult::Ok { propagated } => {
+                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
+                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2), Lit::pos(3)]);
             }
-        );
+            other => panic!("expected Ok, got {:?}", other),
+        }
         assert_eq!(
             assign,
             vec![Some(true), Some(true), Some(true), Some(true)]

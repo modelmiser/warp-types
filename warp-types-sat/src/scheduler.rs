@@ -21,7 +21,6 @@
 use crate::bcp::ClauseDb;
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseBatch, ClauseStatus, ClauseTile};
-use crate::literal::Lit;
 use crate::phase::Propagate;
 
 // ============================================================================
@@ -47,8 +46,8 @@ pub struct ClauseScheduler {
 
 /// Result of one scheduler round.
 pub struct SchedulerRound {
-    /// Literals that were propagated in this round.
-    pub propagated: Vec<Lit>,
+    /// Literals that were propagated in this round, with reason clauses.
+    pub propagated: Vec<crate::bcp::Implication>,
     /// Whether a conflict was found (and which clause).
     pub conflict: Option<usize>,
     /// Number of clauses that were checked.
@@ -187,7 +186,10 @@ impl ClauseScheduler {
                         let value = !propagate.is_negated();
                         if var < assignments.len() && assignments[var].is_none() {
                             assignments[var] = Some(value);
-                            round.propagated.push(*propagate);
+                            round.propagated.push(crate::bcp::Implication {
+                                lit: *propagate,
+                                reason: db_index,
+                            });
                         }
                         // Unit clause becomes satisfied after propagation —
                         // mark done for this round
@@ -303,12 +305,13 @@ mod tests {
         let mut assign = vec![Some(true), None, None];
         let result = scheduled_bcp(&db, &mut assign);
 
-        assert_eq!(
-            result,
-            BcpResult::Ok {
-                propagated: vec![Lit::pos(1), Lit::pos(2)]
+        match result {
+            BcpResult::Ok { propagated } => {
+                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
+                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2)]);
             }
-        );
+            other => panic!("expected Ok, got {:?}", other),
+        }
     }
 
     #[test]
@@ -335,12 +338,13 @@ mod tests {
         let mut assign = vec![Some(true), None, None, None];
         let result = scheduled_bcp(&db, &mut assign);
 
-        assert_eq!(
-            result,
-            BcpResult::Ok {
-                propagated: vec![Lit::pos(1), Lit::pos(2), Lit::pos(3)]
+        match result {
+            BcpResult::Ok { propagated } => {
+                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
+                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2), Lit::pos(3)]);
             }
-        );
+            other => panic!("expected Ok, got {:?}", other),
+        }
     }
 
     #[test]
