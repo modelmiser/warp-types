@@ -246,7 +246,7 @@ p cnf 3 4
         match solve(db, 64) {
             SolveResult::Sat(assign) => {
                 assert!(!assign[0]); // x0 must be false
-                // The 64-lit clause needs at least one true lit — any of x1..x63 works
+                                     // The 64-lit clause needs at least one true lit — any of x1..x63 works
                 assert!(assign[1..].iter().any(|&v| v));
             }
             SolveResult::Unsat => panic!("expected SAT"),

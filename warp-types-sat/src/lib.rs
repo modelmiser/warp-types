@@ -50,6 +50,8 @@ pub mod trail;
 // Core types re-exported at crate root.
 pub use clause::{ClausePool, ClauseToken};
 pub use dimacs::parse_dimacs_str;
-pub use phase::{Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat};
+pub use phase::{
+    Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
+};
 pub use session::{with_session, SolverSession};
 pub use solver::{solve, SolveResult};

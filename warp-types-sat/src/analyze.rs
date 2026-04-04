@@ -118,9 +118,8 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         }
     }
 
-    let lit = asserting_lit.expect(
-        "1-UIP resolution must find an asserting literal at the current decision level",
-    );
+    let lit = asserting_lit
+        .expect("1-UIP resolution must find an asserting literal at the current decision level");
     learned.insert(0, lit); // asserting literal first
 
     // Backtrack level: highest level among learned clause literals,
