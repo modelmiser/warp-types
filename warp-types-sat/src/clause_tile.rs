@@ -14,7 +14,7 @@
 //! # SimWarp simulation
 //!
 //! On CPU, we simulate tile-local operations using SimWarp segments.
-//! On GPU, these map directly to Tile<SIZE> ballot/reduce operations.
+//! On GPU, these map directly to `Tile<SIZE>` ballot/reduce operations.
 
 use crate::clause::ClauseToken;
 use crate::literal::Lit;
@@ -115,11 +115,12 @@ pub fn make_clause_tile<P: Phase>(
     token: ClauseToken,
     db_index: usize,
 ) -> Option<ClauseTile<P>> {
-    assert!(
-        !literals.is_empty() && literals.len() <= 32,
-        "clause must have 1-32 literals, got {}",
-        literals.len()
-    );
+    if literals.is_empty() || literals.len() > 32 {
+        // Empty clauses (trivially false) and oversize clauses (>32 literals)
+        // can't be packed into a tile. Caller handles them via eval_clause_direct.
+        // Token is consumed and dropped (pool is loop-local in BCP).
+        return None;
+    }
 
     // Deduplicate literals
     let mut deduped: Vec<Lit> = Vec::with_capacity(literals.len());
@@ -147,6 +148,40 @@ pub fn make_clause_tile<P: Phase>(
         _token: token,
         _phase: PhantomData,
     })
+}
+
+// ============================================================================
+// Direct clause evaluation (fallback for non-tileable clauses)
+// ============================================================================
+
+/// Evaluate a clause directly without tile packing.
+///
+/// Used for clauses that don't fit in a tile (empty or >32 literals).
+/// Same logic as `ClauseTile::check()` but operates on raw literals.
+pub fn eval_clause_direct(literals: &[Lit], assignments: &[Option<bool>]) -> ClauseStatus {
+    let mut unassigned_count = 0u32;
+    let mut last_unassigned = None;
+
+    for &lit in literals {
+        match lit.eval(assignments) {
+            Some(true) => return ClauseStatus::Satisfied,
+            Some(false) => {}
+            None => {
+                unassigned_count += 1;
+                last_unassigned = Some(lit);
+            }
+        }
+    }
+
+    if unassigned_count == 0 {
+        ClauseStatus::Conflict
+    } else if unassigned_count == 1 {
+        ClauseStatus::Unit {
+            propagate: last_unassigned.unwrap(),
+        }
+    } else {
+        ClauseStatus::Unresolved { unassigned_count }
+    }
 }
 
 // ============================================================================
@@ -504,5 +539,46 @@ mod tests {
 
         let batches = pack_clauses(tiles);
         assert_eq!(batches.len(), 2); // Can't fit two 32-tile clauses in one warp
+    }
+
+    #[test]
+    fn empty_clause_returns_none() {
+        let mut pool = ClausePool::new(1);
+        let token = pool.acquire(0).unwrap();
+        assert!(make_clause_tile::<Propagate>(&[], token, 0).is_none());
+    }
+
+    #[test]
+    fn oversize_clause_returns_none() {
+        let mut pool = ClausePool::new(1);
+        let token = pool.acquire(0).unwrap();
+        let lits: Vec<_> = (0..33).map(Lit::pos).collect();
+        assert!(make_clause_tile::<Propagate>(&lits, token, 0).is_none());
+    }
+
+    #[test]
+    fn eval_direct_empty_is_conflict() {
+        assert_eq!(eval_clause_direct(&[], &[]), ClauseStatus::Conflict);
+    }
+
+    #[test]
+    fn eval_direct_large_clause() {
+        // 64-literal clause, all false except one unassigned → Unit
+        let lits: Vec<_> = (0..64).map(Lit::pos).collect();
+        let mut assign: Vec<Option<bool>> = vec![Some(false); 64];
+        assign[42] = None; // x42 unassigned
+        assert_eq!(
+            eval_clause_direct(&lits, &assign),
+            ClauseStatus::Unit {
+                propagate: Lit::pos(42)
+            }
+        );
+    }
+
+    #[test]
+    fn eval_direct_satisfied() {
+        let lits = vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)];
+        let assign = vec![Some(false), Some(true), None];
+        assert_eq!(eval_clause_direct(&lits, &assign), ClauseStatus::Satisfied);
     }
 }

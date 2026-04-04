@@ -36,7 +36,7 @@
 
 pub mod analyze;
 pub mod bcp;
-pub mod bench;
+pub(crate) mod bench;
 pub mod clause;
 pub mod clause_tile;
 pub mod dimacs;
@@ -47,6 +47,9 @@ pub mod session;
 pub mod solver;
 pub mod trail;
 
-pub use clause::*;
-pub use phase::*;
-pub use session::*;
+// Core types re-exported at crate root.
+pub use clause::{ClausePool, ClauseToken};
+pub use dimacs::parse_dimacs_str;
+pub use phase::{Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat};
+pub use session::{with_session, SolverSession};
+pub use solver::{solve, SolveResult};

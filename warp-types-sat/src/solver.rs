@@ -23,6 +23,22 @@ pub enum SolveResult {
 ///
 /// Takes ownership of the clause database (learned clauses are appended).
 pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
+    // Empty clause → trivially UNSAT (a disjunction of zero literals is false).
+    for i in 0..db.len() {
+        if db.clause(i).literals.is_empty() {
+            return SolveResult::Unsat;
+        }
+    }
+    // Zero variables: vacuously SAT if no clauses, UNSAT if any clause exists
+    // (clauses reference variables that can't be assigned).
+    if num_vars == 0 {
+        return if db.is_empty() {
+            SolveResult::Sat(vec![])
+        } else {
+            SolveResult::Unsat
+        };
+    }
+
     let mut trail = Trail::new(num_vars as usize);
 
     session::with_session(|initial_session| {
@@ -177,6 +193,62 @@ p cnf 3 4
         let inst = dimacs::parse_dimacs_str(cnf).unwrap();
         match solve(inst.db, inst.num_vars) {
             SolveResult::Sat(_) => {}
+            SolveResult::Unsat => panic!("expected SAT"),
+        }
+    }
+
+    #[test]
+    fn empty_clause_is_unsat() {
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![]); // empty clause = trivially false
+        match solve(db, 1) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(_) => panic!("expected UNSAT for empty clause"),
+        }
+    }
+
+    #[test]
+    fn zero_vars_no_clauses_is_sat() {
+        let db = ClauseDb::new();
+        match solve(db, 0) {
+            SolveResult::Sat(assign) => assert!(assign.is_empty()),
+            SolveResult::Unsat => panic!("expected SAT for vacuous formula"),
+        }
+    }
+
+    #[test]
+    fn zero_vars_with_clauses_is_unsat() {
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]);
+        match solve(db, 0) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(_) => panic!("expected UNSAT for 0-var formula with clauses"),
+        }
+    }
+
+    #[test]
+    fn empty_db_is_sat() {
+        let db = ClauseDb::new();
+        match solve(db, 5) {
+            SolveResult::Sat(_) => {}
+            SolveResult::Unsat => panic!("expected SAT for vacuously satisfiable formula"),
+        }
+    }
+
+    #[test]
+    fn large_clause_does_not_panic() {
+        // Clause with 64 literals — exceeds tile size (32), should not panic.
+        let mut db = ClauseDb::new();
+        let lits: Vec<Lit> = (0..64).map(Lit::pos).collect();
+        db.add_clause(lits);
+        db.add_clause(vec![Lit::neg(0)]); // force x0=false
+
+        match solve(db, 64) {
+            SolveResult::Sat(assign) => {
+                assert!(!assign[0]); // x0 must be false
+                // The 64-lit clause needs at least one true lit — any of x1..x63 works
+                assert!(assign[1..].iter().any(|&v| v));
+            }
             SolveResult::Unsat => panic!("expected SAT"),
         }
     }

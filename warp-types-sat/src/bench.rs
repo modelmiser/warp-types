@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Bench utilities only used in #[cfg(test)]
+
 //! Benchmarking: scheduled vs basic BCP.
 //!
 //! Generates random 3-SAT instances at the phase transition ratio (~4.267 clauses/var)

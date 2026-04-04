@@ -75,6 +75,11 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
             Reason::Decision => {
                 // Decisions can't be resolved — this shouldn't happen if
                 // there's more than 1 literal at the current level
+                debug_assert!(
+                    num_at_current_level <= 1,
+                    "hit decision during resolution with {} literals remaining at current level",
+                    num_at_current_level
+                );
                 break;
             }
             Reason::Propagation(reason_clause) => {
@@ -113,9 +118,10 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         }
     }
 
-    if let Some(lit) = asserting_lit {
-        learned.insert(0, lit); // asserting literal first
-    }
+    let lit = asserting_lit.expect(
+        "1-UIP resolution must find an asserting literal at the current decision level",
+    );
+    learned.insert(0, lit); // asserting literal first
 
     // Backtrack level: highest level among learned clause literals,
     // excluding the asserting literal (which is at current_level).

@@ -114,11 +114,34 @@ pub fn run_bcp(
     loop {
         let mut found_unit = false;
 
+        // Evaluate non-tileable clauses directly (empty or >32 literals).
+        for i in 0..db.len() {
+            let clause = &db.clauses[i];
+            if clause.literals.is_empty() || clause.literals.len() > 32 {
+                match clause_tile::eval_clause_direct(&clause.literals, trail.assignments()) {
+                    ClauseStatus::Conflict => {
+                        return BcpResult::Conflict { clause_index: i };
+                    }
+                    ClauseStatus::Unit { propagate } => {
+                        if trail.value(propagate.var()).is_none() {
+                            trail.record_propagation(propagate, i);
+                            found_unit = true;
+                        }
+                    }
+                    ClauseStatus::Satisfied | ClauseStatus::Unresolved { .. } => {}
+                }
+            }
+        }
+
+        // Tile-based evaluation for clauses that fit (1-32 literals).
         let mut pool = ClausePool::new(db.len());
         let mut tiles: Vec<ClauseTile<Propagate>> = Vec::new();
 
         for i in 0..db.len() {
             let clause = &db.clauses[i];
+            if clause.literals.is_empty() || clause.literals.len() > 32 {
+                continue; // handled in direct evaluation above
+            }
             let token = pool.acquire(i).unwrap();
             if let Some(tile) =
                 clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, i)

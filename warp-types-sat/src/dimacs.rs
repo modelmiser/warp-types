@@ -53,6 +53,15 @@ impl std::fmt::Display for DimacsError {
     }
 }
 
+impl std::error::Error for DimacsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DimacsError::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 /// Parsed DIMACS instance.
 pub struct DimacsInstance {
     /// Number of variables declared in header.

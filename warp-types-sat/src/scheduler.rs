@@ -103,6 +103,38 @@ impl ClauseScheduler {
             tiles_recycled: 0,
         };
 
+        // Evaluate non-tileable clauses directly (empty or >32 literals).
+        let mut i = 0;
+        while i < self.pending.len() {
+            let clause_idx = self.pending[i];
+            let clause = db.clause(clause_idx);
+            if clause.literals.is_empty() || clause.literals.len() > 32 {
+                self.pending.remove(i);
+                match clause_tile::eval_clause_direct(&clause.literals, trail.assignments()) {
+                    ClauseStatus::Conflict => {
+                        round.conflict = Some(clause_idx);
+                        return round;
+                    }
+                    ClauseStatus::Unit { propagate } => {
+                        if trail.value(propagate.var()).is_none() {
+                            trail.record_propagation(propagate, clause_idx);
+                            round.num_propagated += 1;
+                        }
+                        self.done.push(clause_idx);
+                    }
+                    ClauseStatus::Satisfied => {
+                        self.done.push(clause_idx);
+                    }
+                    ClauseStatus::Unresolved { .. } => {
+                        // Still unresolved — will retry next round after reset
+                    }
+                }
+                round.clauses_checked += 1;
+            } else {
+                i += 1;
+            }
+        }
+
         while let Some(batch) = self.fill_batch(db) {
             let results = batch.check_all(trail.assignments());
             round.clauses_checked += results.len();
