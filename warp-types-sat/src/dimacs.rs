@@ -112,7 +112,7 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
             if val == 0 {
                 // End of clause
                 if !current_clause.is_empty() {
-                    db.add_clause(current_clause.drain(..).collect());
+                    db.add_clause(std::mem::take(&mut current_clause));
                 }
             } else {
                 let abs_var = val.unsigned_abs() as u32;
@@ -166,8 +166,8 @@ pub fn parse_dimacs_str(s: &str) -> Result<DimacsInstance, DimacsError> {
 mod tests {
     use super::*;
     use crate::bcp::{self, BcpResult};
-    use crate::literal::Lit;
     use crate::session;
+    use crate::trail::Trail;
 
     #[test]
     fn parse_simple() {
@@ -220,44 +220,39 @@ c trailing comment
 
     #[test]
     fn bcp_on_parsed_instance() {
-        // Implication chain from DIMACS: x1=T → x2=T → x3=T
         let cnf = "\
 p cnf 3 2
 -1 2 0
 -2 3 0
 ";
         let inst = parse_dimacs_str(cnf).unwrap();
-        let mut assign = vec![Some(true), None, None];
+        let mut trail = Trail::new(3);
+        trail.new_decision(crate::literal::Lit::pos(0)); // x0=true
 
         let result = session::with_session(|s| {
             let p = s.decide().propagate();
-            bcp::run_bcp(&inst.db, &mut assign, &p)
+            bcp::run_bcp(&inst.db, &mut trail, &p)
         });
 
-        match result {
-            BcpResult::Ok { propagated } => {
-                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
-                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2)]);
-            }
-            other => panic!("expected Ok, got {:?}", other),
-        }
-        assert_eq!(assign, vec![Some(true), Some(true), Some(true)]);
+        assert_eq!(result, BcpResult::Ok);
+        assert_eq!(trail.value(1), Some(true));
+        assert_eq!(trail.value(2), Some(true));
     }
 
     #[test]
     fn bcp_conflict_from_dimacs() {
-        // x1 forced true and false simultaneously
         let cnf = "\
 p cnf 2 2
 -1 2 0
 -1 -2 0
 ";
         let inst = parse_dimacs_str(cnf).unwrap();
-        let mut assign = vec![Some(true), None];
+        let mut trail = Trail::new(2);
+        trail.new_decision(crate::literal::Lit::pos(0));
 
         let result = session::with_session(|s| {
             let p = s.decide().propagate();
-            bcp::run_bcp(&inst.db, &mut assign, &p)
+            bcp::run_bcp(&inst.db, &mut trail, &p)
         });
 
         match result {
@@ -285,17 +280,15 @@ p cnf 2 3
 -1 -2 0
 ";
         let inst = parse_dimacs_str(cnf).unwrap();
-        let mut assign = vec![None, None];
+        let mut trail = Trail::new(2);
 
-        // Initial BCP: x1 is a unit clause, x2 is a unit clause
         let result = session::with_session(|s| {
-            let p = s.propagate(); // initial BCP from Idle
-            bcp::run_bcp(&inst.db, &mut assign, &p)
+            let p = s.propagate();
+            bcp::run_bcp(&inst.db, &mut trail, &p)
         });
 
-        // Should propagate x1=true, x2=true, then conflict on (¬x1 ∨ ¬x2)
         match result {
-            BcpResult::Conflict { .. } => {} // expected: UNSAT
+            BcpResult::Conflict { .. } => {}
             other => panic!("expected conflict on pigeonhole, got {:?}", other),
         }
     }

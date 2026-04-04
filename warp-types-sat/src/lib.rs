@@ -34,19 +34,19 @@
 //! `ClauseToken` is non-Copy, non-Clone. Prevents the #1 parallel SAT bug:
 //! two threads propagating the same clause, producing contradictory learned clauses.
 
-pub mod phase;
-pub mod session;
-pub mod clause;
-pub mod literal;
-pub mod clause_tile;
-pub mod bcp;
-pub mod dimacs;
-pub mod scheduler;
-pub mod trail;
 pub mod analyze;
-pub mod solver;
+pub mod bcp;
 pub mod bench;
+pub mod clause;
+pub mod clause_tile;
+pub mod dimacs;
+pub mod literal;
+pub mod phase;
+pub mod scheduler;
+pub mod session;
+pub mod solver;
+pub mod trail;
 
+pub use clause::*;
 pub use phase::*;
 pub use session::*;
-pub use clause::*;

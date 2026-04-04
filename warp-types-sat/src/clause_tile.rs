@@ -128,7 +128,7 @@ pub fn make_clause_tile<P: Phase>(
         if deduped.iter().any(|&l| l == lit.complement()) {
             return None; // tautological clause — always satisfied
         }
-        if !deduped.iter().any(|&l| l == lit) {
+        if !deduped.contains(&lit) {
             deduped.push(lit);
         }
     }
@@ -283,11 +283,9 @@ impl ClauseBatch {
 ///
 /// Returns batches where each batch uses at most 32 lanes.
 /// Larger clauses are packed first (better utilization).
-pub fn pack_clauses(
-    mut tiles: Vec<ClauseTile<crate::phase::Propagate>>,
-) -> Vec<ClauseBatch> {
+pub fn pack_clauses(mut tiles: Vec<ClauseTile<crate::phase::Propagate>>) -> Vec<ClauseBatch> {
     // Sort by tile size descending (first-fit-decreasing)
-    tiles.sort_by(|a, b| b.tile_size().cmp(&a.tile_size()));
+    tiles.sort_by_key(|t| std::cmp::Reverse(t.tile_size()));
 
     let mut batches: Vec<Vec<ClauseTile<crate::phase::Propagate>>> = Vec::new();
     let mut batch_lanes: Vec<usize> = Vec::new();
@@ -331,11 +329,7 @@ mod tests {
     fn satisfied_clause() {
         let mut pool = ClausePool::new(1);
         // Clause: (x0 ∨ x1 ∨ x2)
-        let tile = make_test_tile(
-            &[Lit::pos(0), Lit::pos(1), Lit::pos(2)],
-            &mut pool,
-            0,
-        );
+        let tile = make_test_tile(&[Lit::pos(0), Lit::pos(1), Lit::pos(2)], &mut pool, 0);
         // x0 = true → clause satisfied
         let assign = vec![Some(true), Some(false), Some(false)];
         assert_eq!(tile.check(&assign), ClauseStatus::Satisfied);
@@ -345,11 +339,7 @@ mod tests {
     fn unit_clause() {
         let mut pool = ClausePool::new(1);
         // Clause: (x0 ∨ x1 ∨ x2)
-        let tile = make_test_tile(
-            &[Lit::pos(0), Lit::pos(1), Lit::pos(2)],
-            &mut pool,
-            0,
-        );
+        let tile = make_test_tile(&[Lit::pos(0), Lit::pos(1), Lit::pos(2)], &mut pool, 0);
         // x0 = false, x1 = false, x2 = unassigned → unit (propagate x2)
         let assign = vec![Some(false), Some(false), None];
         assert_eq!(
@@ -374,11 +364,7 @@ mod tests {
     fn unresolved() {
         let mut pool = ClausePool::new(1);
         // Clause: (x0 ∨ x1 ∨ x2)
-        let tile = make_test_tile(
-            &[Lit::pos(0), Lit::pos(1), Lit::pos(2)],
-            &mut pool,
-            0,
-        );
+        let tile = make_test_tile(&[Lit::pos(0), Lit::pos(1), Lit::pos(2)], &mut pool, 0);
         // x0 = false, x1 and x2 unassigned → unresolved
         let assign = vec![Some(false), None, None];
         assert_eq!(
@@ -417,13 +403,7 @@ mod tests {
         let mut pool = ClausePool::new(10);
         // 8 clauses of 3 literals each → tile_size 4 each → 32 lanes total
         let tiles: Vec<_> = (0..8)
-            .map(|i| {
-                make_test_tile(
-                    &[Lit::pos(0), Lit::pos(1), Lit::pos(2)],
-                    &mut pool,
-                    i,
-                )
-            })
+            .map(|i| make_test_tile(&[Lit::pos(0), Lit::pos(1), Lit::pos(2)], &mut pool, i))
             .collect();
 
         let batch = ClauseBatch::pack(tiles);
@@ -463,17 +443,17 @@ mod tests {
         let mut pool = ClausePool::new(1);
         // Clause: (x0 ∨ x0 ∨ x1) → deduped to (x0 ∨ x1)
         let token = pool.acquire(0).unwrap();
-        let tile = make_clause_tile::<Propagate>(
-            &[Lit::pos(0), Lit::pos(0), Lit::pos(1)],
-            token,
-            0,
-        ).unwrap();
+        let tile =
+            make_clause_tile::<Propagate>(&[Lit::pos(0), Lit::pos(0), Lit::pos(1)], token, 0)
+                .unwrap();
         assert_eq!(tile.clause_len(), 2); // deduped
-        // x0 = false, x1 = unassigned → unit (not unresolved)
+                                          // x0 = false, x1 = unassigned → unit (not unresolved)
         let assign = vec![Some(false), None];
         assert_eq!(
             tile.check(&assign),
-            ClauseStatus::Unit { propagate: Lit::pos(1) }
+            ClauseStatus::Unit {
+                propagate: Lit::pos(1)
+            }
         );
     }
 
@@ -482,11 +462,7 @@ mod tests {
         let mut pool = ClausePool::new(1);
         // Clause: (x0 ∨ ¬x0) → tautology
         let token = pool.acquire(0).unwrap();
-        let result = make_clause_tile::<Propagate>(
-            &[Lit::pos(0), Lit::neg(0)],
-            token,
-            0,
-        );
+        let result = make_clause_tile::<Propagate>(&[Lit::pos(0), Lit::neg(0)], token, 0);
         assert!(result.is_none());
     }
 

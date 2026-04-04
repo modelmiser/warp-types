@@ -8,8 +8,8 @@
 //! - Transitions consume the session and produce a new phase
 //! - Terminal states (`Sat`, `Unsat`) have no outgoing transitions
 
-use core::marker::PhantomData;
 use crate::phase::*;
+use core::marker::PhantomData;
 
 // ============================================================================
 // Solver session

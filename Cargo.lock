@@ -39,7 +39,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "warp-types"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "warp-types-kernel",
  "warp-types-macros",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "warp-types-sat"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "warp-types",
 ]

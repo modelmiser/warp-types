@@ -1,46 +1,41 @@
 //! Boolean Constraint Propagation (BCP) engine.
 //!
-//! Runs unit propagation using tile-local clause checking.
-//! Each propagation step checks all clauses in parallel (via batched tiles),
-//! identifies unit clauses, and propagates the forced assignments.
-//!
-//! # Architecture
+//! Runs unit propagation using tile-local clause checking. All propagated
+//! assignments are written through the [`Trail`], which is the single source
+//! of truth for variable assignments. This prevents ghost assignments — values
+//! in the assignment array with no trail entry — which would corrupt conflict
+//! analysis and backtracking.
 //!
 //! Currently CPU-only (SimWarp simulation). The ballot-based clause checking
-//! pattern maps directly to GPU Tile<SIZE> when Rust nightly gets pred register
-//! support for nvptx64 ballot. Until then, this validates the algorithm and
-//! type-system design on CPU.
+//! pattern maps directly to GPU `Tile<SIZE>` when Rust nightly gets pred
+//! register support for nvptx64 ballot.
 //!
-//! The phase-typed session ensures BCP only runs during Propagate phase.
+//! The phase-typed session ensures BCP only runs during the Propagate phase.
 
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseStatus, ClauseTile};
 use crate::literal::Lit;
 use crate::phase::Propagate;
+use crate::trail::Trail;
 
 // ============================================================================
 // BCP result
 // ============================================================================
 
-/// A single BCP implication: a literal and the clause that forced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Implication {
-    pub lit: Lit,
-    pub reason: usize, // clause index that forced this literal
-}
-
 /// Result of running BCP to fixpoint.
+///
+/// Propagated literals are recorded on the trail (not returned here).
+/// Query `trail.entries()` or `trail.len()` to inspect what was propagated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BcpResult {
     /// Propagation completed without conflict.
-    /// Contains the list of propagated literals with their reason clauses.
-    Ok { propagated: Vec<Implication> },
+    Ok,
     /// A conflict was found. Contains the conflicting clause index.
     Conflict { clause_index: usize },
 }
 
 // ============================================================================
-// Clause database (simple, for testing)
+// Clause database
 // ============================================================================
 
 /// A clause: a disjunction of literals.
@@ -49,7 +44,7 @@ pub struct Clause {
     pub literals: Vec<Lit>,
 }
 
-/// Simple clause database for BCP testing.
+/// Clause database. Stores original and learned clauses.
 pub struct ClauseDb {
     clauses: Vec<Clause>,
 }
@@ -101,71 +96,51 @@ impl Default for ClauseDb {
 // BCP engine
 // ============================================================================
 
-/// Run BCP on the clause database with the given assignment.
+/// Run BCP on the clause database, writing propagations through the trail.
 ///
-/// Propagates unit clauses to fixpoint. Returns the list of propagated
-/// literals or a conflict.
+/// Propagates unit clauses to fixpoint. On success, all propagated literals
+/// are on the trail. On conflict, partial propagations from this BCP call
+/// are also on the trail (so backtracking retracts them correctly).
 ///
-/// This function requires a `Propagate` phase proof — it can only be called
-/// during the propagation phase of the CDCL loop. The phase token is not
-/// consumed (BCP is an operation within Propagate, not a transition out of it).
+/// Requires a `Propagate` phase proof — compile-time guarantee that BCP
+/// only runs during the propagation phase of the CDCL loop.
 pub fn run_bcp(
     db: &ClauseDb,
-    assignments: &mut Vec<Option<bool>>,
+    trail: &mut Trail,
     _phase_proof: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
-    // Ensure assignment array covers all variables referenced in clauses
-    let max_var = db.max_variable();
-    if max_var as usize >= assignments.len() {
-        assignments.resize(max_var as usize + 1, None);
-    }
+    trail.ensure_capacity(db.max_variable() as usize + 1);
 
-    let mut propagated: Vec<Implication> = Vec::new();
-
-    // Propagate to fixpoint
     loop {
         let mut found_unit = false;
 
-        // Build clause tiles and pack into batches.
-        // Pool is per-iteration (scaffold; a real solver would use incremental dirty-set).
         let mut pool = ClausePool::new(db.len());
         let mut tiles: Vec<ClauseTile<Propagate>> = Vec::new();
 
         for i in 0..db.len() {
             let clause = &db.clauses[i];
             let token = pool.acquire(i).unwrap();
-            // make_clause_tile deduplicates and detects tautologies
-            if let Some(tile) = clause_tile::make_clause_tile::<Propagate>(
-                &clause.literals,
-                token,
-                i, // db_index — survives bin-packing reorder
-            ) {
+            if let Some(tile) =
+                clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, i)
+            {
                 tiles.push(tile);
             }
-            // Tautological clauses (None) are skipped — always satisfied
         }
 
         let batches = clause_tile::pack_clauses(tiles);
 
-        // Check all batches
         for batch in &batches {
-            let results = batch.check_all(assignments);
+            let results = batch.check_all(trail.assignments());
             for &(db_index, ref status) in &results {
                 match status {
                     ClauseStatus::Conflict => {
                         return BcpResult::Conflict {
-                            clause_index: db_index, // correct database index
+                            clause_index: db_index,
                         };
                     }
                     ClauseStatus::Unit { propagate } => {
-                        let var = propagate.var() as usize;
-                        let value = !propagate.is_negated();
-                        if assignments[var].is_none() {
-                            assignments[var] = Some(value);
-                            propagated.push(Implication {
-                                lit: *propagate,
-                                reason: db_index,
-                            });
+                        if trail.value(propagate.var()).is_none() {
+                            trail.record_propagation(*propagate, db_index);
                             found_unit = true;
                         }
                     }
@@ -179,7 +154,7 @@ pub fn run_bcp(
         }
     }
 
-    BcpResult::Ok { propagated }
+    BcpResult::Ok
 }
 
 // ============================================================================
@@ -191,126 +166,110 @@ mod tests {
     use super::*;
     use crate::session;
 
-    /// Helper: run BCP within a properly-typed solver session.
-    fn bcp_in_session(db: &ClauseDb, assignments: &mut Vec<Option<bool>>) -> BcpResult {
+    /// Helper: set up a trail with a decision, then run BCP.
+    fn bcp_after_decision(db: &ClauseDb, trail: &mut Trail) -> BcpResult {
         session::with_session(|session| {
-            // Idle → Decide → Propagate (the normal CDCL path)
             let propagate = session.decide().propagate();
-            run_bcp(db, assignments, &propagate)
+            run_bcp(db, trail, &propagate)
         })
     }
 
     #[test]
     fn simple_unit_propagation() {
-        // x0 = true (decision)
-        // Clause: (¬x0 ∨ x1)  → ¬x0 = false, so x1 must be true
-        // Clause: (¬x1 ∨ x2)  → after x1 = true, x2 must be true
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
-        db.add_clause(vec![Lit::neg(1), Lit::pos(2)]);
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // ¬x0 ∨ x1
+        db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // ¬x1 ∨ x2
 
-        let mut assign = vec![Some(true), None, None]; // x0 = true
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0)); // x0=true
+        let result = bcp_after_decision(&db, &mut trail);
 
-        match result {
-            BcpResult::Ok { propagated } => {
-                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
-                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2)]);
-            }
-            other => panic!("expected Ok, got {:?}", other),
-        }
-        assert_eq!(assign, vec![Some(true), Some(true), Some(true)]);
+        assert_eq!(result, BcpResult::Ok);
+        assert_eq!(trail.value(1), Some(true));
+        assert_eq!(trail.value(2), Some(true));
     }
 
     #[test]
     fn conflict_detection() {
-        // x0 = true (decision)
-        // Clause: (¬x0)  → conflict immediately
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0)]);
+        db.add_clause(vec![Lit::neg(0)]); // ¬x0
 
-        let mut assign = vec![Some(true)];
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(1);
+        trail.new_decision(Lit::pos(0)); // x0=true → conflict
+        let result = bcp_after_decision(&db, &mut trail);
 
-        match result {
-            BcpResult::Conflict { .. } => {} // expected
-            other => panic!("expected Conflict, got {:?}", other),
-        }
+        assert_eq!(result, BcpResult::Conflict { clause_index: 0 });
     }
 
     #[test]
     fn no_propagation_needed() {
-        // All clauses already satisfied
         let mut db = ClauseDb::new();
         db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
         db.add_clause(vec![Lit::pos(1), Lit::pos(2)]);
 
-        let mut assign = vec![Some(true), Some(true), Some(true)];
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0));
+        trail.record_propagation(Lit::pos(1), 0);
+        trail.record_propagation(Lit::pos(2), 1);
+        let result = bcp_after_decision(&db, &mut trail);
 
-        assert_eq!(result, BcpResult::Ok { propagated: vec![] });
+        assert_eq!(result, BcpResult::Ok);
     }
 
     #[test]
     fn chain_propagation() {
-        // Implication chain: x0 → x1 → x2 → x3
         let mut db = ClauseDb::new();
         db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // ¬x0 ∨ x1
         db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // ¬x1 ∨ x2
         db.add_clause(vec![Lit::neg(2), Lit::pos(3)]); // ¬x2 ∨ x3
 
-        let mut assign = vec![Some(true), None, None, None];
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(4);
+        trail.new_decision(Lit::pos(0));
+        let before = trail.len();
+        let result = bcp_after_decision(&db, &mut trail);
 
-        match result {
-            BcpResult::Ok { propagated } => {
-                let lits: Vec<_> = propagated.iter().map(|i| i.lit).collect();
-                assert_eq!(lits, vec![Lit::pos(1), Lit::pos(2), Lit::pos(3)]);
-            }
-            other => panic!("expected Ok, got {:?}", other),
-        }
-        assert_eq!(
-            assign,
-            vec![Some(true), Some(true), Some(true), Some(true)]
-        );
+        assert_eq!(result, BcpResult::Ok);
+        assert_eq!(trail.len() - before, 3); // propagated 3 literals
+        assert_eq!(trail.value(1), Some(true));
+        assert_eq!(trail.value(2), Some(true));
+        assert_eq!(trail.value(3), Some(true));
     }
 
     #[test]
     fn conflict_after_propagation() {
-        // x0 → x1, x0 → ¬x1 (contradiction)
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]);  // ¬x0 ∨ x1 (forces x1=true)
-        db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);  // ¬x0 ∨ ¬x1 (forces x1=false)
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // forces x1=true
+        db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // forces x1=false
 
-        let mut assign = vec![Some(true), None];
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        let result = bcp_after_decision(&db, &mut trail);
 
         match result {
-            BcpResult::Conflict { .. } => {} // expected
+            BcpResult::Conflict { .. } => {}
             other => panic!("expected Conflict, got {:?}", other),
         }
+        // Partial propagation (x1=true) is on the trail — backtracking cleans it up
+        assert!(trail.entry_for_var(1).is_some());
     }
 
     #[test]
     fn three_sat_instance() {
-        // A satisfiable 3-SAT instance:
-        // (x0 ∨ x1 ∨ x2) ∧ (¬x0 ∨ x1 ∨ x3) ∧ (¬x1 ∨ ¬x2 ∨ x3)
-        // With x0=true, x1=true: all clauses satisfied, no propagation needed.
         let mut db = ClauseDb::new();
         db.add_clause(vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)]);
         db.add_clause(vec![Lit::neg(0), Lit::pos(1), Lit::pos(3)]);
         db.add_clause(vec![Lit::neg(1), Lit::neg(2), Lit::pos(3)]);
 
-        let mut assign = vec![Some(true), Some(true), None, None];
-        let result = bcp_in_session(&db, &mut assign);
+        let mut trail = Trail::new(4);
+        trail.new_decision(Lit::pos(0));
+        trail.record_propagation(Lit::pos(1), 0);
+        let result = bcp_after_decision(&db, &mut trail);
 
-        assert_eq!(result, BcpResult::Ok { propagated: vec![] });
+        assert_eq!(result, BcpResult::Ok);
     }
 
     #[test]
     fn batch_utilization() {
-        // 8 binary clauses → 8 tiles of 4 → 1 batch of 32 lanes
-        // Utilization: 16 real literals / 32 lanes = 50%
         let mut pool = ClausePool::new(8);
         let tiles: Vec<_> = (0..8)
             .filter_map(|i| {

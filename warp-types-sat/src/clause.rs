@@ -168,7 +168,7 @@ mod tests {
     fn acquire_next() {
         let mut pool = ClausePool::new(3);
         let _t0 = pool.acquire_next().unwrap(); // gets 0
-        let t1 = pool.acquire_next().unwrap();  // gets 1
+        let t1 = pool.acquire_next().unwrap(); // gets 1
         let _t2 = pool.acquire_next().unwrap(); // gets 2
         assert!(pool.acquire_next().is_none()); // exhausted
         assert_eq!(t1.index(), 1);

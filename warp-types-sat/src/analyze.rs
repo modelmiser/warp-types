@@ -23,16 +23,17 @@ pub struct AnalysisResult {
 ///
 /// `conflict_clause` is the index of the clause that caused the conflict.
 /// Returns the learned clause and backtrack level.
-pub fn analyze_conflict(
-    trail: &Trail,
-    db: &ClauseDb,
-    conflict_clause: usize,
-) -> AnalysisResult {
+pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) -> AnalysisResult {
     let current_level = trail.current_level();
 
     // Seen set: tracks which variables have been visited during resolution
     let max_var = db.max_variable().max(
-        trail.entries().iter().map(|e| e.lit.var()).max().unwrap_or(0),
+        trail
+            .entries()
+            .iter()
+            .map(|e| e.lit.var())
+            .max()
+            .unwrap_or(0),
     );
     let mut seen = vec![false; max_var as usize + 1];
 
@@ -79,7 +80,7 @@ pub fn analyze_conflict(
             Reason::Propagation(reason_clause) => {
                 num_at_current_level -= 1;
                 seen[entry.lit.var() as usize] = false; // resolved away
-                // Add all other literals from the reason clause
+                                                        // Add all other literals from the reason clause
                 for &lit in &db.clause(reason_clause).literals {
                     let var = lit.var();
                     if var == entry.lit.var() {
@@ -152,11 +153,10 @@ mod tests {
         db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // clause 0: ¬x0 ∨ x1
         db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // clause 1: ¬x0 ∨ ¬x1
 
-        let mut trail = Trail::new();
-        let mut assign = vec![None; 2];
+        let mut trail = Trail::new(2);
 
-        trail.new_decision(Lit::pos(0), &mut assign); // level 1: x0=T
-        trail.record_propagation(Lit::pos(1), 0, &mut assign); // x1=T from clause 0
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.record_propagation(Lit::pos(1), 0); // x1=T from clause 0
 
         let result = analyze_conflict(&trail, &db, 1);
 
@@ -184,12 +184,11 @@ mod tests {
         db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // clause 0: ¬x1 ∨ x2
         db.add_clause(vec![Lit::neg(0), Lit::neg(2)]); // clause 1: ¬x0 ∨ ¬x2
 
-        let mut trail = Trail::new();
-        let mut assign = vec![None; 3];
+        let mut trail = Trail::new(3);
 
-        trail.new_decision(Lit::pos(0), &mut assign); // level 1: x0=T
-        trail.new_decision(Lit::pos(1), &mut assign); // level 2: x1=T
-        trail.record_propagation(Lit::pos(2), 0, &mut assign); // x2=T from clause 0
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.new_decision(Lit::pos(1)); // level 2: x1=T
+        trail.record_propagation(Lit::pos(2), 0); // x2=T from clause 0
 
         let result = analyze_conflict(&trail, &db, 1);
 

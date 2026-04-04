@@ -1,12 +1,13 @@
 [package]
 name = "warp-types-sat"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Chad Aldreda"]
-description = "Phase-typed CDCL SAT solver scaffold built on warp-types"
+description = "Phase-typed CDCL SAT solver with compile-time phase ordering, built on warp-types"
 license = "MIT"
 rust-version = "1.75"
 repository = "https://github.com/modelmiser/warp-types"
+readme = "README.md"
 
 [[bin]]
 name = "solve"

@@ -48,13 +48,11 @@ impl Lit {
     /// Evaluate this literal given a variable assignment.
     /// `assign[var]`: Some(true) = true, Some(false) = false, None = unassigned.
     pub fn eval(self, assign: &[Option<bool>]) -> Option<bool> {
-        assign.get(self.var() as usize).copied().flatten().map(|val| {
-            if self.is_negated() {
-                !val
-            } else {
-                val
-            }
-        })
+        assign
+            .get(self.var() as usize)
+            .copied()
+            .flatten()
+            .map(|val| if self.is_negated() { !val } else { val })
     }
 }
 
@@ -87,10 +85,10 @@ mod tests {
     #[test]
     fn literal_eval() {
         let assign = vec![None, Some(true), Some(false)];
-        assert_eq!(Lit::pos(0).eval(&assign), None);        // unassigned
-        assert_eq!(Lit::pos(1).eval(&assign), Some(true));   // x1 = true
-        assert_eq!(Lit::neg(1).eval(&assign), Some(false));  // ¬x1 = false
-        assert_eq!(Lit::pos(2).eval(&assign), Some(false));  // x2 = false
-        assert_eq!(Lit::neg(2).eval(&assign), Some(true));   // ¬x2 = true
+        assert_eq!(Lit::pos(0).eval(&assign), None); // unassigned
+        assert_eq!(Lit::pos(1).eval(&assign), Some(true)); // x1 = true
+        assert_eq!(Lit::neg(1).eval(&assign), Some(false)); // ¬x1 = false
+        assert_eq!(Lit::pos(2).eval(&assign), Some(false)); // x2 = false
+        assert_eq!(Lit::neg(2).eval(&assign), Some(true)); // ¬x2 = true
     }
 }

@@ -10,6 +10,7 @@ use crate::bcp::{self, BcpResult, ClauseDb};
 use crate::literal::Lit;
 use crate::scheduler;
 use crate::session;
+use crate::trail::Trail;
 use std::time::Instant;
 
 // ============================================================================
@@ -28,7 +29,10 @@ impl Rng {
 
     fn next_u32(&mut self) -> u32 {
         // LCG from Numerical Recipes
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.state >> 33) as u32
     }
 
@@ -95,32 +99,30 @@ impl std::fmt::Display for BenchResult {
         write!(
             f,
             "{:<20} vars={:<6} cls={:<6} time={:<8}µs props={:<6} [{}]",
-            self.name, self.num_vars, self.num_clauses, self.elapsed_us,
-            self.propagated, outcome
+            self.name, self.num_vars, self.num_clauses, self.elapsed_us, self.propagated, outcome
         )
     }
 }
 
 /// Run basic BCP and return timing.
-fn bench_basic_bcp(db: &ClauseDb, initial_assign: &[Option<bool>]) -> BenchResult {
-    let mut assign = initial_assign.to_vec();
+fn bench_basic_bcp(db: &ClauseDb, num_vars: usize) -> BenchResult {
+    let mut trail = Trail::new(num_vars);
+    trail.new_decision(Lit::pos(0));
+    let before = trail.len();
     let start = Instant::now();
 
     let result = session::with_session(|s| {
         let p = s.decide().propagate();
-        bcp::run_bcp(db, &mut assign, &p)
+        bcp::run_bcp(db, &mut trail, &p)
     });
 
     let elapsed = start.elapsed();
-
-    let (propagated, is_conflict) = match &result {
-        BcpResult::Ok { propagated } => (propagated.len(), false),
-        BcpResult::Conflict { .. } => (0, true),
-    };
+    let propagated = trail.len() - before;
+    let is_conflict = matches!(result, BcpResult::Conflict { .. });
 
     BenchResult {
         name: "basic".to_string(),
-        num_vars: assign.len() as u32,
+        num_vars: num_vars as u32,
         num_clauses: db.len(),
         elapsed_us: elapsed.as_micros(),
         propagated,
@@ -129,25 +131,24 @@ fn bench_basic_bcp(db: &ClauseDb, initial_assign: &[Option<bool>]) -> BenchResul
 }
 
 /// Run scheduled BCP and return timing.
-fn bench_scheduled_bcp(db: &ClauseDb, initial_assign: &[Option<bool>]) -> BenchResult {
-    let mut assign = initial_assign.to_vec();
+fn bench_scheduled_bcp(db: &ClauseDb, num_vars: usize) -> BenchResult {
+    let mut trail = Trail::new(num_vars);
+    trail.new_decision(Lit::pos(0));
+    let before = trail.len();
     let start = Instant::now();
 
     let result = session::with_session(|s| {
         let p = s.decide().propagate();
-        scheduler::run_bcp_scheduled(db, &mut assign, &p)
+        scheduler::run_bcp_scheduled(db, &mut trail, &p)
     });
 
     let elapsed = start.elapsed();
-
-    let (propagated, is_conflict) = match &result {
-        BcpResult::Ok { propagated } => (propagated.len(), false),
-        BcpResult::Conflict { .. } => (0, true),
-    };
+    let propagated = trail.len() - before;
+    let is_conflict = matches!(result, BcpResult::Conflict { .. });
 
     BenchResult {
         name: "scheduled".to_string(),
-        num_vars: assign.len() as u32,
+        num_vars: num_vars as u32,
         num_clauses: db.len(),
         elapsed_us: elapsed.as_micros(),
         propagated,
@@ -159,12 +160,8 @@ fn bench_scheduled_bcp(db: &ClauseDb, initial_assign: &[Option<bool>]) -> BenchR
 pub fn bench_comparison(num_vars: u32, seed: u64) -> (BenchResult, BenchResult) {
     let db = generate_3sat_phase_transition(num_vars, seed);
 
-    // Initial assignment: set variable 0 = true (trigger propagation)
-    let mut assign = vec![None; num_vars as usize];
-    assign[0] = Some(true);
-
-    let basic = bench_basic_bcp(&db, &assign);
-    let scheduled = bench_scheduled_bcp(&db, &assign);
+    let basic = bench_basic_bcp(&db, num_vars as usize);
+    let scheduled = bench_scheduled_bcp(&db, num_vars as usize);
 
     (basic, scheduled)
 }
@@ -217,29 +214,29 @@ mod tests {
 
     #[test]
     fn basic_and_scheduled_agree() {
-        // Verify both BCP implementations produce identical results
         for seed in 0..5 {
             let db = generate_3sat_phase_transition(30, seed);
-            let assign = {
-                let mut a = vec![None; 30];
-                a[0] = Some(true);
-                a
-            };
 
-            let mut a1 = assign.clone();
-            let mut a2 = assign.clone();
+            let mut trail1 = Trail::new(30);
+            trail1.new_decision(Lit::pos(0));
+            let mut trail2 = Trail::new(30);
+            trail2.new_decision(Lit::pos(0));
 
             let r1 = session::with_session(|s| {
                 let p = s.decide().propagate();
-                bcp::run_bcp(&db, &mut a1, &p)
+                bcp::run_bcp(&db, &mut trail1, &p)
             });
             let r2 = session::with_session(|s| {
                 let p = s.decide().propagate();
-                scheduler::run_bcp_scheduled(&db, &mut a2, &p)
+                scheduler::run_bcp_scheduled(&db, &mut trail2, &p)
             });
 
             assert_eq!(r1, r2, "seed {seed}: basic and scheduled disagree");
-            assert_eq!(a1, a2, "seed {seed}: assignments diverge");
+            assert_eq!(
+                trail1.assignments(),
+                trail2.assignments(),
+                "seed {seed}: assignments diverge"
+            );
         }
     }
 
@@ -293,22 +290,23 @@ mod tests {
                 db.add_clause(vec![Lit::neg(i), Lit::pos(i + 1)]);
             }
 
-            let mut assign_b = vec![None; (n + 1) as usize];
-            let mut assign_s = assign_b.clone();
-            assign_b[0] = Some(true);
-            assign_s[0] = Some(true);
+            let num = (n + 1) as usize;
+            let mut trail_b = Trail::new(num);
+            trail_b.new_decision(Lit::pos(0));
+            let mut trail_s = Trail::new(num);
+            trail_s.new_decision(Lit::pos(0));
 
             let start = Instant::now();
             session::with_session(|s| {
                 let p = s.decide().propagate();
-                bcp::run_bcp(&db, &mut assign_b, &p)
+                bcp::run_bcp(&db, &mut trail_b, &p)
             });
             let basic_us = start.elapsed().as_micros();
 
             let start = Instant::now();
             session::with_session(|s| {
                 let p = s.decide().propagate();
-                scheduler::run_bcp_scheduled(&db, &mut assign_s, &p)
+                scheduler::run_bcp_scheduled(&db, &mut trail_s, &p)
             });
             let sched_us = start.elapsed().as_micros();
 
@@ -317,12 +315,9 @@ mod tests {
             } else {
                 f64::NAN
             };
-            println!(
-                "{:<8} {:>10} {:>10} {:>8.2}x",
-                n, basic_us, sched_us, ratio
-            );
+            println!("{:<8} {:>10} {:>10} {:>8.2}x", n, basic_us, sched_us, ratio);
 
-            assert_eq!(assign_b, assign_s);
+            assert_eq!(trail_b.assignments(), trail_s.assignments());
         }
     }
 }
