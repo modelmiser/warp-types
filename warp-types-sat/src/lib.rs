@@ -34,6 +34,9 @@
 pub mod phase;
 pub mod session;
 pub mod clause;
+pub mod literal;
+pub mod clause_tile;
+pub mod bcp;
 
 pub use phase::*;
 pub use session::*;
