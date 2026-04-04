@@ -94,7 +94,15 @@ impl Trail {
     }
 
     /// Record a new decision: increments the decision level and assigns.
+    ///
+    /// # Panics
+    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
     pub fn new_decision(&mut self, lit: Lit) {
+        debug_assert!(
+            self.assignments[lit.var() as usize].is_none(),
+            "new_decision on already-assigned variable {}",
+            lit.var()
+        );
         self.current_level += 1;
         self.level_starts.push(self.entries.len());
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
@@ -106,7 +114,15 @@ impl Trail {
     }
 
     /// Record a propagated literal at the current decision level.
+    ///
+    /// # Panics
+    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
     pub fn record_propagation(&mut self, lit: Lit, reason_clause: usize) {
+        debug_assert!(
+            self.assignments[lit.var() as usize].is_none(),
+            "record_propagation on already-assigned variable {}",
+            lit.var()
+        );
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
         self.entries.push(TrailEntry {
             lit,
@@ -116,7 +132,16 @@ impl Trail {
     }
 
     /// Backtrack to the given decision level, retracting all assignments above it.
+    ///
+    /// # Panics
+    /// Debug-panics if `target_level >= current_level` (must backtrack to a strictly lower level).
     pub fn backtrack_to(&mut self, target_level: u32) {
+        debug_assert!(
+            target_level < self.current_level,
+            "backtrack_to({}) but current_level is {}",
+            target_level,
+            self.current_level
+        );
         let start = self.level_starts[target_level as usize + 1];
         for entry in &self.entries[start..] {
             self.assignments[entry.lit.var() as usize] = None;

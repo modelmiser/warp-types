@@ -124,7 +124,14 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
                     db.add_clause(std::mem::take(&mut current_clause));
                 }
             } else {
-                let abs_var = val.unsigned_abs() as u32;
+                let abs_val = val.unsigned_abs();
+                if abs_val > u32::MAX as u64 {
+                    return Err(DimacsError::VariableOutOfRange {
+                        var: u32::MAX,
+                        declared: num_vars,
+                    });
+                }
+                let abs_var = abs_val as u32;
                 if abs_var == 0 {
                     return Err(DimacsError::ZeroVariable);
                 }

@@ -39,6 +39,14 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
         };
     }
 
+    // Validate that clause database doesn't reference variables beyond num_vars.
+    assert!(
+        db.is_empty() || db.max_variable() < num_vars,
+        "clause database references variable {} but only {} variables declared",
+        db.max_variable(),
+        num_vars
+    );
+
     let mut trail = Trail::new(num_vars as usize);
 
     session::with_session(|initial_session| {

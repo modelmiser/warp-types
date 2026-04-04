@@ -54,6 +54,10 @@ impl Rng {
 /// `k`: literals per clause
 /// `seed`: deterministic seed
 pub fn generate_k_sat(num_vars: u32, num_clauses: usize, k: usize, seed: u64) -> ClauseDb {
+    assert!(
+        k <= num_vars as usize,
+        "k={k} exceeds num_vars={num_vars} — cannot pick {k} distinct variables from {num_vars}"
+    );
     let mut rng = Rng::new(seed);
     let mut db = ClauseDb::new();
 
