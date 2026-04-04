@@ -72,6 +72,16 @@ impl ClauseDb {
     pub fn clause(&self, idx: usize) -> &Clause {
         &self.clauses[idx]
     }
+
+    /// Highest variable index across all clauses. Returns 0 if empty.
+    pub fn max_variable(&self) -> u32 {
+        self.clauses
+            .iter()
+            .flat_map(|c| c.literals.iter())
+            .map(|lit| lit.var())
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 impl Default for ClauseDb {
@@ -97,23 +107,35 @@ pub fn run_bcp(
     assignments: &mut Vec<Option<bool>>,
     _phase_proof: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
+    // Ensure assignment array covers all variables referenced in clauses
+    let max_var = db.max_variable();
+    if max_var as usize >= assignments.len() {
+        assignments.resize(max_var as usize + 1, None);
+    }
+
     let mut propagated = Vec::new();
 
     // Propagate to fixpoint
     loop {
         let mut found_unit = false;
 
-        // Build clause tiles and pack into batches
+        // Build clause tiles and pack into batches.
+        // Pool is per-iteration (scaffold; a real solver would use incremental dirty-set).
         let mut pool = ClausePool::new(db.len());
         let mut tiles: Vec<ClauseTile<Propagate>> = Vec::new();
 
         for i in 0..db.len() {
             let clause = &db.clauses[i];
             let token = pool.acquire(i).unwrap();
-            tiles.push(clause_tile::make_clause_tile::<Propagate>(
+            // make_clause_tile deduplicates and detects tautologies
+            if let Some(tile) = clause_tile::make_clause_tile::<Propagate>(
                 &clause.literals,
                 token,
-            ));
+                i, // db_index — survives bin-packing reorder
+            ) {
+                tiles.push(tile);
+            }
+            // Tautological clauses (None) are skipped — always satisfied
         }
 
         let batches = clause_tile::pack_clauses(tiles);
@@ -121,16 +143,14 @@ pub fn run_bcp(
         // Check all batches
         for batch in &batches {
             let results = batch.check_all(assignments);
-            for (tile_idx, status) in results.iter().enumerate() {
+            for &(db_index, ref status) in &results {
                 match status {
                     ClauseStatus::Conflict => {
-                        // Release all tokens before returning
                         return BcpResult::Conflict {
-                            clause_index: tile_idx,
+                            clause_index: db_index, // correct database index
                         };
                     }
                     ClauseStatus::Unit { propagate } => {
-                        // Propagate the forced literal
                         let var = propagate.var() as usize;
                         let value = !propagate.is_negated();
                         if assignments[var].is_none() {
@@ -139,9 +159,7 @@ pub fn run_bcp(
                             found_unit = true;
                         }
                     }
-                    ClauseStatus::Satisfied | ClauseStatus::Unresolved { .. } => {
-                        // Nothing to do
-                    }
+                    ClauseStatus::Satisfied | ClauseStatus::Unresolved { .. } => {}
                 }
             }
         }
@@ -163,14 +181,11 @@ mod tests {
     use super::*;
     use crate::session;
 
-    /// Helper: run BCP within a solver session.
+    /// Helper: run BCP within a properly-typed solver session.
     fn bcp_in_session(db: &ClauseDb, assignments: &mut Vec<Option<bool>>) -> BcpResult {
         session::with_session(|session| {
-            let decide = session.decide();
-            // We need a Propagate session to call run_bcp.
-            // Use the generic transition since propagate() returns PropagationOutcome.
-            let propagate: crate::session::SolverSession<'_, Propagate> =
-                decide.transition();
+            // Idle → Decide → Propagate (the normal CDCL path)
+            let propagate = session.decide().propagate();
             run_bcp(db, assignments, &propagate)
         })
     }
@@ -286,10 +301,11 @@ mod tests {
         // Utilization: 16 real literals / 32 lanes = 50%
         let mut pool = ClausePool::new(8);
         let tiles: Vec<_> = (0..8)
-            .map(|i| {
+            .filter_map(|i| {
                 clause_tile::make_clause_tile::<Propagate>(
                     &[Lit::pos(0), Lit::pos(1)],
                     pool.acquire(i).unwrap(),
+                    i,
                 )
             })
             .collect();

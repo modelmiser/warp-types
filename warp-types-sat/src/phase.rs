@@ -106,19 +106,22 @@ impl_phase!(Unsat, "unsat");
 /// transition (e.g., Idle → Analyze) is a compile error.
 pub trait CanTransition<To: Phase>: sealed::Sealed + Phase {}
 
-// Valid transitions:
+// Valid CDCL transitions:
+//
 //   Idle → Decide        (start decision)
+//   Idle → Propagate     (initial BCP before first decision, or after restart)
 //   Idle → Sat           (all variables assigned, no conflict)
-//   Idle → Unsat         (empty clause derived)
+//   Idle → Unsat         (empty clause derived at level 0)
 //   Decide → Propagate   (decision made, run BCP)
 //   Propagate → Idle     (BCP complete, no conflict — next decision)
 //   Propagate → Conflict (BCP found conflict)
 //   Conflict → Analyze   (start conflict analysis)
 //   Analyze → Backtrack  (learned clause, now backtrack)
-//   Backtrack → Idle     (backtrack complete, resume)
+//   Backtrack → Propagate (re-propagate learned clause immediately)
 //   Backtrack → Unsat    (backtracked to level 0 — unsatisfiable)
 
 impl CanTransition<Decide> for Idle {}
+impl CanTransition<Propagate> for Idle {}
 impl CanTransition<Sat> for Idle {}
 impl CanTransition<Unsat> for Idle {}
 impl CanTransition<Propagate> for Decide {}
@@ -126,43 +129,10 @@ impl CanTransition<Idle> for Propagate {}
 impl CanTransition<Conflict> for Propagate {}
 impl CanTransition<Analyze> for Conflict {}
 impl CanTransition<Backtrack> for Analyze {}
-impl CanTransition<Idle> for Backtrack {}
+impl CanTransition<Propagate> for Backtrack {}
 impl CanTransition<Unsat> for Backtrack {}
 
-// ============================================================================
-// Propagation outcome (data-dependent branch)
-// ============================================================================
-
-/// Result of BCP — either propagation completed (no conflict)
-/// or a conflict was found. This is the typed equivalent of
-/// `DynDiverge` for solver phases: the branch is data-dependent,
-/// but both outcomes are handled.
-///
-/// The `'s` lifetime ties this to the solver session, preventing
-/// cross-session confusion.
-pub enum PropagationOutcome<'s> {
-    /// BCP completed without conflict. Solver returns to Idle
-    /// for the next decision.
-    Done(SolverSession<'s, Idle>),
-
-    /// BCP found a conflict. Must proceed to conflict analysis.
-    ConflictFound(SolverSession<'s, Conflict>),
-}
-
-// Forward declare — defined in session.rs, used here for the enum.
-// This creates a circular reference that we resolve with the re-export in lib.rs.
-use crate::session::SolverSession;
-
-impl<'s> PropagationOutcome<'s> {
-    /// Handle both branches with closures (structured pattern, like DynDiverge::with_branches).
-    pub fn handle<R>(
-        self,
-        on_done: impl FnOnce(SolverSession<'s, Idle>) -> R,
-        on_conflict: impl FnOnce(SolverSession<'s, Conflict>) -> R,
-    ) -> R {
-        match self {
-            PropagationOutcome::Done(session) => on_done(session),
-            PropagationOutcome::ConflictFound(session) => on_conflict(session),
-        }
-    }
-}
+// PropagationOutcome removed — the caller now explicitly calls
+// finish_no_conflict() or finish_conflict() on SolverSession<Propagate>
+// based on the BcpResult. This keeps the phase proof connected to the
+// actual BCP execution rather than being a pre-determined stub.

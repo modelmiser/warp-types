@@ -67,20 +67,12 @@ impl<'s, P: Phase> SolverSession<'s, P> {
 ///     // session: SolverSession<'s, Idle>
 ///     let session = session.decide();
 ///     // session: SolverSession<'s, Decide>
-///     let outcome = session.propagate();
-///     // outcome: PropagationOutcome<'s>
-///     outcome.handle(
-///         |idle| {
-///             // No conflict — declare SAT
-///             idle.sat().is_satisfiable()
-///         },
-///         |conflict| {
-///             // Conflict path — analyze, backtrack, then declare SAT
-///             let analyzed = conflict.analyze();
-///             let backtracked = analyzed.backtrack();
-///             backtracked.resume().sat().is_satisfiable()
-///         },
-///     )
+///     let propagate = session.propagate();
+///     // propagate: SolverSession<'s, Propagate>
+///     // ... run BCP here, then finish ...
+///     let outcome = propagate.finish_no_conflict();
+///     // outcome: SolverSession<'s, Idle>
+///     outcome.sat()
 /// });
 /// assert!(is_sat);
 /// ```
@@ -102,36 +94,53 @@ impl<'s> SolverSession<'s, Idle> {
         SolverSession::new()
     }
 
+    /// Begin propagation directly from Idle (initial BCP or post-restart).
+    ///
+    /// Use this before the first decision to propagate unit clauses in the
+    /// initial clause database, or after a restart to re-propagate.
+    pub fn propagate(self) -> SolverSession<'s, Propagate> {
+        SolverSession::new()
+    }
+
     /// Declare satisfiable (all variables assigned, no conflict).
     ///
-    /// Terminal state — no further transitions available.
-    pub fn sat(self) -> SolverSession<'s, Sat> {
-        SolverSession::new()
+    /// Terminal state — session consumed.
+    pub fn sat(self) -> bool {
+        true
     }
 
     /// Declare unsatisfiable (empty clause derived at decision level 0).
     ///
-    /// Terminal state — no further transitions available.
-    pub fn unsat(self) -> SolverSession<'s, Unsat> {
-        SolverSession::new()
+    /// Terminal state — session consumed.
+    pub fn unsat(self) -> bool {
+        false
     }
 }
 
 // --- Decide transitions ---
 
 impl<'s> SolverSession<'s, Decide> {
-    /// Begin propagation (BCP) after making a decision.
+    /// Enter propagation phase (BCP) after making a decision.
     ///
-    /// Consumes Decide, produces PropagationOutcome — the data-dependent
-    /// branch between "no conflict" (→ Idle) and "conflict found" (→ Conflict).
-    ///
-    /// This is the typed equivalent of DynDiverge for solver phases:
-    /// the caller must handle both outcomes.
-    pub fn propagate(self) -> PropagationOutcome<'s> {
-        // In a real solver, BCP runs here. The outcome determines the phase.
-        // For now, default to no-conflict. Real implementations will override
-        // this with actual propagation logic.
-        PropagationOutcome::Done(SolverSession::new())
+    /// Returns a `SolverSession<Propagate>` — the caller runs BCP using
+    /// `run_bcp()` with this session as the phase proof, then calls
+    /// `finish_no_conflict()` or `finish_conflict()` based on the result.
+    pub fn propagate(self) -> SolverSession<'s, Propagate> {
+        SolverSession::new()
+    }
+}
+
+// --- Propagate transitions ---
+
+impl<'s> SolverSession<'s, Propagate> {
+    /// BCP completed without conflict. Return to Idle for next decision.
+    pub fn finish_no_conflict(self) -> SolverSession<'s, Idle> {
+        SolverSession::new()
+    }
+
+    /// BCP found a conflict. Enter Conflict phase.
+    pub fn finish_conflict(self) -> SolverSession<'s, Conflict> {
+        SolverSession::new()
     }
 }
 
@@ -162,36 +171,20 @@ impl<'s> SolverSession<'s, Analyze> {
 // --- Backtrack transitions ---
 
 impl<'s> SolverSession<'s, Backtrack> {
-    /// Resume solving after backtracking. Returns to Idle for the next decision.
+    /// Re-propagate after backtracking. The learned clause is now unit
+    /// at the backtrack level and must be immediately propagated.
     ///
-    /// Consumes Backtrack, produces Idle.
-    pub fn resume(self) -> SolverSession<'s, Idle> {
+    /// This is NOT optional — CDCL correctness requires propagating
+    /// the asserting literal before any new decision.
+    pub fn propagate(self) -> SolverSession<'s, Propagate> {
         SolverSession::new()
     }
 
     /// Declare unsatisfiable (backtracked to level 0 with no remaining decisions).
     ///
-    /// Terminal state — no further transitions available.
-    pub fn unsat(self) -> SolverSession<'s, Unsat> {
-        SolverSession::new()
-    }
-}
-
-// ============================================================================
-// Terminal states (no outgoing transitions)
-// ============================================================================
-
-impl<'s> SolverSession<'s, Sat> {
-    /// Extract the result. The session is consumed.
-    pub fn is_satisfiable(&self) -> bool {
-        true
-    }
-}
-
-impl<'s> SolverSession<'s, Unsat> {
-    /// Extract the result. The session is consumed.
-    pub fn is_unsatisfiable(&self) -> bool {
-        true
+    /// Terminal state — session consumed.
+    pub fn unsat(self) -> bool {
+        false
     }
 }
 
@@ -220,60 +213,78 @@ impl<'s, P: Phase> SolverSession<'s, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::phase;
 
     #[test]
     fn happy_path_sat() {
         let result = with_session(|session| {
-            let session = session.decide();
-            let outcome = session.propagate();
-            outcome.handle(
-                |idle| idle.sat().is_satisfiable(),
-                |conflict| {
-                    let analyzed = conflict.analyze();
-                    let bt = analyzed.backtrack();
-                    bt.resume().sat().is_satisfiable()
-                },
-            )
+            let decide = session.decide();
+            let propagate = decide.propagate();
+            // BCP finds no conflict
+            let idle = propagate.finish_no_conflict();
+            idle.sat()
         });
         assert!(result);
     }
 
     #[test]
     fn conflict_path() {
-        // Manually construct a conflict outcome to test the conflict path
         let result = with_session(|session| {
-            let session = session.decide();
-            // Use generic transition to test CanTransition bounds
-            let _propagate: SolverSession<'_, Propagate> = session.transition();
-            // Simulate conflict found
-            let conflict: SolverSession<'_, Conflict> = SolverSession::new();
+            let decide = session.decide();
+            let propagate = decide.propagate();
+            // BCP finds conflict
+            let conflict = propagate.finish_conflict();
             let analyzed = conflict.analyze();
             let bt = analyzed.backtrack();
-            bt.unsat().is_unsatisfiable()
+            // Re-propagate learned clause (CDCL requirement)
+            let propagate = bt.propagate();
+            let idle = propagate.finish_no_conflict();
+            idle.sat()
         });
         assert!(result);
     }
 
     #[test]
+    fn initial_propagation() {
+        // BCP before first decision (unit clauses in initial database)
+        let result = with_session(|session| {
+            let propagate = session.propagate();
+            let idle = propagate.finish_no_conflict();
+            idle.decide().propagate().finish_no_conflict().sat()
+        });
+        assert!(result);
+    }
+
+    #[test]
+    fn backtrack_to_unsat() {
+        let result = with_session(|session| {
+            let decide = session.decide();
+            let propagate = decide.propagate();
+            let conflict = propagate.finish_conflict();
+            let analyzed = conflict.analyze();
+            let bt = analyzed.backtrack();
+            // Backtracked to level 0 — UNSAT
+            bt.unsat()
+        });
+        assert!(!result); // unsat returns false
+    }
+
+    #[test]
     fn full_cdcl_loop() {
         let result = with_session(|session| {
-            // Iteration 1: decide → propagate → no conflict → idle
-            let session = session.decide();
-            let outcome = session.propagate();
-            let idle = outcome.handle(
-                |idle| idle,
-                |conflict| conflict.analyze().backtrack().resume(),
-            );
+            // Initial BCP
+            let propagate = session.propagate();
+            let idle = propagate.finish_no_conflict();
 
-            // Iteration 2: decide → propagate → (assume no conflict) → sat
-            let session = idle.decide();
-            let outcome = session.propagate();
-            outcome.handle(
-                |idle| idle.sat().is_satisfiable(),
-                |conflict| {
-                    conflict.analyze().backtrack().resume().sat().is_satisfiable()
-                },
-            )
+            // Iteration 1: decide → propagate → conflict → analyze → backtrack → re-propagate
+            let propagate = idle.decide().propagate();
+            let conflict = propagate.finish_conflict();
+            let bt = conflict.analyze().backtrack();
+            let propagate = bt.propagate(); // re-propagate learned clause
+            let idle = propagate.finish_no_conflict();
+
+            // Iteration 2: decide → propagate → no conflict → SAT
+            idle.decide().propagate().finish_no_conflict().sat()
         });
         assert!(result);
     }
@@ -284,19 +295,22 @@ mod tests {
             assert_eq!(session.phase_name(), "idle");
             let session = session.decide();
             assert_eq!(session.phase_name(), "decide");
+            let session = session.propagate();
+            assert_eq!(session.phase_name(), "propagate");
         });
     }
 
     #[test]
     fn generic_transition() {
         with_session(|session| {
-            // All of these use the generic transition method
-            let d: SolverSession<'_, Decide> = session.transition();
-            let p: SolverSession<'_, Propagate> = d.transition();
-            let c: SolverSession<'_, Conflict> = p.transition();
-            let a: SolverSession<'_, Analyze> = c.transition();
-            let b: SolverSession<'_, Backtrack> = a.transition();
-            let _idle: SolverSession<'_, Idle> = b.transition();
+            let d: SolverSession<'_, phase::Decide> = session.transition();
+            let p: SolverSession<'_, phase::Propagate> = d.transition();
+            let c: SolverSession<'_, phase::Conflict> = p.transition();
+            let a: SolverSession<'_, phase::Analyze> = c.transition();
+            let b: SolverSession<'_, phase::Backtrack> = a.transition();
+            // Backtrack → Propagate (re-propagate learned clause)
+            let p2: SolverSession<'_, phase::Propagate> = b.transition();
+            let _idle: SolverSession<'_, phase::Idle> = p2.transition();
         });
     }
 }

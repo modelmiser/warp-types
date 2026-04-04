@@ -51,12 +51,14 @@ pub enum ClauseStatus {
 ///
 /// The `ClauseToken` proves exclusive ownership of this clause.
 pub struct ClauseTile<P: Phase> {
-    /// Literals in this clause (padded to tile size with sentinel).
+    /// Literals in this clause (deduplicated, padded to tile size).
     literals: Vec<Lit>,
-    /// Original clause length (before padding).
+    /// Original clause length (after dedup, before padding).
     clause_len: usize,
     /// Tile size (4, 8, 16, or 32).
     tile_size: usize,
+    /// Original clause database index (survives bin-packing reorder).
+    db_index: usize,
     /// Ownership token (affine).
     _token: ClauseToken,
     /// Phase marker.
@@ -72,6 +74,11 @@ impl<P: Phase> ClauseTile<P> {
     /// Tile size (power of 2).
     pub fn tile_size(&self) -> usize {
         self.tile_size
+    }
+
+    /// Original clause database index.
+    pub fn db_index(&self) -> usize {
+        self.db_index
     }
 
     /// Recover the clause token (release ownership).
@@ -98,38 +105,48 @@ fn tile_size_for(clause_len: usize) -> usize {
     }
 }
 
-/// Create a clause tile from literals and a clause token.
+/// Create a clause tile from literals, a clause token, and the database index.
 ///
-/// Pads the literal array to the next power-of-2 tile size.
-/// Padding slots use a sentinel literal that always evaluates to "satisfied"
-/// so they don't affect clause status.
+/// Deduplicates literals (removes exact duplicates). Detects tautologies
+/// (clause containing both `x` and `¬x`) and returns `None` for them.
+/// Pads to the next power-of-2 tile size.
 pub fn make_clause_tile<P: Phase>(
     literals: &[Lit],
     token: ClauseToken,
-) -> ClauseTile<P> {
+    db_index: usize,
+) -> Option<ClauseTile<P>> {
     assert!(
         !literals.is_empty() && literals.len() <= 32,
         "clause must have 1-32 literals, got {}",
         literals.len()
     );
-    let clause_len = literals.len();
+
+    // Deduplicate literals
+    let mut deduped: Vec<Lit> = Vec::with_capacity(literals.len());
+    for &lit in literals {
+        // Check for tautology: literal and its complement both present
+        if deduped.iter().any(|&l| l == lit.complement()) {
+            return None; // tautological clause — always satisfied
+        }
+        if !deduped.iter().any(|&l| l == lit) {
+            deduped.push(lit);
+        }
+    }
+
+    let clause_len = deduped.len();
     let ts = tile_size_for(clause_len);
 
-    // Pad with Lit::pos(u32::MAX / 2) — a sentinel variable that won't
-    // appear in real assignments. The sentinel evaluates to None (unassigned)
-    // but we handle padding specially in check().
-    let mut padded = Vec::with_capacity(ts);
-    padded.extend_from_slice(literals);
-    let sentinel = Lit::pos(u32::MAX / 2);
-    padded.resize(ts, sentinel);
+    // Pad to tile size (padding lanes never reached in check())
+    deduped.resize(ts, Lit::pos(u32::MAX / 2));
 
-    ClauseTile {
-        literals: padded,
+    Some(ClauseTile {
+        literals: deduped,
         clause_len,
         tile_size: ts,
+        db_index,
         _token: token,
         _phase: PhantomData,
-    }
+    })
 }
 
 // ============================================================================
@@ -241,12 +258,15 @@ impl ClauseBatch {
         }
     }
 
-    /// Check all clauses in the batch. Returns status for each.
+    /// Check all clauses in the batch. Returns (db_index, status) for each.
     ///
     /// On GPU, this would be a single warp-wide ballot per check,
     /// with each tile segment computing independently.
-    pub fn check_all(&self, assignments: &[Option<bool>]) -> Vec<ClauseStatus> {
-        self.tiles.iter().map(|tile| tile.check(assignments)).collect()
+    pub fn check_all(&self, assignments: &[Option<bool>]) -> Vec<(usize, ClauseStatus)> {
+        self.tiles
+            .iter()
+            .map(|tile| (tile.db_index(), tile.check(assignments)))
+            .collect()
     }
 
     /// Recover all clause tokens from the batch (release ownership).
@@ -304,7 +324,7 @@ mod tests {
 
     fn make_test_tile(lits: &[Lit], pool: &mut ClausePool, idx: usize) -> ClauseTile<Propagate> {
         let token = pool.acquire(idx).unwrap();
-        make_clause_tile::<Propagate>(lits, token)
+        make_clause_tile::<Propagate>(lits, token, idx).expect("tautological clause in test")
     }
 
     #[test]
@@ -424,15 +444,50 @@ mod tests {
         let assign = vec![Some(true), Some(false), None];
         let results = batch.check_all(&assign);
 
+        // Results carry db_index — find by index since bin-packing may reorder
+        let r0 = results.iter().find(|(idx, _)| *idx == 0).unwrap();
+        let r1 = results.iter().find(|(idx, _)| *idx == 1).unwrap();
         // Clause 0: (x0 ∨ x1) — x0 = true → Satisfied
-        assert_eq!(results[0], ClauseStatus::Satisfied);
+        assert_eq!(r0.1, ClauseStatus::Satisfied);
         // Clause 1: (¬x0 ∨ x2) — ¬x0 = false, x2 = unassigned → Unit(x2)
         assert_eq!(
-            results[1],
+            r1.1,
             ClauseStatus::Unit {
                 propagate: Lit::pos(2)
             }
         );
+    }
+
+    #[test]
+    fn duplicate_literals_deduped() {
+        let mut pool = ClausePool::new(1);
+        // Clause: (x0 ∨ x0 ∨ x1) → deduped to (x0 ∨ x1)
+        let token = pool.acquire(0).unwrap();
+        let tile = make_clause_tile::<Propagate>(
+            &[Lit::pos(0), Lit::pos(0), Lit::pos(1)],
+            token,
+            0,
+        ).unwrap();
+        assert_eq!(tile.clause_len(), 2); // deduped
+        // x0 = false, x1 = unassigned → unit (not unresolved)
+        let assign = vec![Some(false), None];
+        assert_eq!(
+            tile.check(&assign),
+            ClauseStatus::Unit { propagate: Lit::pos(1) }
+        );
+    }
+
+    #[test]
+    fn tautological_clause_rejected() {
+        let mut pool = ClausePool::new(1);
+        // Clause: (x0 ∨ ¬x0) → tautology
+        let token = pool.acquire(0).unwrap();
+        let result = make_clause_tile::<Propagate>(
+            &[Lit::pos(0), Lit::neg(0)],
+            token,
+            0,
+        );
+        assert!(result.is_none());
     }
 
     #[test]

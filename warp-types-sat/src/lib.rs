@@ -7,16 +7,19 @@
 //! # CDCL Phase Machine
 //!
 //! ```text
-//! SolverSession::with_session(|session| {
+//! with_session(|session| {
 //!   // session: SolverSession<'s, Idle>
-//!   //   → decide()       → SolverSession<'s, Decide>
-//!   //   → propagate()    → PropagationOutcome<'s>
-//!   //     → Ok(session)  → SolverSession<'s, Propagate>  (no conflict)
-//!   //     → Conflict(..) → SolverSession<'s, Conflict>   (conflict found)
-//!   //   → analyze()      → SolverSession<'s, Analyze>
-//!   //   → backtrack()    → SolverSession<'s, Backtrack>
-//!   //   → resume()       → SolverSession<'s, Idle>
-//!   //   → solution()     → SolverSession<'s, Sat> | SolverSession<'s, Unsat>
+//!   //   → propagate()           → SolverSession<'s, Propagate>  (initial BCP)
+//!   //   → decide()              → SolverSession<'s, Decide>
+//!   //     → propagate()         → SolverSession<'s, Propagate>
+//!   //       → finish_no_conflict() → SolverSession<'s, Idle>
+//!   //       → finish_conflict()    → SolverSession<'s, Conflict>
+//!   //         → analyze()       → SolverSession<'s, Analyze>
+//!   //           → backtrack()   → SolverSession<'s, Backtrack>
+//!   //             → propagate() → SolverSession<'s, Propagate>  (re-propagate learned clause)
+//!   //             → unsat()     → bool
+//!   //   → sat()                 → bool
+//!   //   → unsat()               → bool
 //! })
 //! ```
 //!
