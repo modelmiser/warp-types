@@ -42,6 +42,7 @@ pub mod clause_tile;
 pub mod bcp;
 pub mod dimacs;
 pub mod scheduler;
+pub mod bench;
 
 pub use phase::*;
 pub use session::*;
