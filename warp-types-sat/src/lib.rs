@@ -40,6 +40,7 @@ pub mod clause;
 pub mod literal;
 pub mod clause_tile;
 pub mod bcp;
+pub mod dimacs;
 
 pub use phase::*;
 pub use session::*;
