@@ -7,8 +7,10 @@
 use crate::analyze;
 use crate::bcp::{self, BcpResult, ClauseDb};
 use crate::literal::Lit;
+use crate::restart::LubyRestarts;
 use crate::session;
 use crate::trail::Trail;
+use crate::vsids::Vsids;
 use crate::watch;
 
 /// Result of solving a SAT instance.
@@ -110,11 +112,23 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
     })
 }
 
-/// Solve a CNF instance using watched-literal BCP (O(propagations) instead of O(n²)).
+/// Solve a CNF instance using watched-literal BCP with VSIDS and Luby restarts.
 ///
-/// Same CDCL loop as `solve`, but uses two-watched-literal BCP for
-/// asymptotically faster unit propagation.
-pub fn solve_watched(mut db: ClauseDb, num_vars: u32) -> SolveResult {
+/// Full CDCL loop: two-watched-literal BCP, VSIDS branching heuristic with
+/// phase saving, Luby restart policy (base interval 100 conflicts).
+pub fn solve_watched(db: ClauseDb, num_vars: u32) -> SolveResult {
+    solve_cdcl_core(db, num_vars, Vsids::new(num_vars))
+}
+
+/// Internal CDCL solver: watched literals + VSIDS + restarts + phase saving.
+///
+/// Accepts a pre-configured `Vsids` so callers (e.g., hybrid solver) can
+/// warm-start activity scores and phase hints from external sources.
+pub(crate) fn solve_cdcl_core(
+    mut db: ClauseDb,
+    num_vars: u32,
+    mut vsids: Vsids,
+) -> SolveResult {
     for i in 0..db.len() {
         if db.clause(i).literals.is_empty() {
             return SolveResult::Unsat;
@@ -136,6 +150,8 @@ pub fn solve_watched(mut db: ClauseDb, num_vars: u32) -> SolveResult {
 
     let mut trail = Trail::new(num_vars as usize);
     let mut watches = watch::Watches::new(&db, num_vars);
+    let mut restarts = LubyRestarts::new(32);
+    let mut restart_pending = false;
 
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
@@ -148,17 +164,32 @@ pub fn solve_watched(mut db: ClauseDb, num_vars: u32) -> SolveResult {
         let mut idle = propagate.finish_no_conflict();
 
         loop {
+            // ── Execute pending restart ──
+            if restart_pending && trail.current_level() > 0 {
+                for entry in trail.entries() {
+                    if entry.level > 0 {
+                        vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
+                    }
+                }
+                trail.backtrack_to(0);
+                watches.notify_backtrack(trail.len());
+                restart_pending = false;
+            }
+
             if trail.all_assigned() {
                 let _ = idle.sat();
                 return SolveResult::Sat(trail.assignment_vec());
             }
 
-            let var = pick_variable(trail.assignments());
-            trail.new_decision(Lit::pos(var));
+            // ── VSIDS decision (highest activity + saved phase) ──
+            let (var, polarity) = vsids.pick(trail.assignments());
+            let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
             let mut bcp_result =
                 watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
 
+            // ── Inner conflict resolution loop ──
             loop {
                 match bcp_result {
                     BcpResult::Ok => {
@@ -172,12 +203,29 @@ pub fn solve_watched(mut db: ClauseDb, num_vars: u32) -> SolveResult {
                         }
 
                         let analysis = analyze::analyze_conflict(&trail, &db, clause_index);
+
+                        // ── VSIDS: bump learned clause variables, decay ──
+                        for &learned_lit in &analysis.learned {
+                            vsids.bump(learned_lit.var());
+                        }
+                        vsids.decay();
+
                         let conflict = propagate.finish_conflict();
                         let analyzed = conflict.analyze();
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
                             return SolveResult::Unsat;
+                        }
+
+                        // ── Phase saving before backtrack ──
+                        for entry in trail.entries() {
+                            if entry.level > analysis.backtrack_level {
+                                vsids.save_phase(
+                                    entry.lit.var(),
+                                    !entry.lit.is_negated(),
+                                );
+                            }
                         }
 
                         trail.backtrack_to(analysis.backtrack_level);
@@ -187,6 +235,11 @@ pub fn solve_watched(mut db: ClauseDb, num_vars: u32) -> SolveResult {
                         let clause_idx = db.add_clause(analysis.learned);
                         watches.add_clause(&db, clause_idx);
                         trail.record_propagation(asserting_lit, clause_idx);
+
+                        // ── Restart check ──
+                        if restarts.on_conflict() {
+                            restart_pending = true;
+                        }
 
                         let bt = analyzed.backtrack();
                         propagate = bt.propagate();
@@ -478,6 +531,49 @@ p cnf 3 4
             }
             SolveResult::Unsat => panic!("expected SAT"),
         }
+    }
+
+    #[test]
+    fn watched_200var_phase_transition() {
+        // 200-var random 3-SAT at phase transition — previously hung with
+        // sequential decision heuristic. VSIDS + restarts make SAT instances
+        // sub-second. UNSAT instances are still hard without clause deletion.
+        use crate::bench::generate_3sat_phase_transition;
+        use crate::gradient;
+        use std::time::Instant;
+
+        println!("\n=== 200-var CDCL scalability (VSIDS + restarts) ===");
+        println!("{:<6} {:>10} {:>8}", "seed", "time(ms)", "result");
+        println!("{}", "-".repeat(30));
+
+        let mut sat_count = 0;
+        for seed in 0..10 {
+            let db = generate_3sat_phase_transition(200, seed);
+            let t = Instant::now();
+            let result = solve_watched(db, 200);
+            let elapsed = t.elapsed().as_millis();
+            let tag = match &result {
+                SolveResult::Sat(a) => {
+                    let db = generate_3sat_phase_transition(200, seed);
+                    assert!(gradient::verify(&db, a), "seed {seed}: invalid assignment");
+                    sat_count += 1;
+                    // SAT instances must be fast
+                    assert!(
+                        elapsed < 5_000,
+                        "seed {seed}: SAT took {elapsed}ms — should be sub-second"
+                    );
+                    "SAT"
+                }
+                SolveResult::Unsat => "UNSAT",
+            };
+            println!("{:<6} {:>10} {:>8}", seed, elapsed, tag);
+            // Skip slow UNSAT seeds — clause deletion not yet implemented
+            if elapsed > 10_000 {
+                println!("(skipping remaining seeds — UNSAT is slow without clause deletion)");
+                break;
+            }
+        }
+        assert!(sat_count > 0, "should find at least one SAT instance in 10 seeds");
     }
 
     #[test]

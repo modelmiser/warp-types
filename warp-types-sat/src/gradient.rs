@@ -398,17 +398,21 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
 ///
 /// Phase 1: Gradient search finds a continuous near-solution.
 /// Phase 2: Rank variables by confidence (distance from 0.5 boundary).
-/// Phase 3: Fix the top-k most confident variables as unit clauses.
-/// Phase 4: CDCL solves the residual (easier) problem.
+/// Phase 3: Warm-start VSIDS with confidence as activity + polarity as phase.
+/// Phase 4: CDCL solves with the warm-started heuristic.
 ///
 /// This is the TurboSAT strategy: GPU narrows the search space, CPU finishes.
-/// k defaults to 1% of variables (minimum 2, maximum n/2).
+///
+/// Unlike the unit-clause approach, these hints are fully backtrackable —
+/// if the gradient points the wrong way, CDCL discovers this via conflict
+/// analysis and backtracks normally. No false UNSAT from irrevocable guesses.
 pub fn hybrid_solve(
-    mut db: ClauseDb,
+    db: ClauseDb,
     num_vars: u32,
     config: &GradientConfig,
 ) -> crate::solver::SolveResult {
-    use crate::solver::{self, SolveResult};
+    use crate::solver::SolveResult;
+    use crate::vsids::Vsids;
 
     // Phase 1: gradient search
     let grad = gradient_search(&db, num_vars, config);
@@ -417,33 +421,22 @@ pub fn hybrid_solve(
         return SolveResult::Sat(assign);
     }
 
-    // Phase 2-3: confidence-ranked variable fixing
+    // Phase 2-3: warm-start VSIDS from gradient confidence
+    let mut vsids = Vsids::new(num_vars);
     if let Some(ref x) = grad.best_continuous {
-        // Confidence = distance from rounding boundary (0.5).
-        // Higher confidence → more likely correct after rounding.
-        let mut conf: Vec<(u32, f64, bool)> = (0..num_vars)
-            .map(|v| {
-                let val = x[v as usize];
-                (v, (val - 0.5).abs(), val >= 0.5)
-            })
-            .collect();
-        conf.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        // Fix top k variables. TurboSAT uses 0.01% with minimum 20;
-        // we use 10% with minimum 2 since our instances are much smaller.
-        let k = ((num_vars as usize) / 10).max(2).min(num_vars as usize / 2);
-        for &(var, _, polarity) in conf.iter().take(k) {
-            let lit = if polarity {
-                Lit::pos(var)
-            } else {
-                Lit::neg(var)
-            };
-            db.add_clause(vec![lit]);
+        for (v, &val) in x.iter().enumerate() {
+            // Phase hint: gradient's rounded polarity suggestion.
+            vsids.set_phase(v as u32, val >= 0.5);
+            // Activity hint: confidence (|val - 0.5|) scaled to be comparable
+            // with clause-occurrence initialization (~12.8 per var at ratio 4.267).
+            vsids.set_initial_activity(v as u32, (val - 0.5).abs() * 20.0);
         }
     }
+    // Blend with clause-occurrence counts for structural awareness.
+    vsids.initialize_from_clauses(&db);
 
-    // Phase 4: CDCL on the constrained problem
-    solver::solve(db, num_vars)
+    // Phase 4: CDCL with warm-started VSIDS (watched literals + restarts)
+    crate::solver::solve_cdcl_core(db, num_vars, vsids)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────

@@ -43,10 +43,12 @@ pub mod dimacs;
 pub mod gradient;
 pub mod literal;
 pub mod phase;
+pub mod restart;
 pub mod scheduler;
 pub mod session;
 pub mod solver;
 pub mod trail;
+pub mod vsids;
 pub mod watch;
 
 // Core types re-exported at crate root.
