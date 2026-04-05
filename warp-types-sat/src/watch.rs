@@ -12,7 +12,7 @@
 use crate::bcp::{BcpResult, ClauseDb};
 use crate::literal::Lit;
 use crate::phase::Propagate;
-use crate::trail::Trail;
+use crate::trail::{BcpTrail, Trail};
 
 /// A single entry in a literal's watch list.
 ///
@@ -119,9 +119,12 @@ pub fn run_bcp_watched(
     trail: &mut Trail,
     _phase: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
+    // Split trail: bt.assigns is a &mut [Option<bool>] (stable pointer).
+    // bt.record_propagation writes entries/var_position (disjoint fields),
+    // so the compiler keeps the assigns pointer in a register across propagations.
+    let mut bt = trail.bcp_split();
+
     // Handle unit/empty original clauses once at initialization.
-    // Must not re-run after restarts — deleted clauses have empty literals
-    // that look like trivially-false clauses, and the O(n) scan is expensive.
     if !watches.initial_scan_done {
         watches.initial_scan_done = true;
         for ci in 0..db.len() {
@@ -134,8 +137,8 @@ pub fn run_bcp_watched(
             }
             if lits.len() == 1 {
                 let lit = lits[0];
-                match eval_lit(lit, trail.assignments()) {
-                    None => trail.record_propagation(lit, ci),
+                match eval_lit(lit, bt.assigns) {
+                    None => bt.record_propagation(lit, ci),
                     Some(false) => return BcpResult::Conflict { clause_index: ci },
                     Some(true) => {}
                 }
@@ -144,33 +147,27 @@ pub fn run_bcp_watched(
     }
 
     // Main propagation loop: process trail entries from queue_head.
-    while watches.queue_head < trail.len() {
-        let assigned_lit = trail.entries()[watches.queue_head].lit;
+    // bt.assigns pointer is stable throughout — no re-derivation after propagations.
+    while watches.queue_head < bt.len() {
+        let assigned_lit = bt.entry_at(watches.queue_head).lit;
         watches.queue_head += 1;
-        let false_lit = assigned_lit.complement(); // this literal just became false
+        let false_lit = assigned_lit.complement();
 
-        // Take the watch list (avoids borrow conflict with trail/watches).
         let mut ws = std::mem::take(&mut watches.lists[false_lit.code() as usize]);
-        let mut j = 0; // compaction write index
+        let mut j = 0;
 
         let mut i = 0;
         while i < ws.len() {
             let entry = ws[i];
             let ci = entry.clause as usize;
 
-            // Lazy cleanup: skip deleted clauses (compacts them out of the list)
             if db.is_deleted(ci) {
                 i += 1;
                 continue;
             }
 
             // ── Blocker fast-path ──
-            // If the blocker literal is true, the clause is satisfied regardless
-            // of other literals. Skip without touching the clause DB or watched array.
-            // The blocker may be stale (watches may have moved), but a stale-but-true
-            // blocker is still a valid optimization — it just means we skip a clause
-            // that could also have been skipped via the partner check below.
-            if eval_lit(entry.blocker, trail.assignments()) == Some(true) {
+            if eval_lit(entry.blocker, bt.assigns) == Some(true) {
                 ws[j] = entry;
                 j += 1;
                 i += 1;
@@ -179,7 +176,6 @@ pub fn run_bcp_watched(
 
             let [w0, w1] = watches.watched[ci];
 
-            // Which watch is false_lit? The other is the partner.
             let (partner, watch_pos) = if w0 == false_lit {
                 (w1, 0usize)
             } else {
@@ -187,66 +183,53 @@ pub fn run_bcp_watched(
                 (w0, 1usize)
             };
 
-            // Fast path: if partner is true, clause is satisfied — keep watching.
-            // Update blocker to partner (freshest known-true literal).
-            if eval_lit(partner, trail.assignments()) == Some(true) {
+            if eval_lit(partner, bt.assigns) == Some(true) {
                 ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
                 j += 1;
                 i += 1;
                 continue;
             }
 
-            // Search clause for a replacement watch (unassigned or true literal).
+            // Search clause for a replacement watch.
             let clause_lits = db.clause(ci).literals;
             let mut replacement = None;
             for &lit in clause_lits {
                 if lit == w0 || lit == w1 {
                     continue;
                 }
-                if eval_lit(lit, trail.assignments()) != Some(false) {
+                if eval_lit(lit, bt.assigns) != Some(false) {
                     replacement = Some(lit);
                     break;
                 }
             }
 
             if let Some(new_watch) = replacement {
-                // Swap watch: move clause from false_lit's list to new_watch's list.
-                // The new entry's blocker = partner (the other still-watched literal).
                 watches.watched[ci][watch_pos] = new_watch;
                 watches.lists[new_watch.code() as usize].push(
                     WatchEntry { clause: entry.clause, blocker: partner }
                 );
                 i += 1;
-                continue; // don't write back to ws — clause removed from this list
+                continue;
             }
 
-            // No replacement: all non-watched literals are false. Keep in list.
             ws[j] = entry;
             j += 1;
             i += 1;
 
-            // Check partner to determine unit vs conflict.
-            match eval_lit(partner, trail.assignments()) {
-                Some(false) => {
-                    // CONFLICT: all literals false.
-                    // Flush remaining entries back to list before returning.
-                    while i < ws.len() {
-                        ws[j] = ws[i];
-                        j += 1;
-                        i += 1;
-                    }
-                    ws.truncate(j);
-                    watches.lists[false_lit.code() as usize] = ws;
-                    return BcpResult::Conflict { clause_index: ci };
+            let partner_val = eval_lit(partner, bt.assigns);
+            if partner_val == Some(false) {
+                while i < ws.len() {
+                    ws[j] = ws[i];
+                    j += 1;
+                    i += 1;
                 }
-                None => {
-                    // UNIT: propagate partner.
-                    trail.record_propagation(partner, ci);
-                }
-                Some(true) => {
-                    // Partner became true during this BCP round. Satisfied.
-                }
+                ws.truncate(j);
+                watches.lists[false_lit.code() as usize] = ws;
+                return BcpResult::Conflict { clause_index: ci };
+            } else if partner_val.is_none() {
+                bt.record_propagation(partner, ci);
             }
+            // else: partner is true — satisfied during this BCP round
         }
 
         ws.truncate(j);

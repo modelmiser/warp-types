@@ -210,6 +210,72 @@ impl Trail {
             })
             .collect()
     }
+
+    /// Split the trail for BCP: yields a mutable assigns slice (stable pointer)
+    /// and a writer for trail entries. The compiler can prove these don't alias,
+    /// so the assigns pointer stays in a register across propagations.
+    pub fn bcp_split(&mut self) -> BcpTrail<'_> {
+        BcpTrail {
+            assigns: &mut self.assignments,
+            entries: &mut self.entries,
+            var_position: &mut self.var_position,
+            current_level: self.current_level,
+            num_unassigned: &mut self.num_unassigned,
+        }
+    }
+}
+
+/// Split view of Trail for BCP — stable assigns pointer across propagations.
+///
+/// `assigns` is a `&mut [Option<bool>]` (a slice, not a Vec), so the compiler
+/// knows its data pointer is stable. `record_propagation` writes to `entries`
+/// (a different field) without invalidating the assigns pointer.
+///
+/// This eliminates the pointer re-derivation that occurs when BCP calls
+/// `trail.record_propagation()` (which takes `&mut Trail`, invalidating all
+/// references including the assignments slice).
+pub struct BcpTrail<'a> {
+    /// Mutable slice into the assignment array. Pointer is stable for the
+    /// lifetime — slice writes can't reallocate.
+    pub assigns: &'a mut [Option<bool>],
+    entries: &'a mut Vec<TrailEntry>,
+    var_position: &'a mut [Option<usize>],
+    current_level: u32,
+    num_unassigned: &'a mut usize,
+}
+
+impl<'a> BcpTrail<'a> {
+    /// Number of entries on the trail.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Get trail entry at position `idx`.
+    #[inline]
+    pub fn entry_at(&self, idx: usize) -> &TrailEntry {
+        &self.entries[idx]
+    }
+
+    /// Record a propagated literal. Writes to `assigns` (stable pointer)
+    /// and pushes to `entries` (disjoint field).
+    #[inline]
+    pub fn record_propagation(&mut self, lit: Lit, reason_clause: usize) {
+        let var = lit.var() as usize;
+        debug_assert!(
+            self.assigns[var].is_none(),
+            "BcpTrail::record_propagation on already-assigned variable {}",
+            lit.var()
+        );
+        self.assigns[var] = Some(!lit.is_negated());
+        self.var_position[var] = Some(self.entries.len());
+        *self.num_unassigned -= 1;
+        self.entries.push(TrailEntry {
+            lit,
+            level: self.current_level,
+            reason: Reason::Propagation(reason_clause),
+        });
+    }
 }
 
 #[cfg(test)]
