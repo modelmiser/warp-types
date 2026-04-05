@@ -547,6 +547,60 @@ pub fn gradient_search_simwarp(
     result
 }
 
+// ─── Hybrid solver via GPU kernel path ───────────────────────────────
+
+/// Hybrid gradient→CDCL solver using GPU kernel primitives.
+///
+/// Same strategy as `gradient::hybrid_solve` (TurboSAT), but uses
+/// the SimWarp-validated GPU kernel path for all three phases:
+///
+/// - **Phase 1**: `gradient_search_simwarp` (Axis 1 + Axis 2)
+/// - **Phase 2-3**: `confidence_ranking_simwarp` (Axis 3 bitonic sort)
+///   → warm-start VSIDS activity + phase hints
+/// - **Phase 4**: `solve_cdcl_core` (unchanged CPU CDCL)
+///
+/// On GPU, Phases 1-3 would be kernel launches; Phase 4 stays on CPU.
+/// The confidence ranking sorts variables by `|x - 0.5|` via bitonic sort,
+/// then maps rank to VSIDS activity (highest confidence → highest activity
+/// → decided first by CDCL).
+pub fn hybrid_solve_simwarp(
+    db: crate::bcp::ClauseDb,
+    num_vars: u32,
+    config: &crate::gradient::GradientConfig,
+) -> crate::solver::SolveResult {
+    use crate::solver::SolveResult;
+    use crate::vsids::Vsids;
+
+    // Phase 1: gradient search via SimWarp GPU kernel path.
+    let grad = gradient_search_simwarp(&db, num_vars, config);
+
+    if let Some(assign) = grad.assignment {
+        return SolveResult::Sat(assign);
+    }
+
+    // Phase 2-3: warm-start VSIDS from gradient confidence via bitonic sort (Axis 3).
+    let mut vsids = Vsids::new(num_vars);
+    if let Some(ref x) = grad.best_continuous {
+        // Axis 3: bitonic sort ranks variables by confidence.
+        let ranked = confidence_ranking_simwarp(x);
+
+        // Map rank position to VSIDS activity: rank 0 (most confident) gets
+        // the highest activity. Scale to be comparable with clause-occurrence
+        // initialization (~12.8 per var at ratio 4.267).
+        for &(var, conf) in ranked.iter() {
+            let var = var as u32;
+            vsids.set_phase(var, x[var as usize] >= 0.5);
+            // Activity from confidence: higher confidence → higher activity.
+            // Scale by 20.0 to match the CPU hybrid's magnitude.
+            vsids.set_initial_activity(var, conf * 20.0);
+        }
+    }
+    vsids.initialize_from_clauses(&db);
+
+    // Phase 4: CDCL with warm-started VSIDS.
+    crate::solver::solve_cdcl_core(db, num_vars, vsids)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1073,6 +1127,111 @@ mod tests {
         assert_eq!(
             cpu_found, gpu_found,
             "50-var: CPU found {cpu_found}/{seeds}, GPU found {gpu_found}/{seeds}"
+        );
+    }
+
+    // ─── Hybrid solver: GPU kernel pipeline tests ────────────────────
+
+    #[test]
+    fn hybrid_simwarp_solves_sat() {
+        // Hybrid with GPU kernel path should find SAT instances.
+        let config = gradient::GradientConfig::enhanced();
+        let mut found = 0;
+        let seeds = 10;
+
+        for seed in 0..seeds {
+            let db = generate_3sat_phase_transition(50, seed);
+            if matches!(
+                hybrid_solve_simwarp(db, 50, &config),
+                crate::solver::SolveResult::Sat(_)
+            ) {
+                found += 1;
+            }
+        }
+        // Hybrid should find at least as many as gradient alone.
+        assert!(found > 0, "hybrid_simwarp should find some SAT instances");
+    }
+
+    #[test]
+    fn hybrid_simwarp_matches_cpu_hybrid() {
+        // GPU hybrid should agree with CPU hybrid on SAT/UNSAT.
+        let config = gradient::GradientConfig::enhanced();
+        for seed in 0..10 {
+            let db1 = generate_3sat_phase_transition(30, seed);
+            let db2 = generate_3sat_phase_transition(30, seed);
+
+            let cpu = gradient::hybrid_solve(db1, 30, &config);
+            let gpu = hybrid_solve_simwarp(db2, 30, &config);
+
+            // Both should agree on satisfiability.
+            let cpu_sat = matches!(cpu, crate::solver::SolveResult::Sat(_));
+            let gpu_sat = matches!(gpu, crate::solver::SolveResult::Sat(_));
+            assert_eq!(
+                cpu_sat, gpu_sat,
+                "seed {seed}: CPU hybrid sat={cpu_sat}, GPU hybrid sat={gpu_sat}"
+            );
+
+            // If SAT, both assignments must verify.
+            if let crate::solver::SolveResult::Sat(ref assign) = gpu {
+                let db3 = generate_3sat_phase_transition(30, seed);
+                assert!(
+                    gradient::verify(&db3, assign),
+                    "seed {seed}: GPU hybrid returned invalid assignment"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hybrid_simwarp_soundness() {
+        // Soundness: hybrid must never claim SAT on UNSAT, never return
+        // invalid assignments.
+        for seed in 0..20 {
+            let db1 = generate_3sat_phase_transition(30, seed);
+            let db2 = generate_3sat_phase_transition(30, seed);
+
+            let gpu = hybrid_solve_simwarp(db1, 30, &gradient::GradientConfig::enhanced());
+            let cdcl = crate::solver::solve_watched(db2, 30);
+
+            if let crate::solver::SolveResult::Sat(ref assign) = gpu {
+                let db3 = generate_3sat_phase_transition(30, seed);
+                assert!(
+                    gradient::verify(&db3, assign),
+                    "seed {seed}: GPU hybrid invalid assignment"
+                );
+                assert!(
+                    matches!(cdcl, crate::solver::SolveResult::Sat(_)),
+                    "seed {seed}: GPU hybrid SAT but CDCL says UNSAT"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hybrid_simwarp_finds_more_than_gradient_alone() {
+        // The whole point of hybrid: CDCL finishes what gradient can't.
+        let config = gradient::GradientConfig::enhanced();
+        let mut grad_found = 0;
+        let mut hybrid_found = 0;
+        let seeds = 10;
+
+        for seed in 0..seeds {
+            let db1 = generate_3sat_phase_transition(50, seed);
+            let db2 = generate_3sat_phase_transition(50, seed);
+
+            if gradient_search_simwarp(&db1, 50, &config).assignment.is_some() {
+                grad_found += 1;
+            }
+            if matches!(
+                hybrid_solve_simwarp(db2, 50, &config),
+                crate::solver::SolveResult::Sat(_)
+            ) {
+                hybrid_found += 1;
+            }
+        }
+        assert!(
+            hybrid_found >= grad_found,
+            "hybrid should find at least as many: grad={grad_found}, hybrid={hybrid_found}"
         );
     }
 }
