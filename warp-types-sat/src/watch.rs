@@ -166,7 +166,12 @@ pub fn run_bcp_watched(
         watches.queue_head += 1;
         let false_lit = assigned_lit.complement();
 
-        let mut ws = std::mem::take(&mut watches.lists[false_lit.code() as usize]);
+        // SAFETY for watches.lists unchecked accesses below:
+        // false_lit and new_watch are literals from clauses in the DB.
+        // All literals satisfy lit.code() < 2*num_vars (validated at solver startup).
+        // watches.lists.len() == 2*num_vars (from Watches::new).
+        let ws_slot = unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) };
+        let mut ws = std::mem::take(ws_slot);
         let mut j = 0;
 
         let mut i = 0;
@@ -225,7 +230,8 @@ pub fn run_bcp_watched(
 
             if let Some(new_watch) = replacement {
                 unsafe { watches.watched.get_unchecked_mut(ci)[watch_pos] = new_watch };
-                watches.lists[new_watch.code() as usize].push(
+                // SAFETY: new_watch is from a clause in the DB → code() < 2*num_vars
+                unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
                     WatchEntry { clause: entry.clause, blocker: partner }
                 );
                 i += 1;
@@ -245,7 +251,8 @@ pub fn run_bcp_watched(
                     i += 1;
                 }
                 ws.truncate(j);
-                watches.lists[false_lit.code() as usize] = ws;
+                // SAFETY: false_lit.code() < 2*num_vars (same as above)
+                *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
                 return BcpResult::Conflict { clause_index: ci };
             } else if partner_val.is_none() {
                 bt.record_propagation(partner, ci);
@@ -254,7 +261,8 @@ pub fn run_bcp_watched(
         }
 
         ws.truncate(j);
-        watches.lists[false_lit.code() as usize] = ws;
+        // SAFETY: false_lit.code() < 2*num_vars (same as above)
+        *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
     }
 
     BcpResult::Ok

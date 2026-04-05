@@ -4,6 +4,8 @@
 //! The trail is the single source of truth for assignments — BCP writes
 //! through it, backtracking retracts through it. No ghost assignments.
 
+use std::time::Instant;
+
 use crate::analyze::{self, AnalyzeWork};
 use crate::bcp::{self, BcpResult, ClauseDb};
 use crate::literal::Lit;
@@ -28,6 +30,12 @@ pub struct SolveStats {
     pub conflicts: u64,
     pub decisions: u64,
     pub propagations: u64,
+    /// Nanoseconds spent in BCP (all `run_bcp_watched` calls).
+    pub bcp_ns: u64,
+    /// Nanoseconds spent in 1-UIP conflict analysis (includes clause minimization).
+    pub analyze_ns: u64,
+    /// Nanoseconds spent in VSIDS (pick + bump + decay).
+    pub vsids_ns: u64,
 }
 
 /// Solve a CNF instance.
@@ -236,14 +244,18 @@ fn solve_cdcl_core_inner(
             }
 
             // ── VSIDS decision (highest activity + saved phase) ──
+            let t = Instant::now();
             let (var, polarity) = vsids.pick(trail.assignments());
+            stats.vsids_ns += t.elapsed().as_nanos() as u64;
             let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
             stats.decisions += 1;
             let trail_before = trail.len();
             trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
+            let t = Instant::now();
             let mut bcp_result =
                 watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+            stats.bcp_ns += t.elapsed().as_nanos() as u64;
             stats.propagations += (trail.len() - trail_before - 1) as u64; // -1 for the decision
 
             // ── Inner conflict resolution loop ──
@@ -262,15 +274,19 @@ fn solve_cdcl_core_inner(
                             return SolveResult::Unsat;
                         }
 
+                        let t = Instant::now();
                         let analysis = analyze::analyze_conflict_with(
                             &mut analyze_work, &trail, &db, clause_index,
                         );
+                        stats.analyze_ns += t.elapsed().as_nanos() as u64;
 
                         // ── VSIDS: bump learned clause variables, decay ──
+                        let t = Instant::now();
                         for &learned_lit in &analysis.learned {
                             vsids.bump(learned_lit.var());
                         }
                         vsids.decay();
+                        stats.vsids_ns += t.elapsed().as_nanos() as u64;
 
                         let conflict = propagate.finish_conflict();
                         let analyzed = conflict.analyze();
@@ -307,8 +323,10 @@ fn solve_cdcl_core_inner(
                         let bt = analyzed.backtrack();
                         propagate = bt.propagate();
                         let trail_before_bcp = trail.len();
+                        let t = Instant::now();
                         bcp_result =
                             watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+                        stats.bcp_ns += t.elapsed().as_nanos() as u64;
                         stats.propagations += (trail.len() - trail_before_bcp) as u64;
                     }
                 }
@@ -789,6 +807,68 @@ p cnf 5 10
                 if completed >= 3 {
                     break;
                 }
+            }
+            if completed == 0 {
+                println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
+            }
+        }
+    }
+
+    #[test]
+    fn phase_timing_profile() {
+        use crate::bench::generate_k_sat;
+        use std::time::Instant;
+
+        // Per-phase timing breakdown: where does the 3x gap vs MiniSat live?
+        // BCP? Analysis? VSIDS? This answers that question.
+        println!("\n=== Phase timing breakdown ===");
+        println!("{:<6} {:>6} {:<6} {:>7} {:>9} {:>6} {:>6} {:>6} {:>6} {:>10} {:>10}",
+            "vars", "ratio", "seed", "ms", "conflicts",
+            "bcp%", "ana%", "vsid%", "otr%",
+            "ns/prop", "ns/conf");
+        println!("{}", "-".repeat(100));
+
+        let configs: &[(u32, f64)] = &[
+            (200, 4.267), (300, 4.0), (500, 3.5), (700, 3.0), (1000, 2.5),
+        ];
+
+        for &(n, ratio) in configs {
+            let num_clauses = ((n as f64) * ratio).ceil() as usize;
+            let mut completed = 0;
+            for seed in 0..30u64 {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let t = Instant::now();
+                let (result, stats) = solve_watched_stats(db, n);
+                let wall_ns = t.elapsed().as_nanos() as u64;
+                let wall_ms = wall_ns / 1_000_000;
+
+                if wall_ms > 5_000 { continue; }
+                if stats.conflicts < 500 { continue; }
+
+                let _ = match result {
+                    SolveResult::Sat(_) => "SAT",
+                    SolveResult::Unsat => "UNSAT",
+                };
+
+                let total_accounted = stats.bcp_ns + stats.analyze_ns + stats.vsids_ns;
+                let other_ns = wall_ns.saturating_sub(total_accounted);
+
+                let pct = |ns: u64| -> f64 { 100.0 * ns as f64 / wall_ns as f64 };
+                let ns_per_prop = if stats.propagations > 0 {
+                    stats.bcp_ns as f64 / stats.propagations as f64
+                } else { 0.0 };
+                let ns_per_conf = if stats.conflicts > 0 {
+                    wall_ns as f64 / stats.conflicts as f64
+                } else { 0.0 };
+
+                println!("{:<6} {:>6.3} {:<6} {:>7} {:>9} {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>10.1} {:>10.0}",
+                    n, ratio, seed, wall_ms, stats.conflicts,
+                    pct(stats.bcp_ns), pct(stats.analyze_ns),
+                    pct(stats.vsids_ns), pct(other_ns),
+                    ns_per_prop, ns_per_conf);
+
+                completed += 1;
+                if completed >= 3 { break; }
             }
             if completed == 0 {
                 println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
