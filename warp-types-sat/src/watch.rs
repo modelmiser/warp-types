@@ -14,10 +14,29 @@ use crate::literal::Lit;
 use crate::phase::Propagate;
 use crate::trail::Trail;
 
-/// Two-watched-literal data structure.
+/// A single entry in a literal's watch list.
+///
+/// Stores the clause index (as u32 for cache density) and a "blocker" literal.
+/// The blocker is a speculative hint — if it evaluates to true, the clause is
+/// satisfied and we skip it without any clause DB lookup. This eliminates
+/// 50-70% of clause lookups in typical BCP (MiniSat's key optimization).
+///
+/// Size: 8 bytes (same as a bare `usize` on 64-bit), but carries the blocker for free.
+#[derive(Clone, Copy)]
+struct WatchEntry {
+    /// Clause index in the ClauseDb.
+    clause: u32,
+    /// Blocker: the other watched literal at watch setup time. If this literal
+    /// is true, the clause is satisfied — skip without touching the clause DB.
+    /// May be stale (clause's watches may have moved), but a stale-but-true
+    /// blocker is still a valid skip.
+    blocker: Lit,
+}
+
+/// Two-watched-literal data structure with blocking literals.
 pub struct Watches {
-    /// Per-literal watch lists. `lists[lit.code()]` = clause indices watching `lit`.
-    lists: Vec<Vec<usize>>,
+    /// Per-literal watch lists with blocker hints.
+    lists: Vec<Vec<WatchEntry>>,
     /// Per-clause watched literal pair.
     watched: Vec<[Lit; 2]>,
     /// Trail position processed up to (for incremental propagation).
@@ -42,8 +61,9 @@ impl Watches {
             }
             let w0 = lits[0];
             let w1 = lits[1];
-            lists[w0.code() as usize].push(ci);
-            lists[w1.code() as usize].push(ci);
+            // Each watch entry stores the *other* watched literal as blocker
+            lists[w0.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w1 });
+            lists[w1.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w0 });
             watched.push([w0, w1]);
         }
 
@@ -64,8 +84,9 @@ impl Watches {
         }
         let w0 = lits[0];
         let w1 = lits[1];
-        self.lists[w0.code() as usize].push(clause_idx);
-        self.lists[w1.code() as usize].push(clause_idx);
+        let ci = clause_idx as u32;
+        self.lists[w0.code() as usize].push(WatchEntry { clause: ci, blocker: w1 });
+        self.lists[w1.code() as usize].push(WatchEntry { clause: ci, blocker: w0 });
         self.watched.push([w0, w1]);
     }
 
@@ -79,7 +100,6 @@ impl Watches {
         self.queue_head = pos;
         self.initial_scan_done = true;
     }
-
 }
 
 /// Evaluate a literal: Some(true) if satisfied, Some(false) if falsified, None if unassigned.
@@ -135,10 +155,24 @@ pub fn run_bcp_watched(
 
         let mut i = 0;
         while i < ws.len() {
-            let ci = ws[i];
+            let entry = ws[i];
+            let ci = entry.clause as usize;
 
             // Lazy cleanup: skip deleted clauses (compacts them out of the list)
             if db.is_deleted(ci) {
+                i += 1;
+                continue;
+            }
+
+            // ── Blocker fast-path ──
+            // If the blocker literal is true, the clause is satisfied regardless
+            // of other literals. Skip without touching the clause DB or watched array.
+            // The blocker may be stale (watches may have moved), but a stale-but-true
+            // blocker is still a valid optimization — it just means we skip a clause
+            // that could also have been skipped via the partner check below.
+            if eval_lit(entry.blocker, trail.assignments()) == Some(true) {
+                ws[j] = entry;
+                j += 1;
                 i += 1;
                 continue;
             }
@@ -154,8 +188,9 @@ pub fn run_bcp_watched(
             };
 
             // Fast path: if partner is true, clause is satisfied — keep watching.
+            // Update blocker to partner (freshest known-true literal).
             if eval_lit(partner, trail.assignments()) == Some(true) {
-                ws[j] = ci;
+                ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
                 j += 1;
                 i += 1;
                 continue;
@@ -176,14 +211,17 @@ pub fn run_bcp_watched(
 
             if let Some(new_watch) = replacement {
                 // Swap watch: move clause from false_lit's list to new_watch's list.
+                // The new entry's blocker = partner (the other still-watched literal).
                 watches.watched[ci][watch_pos] = new_watch;
-                watches.lists[new_watch.code() as usize].push(ci);
+                watches.lists[new_watch.code() as usize].push(
+                    WatchEntry { clause: entry.clause, blocker: partner }
+                );
                 i += 1;
                 continue; // don't write back to ws — clause removed from this list
             }
 
             // No replacement: all non-watched literals are false. Keep in list.
-            ws[j] = ci;
+            ws[j] = entry;
             j += 1;
             i += 1;
 
