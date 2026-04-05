@@ -8,6 +8,12 @@
 //!
 //! No watch restoration on backtrack. The two-watched-literal invariant
 //! survives because unassigning a variable only strengthens it.
+//!
+//! Watched positions are stored inline in the clause arena: c[0] and c[1]
+//! are always the two watched literals. When a watch changes, the new literal
+//! is swapped into position. This co-locates watch data with clause data
+//! (one fewer cache line access vs a separate `watched` array) and lets the
+//! replacement search start at c[2] (no w0/w1 comparison).
 
 use crate::bcp::{BcpResult, ClauseDb};
 use crate::literal::Lit;
@@ -34,11 +40,13 @@ struct WatchEntry {
 }
 
 /// Two-watched-literal data structure with blocking literals.
+///
+/// Watch positions are stored inline in the clause arena (c[0] and c[1]),
+/// not in a separate array. This struct only holds per-literal watch lists
+/// and the BCP queue head.
 pub struct Watches {
     /// Per-literal watch lists with blocker hints.
     lists: Vec<Vec<WatchEntry>>,
-    /// Per-clause watched literal pair.
-    watched: Vec<[Lit; 2]>,
     /// Trail position processed up to (for incremental propagation).
     queue_head: usize,
     /// Whether the one-time unit/empty clause scan has been performed.
@@ -46,17 +54,19 @@ pub struct Watches {
 }
 
 impl Watches {
-    /// Initialize watches for all clauses. Clauses with <2 literals get a
-    /// placeholder (handled as unit/empty in the BCP loop directly).
+    /// Initialize watches for all clauses. Clauses with <2 literals get
+    /// no watch entries (handled as unit/empty in the BCP loop directly).
+    ///
+    /// Reads c[0] and c[1] from each clause as the watched pair — the
+    /// inline-watch invariant must already hold (true at init and maintained
+    /// by swap_literal_unchecked during BCP).
     pub fn new(db: &ClauseDb, num_vars: u32) -> Self {
         let num_lits = 2 * num_vars as usize;
         let mut lists = vec![Vec::new(); num_lits];
-        let mut watched = Vec::with_capacity(db.len());
 
         for ci in 0..db.len() {
             let lits = &db.clause(ci).literals;
             if lits.len() < 2 {
-                watched.push([Lit::pos(0), Lit::pos(0)]); // placeholder
                 continue;
             }
             let w0 = lits[0];
@@ -64,22 +74,22 @@ impl Watches {
             // Each watch entry stores the *other* watched literal as blocker
             lists[w0.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w1 });
             lists[w1.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w0 });
-            watched.push([w0, w1]);
         }
 
         Watches {
             lists,
-            watched,
             queue_head: 0,
             initial_scan_done: false,
         }
     }
 
     /// Add watches for a newly learned clause.
+    ///
+    /// Reads c[0] and c[1] as the watched pair (caller must ensure the
+    /// asserting literal is at c[0] and the second watch is at c[1]).
     pub fn add_clause(&mut self, db: &ClauseDb, clause_idx: usize) {
         let lits = &db.clause(clause_idx).literals;
         if lits.len() < 2 {
-            self.watched.push([Lit::pos(0), Lit::pos(0)]);
             return;
         }
         let w0 = lits[0];
@@ -87,7 +97,6 @@ impl Watches {
         let ci = clause_idx as u32;
         self.lists[w0.code() as usize].push(WatchEntry { clause: ci, blocker: w1 });
         self.lists[w1.code() as usize].push(WatchEntry { clause: ci, blocker: w0 });
-        self.watched.push([w0, w1]);
     }
 
     /// Reset queue head after backtracking (trail is shorter now).
@@ -115,13 +124,15 @@ unsafe fn eval_lit_indexed(lit: Lit, lit_values: &[Option<bool>]) -> Option<bool
     *lit_values.get_unchecked(lit.code() as usize)
 }
 
-/// Watched-literal BCP. Processes trail entries from `queue_head` onward.
+/// Watched-literal BCP with inline watch positions.
 ///
-/// Complexity: O(propagations × avg_watches_per_literal).
-/// For random 3-SAT at ratio 4.267: ~13 watch entries per literal on average,
-/// vs scanning all ~4n clauses in the old BCP.
+/// Processes trail entries from `queue_head` onward. Clause positions c[0]
+/// and c[1] are always the watched pair — when a replacement is found, it's
+/// swapped into the watched position via `swap_literal_unchecked`.
+///
+/// Takes `&mut ClauseDb` for in-place literal swapping.
 pub fn run_bcp_watched(
-    db: &ClauseDb,
+    db: &mut ClauseDb,
     watches: &mut Watches,
     trail: &mut Trail,
     _phase: &crate::session::SolverSession<'_, Propagate>,
@@ -157,7 +168,7 @@ pub fn run_bcp_watched(
     // bt.assigns pointer is stable throughout — no re-derivation after propagations.
     //
     // SAFETY of unchecked indexing throughout this loop:
-    // - All literals come from clauses in the DB or from watched[] (derived from DB)
+    // - All literals come from clauses in the DB (c[0], c[1], c[k])
     // - solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup
     // - bt.assigns.len() == num_vars (from Trail::new)
     // - Therefore lit.var() < bt.assigns.len() for every literal encountered
@@ -166,7 +177,7 @@ pub fn run_bcp_watched(
         watches.queue_head += 1;
         let false_lit = assigned_lit.complement();
 
-        // SAFETY for watches.lists unchecked accesses below:
+        // SAFETY for watches.lists unchecked accesses:
         // false_lit and new_watch are literals from clauses in the DB.
         // All literals satisfy lit.code() < 2*num_vars (validated at solver startup).
         // watches.lists.len() == 2*num_vars (from Watches::new).
@@ -179,17 +190,15 @@ pub fn run_bcp_watched(
             let entry = ws[i];
             let ci = entry.clause as usize;
 
-            // SAFETY for all unchecked accesses in this loop:
-            // ci comes from WatchEntry.clause, set only from valid clause indices
-            // during Watches::new() or add_clause(). Therefore ci < db.len()
-            // and ci < watches.watched.len().
+            // SAFETY: ci comes from WatchEntry.clause, set only from valid clause
+            // indices during Watches::new() or add_clause().
             if unsafe { db.is_deleted_unchecked(ci) } {
                 i += 1;
                 continue;
             }
 
             // ── Blocker fast-path ──
-            // SAFETY: blocker literal comes from a clause in the DB (see above)
+            // SAFETY: blocker literal comes from a clause in the DB
             if unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) } == Some(true) {
                 ws[j] = entry;
                 j += 1;
@@ -197,16 +206,26 @@ pub fn run_bcp_watched(
                 continue;
             }
 
-            let [w0, w1] = unsafe { *watches.watched.get_unchecked(ci) };
+            // Read watched pair from inline positions c[0], c[1].
+            // SAFETY: ci < db.len(), positions 0 and 1 exist (clauses with <2
+            // literals never get watch entries).
+            let (c0, c1) = {
+                let c = unsafe { db.clause_unchecked(ci) };
+                (c.literals[0], c.literals[1])
+            }; // borrow of db released — enables mutable access below
 
-            let (partner, watch_pos) = if w0 == false_lit {
-                (w1, 0usize)
+            // Determine partner (the other watched literal) and which position
+            // in the clause holds false_lit.
+            let (partner, false_pos) = if c0 == false_lit {
+                (c1, 0usize)
             } else {
-                debug_assert_eq!(w1, false_lit, "clause {ci} in watch list for {false_lit} but watches {w0},{w1}");
-                (w0, 1usize)
+                debug_assert_eq!(c1, false_lit,
+                    "clause {ci} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
+                (c0, 1usize)
             };
 
-            // SAFETY: partner is one of the watched literals, from the DB
+            // ── Partner satisfied → clause satisfied, keep watch ──
+            // SAFETY: partner is a watched literal from the DB
             if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
                 ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
                 j += 1;
@@ -214,30 +233,38 @@ pub fn run_bcp_watched(
                 continue;
             }
 
-            // Search clause for a replacement watch.
-            let clause_lits = unsafe { db.clause_unchecked(ci) }.literals;
-            let mut replacement = None;
-            for &lit in clause_lits {
-                if lit == w0 || lit == w1 {
-                    continue;
+            // ── Search for replacement watch starting at c[2] ──
+            // No need to compare against c[0]/c[1] — they're at known positions.
+            let replacement = {
+                let c = unsafe { db.clause_unchecked(ci) };
+                let mut found = None;
+                for k in 2..c.literals.len() {
+                    let lit = c.literals[k];
+                    // SAFETY: lit comes from a clause in the DB
+                    if unsafe { eval_lit_indexed(lit, bt.lit_values) } != Some(false) {
+                        found = Some((lit, k));
+                        break;
+                    }
                 }
-                // SAFETY: lit comes from a clause in the DB
-                if unsafe { eval_lit_indexed(lit, bt.lit_values) } != Some(false) {
-                    replacement = Some(lit);
-                    break;
-                }
-            }
+                found
+            }; // borrow of db released
 
-            if let Some(new_watch) = replacement {
-                unsafe { watches.watched.get_unchecked_mut(ci)[watch_pos] = new_watch };
-                // SAFETY: new_watch is from a clause in the DB → code() < 2*num_vars
+            if let Some((new_watch, k)) = replacement {
+                // Swap replacement into the watched position (c[false_pos])
+                // SAFETY: ci < db.len(), false_pos ∈ {0,1}, k ∈ [2, clause_len)
+                unsafe { db.swap_literal_unchecked(ci, false_pos, k) };
+                // Add watch for the new literal
+                // SAFETY: new_watch.code() < 2*num_vars
                 unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
                     WatchEntry { clause: entry.clause, blocker: partner }
                 );
+                // Entry removed from false_lit's list (not copied to ws[j])
                 i += 1;
                 continue;
             }
 
+            // No replacement found — clause is binary under current assignment.
+            // Keep this entry in the watch list.
             ws[j] = entry;
             j += 1;
             i += 1;
@@ -245,23 +272,26 @@ pub fn run_bcp_watched(
             // SAFETY: partner is a watched literal from the DB
             let partner_val = unsafe { eval_lit_indexed(partner, bt.lit_values) };
             if partner_val == Some(false) {
+                // Both watched literals false, no replacement → CONFLICT
+                // Drain remaining entries before returning
                 while i < ws.len() {
                     ws[j] = ws[i];
                     j += 1;
                     i += 1;
                 }
                 ws.truncate(j);
-                // SAFETY: false_lit.code() < 2*num_vars (same as above)
+                // SAFETY: false_lit.code() < 2*num_vars
                 *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
                 return BcpResult::Conflict { clause_index: ci };
             } else if partner_val.is_none() {
+                // Partner unassigned → unit clause, propagate partner
                 bt.record_propagation(partner, ci);
             }
             // else: partner is true — satisfied during this BCP round
         }
 
         ws.truncate(j);
-        // SAFETY: false_lit.code() < 2*num_vars (same as above)
+        // SAFETY: false_lit.code() < 2*num_vars
         *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
     }
 
@@ -274,7 +304,7 @@ mod tests {
     use crate::session;
 
     fn bcp_after_decision(
-        db: &ClauseDb,
+        db: &mut ClauseDb,
         watches: &mut Watches,
         trail: &mut Trail,
     ) -> BcpResult {
@@ -293,7 +323,7 @@ mod tests {
         let mut w = Watches::new(&db, 3);
         let mut trail = Trail::new(3);
         trail.new_decision(Lit::pos(0));
-        assert_eq!(bcp_after_decision(&db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
         assert_eq!(trail.value(1), Some(true));
         assert_eq!(trail.value(2), Some(true));
     }
@@ -307,7 +337,7 @@ mod tests {
         let mut trail = Trail::new(1);
         trail.new_decision(Lit::pos(0));
         assert_eq!(
-            bcp_after_decision(&db, &mut w, &mut trail),
+            bcp_after_decision(&mut db, &mut w, &mut trail),
             BcpResult::Conflict { clause_index: 0 }
         );
     }
@@ -323,7 +353,7 @@ mod tests {
         let mut trail = Trail::new(4);
         trail.new_decision(Lit::pos(0));
         let before = trail.len();
-        assert_eq!(bcp_after_decision(&db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
         assert_eq!(trail.len() - before, 3);
         assert_eq!(trail.value(3), Some(true));
     }
@@ -337,7 +367,7 @@ mod tests {
         let mut w = Watches::new(&db, 2);
         let mut trail = Trail::new(2);
         trail.new_decision(Lit::pos(0));
-        match bcp_after_decision(&db, &mut w, &mut trail) {
+        match bcp_after_decision(&mut db, &mut w, &mut trail) {
             BcpResult::Conflict { .. } => {}
             other => panic!("expected Conflict, got {:?}", other),
         }
@@ -353,7 +383,7 @@ mod tests {
         let mut w = Watches::new(&db, 3);
         let mut trail = Trail::new(3);
         trail.new_decision(Lit::pos(0));
-        assert_eq!(bcp_after_decision(&db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
         // Neither x1 nor x2 should be propagated (clause has 2 unresolved lits).
         assert_eq!(trail.value(1), None);
         assert_eq!(trail.value(2), None);
@@ -376,12 +406,13 @@ mod tests {
             });
 
             // Watched-literal BCP
-            let mut w = Watches::new(&db, 30);
+            let mut db2 = generate_3sat_phase_transition(30, seed);
+            let mut w = Watches::new(&db2, 30);
             let mut trail2 = Trail::new(30);
             trail2.new_decision(Lit::pos(0));
             let r2 = session::with_session(|s| {
                 let p = s.decide().propagate();
-                run_bcp_watched(&db, &mut w, &mut trail2, &p)
+                run_bcp_watched(&mut db2, &mut w, &mut trail2, &p)
             });
 
             // Must agree on Ok vs Conflict.

@@ -239,6 +239,20 @@ impl ClauseDb {
         }
     }
 
+    /// Swap two literal positions within a clause in-place.
+    ///
+    /// Used to maintain the MiniSat convention: `c[0]` and `c[1]` are always
+    /// the watched literals. When a replacement watch is found at position `k`,
+    /// swap it into the watched position.
+    ///
+    /// # Safety
+    /// `idx` must be < `self.len()`. `a` and `b` must be < clause length.
+    #[inline]
+    pub unsafe fn swap_literal_unchecked(&mut self, idx: usize, a: usize, b: usize) {
+        let start = *self.offsets.get_unchecked(idx) as usize;
+        self.arena.swap(start + a, start + b);
+    }
+
     /// Highest variable index across all clauses. Returns 0 if empty.
     pub fn max_variable(&self) -> u32 {
         self.arena.iter().map(|lit| lit.var()).max().unwrap_or(0)

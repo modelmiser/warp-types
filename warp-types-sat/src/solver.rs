@@ -190,7 +190,7 @@ fn solve_cdcl_core_inner(
     );
 
     let mut trail = Trail::new(num_vars as usize);
-    let mut watches = watch::Watches::new(&db, num_vars);
+    let mut watches = watch::Watches::new(db, num_vars);
     let mut restarts = LubyRestarts::new(32);
     let mut restart_pending = false;
     let mut analyze_work = AnalyzeWork::new(num_vars as usize);
@@ -204,7 +204,7 @@ fn solve_cdcl_core_inner(
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
         if let BcpResult::Conflict { .. } =
-            watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate)
+            watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate)
         {
             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
             return SolveResult::Unsat;
@@ -231,7 +231,7 @@ fn solve_cdcl_core_inner(
                         let remap = db.compact();
                         trail.remap_reasons(&remap);
                         // Rebuild watches from the now-compact database
-                        watches = watch::Watches::new(&db, num_vars);
+                        watches = watch::Watches::new(db, num_vars);
                         watches.set_queue_head(trail.len());
                     }
                     next_reduce = conflicts + reduce_interval;
@@ -254,7 +254,7 @@ fn solve_cdcl_core_inner(
             let mut propagate = idle.decide().propagate();
             let t = Instant::now();
             let mut bcp_result =
-                watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+                watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
             stats.bcp_ns += t.elapsed().as_nanos() as u64;
             stats.propagations += (trail.len() - trail_before - 1) as u64; // -1 for the decision
 
@@ -312,7 +312,7 @@ fn solve_cdcl_core_inner(
                         let lbd = analysis.lbd;
                         let clause_idx = db.add_clause(analysis.learned);
                         db.set_lbd(clause_idx, lbd as u16);
-                        watches.add_clause(&db, clause_idx);
+                        watches.add_clause(db, clause_idx);
                         trail.record_propagation(asserting_lit, clause_idx);
 
                         // ── Restart check ──
@@ -325,7 +325,7 @@ fn solve_cdcl_core_inner(
                         let trail_before_bcp = trail.len();
                         let t = Instant::now();
                         bcp_result =
-                            watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+                            watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
                         stats.bcp_ns += t.elapsed().as_nanos() as u64;
                         stats.propagations += (trail.len() - trail_before_bcp) as u64;
                     }
