@@ -47,6 +47,12 @@ pub struct Trail {
     var_position: Vec<Option<usize>>,
     /// Number of unassigned variables. Maintained incrementally for O(1) `all_assigned`.
     num_unassigned: usize,
+    /// Literal-indexed assignment array for branch-free evaluation in BCP.
+    /// `lit_values[lit.code()]` = Some(true) iff the literal is satisfied,
+    /// Some(false) iff falsified, None iff unassigned.
+    /// Eliminates the `if is_negated { !val }` conditional in eval_lit —
+    /// single array lookup with no polarity branch.
+    lit_values: Vec<Option<bool>>,
 }
 
 impl Trail {
@@ -58,6 +64,7 @@ impl Trail {
             assignments: vec![None; num_vars],
             var_position: vec![None; num_vars],
             num_unassigned: num_vars,
+            lit_values: vec![None; 2 * num_vars],
         }
     }
 
@@ -67,6 +74,7 @@ impl Trail {
             let added = num_vars - self.assignments.len();
             self.assignments.resize(num_vars, None);
             self.var_position.resize(num_vars, None);
+            self.lit_values.resize(2 * num_vars, None);
             self.num_unassigned += added;
         }
     }
@@ -115,6 +123,9 @@ impl Trail {
         self.current_level += 1;
         self.level_starts.push(self.entries.len());
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
+        // Literal-indexed: the decided literal is true, its complement is false
+        self.lit_values[lit.code() as usize] = Some(true);
+        self.lit_values[lit.complement().code() as usize] = Some(false);
         self.var_position[lit.var() as usize] = Some(self.entries.len());
         self.num_unassigned -= 1;
         self.entries.push(TrailEntry {
@@ -135,6 +146,8 @@ impl Trail {
             lit.var()
         );
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
+        self.lit_values[lit.code() as usize] = Some(true);
+        self.lit_values[lit.complement().code() as usize] = Some(false);
         self.var_position[lit.var() as usize] = Some(self.entries.len());
         self.num_unassigned -= 1;
         self.entries.push(TrailEntry {
@@ -167,6 +180,8 @@ impl Trail {
         let retracted = self.entries.len() - start;
         for entry in &self.entries[start..] {
             self.assignments[entry.lit.var() as usize] = None;
+            self.lit_values[entry.lit.code() as usize] = None;
+            self.lit_values[entry.lit.complement().code() as usize] = None;
             self.var_position[entry.lit.var() as usize] = None;
         }
         self.num_unassigned += retracted;
@@ -217,6 +232,7 @@ impl Trail {
     pub fn bcp_split(&mut self) -> BcpTrail<'_> {
         BcpTrail {
             assigns: &mut self.assignments,
+            lit_values: &mut self.lit_values,
             entries: &mut self.entries,
             var_position: &mut self.var_position,
             current_level: self.current_level,
@@ -235,9 +251,12 @@ impl Trail {
 /// `trail.record_propagation()` (which takes `&mut Trail`, invalidating all
 /// references including the assignments slice).
 pub struct BcpTrail<'a> {
-    /// Mutable slice into the assignment array. Pointer is stable for the
-    /// lifetime — slice writes can't reallocate.
+    /// Mutable slice into the variable-indexed assignment array.
+    /// Kept in sync for non-BCP consumers (value(), assignments()).
     pub assigns: &'a mut [Option<bool>],
+    /// Literal-indexed values: `lit_values[lit.code()]` gives the literal's
+    /// truth value directly — no polarity branch. This is the BCP hot-path array.
+    pub lit_values: &'a mut [Option<bool>],
     entries: &'a mut Vec<TrailEntry>,
     var_position: &'a mut [Option<usize>],
     current_level: u32,
@@ -277,9 +296,13 @@ impl<'a> BcpTrail<'a> {
         );
         // SAFETY: var < assigns.len() — all literals come from clauses in the DB,
         // and solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup.
-        // assigns.len() == num_vars (from Trail::new).
+        // assigns.len() == num_vars, lit_values.len() == 2 * num_vars.
+        // lit.code() = 2*var + polarity <= 2*(num_vars-1) + 1 < 2*num_vars.
+        let code = lit.code() as usize;
         unsafe {
             *self.assigns.get_unchecked_mut(var) = Some(!lit.is_negated());
+            *self.lit_values.get_unchecked_mut(code) = Some(true);
+            *self.lit_values.get_unchecked_mut(code ^ 1) = Some(false);
             *self.var_position.get_unchecked_mut(var) = Some(self.entries.len());
         }
         *self.num_unassigned -= 1;

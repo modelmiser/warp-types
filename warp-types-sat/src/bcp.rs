@@ -120,6 +120,15 @@ impl ClauseDb {
         self.deleted[idx]
     }
 
+    /// Unchecked deleted check for the BCP hot loop.
+    ///
+    /// # Safety
+    /// `idx` must be < `self.len()`.
+    #[inline]
+    pub unsafe fn is_deleted_unchecked(&self, idx: usize) -> bool {
+        *self.deleted.get_unchecked(idx)
+    }
+
     /// Delete the worst learned clauses by LBD score.
     ///
     /// Keeps clauses that are:
@@ -213,6 +222,20 @@ impl ClauseDb {
         let len = self.lengths[idx] as usize;
         ClauseRef {
             literals: &self.arena[start..start + len],
+        }
+    }
+
+    /// Unchecked clause access for the BCP hot loop.
+    ///
+    /// # Safety
+    /// `idx` must be < `self.len()`. The clause's arena range must be valid
+    /// (guaranteed by construction — add_clause sets offsets/lengths from arena).
+    #[inline]
+    pub unsafe fn clause_unchecked(&self, idx: usize) -> ClauseRef<'_> {
+        let start = *self.offsets.get_unchecked(idx) as usize;
+        let len = *self.lengths.get_unchecked(idx) as usize;
+        ClauseRef {
+            literals: self.arena.get_unchecked(start..start + len),
         }
     }
 

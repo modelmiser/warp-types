@@ -102,23 +102,17 @@ impl Watches {
     }
 }
 
-/// Evaluate a literal: Some(true) if satisfied, Some(false) if falsified, None if unassigned.
-#[inline]
-fn eval_lit(lit: Lit, assignments: &[Option<bool>]) -> Option<bool> {
-    assignments[lit.var() as usize].map(|val| if lit.is_negated() { !val } else { val })
-}
-
-/// Unchecked eval_lit for the BCP hot loop.
+/// Evaluate a literal using the literal-indexed assignment array.
+/// Single array lookup — no polarity branch.
 ///
 /// # Safety
-/// `lit.var()` must be < `assignments.len()`. This is guaranteed when:
+/// `lit.code()` must be < `lit_values.len()`. This is guaranteed when:
 /// - All literals come from the clause DB
 /// - `db.max_variable() < num_vars` was asserted at solver startup
-/// - `assignments.len() == num_vars`
+/// - `lit_values.len() == 2 * num_vars`
 #[inline]
-unsafe fn eval_lit_unchecked(lit: Lit, assignments: &[Option<bool>]) -> Option<bool> {
-    unsafe { *assignments.get_unchecked(lit.var() as usize) }
-        .map(|val| if lit.is_negated() { !val } else { val })
+unsafe fn eval_lit_indexed(lit: Lit, lit_values: &[Option<bool>]) -> Option<bool> {
+    *lit_values.get_unchecked(lit.code() as usize)
 }
 
 /// Watched-literal BCP. Processes trail entries from `queue_head` onward.
@@ -150,7 +144,7 @@ pub fn run_bcp_watched(
             }
             if lits.len() == 1 {
                 let lit = lits[0];
-                match eval_lit(lit, bt.assigns) {
+                match bt.lit_values[lit.code() as usize] {
                     None => bt.record_propagation(lit, ci),
                     Some(false) => return BcpResult::Conflict { clause_index: ci },
                     Some(true) => {}
@@ -180,21 +174,25 @@ pub fn run_bcp_watched(
             let entry = ws[i];
             let ci = entry.clause as usize;
 
-            if db.is_deleted(ci) {
+            // SAFETY for all unchecked accesses in this loop:
+            // ci comes from WatchEntry.clause, set only from valid clause indices
+            // during Watches::new() or add_clause(). Therefore ci < db.len()
+            // and ci < watches.watched.len().
+            if unsafe { db.is_deleted_unchecked(ci) } {
                 i += 1;
                 continue;
             }
 
             // ── Blocker fast-path ──
             // SAFETY: blocker literal comes from a clause in the DB (see above)
-            if unsafe { eval_lit_unchecked(entry.blocker, bt.assigns) } == Some(true) {
+            if unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) } == Some(true) {
                 ws[j] = entry;
                 j += 1;
                 i += 1;
                 continue;
             }
 
-            let [w0, w1] = watches.watched[ci];
+            let [w0, w1] = unsafe { *watches.watched.get_unchecked(ci) };
 
             let (partner, watch_pos) = if w0 == false_lit {
                 (w1, 0usize)
@@ -204,7 +202,7 @@ pub fn run_bcp_watched(
             };
 
             // SAFETY: partner is one of the watched literals, from the DB
-            if unsafe { eval_lit_unchecked(partner, bt.assigns) } == Some(true) {
+            if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
                 ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
                 j += 1;
                 i += 1;
@@ -212,21 +210,21 @@ pub fn run_bcp_watched(
             }
 
             // Search clause for a replacement watch.
-            let clause_lits = db.clause(ci).literals;
+            let clause_lits = unsafe { db.clause_unchecked(ci) }.literals;
             let mut replacement = None;
             for &lit in clause_lits {
                 if lit == w0 || lit == w1 {
                     continue;
                 }
                 // SAFETY: lit comes from a clause in the DB
-                if unsafe { eval_lit_unchecked(lit, bt.assigns) } != Some(false) {
+                if unsafe { eval_lit_indexed(lit, bt.lit_values) } != Some(false) {
                     replacement = Some(lit);
                     break;
                 }
             }
 
             if let Some(new_watch) = replacement {
-                watches.watched[ci][watch_pos] = new_watch;
+                unsafe { watches.watched.get_unchecked_mut(ci)[watch_pos] = new_watch };
                 watches.lists[new_watch.code() as usize].push(
                     WatchEntry { clause: entry.clause, blocker: partner }
                 );
@@ -239,7 +237,7 @@ pub fn run_bcp_watched(
             i += 1;
 
             // SAFETY: partner is a watched literal from the DB
-            let partner_val = unsafe { eval_lit_unchecked(partner, bt.assigns) };
+            let partner_val = unsafe { eval_lit_indexed(partner, bt.lit_values) };
             if partner_val == Some(false) {
                 while i < ws.len() {
                     ws[j] = ws[i];
