@@ -47,6 +47,7 @@ pub mod scheduler;
 pub mod session;
 pub mod solver;
 pub mod trail;
+pub mod watch;
 
 // Core types re-exported at crate root.
 pub use clause::{ClausePool, ClauseToken};
@@ -55,4 +56,4 @@ pub use phase::{
     Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
 };
 pub use session::{with_session, SolverSession};
-pub use solver::{solve, SolveResult};
+pub use solver::{solve, solve_watched, SolveResult};
