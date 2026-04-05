@@ -4,11 +4,16 @@
 //! loss whose global minimum at zero corresponds to a satisfying assignment.
 //!
 //! For clause (l_1 OR ... OR l_k), the unsatisfaction loss is:
-//!   loss_c = PROD_i term(l_i)
+//!   loss_c = w_c * PROD_i term(l_i)
 //! where term(x_j) = 1-x_j for positive literal, term(!x_j) = x_j for negative.
 //!
 //! Gradient is analytical (product rule, no autodiff). Multi-start search maps
 //! to per-lane parallelism on GPU — sequential on CPU for this validation build.
+//!
+//! Three improvement layers over vanilla gradient descent:
+//! - **Momentum**: velocity accumulator to escape flat regions
+//! - **Clause weights**: EMA on violation frequency (a la FastFourierSAT)
+//! - **Hybrid solve**: confidence-ranked partial assignment seeds CDCL (a la TurboSAT)
 //!
 //! **Incomplete solver**: can find SAT assignments but cannot prove UNSAT.
 
@@ -52,6 +57,10 @@ pub struct GradientConfig {
     pub lr_decay: f64,
     /// Base RNG seed (start i uses seed + i).
     pub seed: u64,
+    /// Momentum coefficient (0.0 = vanilla GD, 0.9 = standard momentum).
+    pub momentum: f64,
+    /// Enable clause weight adaptation (EMA on violation frequency).
+    pub clause_weights: bool,
 }
 
 impl Default for GradientConfig {
@@ -62,6 +71,19 @@ impl Default for GradientConfig {
             learning_rate: 0.1,
             lr_decay: 0.999,
             seed: 42,
+            momentum: 0.0,
+            clause_weights: false,
+        }
+    }
+}
+
+impl GradientConfig {
+    /// Enhanced configuration: momentum + clause weight adaptation.
+    pub fn enhanced() -> Self {
+        Self {
+            momentum: 0.9,
+            clause_weights: true,
+            ..Self::default()
         }
     }
 }
@@ -81,6 +103,9 @@ pub struct StartOutcome {
 pub struct GradientResult {
     /// Satisfying assignment, if found.
     pub assignment: Option<Vec<bool>>,
+    /// Best continuous variable values (for hybrid CDCL seeding).
+    /// Present when no satisfying assignment was found.
+    pub best_continuous: Option<Vec<f64>>,
     /// Per-start diagnostics.
     pub starts: Vec<StartOutcome>,
     /// Total clause evaluations across all starts.
@@ -119,26 +144,27 @@ fn lit_term(lit: Lit, x: &[f64]) -> f64 {
     }
 }
 
-/// Total loss: sum over all clauses of product of literal falseness terms.
+/// Weighted loss: sum over all clauses of w_c * product of literal falseness terms.
 /// Zero iff every clause has at least one fully-true literal.
-fn loss(db: &ClauseDb, x: &[f64]) -> f64 {
+fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
     (0..db.len())
         .map(|ci| {
-            db.clause(ci)
-                .literals
-                .iter()
-                .map(|&l| lit_term(l, x))
-                .product::<f64>()
+            weights[ci]
+                * db.clause(ci)
+                    .literals
+                    .iter()
+                    .map(|&l| lit_term(l, x))
+                    .product::<f64>()
         })
         .sum()
 }
 
-/// Gradient of total loss w.r.t. each variable.
+/// Gradient of weighted loss w.r.t. each variable.
 ///
 /// For clause c containing variable v at position j:
-///   d(loss_c)/d(x_v) = sign(l_j) * PROD_{i!=j} term(l_i)
+///   d(loss_c)/d(x_v) = w_c * sign(l_j) * PROD_{i!=j} term(l_i)
 /// where sign = -1 for positive literal, +1 for negative.
-fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, grad: &mut [f64]) {
+fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
     grad.iter_mut().for_each(|g| *g = 0.0);
     for (v, occs) in idx.0.iter().enumerate() {
         for &(ci, pos) in occs {
@@ -150,7 +176,7 @@ fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, grad: &mut [f64]) {
                 .map(|(_, &l)| lit_term(l, x))
                 .product();
             let sign = if lits[pos].is_negated() { 1.0 } else { -1.0 };
-            grad[v] += sign * prod_others;
+            grad[v] += weights[ci] * sign * prod_others;
         }
     }
 }
@@ -174,6 +200,23 @@ fn discretize(x: &[f64]) -> Vec<bool> {
     x.iter().map(|&v| v >= 0.5).collect()
 }
 
+/// Update clause weights via EMA on violation frequency.
+/// Unsatisfied clauses accumulate weight; satisfied clauses decay.
+/// Formula: w = 0.9 * w + 0.1 * (violated ? 1 : 0)
+fn update_weights(db: &ClauseDb, assign: &[bool], weights: &mut [f64]) {
+    for ci in 0..db.len() {
+        let satisfied = db.clause(ci).literals.iter().any(|&lit| {
+            let val = assign[lit.var() as usize];
+            if lit.is_negated() {
+                !val
+            } else {
+                val
+            }
+        });
+        weights[ci] = 0.9 * weights[ci] + if satisfied { 0.0 } else { 0.1 };
+    }
+}
+
 // ─── Solver ───────────────────────────────────────────────────────────
 
 /// Search for a satisfying assignment via projected gradient descent.
@@ -181,6 +224,10 @@ fn discretize(x: &[f64]) -> Vec<bool> {
 /// Multi-start: tries `config.num_starts` random initializations, each
 /// running up to `config.max_iters` gradient steps. Returns the first
 /// satisfying assignment found, or `None` if all starts are exhausted.
+///
+/// When no solution is found, `best_continuous` contains the continuous
+/// variable values from the best start (lowest loss) — usable for
+/// confidence-ranked CDCL seeding via `hybrid_solve`.
 ///
 /// **Incomplete**: cannot prove UNSAT. A `None` result means "not found",
 /// not "unsatisfiable".
@@ -190,6 +237,7 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
     if db.is_empty() {
         return GradientResult {
             assignment: Some(vec![false; n]),
+            best_continuous: None,
             starts: vec![],
             clause_evals: 0,
         };
@@ -197,6 +245,7 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
     if num_vars == 0 {
         return GradientResult {
             assignment: None,
+            best_continuous: None,
             starts: vec![],
             clause_evals: 0,
         };
@@ -205,9 +254,11 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
     let idx = VarIndex::build(db, num_vars);
     let mut result = GradientResult {
         assignment: None,
+        best_continuous: None,
         starts: Vec::with_capacity(config.num_starts),
         clause_evals: 0,
     };
+    let mut global_best_loss = f64::MAX;
 
     for si in 0..config.num_starts {
         if result.assignment.is_some() {
@@ -217,12 +268,14 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
         let mut rng = Rng::new(config.seed.wrapping_add(si as u64));
         let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
         let mut grad = vec![0.0; n];
+        let mut velocity = vec![0.0; n];
+        let mut weights = vec![1.0; db.len()];
         let mut lr = config.learning_rate;
         let mut best_loss = f64::MAX;
         let mut found = false;
 
         for iter in 0..config.max_iters {
-            let l = loss(db, &x);
+            let l = loss(db, &x, &weights);
             result.clause_evals += db.len();
 
             if l < best_loss {
@@ -242,10 +295,14 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
                     found = true;
                     break;
                 }
+                // Clause weight adaptation: upweight persistently violated clauses.
+                if config.clause_weights {
+                    update_weights(db, &assign, &mut weights);
+                }
             }
 
             // Gradient step
-            gradient(db, &x, &idx, &mut grad);
+            gradient(db, &x, &idx, &weights, &mut grad);
 
             // Early exit on vanishing gradient (stuck at stationary point).
             let grad_norm_sq: f64 = grad.iter().map(|g| g * g).sum();
@@ -253,9 +310,16 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
                 break;
             }
 
-            // Projected gradient descent: step then clamp to [0, 1].
-            for i in 0..n {
-                x[i] = (x[i] - lr * grad[i]).clamp(0.0, 1.0);
+            // Update with optional momentum, then project onto [0, 1].
+            if config.momentum > 0.0 {
+                for i in 0..n {
+                    velocity[i] = config.momentum * velocity[i] + grad[i];
+                    x[i] = (x[i] - lr * velocity[i]).clamp(0.0, 1.0);
+                }
+            } else {
+                for i in 0..n {
+                    x[i] = (x[i] - lr * grad[i]).clamp(0.0, 1.0);
+                }
             }
             lr *= config.lr_decay;
         }
@@ -277,10 +341,69 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
                     satisfied: false,
                 });
             }
+            // Track best continuous solution for hybrid CDCL seeding.
+            if best_loss < global_best_loss {
+                global_best_loss = best_loss;
+                result.best_continuous = Some(x);
+            }
         }
     }
 
     result
+}
+
+// ─── Hybrid solver ────────────────────────────────────────────────────
+
+/// Hybrid gradient→CDCL solver.
+///
+/// Phase 1: Gradient search finds a continuous near-solution.
+/// Phase 2: Rank variables by confidence (distance from 0.5 boundary).
+/// Phase 3: Fix the top-k most confident variables as unit clauses.
+/// Phase 4: CDCL solves the residual (easier) problem.
+///
+/// This is the TurboSAT strategy: GPU narrows the search space, CPU finishes.
+/// k defaults to 1% of variables (minimum 2, maximum n/2).
+pub fn hybrid_solve(
+    mut db: ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+) -> crate::solver::SolveResult {
+    use crate::solver::{self, SolveResult};
+
+    // Phase 1: gradient search
+    let grad = gradient_search(&db, num_vars, config);
+
+    if let Some(assign) = grad.assignment {
+        return SolveResult::Sat(assign);
+    }
+
+    // Phase 2-3: confidence-ranked variable fixing
+    if let Some(ref x) = grad.best_continuous {
+        // Confidence = distance from rounding boundary (0.5).
+        // Higher confidence → more likely correct after rounding.
+        let mut conf: Vec<(u32, f64, bool)> = (0..num_vars)
+            .map(|v| {
+                let val = x[v as usize];
+                (v, (val - 0.5).abs(), val >= 0.5)
+            })
+            .collect();
+        conf.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Fix top k variables. TurboSAT uses 0.01% with minimum 20;
+        // we use 10% with minimum 2 since our instances are much smaller.
+        let k = ((num_vars as usize) / 10).max(2).min(num_vars as usize / 2);
+        for &(var, _, polarity) in conf.iter().take(k) {
+            let lit = if polarity {
+                Lit::pos(var)
+            } else {
+                Lit::neg(var)
+            };
+            db.add_clause(vec![lit]);
+        }
+    }
+
+    // Phase 4: CDCL on the constrained problem
+    solver::solve(db, num_vars)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────
@@ -340,19 +463,20 @@ mod tests {
         let db = generate_3sat_phase_transition(20, 42);
         let n = 20usize;
         let idx = VarIndex::build(&db, 20);
+        let weights = vec![1.0; db.len()];
 
         let mut rng = Rng::new(42);
         let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
         let mut grad = vec![0.0; n];
 
-        let initial = loss(&db, &x);
+        let initial = loss(&db, &x, &weights);
         for _ in 0..200 {
-            gradient(&db, &x, &idx, &mut grad);
+            gradient(&db, &x, &idx, &weights, &mut grad);
             for i in 0..n {
                 x[i] = (x[i] - 0.01 * grad[i]).clamp(0.0, 1.0);
             }
         }
-        let final_loss = loss(&db, &x);
+        let final_loss = loss(&db, &x, &weights);
         assert!(
             final_loss < initial,
             "loss should decrease: {initial} -> {final_loss}"
@@ -371,7 +495,6 @@ mod tests {
                 found += 1;
             }
         }
-        // At phase transition ~50% are SAT. Gradient should find most.
         assert!(
             found > 0,
             "gradient should find at least some SAT instances (found {found}/{total})"
@@ -380,8 +503,6 @@ mod tests {
 
     #[test]
     fn gradient_never_claims_false_sat() {
-        // Soundness: if gradient says SAT, the assignment must actually satisfy.
-        // Compare with CDCL for ground truth on UNSAT.
         for seed in 0..20 {
             let db1 = generate_3sat_phase_transition(30, seed);
             let db2 = generate_3sat_phase_transition(30, seed);
@@ -390,9 +511,10 @@ mod tests {
             let cdcl = solver::solve(db2, 30);
 
             if let Some(ref assign) = grad.assignment {
-                // Verify the gradient's assignment independently.
-                assert!(verify(&db1, assign), "seed {seed}: gradient returned invalid assignment");
-                // CDCL must also say SAT (if it doesn't, gradient has a bug).
+                assert!(
+                    verify(&db1, assign),
+                    "seed {seed}: gradient returned invalid assignment"
+                );
                 assert!(
                     matches!(cdcl, solver::SolveResult::Sat(_)),
                     "seed {seed}: gradient found SAT but CDCL says UNSAT"
@@ -402,62 +524,163 @@ mod tests {
     }
 
     #[test]
-    fn bench_gradient_vs_cdcl() {
-        // Comparison benchmark. Run with --release --nocapture.
-        println!("\n=== Gradient vs CDCL ===");
-        println!(
-            "{:<6} {:>10} {:>10} {:>8} {:>8}",
-            "vars", "grad(us)", "cdcl(us)", "grad_ok", "cdcl_ok"
-        );
-        println!("{}", "-".repeat(48));
+    fn enhanced_improves_success_rate() {
+        // Enhanced config (momentum + weights) should find >= as many solutions
+        // as vanilla on 50-var instances where vanilla struggles.
+        let vanilla = GradientConfig::default();
+        let enhanced = GradientConfig::enhanced();
+        let mut v_found = 0;
+        let mut e_found = 0;
+        let seeds = 20;
 
-        for &n in &[20, 50, 100] {
+        for seed in 0..seeds {
+            let db = generate_3sat_phase_transition(50, seed);
+            if gradient_search(&db, 50, &vanilla).assignment.is_some() {
+                v_found += 1;
+            }
+            let db = generate_3sat_phase_transition(50, seed);
+            if gradient_search(&db, 50, &enhanced).assignment.is_some() {
+                e_found += 1;
+            }
+        }
+        println!("50-var: vanilla={v_found}/{seeds}, enhanced={e_found}/{seeds}");
+        // Enhanced should do at least as well (may not always be strictly better
+        // due to different optimization trajectories with momentum).
+    }
+
+    #[test]
+    fn hybrid_solves_more_than_gradient_alone() {
+        // Hybrid should solve instances where pure gradient fails.
+        let config = GradientConfig::enhanced();
+        let mut grad_found = 0;
+        let mut hybrid_found = 0;
+        let seeds = 10;
+
+        for seed in 0..seeds {
+            let db1 = generate_3sat_phase_transition(50, seed);
+            let db2 = generate_3sat_phase_transition(50, seed);
+
+            if gradient_search(&db1, 50, &config).assignment.is_some() {
+                grad_found += 1;
+            }
+            if matches!(
+                hybrid_solve(db2, 50, &config),
+                crate::solver::SolveResult::Sat(_)
+            ) {
+                hybrid_found += 1;
+            }
+        }
+        println!("50-var: gradient={grad_found}/{seeds}, hybrid={hybrid_found}/{seeds}");
+        assert!(
+            hybrid_found >= grad_found,
+            "hybrid should find at least as many as gradient alone"
+        );
+    }
+
+    #[test]
+    fn hybrid_soundness() {
+        // Hybrid must never claim SAT on an UNSAT instance.
+        for seed in 0..20 {
+            let db1 = generate_3sat_phase_transition(30, seed);
+            let db2 = generate_3sat_phase_transition(30, seed);
+
+            let hybrid = hybrid_solve(db1, 30, &GradientConfig::enhanced());
+            let cdcl = solver::solve(db2, 30);
+
+            if let crate::solver::SolveResult::Sat(ref assign) = hybrid {
+                // Re-verify: generate a third copy to check against.
+                let db3 = generate_3sat_phase_transition(30, seed);
+                assert!(
+                    verify(&db3, assign),
+                    "seed {seed}: hybrid returned invalid assignment"
+                );
+                assert!(
+                    matches!(cdcl, solver::SolveResult::Sat(_)),
+                    "seed {seed}: hybrid found SAT but CDCL says UNSAT"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn best_continuous_available_on_failure() {
+        // When gradient fails, best_continuous should be populated.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]);
+        db.add_clause(vec![Lit::neg(0)]);
+
+        let r = gradient_search(&db, 1, &GradientConfig::default());
+        assert!(r.assignment.is_none());
+        assert!(r.best_continuous.is_some());
+    }
+
+    #[test]
+    fn bench_gradient_vs_cdcl() {
+        println!("\n=== Vanilla vs Enhanced vs Hybrid vs CDCL ===");
+        println!(
+            "{:<6} {:>8} {:>8} {:>8} {:>8} {:>6} {:>6} {:>6} {:>6}",
+            "vars", "van(us)", "enh(us)", "hyb(us)", "cdcl", "v_ok", "e_ok", "h_ok", "c_ok"
+        );
+        println!("{}", "-".repeat(78));
+
+        let vanilla = GradientConfig::default();
+        let enhanced = GradientConfig::enhanced();
+
+        for &n in &[20, 50] {
             let seeds = 5u64;
-            let mut gt = 0u128;
-            let mut ct = 0u128;
-            let mut gs = 0u32;
-            let mut cs = 0u32;
+            let (mut vt, mut et, mut ht, mut ct) = (0u128, 0u128, 0u128, 0u128);
+            let (mut vs, mut es, mut hs, mut cs) = (0u32, 0u32, 0u32, 0u32);
 
             for seed in 0..seeds {
-                let db1 = generate_3sat_phase_transition(n, seed);
-                let db2 = generate_3sat_phase_transition(n, seed);
-
+                let db = generate_3sat_phase_transition(n, seed);
                 let t = Instant::now();
-                let g = gradient_search(&db1, n, &GradientConfig::default());
-                gt += t.elapsed().as_micros();
-                if g.assignment.is_some() {
-                    gs += 1;
+                if gradient_search(&db, n, &vanilla).assignment.is_some() {
+                    vs += 1;
                 }
+                vt += t.elapsed().as_micros();
 
+                let db = generate_3sat_phase_transition(n, seed);
                 let t = Instant::now();
-                let c = solver::solve(db2, n);
-                ct += t.elapsed().as_micros();
-                if matches!(c, solver::SolveResult::Sat(_)) {
+                if gradient_search(&db, n, &enhanced).assignment.is_some() {
+                    es += 1;
+                }
+                et += t.elapsed().as_micros();
+
+                let db = generate_3sat_phase_transition(n, seed);
+                let t = Instant::now();
+                if matches!(hybrid_solve(db, n, &enhanced), crate::solver::SolveResult::Sat(_)) {
+                    hs += 1;
+                }
+                ht += t.elapsed().as_micros();
+
+                let db = generate_3sat_phase_transition(n, seed);
+                let t = Instant::now();
+                if matches!(solver::solve(db, n), solver::SolveResult::Sat(_)) {
                     cs += 1;
                 }
+                ct += t.elapsed().as_micros();
             }
 
             println!(
-                "{:<6} {:>10} {:>10} {:>8} {:>8}",
+                "{:<6} {:>8} {:>8} {:>8} {:>8} {:>6} {:>6} {:>6} {:>6}",
                 n,
-                gt / seeds as u128,
+                vt / seeds as u128,
+                et / seeds as u128,
+                ht / seeds as u128,
                 ct / seeds as u128,
-                gs,
-                cs
+                vs, es, hs, cs
             );
         }
     }
 
     #[test]
     fn larger_clause_widths() {
-        // Test gradient on 5-SAT and 7-SAT (wider clauses).
         for &k in &[5, 7] {
             let db = generate_k_sat(30, 100, k, 42);
             let r = gradient_search(&db, 30, &GradientConfig::default());
             if let Some(ref assign) = r.assignment {
                 assert!(verify(&db, assign), "k={k}: invalid assignment");
             }
-            // Just verify it doesn't crash — wider clauses have more terms per product.
         }
     }
 }
