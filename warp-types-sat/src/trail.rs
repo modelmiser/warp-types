@@ -259,16 +259,29 @@ impl<'a> BcpTrail<'a> {
 
     /// Record a propagated literal. Writes to `assigns` (stable pointer)
     /// and pushes to `entries` (disjoint field).
+    ///
+    /// Uses unchecked indexing for `assigns` and `var_position` since all
+    /// variables come from clauses validated at solver startup (var < num_vars).
     #[inline]
     pub fn record_propagation(&mut self, lit: Lit, reason_clause: usize) {
         let var = lit.var() as usize;
+        debug_assert!(
+            var < self.assigns.len(),
+            "BcpTrail::record_propagation variable {} out of bounds (len {})",
+            var, self.assigns.len()
+        );
         debug_assert!(
             self.assigns[var].is_none(),
             "BcpTrail::record_propagation on already-assigned variable {}",
             lit.var()
         );
-        self.assigns[var] = Some(!lit.is_negated());
-        self.var_position[var] = Some(self.entries.len());
+        // SAFETY: var < assigns.len() — all literals come from clauses in the DB,
+        // and solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup.
+        // assigns.len() == num_vars (from Trail::new).
+        unsafe {
+            *self.assigns.get_unchecked_mut(var) = Some(!lit.is_negated());
+            *self.var_position.get_unchecked_mut(var) = Some(self.entries.len());
+        }
         *self.num_unassigned -= 1;
         self.entries.push(TrailEntry {
             lit,

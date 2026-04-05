@@ -108,6 +108,19 @@ fn eval_lit(lit: Lit, assignments: &[Option<bool>]) -> Option<bool> {
     assignments[lit.var() as usize].map(|val| if lit.is_negated() { !val } else { val })
 }
 
+/// Unchecked eval_lit for the BCP hot loop.
+///
+/// # Safety
+/// `lit.var()` must be < `assignments.len()`. This is guaranteed when:
+/// - All literals come from the clause DB
+/// - `db.max_variable() < num_vars` was asserted at solver startup
+/// - `assignments.len() == num_vars`
+#[inline]
+unsafe fn eval_lit_unchecked(lit: Lit, assignments: &[Option<bool>]) -> Option<bool> {
+    unsafe { *assignments.get_unchecked(lit.var() as usize) }
+        .map(|val| if lit.is_negated() { !val } else { val })
+}
+
 /// Watched-literal BCP. Processes trail entries from `queue_head` onward.
 ///
 /// Complexity: O(propagations × avg_watches_per_literal).
@@ -148,6 +161,12 @@ pub fn run_bcp_watched(
 
     // Main propagation loop: process trail entries from queue_head.
     // bt.assigns pointer is stable throughout — no re-derivation after propagations.
+    //
+    // SAFETY of unchecked indexing throughout this loop:
+    // - All literals come from clauses in the DB or from watched[] (derived from DB)
+    // - solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup
+    // - bt.assigns.len() == num_vars (from Trail::new)
+    // - Therefore lit.var() < bt.assigns.len() for every literal encountered
     while watches.queue_head < bt.len() {
         let assigned_lit = bt.entry_at(watches.queue_head).lit;
         watches.queue_head += 1;
@@ -167,7 +186,8 @@ pub fn run_bcp_watched(
             }
 
             // ── Blocker fast-path ──
-            if eval_lit(entry.blocker, bt.assigns) == Some(true) {
+            // SAFETY: blocker literal comes from a clause in the DB (see above)
+            if unsafe { eval_lit_unchecked(entry.blocker, bt.assigns) } == Some(true) {
                 ws[j] = entry;
                 j += 1;
                 i += 1;
@@ -183,7 +203,8 @@ pub fn run_bcp_watched(
                 (w0, 1usize)
             };
 
-            if eval_lit(partner, bt.assigns) == Some(true) {
+            // SAFETY: partner is one of the watched literals, from the DB
+            if unsafe { eval_lit_unchecked(partner, bt.assigns) } == Some(true) {
                 ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
                 j += 1;
                 i += 1;
@@ -197,7 +218,8 @@ pub fn run_bcp_watched(
                 if lit == w0 || lit == w1 {
                     continue;
                 }
-                if eval_lit(lit, bt.assigns) != Some(false) {
+                // SAFETY: lit comes from a clause in the DB
+                if unsafe { eval_lit_unchecked(lit, bt.assigns) } != Some(false) {
                     replacement = Some(lit);
                     break;
                 }
@@ -216,7 +238,8 @@ pub fn run_bcp_watched(
             j += 1;
             i += 1;
 
-            let partner_val = eval_lit(partner, bt.assigns);
+            // SAFETY: partner is a watched literal from the DB
+            let partner_val = unsafe { eval_lit_unchecked(partner, bt.assigns) };
             if partner_val == Some(false) {
                 while i < ws.len() {
                     ws[j] = ws[i];
