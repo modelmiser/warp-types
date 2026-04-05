@@ -20,6 +20,9 @@ use crate::literal::Lit;
 use crate::phase::Propagate;
 use crate::trail::Trail;
 
+/// Binary flag encoded in bit 31 of the clause index.
+const BINARY_FLAG: u32 = 0x8000_0000;
+
 /// A single entry in a literal's watch list.
 ///
 /// Stores the clause index (as u32 for cache density) and a "blocker" literal.
@@ -27,16 +30,44 @@ use crate::trail::Trail;
 /// satisfied and we skip it without any clause DB lookup. This eliminates
 /// 50-70% of clause lookups in typical BCP (MiniSat's key optimization).
 ///
+/// For binary clauses (2 literals), bit 31 of `clause_and_flags` is set.
+/// The blocker is always the exact partner literal (never stale), so BCP
+/// can skip the clause DB access entirely — propagation or conflict is
+/// determined from the blocker value alone.
+///
 /// Size: 8 bytes (same as a bare `usize` on 64-bit), but carries the blocker for free.
 #[derive(Clone, Copy)]
 struct WatchEntry {
-    /// Clause index in the ClauseDb.
-    clause: u32,
+    /// Clause index in the ClauseDb, with binary flag in bit 31.
+    /// Bit 31 set → binary clause (blocker is exact partner, no clause DB access needed).
+    clause_and_flags: u32,
     /// Blocker: the other watched literal at watch setup time. If this literal
     /// is true, the clause is satisfied — skip without touching the clause DB.
-    /// May be stale (clause's watches may have moved), but a stale-but-true
-    /// blocker is still a valid skip.
+    /// For long clauses: may be stale (clause's watches may have moved),
+    /// but a stale-but-true blocker is still a valid skip.
+    /// For binary clauses: always exact (the partner never changes).
     blocker: Lit,
+}
+
+impl WatchEntry {
+    #[inline]
+    fn new(clause_idx: u32, blocker: Lit, binary: bool) -> Self {
+        let flags = if binary { BINARY_FLAG } else { 0 };
+        WatchEntry {
+            clause_and_flags: clause_idx | flags,
+            blocker,
+        }
+    }
+
+    #[inline]
+    fn clause_index(&self) -> usize {
+        (self.clause_and_flags & !BINARY_FLAG) as usize
+    }
+
+    #[inline]
+    fn is_binary(&self) -> bool {
+        self.clause_and_flags & BINARY_FLAG != 0
+    }
 }
 
 /// Two-watched-literal data structure with blocking literals.
@@ -71,9 +102,10 @@ impl Watches {
             }
             let w0 = lits[0];
             let w1 = lits[1];
+            let binary = lits.len() == 2;
             // Each watch entry stores the *other* watched literal as blocker
-            lists[w0.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w1 });
-            lists[w1.code() as usize].push(WatchEntry { clause: ci as u32, blocker: w0 });
+            lists[w0.code() as usize].push(WatchEntry::new(ci as u32, w1, binary));
+            lists[w1.code() as usize].push(WatchEntry::new(ci as u32, w0, binary));
         }
 
         Watches {
@@ -95,8 +127,9 @@ impl Watches {
         let w0 = lits[0];
         let w1 = lits[1];
         let ci = clause_idx as u32;
-        self.lists[w0.code() as usize].push(WatchEntry { clause: ci, blocker: w1 });
-        self.lists[w1.code() as usize].push(WatchEntry { clause: ci, blocker: w0 });
+        let binary = lits.len() == 2;
+        self.lists[w0.code() as usize].push(WatchEntry::new(ci, w1, binary));
+        self.lists[w1.code() as usize].push(WatchEntry::new(ci, w0, binary));
     }
 
     /// Reset queue head after backtracking (trail is shorter now).
@@ -188,23 +221,52 @@ pub fn run_bcp_watched(
         let mut i = 0;
         while i < ws.len() {
             let entry = ws[i];
-            let ci = entry.clause as usize;
+            let ci = entry.clause_index();
 
-            // SAFETY: ci comes from WatchEntry.clause, set only from valid clause
+            // SAFETY: ci comes from WatchEntry, set only from valid clause
             // indices during Watches::new() or add_clause().
             if unsafe { db.is_deleted_unchecked(ci) } {
                 i += 1;
                 continue;
             }
 
-            // ── Blocker fast-path ──
-            // SAFETY: blocker literal comes from a clause in the DB
-            if unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) } == Some(true) {
+            // ── Blocker check ──
+            // SAFETY: blocker literal comes from a clause in the DB.
+            // Store result — reused by the binary fast path below.
+            let blocker_val = unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) };
+            if blocker_val == Some(true) {
                 ws[j] = entry;
                 j += 1;
                 i += 1;
                 continue;
             }
+
+            // ── Binary clause fast path ──
+            // For binary clauses, the blocker is the exact partner (never stale).
+            // No clause DB access needed — decide propagation/conflict from
+            // the blocker value alone.
+            if entry.is_binary() {
+                ws[j] = entry;
+                j += 1;
+                i += 1;
+                // blocker_val is Some(false) or None (Some(true) handled above)
+                if blocker_val == Some(false) {
+                    // Both literals false → CONFLICT
+                    while i < ws.len() {
+                        ws[j] = ws[i];
+                        j += 1;
+                        i += 1;
+                    }
+                    ws.truncate(j);
+                    *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
+                    return BcpResult::Conflict { clause_index: ci };
+                }
+                // blocker_val is None → propagate partner
+                bt.record_propagation(entry.blocker, ci);
+                continue;
+            }
+
+            // ── Long clause path (≥3 literals) ──
 
             // Read watched pair from inline positions c[0], c[1].
             // SAFETY: ci < db.len(), positions 0 and 1 exist (clauses with <2
@@ -227,7 +289,7 @@ pub fn run_bcp_watched(
             // ── Partner satisfied → clause satisfied, keep watch ──
             // SAFETY: partner is a watched literal from the DB
             if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
-                ws[j] = WatchEntry { clause: entry.clause, blocker: partner };
+                ws[j] = WatchEntry::new(entry.clause_and_flags & !BINARY_FLAG, partner, false);
                 j += 1;
                 i += 1;
                 continue;
@@ -253,17 +315,17 @@ pub fn run_bcp_watched(
                 // Swap replacement into the watched position (c[false_pos])
                 // SAFETY: ci < db.len(), false_pos ∈ {0,1}, k ∈ [2, clause_len)
                 unsafe { db.swap_literal_unchecked(ci, false_pos, k) };
-                // Add watch for the new literal
+                // Add watch for the new literal (long clause, not binary)
                 // SAFETY: new_watch.code() < 2*num_vars
                 unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
-                    WatchEntry { clause: entry.clause, blocker: partner }
+                    WatchEntry::new(ci as u32, partner, false)
                 );
                 // Entry removed from false_lit's list (not copied to ws[j])
                 i += 1;
                 continue;
             }
 
-            // No replacement found — clause is binary under current assignment.
+            // No replacement found — clause is unit under current assignment.
             // Keep this entry in the watch list.
             ws[j] = entry;
             j += 1;
