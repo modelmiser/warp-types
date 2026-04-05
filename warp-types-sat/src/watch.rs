@@ -218,9 +218,13 @@ pub fn run_bcp_watched(
         let mut ws = std::mem::take(ws_slot);
         let mut j = 0;
 
+        // SAFETY for ws unchecked accesses throughout this loop:
+        // Invariant: j <= i. j starts at 0, incremented only when i increments.
+        // i < ws.len() is the loop condition. Therefore j <= i < ws.len(),
+        // so both ws[i] reads and ws[j] writes are in bounds.
         let mut i = 0;
         while i < ws.len() {
-            let entry = ws[i];
+            let entry = unsafe { *ws.get_unchecked(i) };
             let ci = entry.clause_index();
 
             // SAFETY: ci comes from WatchEntry, set only from valid clause
@@ -235,7 +239,7 @@ pub fn run_bcp_watched(
             // Store result — reused by the binary fast path below.
             let blocker_val = unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) };
             if blocker_val == Some(true) {
-                ws[j] = entry;
+                unsafe { *ws.get_unchecked_mut(j) = entry };
                 j += 1;
                 i += 1;
                 continue;
@@ -246,14 +250,14 @@ pub fn run_bcp_watched(
             // No clause DB access needed — decide propagation/conflict from
             // the blocker value alone.
             if entry.is_binary() {
-                ws[j] = entry;
+                unsafe { *ws.get_unchecked_mut(j) = entry };
                 j += 1;
                 i += 1;
                 // blocker_val is Some(false) or None (Some(true) handled above)
                 if blocker_val == Some(false) {
                     // Both literals false → CONFLICT
                     while i < ws.len() {
-                        ws[j] = ws[i];
+                        unsafe { *ws.get_unchecked_mut(j) = *ws.get_unchecked(i) };
                         j += 1;
                         i += 1;
                     }
@@ -289,7 +293,9 @@ pub fn run_bcp_watched(
             // ── Partner satisfied → clause satisfied, keep watch ──
             // SAFETY: partner is a watched literal from the DB
             if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
-                ws[j] = WatchEntry::new(entry.clause_and_flags & !BINARY_FLAG, partner, false);
+                unsafe { *ws.get_unchecked_mut(j) = WatchEntry::new(
+                    entry.clause_and_flags & !BINARY_FLAG, partner, false,
+                ) };
                 j += 1;
                 i += 1;
                 continue;
@@ -327,7 +333,7 @@ pub fn run_bcp_watched(
 
             // No replacement found — clause is unit under current assignment.
             // Keep this entry in the watch list.
-            ws[j] = entry;
+            unsafe { *ws.get_unchecked_mut(j) = entry };
             j += 1;
             i += 1;
 
@@ -337,7 +343,7 @@ pub fn run_bcp_watched(
                 // Both watched literals false, no replacement → CONFLICT
                 // Drain remaining entries before returning
                 while i < ws.len() {
-                    ws[j] = ws[i];
+                    unsafe { *ws.get_unchecked_mut(j) = *ws.get_unchecked(i) };
                     j += 1;
                     i += 1;
                 }
