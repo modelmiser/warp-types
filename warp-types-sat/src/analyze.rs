@@ -17,6 +17,9 @@ pub struct AnalysisResult {
     pub learned: Vec<Lit>,
     /// The decision level to backtrack to.
     pub backtrack_level: u32,
+    /// Literal Block Distance: number of distinct decision levels among the
+    /// learned clause's literals. Lower = more useful (a "glue clause" has LBD ≤ 2).
+    pub lbd: u32,
 }
 
 /// Run 1-UIP conflict analysis.
@@ -88,6 +91,11 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
                 break;
             }
             Reason::Propagation(reason_clause) => {
+                debug_assert!(
+                    !db.is_deleted(reason_clause),
+                    "resolving through deleted clause {reason_clause} for var {}",
+                    entry.lit.var()
+                );
                 num_at_current_level -= 1;
                 seen[entry.lit.var() as usize] = false; // resolved away
                                                         // Add all other literals from the reason clause
@@ -136,9 +144,26 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         .max()
         .unwrap_or(0);
 
+    // LBD: count distinct decision levels in the learned clause.
+    let lbd = {
+        let mut levels_seen = vec![false; current_level as usize + 1];
+        let mut count = 0u32;
+        for lit in &learned {
+            if let Some(e) = trail.entry_for_var(lit.var()) {
+                let lv = e.level as usize;
+                if lv < levels_seen.len() && !levels_seen[lv] {
+                    levels_seen[lv] = true;
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
     AnalysisResult {
         learned,
         backtrack_level,
+        lbd,
     }
 }
 

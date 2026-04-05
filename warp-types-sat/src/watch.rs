@@ -22,6 +22,8 @@ pub struct Watches {
     watched: Vec<[Lit; 2]>,
     /// Trail position processed up to (for incremental propagation).
     queue_head: usize,
+    /// Whether the one-time unit/empty clause scan has been performed.
+    initial_scan_done: bool,
 }
 
 impl Watches {
@@ -49,6 +51,7 @@ impl Watches {
             lists,
             watched,
             queue_head: 0,
+            initial_scan_done: false,
         }
     }
 
@@ -70,6 +73,13 @@ impl Watches {
     pub fn notify_backtrack(&mut self, new_trail_len: usize) {
         self.queue_head = self.queue_head.min(new_trail_len);
     }
+
+    /// Set queue head and mark initial scan as done (used after watch rebuild).
+    pub fn set_queue_head(&mut self, pos: usize) {
+        self.queue_head = pos;
+        self.initial_scan_done = true;
+    }
+
 }
 
 /// Evaluate a literal: Some(true) if satisfied, Some(false) if falsified, None if unassigned.
@@ -91,9 +101,15 @@ pub fn run_bcp_watched(
 ) -> BcpResult {
     trail.ensure_capacity(db.max_variable() as usize + 1);
 
-    // Handle unit/empty clauses on first call (queue_head == 0).
-    if watches.queue_head == 0 {
+    // Handle unit/empty original clauses once at initialization.
+    // Must not re-run after restarts — deleted clauses have empty literals
+    // that look like trivially-false clauses, and the O(n) scan is expensive.
+    if !watches.initial_scan_done {
+        watches.initial_scan_done = true;
         for ci in 0..db.len() {
+            if db.is_deleted(ci) {
+                continue;
+            }
             let lits = &db.clause(ci).literals;
             if lits.is_empty() {
                 return BcpResult::Conflict { clause_index: ci };
@@ -122,6 +138,13 @@ pub fn run_bcp_watched(
         let mut i = 0;
         while i < ws.len() {
             let ci = ws[i];
+
+            // Lazy cleanup: skip deleted clauses (compacts them out of the list)
+            if db.is_deleted(ci) {
+                i += 1;
+                continue;
+            }
+
             let [w0, w1] = watches.watched[ci];
 
             // Which watch is false_lit? The other is the partner.

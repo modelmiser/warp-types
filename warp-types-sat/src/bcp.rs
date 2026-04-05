@@ -49,14 +49,26 @@ pub struct Clause {
 ///
 /// Clauses are indexed by insertion order (0, 1, 2, ...).
 /// The solver appends learned clauses during conflict analysis.
+/// After `freeze_original()`, clauses at indices `0..num_original` are
+/// protected from deletion; all subsequent clauses are "learned" and
+/// eligible for LBD-based garbage collection.
 pub struct ClauseDb {
     clauses: Vec<Clause>,
+    /// Number of original (input) clauses. Set by `freeze_original()`.
+    num_original: usize,
+    /// LBD (Literal Block Distance) score per clause. 0 for original clauses.
+    lbd: Vec<u16>,
+    /// Tombstone flag: true if the clause has been deleted.
+    deleted: Vec<bool>,
 }
 
 impl ClauseDb {
     pub fn new() -> Self {
         ClauseDb {
             clauses: Vec::new(),
+            num_original: 0,
+            lbd: Vec::new(),
+            deleted: Vec::new(),
         }
     }
 
@@ -64,7 +76,98 @@ impl ClauseDb {
     pub fn add_clause(&mut self, literals: Vec<Lit>) -> usize {
         let idx = self.clauses.len();
         self.clauses.push(Clause { literals });
+        self.lbd.push(0);
+        self.deleted.push(false);
         idx
+    }
+
+    /// Mark the current clause count as "original". Clauses added after this
+    /// point are "learned" and eligible for LBD-based deletion.
+    pub fn freeze_original(&mut self) {
+        self.num_original = self.clauses.len();
+    }
+
+    /// Set the LBD score for a clause.
+    pub fn set_lbd(&mut self, idx: usize, lbd: u16) {
+        self.lbd[idx] = lbd;
+    }
+
+    /// Number of original (non-learned) clauses.
+    pub fn num_original(&self) -> usize {
+        self.num_original
+    }
+
+    /// Check if a clause has been deleted (tombstoned).
+    pub fn is_deleted(&self, idx: usize) -> bool {
+        self.deleted[idx]
+    }
+
+    /// Delete the worst learned clauses by LBD score.
+    ///
+    /// Keeps clauses that are:
+    /// - Original (index < num_original)
+    /// - Locked (currently a propagation reason on the trail)
+    /// - "Glue" clauses: LBD ≤ 2 (binary learned clauses are always useful)
+    ///
+    /// Strategy: sort by LBD, keep the best half. This is the standard
+    /// MiniSat/Glucose approach for balancing clause quality retention
+    /// against watch list growth.
+    ///
+    /// Returns indices of deleted clauses (for watch list cleanup).
+    pub fn reduce_learned(&mut self, locked: &[bool]) -> Vec<usize> {
+        let mut candidates: Vec<(usize, u16)> = Vec::new();
+        for i in self.num_original..self.clauses.len() {
+            if self.deleted[i] {
+                continue;
+            }
+            if i < locked.len() && locked[i] {
+                continue;
+            }
+            // Protect glue clauses (LBD ≤ 2) — they bridge few decision levels
+            // and provide critical implication chains
+            if self.lbd[i] <= 2 {
+                continue;
+            }
+            candidates.push((i, self.lbd[i]));
+        }
+        // Sort by LBD ascending (best/lowest first), delete the worst half
+        candidates.sort_by_key(|&(_, lbd)| lbd);
+        let keep = candidates.len() / 2;
+        let to_delete: Vec<usize> = candidates[keep..].iter().map(|&(i, _)| i).collect();
+        for &i in &to_delete {
+            self.deleted[i] = true;
+            self.clauses[i].literals.clear();
+        }
+        to_delete
+    }
+
+    /// Compact the database: remove tombstoned clauses and renumber.
+    ///
+    /// Returns a remap table: `remap[old_index] = Some(new_index)` for live
+    /// clauses, `None` for deleted ones. Callers must update all stored clause
+    /// indices (trail reasons, watch lists) using this table.
+    pub fn compact(&mut self) -> Vec<Option<usize>> {
+        let n = self.clauses.len();
+        let mut remap: Vec<Option<usize>> = vec![None; n];
+        let mut write = 0;
+
+        for read in 0..n {
+            if !self.deleted[read] {
+                remap[read] = Some(write);
+                if write != read {
+                    self.clauses.swap(write, read);
+                    self.lbd.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+
+        self.clauses.truncate(write);
+        self.lbd.truncate(write);
+        self.deleted.clear();
+        self.deleted.resize(write, false);
+        // num_original unchanged — original clauses are never deleted
+        remap
     }
 
     /// Number of clauses (original + learned).

@@ -9,7 +9,7 @@ use crate::bcp::{self, BcpResult, ClauseDb};
 use crate::literal::Lit;
 use crate::restart::LubyRestarts;
 use crate::session;
-use crate::trail::Trail;
+use crate::trail::{Reason, Trail};
 use crate::vsids::Vsids;
 use crate::watch;
 
@@ -153,6 +153,12 @@ pub(crate) fn solve_cdcl_core(
     let mut restarts = LubyRestarts::new(32);
     let mut restart_pending = false;
 
+    // LBD clause deletion with periodic compaction
+    db.freeze_original();
+    let mut conflicts: u64 = 0;
+    let reduce_interval: u64 = 2000;
+    let mut next_reduce: u64 = reduce_interval;
+
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
         if let BcpResult::Conflict { .. } =
@@ -174,6 +180,21 @@ pub(crate) fn solve_cdcl_core(
                 trail.backtrack_to(0);
                 watches.notify_backtrack(trail.len());
                 restart_pending = false;
+
+                // ── Learned clause deletion + compaction ──
+                if conflicts >= next_reduce {
+                    let locked = build_locked_set(&trail, db.len());
+                    let deleted = db.reduce_learned(&locked);
+                    if !deleted.is_empty() {
+                        // Compact db → contiguous indices for cache locality
+                        let remap = db.compact();
+                        trail.remap_reasons(&remap);
+                        // Rebuild watches from the now-compact database
+                        watches = watch::Watches::new(&db, num_vars);
+                        watches.set_queue_head(trail.len());
+                    }
+                    next_reduce = conflicts + reduce_interval;
+                }
             }
 
             if trail.all_assigned() {
@@ -197,6 +218,8 @@ pub(crate) fn solve_cdcl_core(
                         break;
                     }
                     BcpResult::Conflict { clause_index } => {
+                        conflicts += 1;
+
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
                             return SolveResult::Unsat;
@@ -232,7 +255,9 @@ pub(crate) fn solve_cdcl_core(
                         watches.notify_backtrack(trail.len());
 
                         let asserting_lit = analysis.learned[0];
+                        let lbd = analysis.lbd;
                         let clause_idx = db.add_clause(analysis.learned);
+                        db.set_lbd(clause_idx, lbd as u16);
                         watches.add_clause(&db, clause_idx);
                         trail.record_propagation(asserting_lit, clause_idx);
 
@@ -250,6 +275,21 @@ pub(crate) fn solve_cdcl_core(
             }
         }
     })
+}
+
+/// Build a boolean array marking which clauses are "locked" — currently
+/// serving as a propagation reason for an assignment on the trail.
+/// Locked clauses must not be deleted.
+fn build_locked_set(trail: &Trail, num_clauses: usize) -> Vec<bool> {
+    let mut locked = vec![false; num_clauses];
+    for entry in trail.entries() {
+        if let Reason::Propagation(ci) = entry.reason {
+            if ci < locked.len() {
+                locked[ci] = true;
+            }
+        }
+    }
+    locked
 }
 
 /// Pick the next unassigned variable. Simple sequential scan.

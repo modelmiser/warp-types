@@ -43,6 +43,8 @@ pub struct Trail {
     /// Trail is the sole writer — all mutations go through `new_decision`,
     /// `record_propagation`, or `backtrack_to`.
     assignments: Vec<Option<bool>>,
+    /// Map from variable to position in `entries` (for O(1) entry lookup).
+    var_position: Vec<Option<usize>>,
 }
 
 impl Trail {
@@ -52,6 +54,7 @@ impl Trail {
             level_starts: vec![0],
             current_level: 0,
             assignments: vec![None; num_vars],
+            var_position: vec![None; num_vars],
         }
     }
 
@@ -59,6 +62,7 @@ impl Trail {
     pub fn ensure_capacity(&mut self, num_vars: usize) {
         if num_vars > self.assignments.len() {
             self.assignments.resize(num_vars, None);
+            self.var_position.resize(num_vars, None);
         }
     }
 
@@ -106,6 +110,7 @@ impl Trail {
         self.current_level += 1;
         self.level_starts.push(self.entries.len());
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
+        self.var_position[lit.var() as usize] = Some(self.entries.len());
         self.entries.push(TrailEntry {
             lit,
             level: self.current_level,
@@ -124,6 +129,7 @@ impl Trail {
             lit.var()
         );
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
+        self.var_position[lit.var() as usize] = Some(self.entries.len());
         self.entries.push(TrailEntry {
             lit,
             level: self.current_level,
@@ -145,15 +151,28 @@ impl Trail {
         let start = self.level_starts[target_level as usize + 1];
         for entry in &self.entries[start..] {
             self.assignments[entry.lit.var() as usize] = None;
+            self.var_position[entry.lit.var() as usize] = None;
         }
         self.entries.truncate(start);
         self.level_starts.truncate(target_level as usize + 1);
         self.current_level = target_level;
     }
 
-    /// Get the trail entry for a variable (most recent assignment).
+    /// Get the trail entry for a variable (O(1) via position map).
     pub fn entry_for_var(&self, var: u32) -> Option<&TrailEntry> {
-        self.entries.iter().rev().find(|e| e.lit.var() == var)
+        self.var_position
+            .get(var as usize)
+            .and_then(|&pos| pos)
+            .map(|pos| &self.entries[pos])
+    }
+
+    /// Remap clause indices in propagation reasons after database compaction.
+    pub fn remap_reasons(&mut self, remap: &[Option<usize>]) {
+        for entry in &mut self.entries {
+            if let Reason::Propagation(ref mut ci) = entry.reason {
+                *ci = remap[*ci].expect("live trail reason was deleted during compaction");
+            }
+        }
     }
 
     /// Iterate entries in assignment order.
