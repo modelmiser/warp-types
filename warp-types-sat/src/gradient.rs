@@ -16,6 +16,46 @@
 //! - **Hybrid solve**: confidence-ranked partial assignment seeds CDCL (a la TurboSAT)
 //!
 //! **Incomplete solver**: can find SAT assignments but cannot prove UNSAT.
+//!
+//! # GPU Kernel Design (warp-types primitive mapping)
+//!
+//! Three parallelism axes, each mapping to a warp-types concept:
+//!
+//! **Axis 1 — Clause-parallel loss evaluation (one warp = 32 clauses):**
+//! ```text
+//! // Each lane evaluates one clause's product-form loss.
+//! // For 3-SAT: 3 loads + 2 multiplies per lane, fully independent.
+//! let term0: PerLane<f64> = /* load x[var(lit0)] per lane */;
+//! let term1: PerLane<f64> = /* load x[var(lit1)] per lane */;
+//! let term2: PerLane<f64> = /* load x[var(lit2)] per lane */;
+//! let loss_per_clause: PerLane<f64> = term0 * term1 * term2; // element-wise
+//! let batch_loss: Uniform<f64> = warp.reduce_sum(loss_per_clause);
+//! ```
+//!
+//! **Axis 2 — Verification via ballot (discrete satisfaction check):**
+//! ```text
+//! let satisfied: PerLane<bool> = /* round x, check clause per lane */;
+//! let result: BallotResult = warp.ballot(satisfied);
+//! // All clauses SAT iff popcount(result) == num_clauses_in_batch
+//! ```
+//!
+//! **Axis 3 — Confidence ranking via bitonic sort (hybrid CDCL seeding):**
+//! ```text
+//! let confidence: PerLane<f64> = /* |x[var] - 0.5| per lane */;
+//! let sorted = warp.bitonic_sort(confidence); // 15 compare-swaps
+//! // Top-k confident variables become unit clauses for CDCL
+//! ```
+//!
+//! **Missing primitive:** `reduce_prod` (product reduction). Currently not in
+//! warp-types because GPU hardware provides sum reduction (`__reduce_add_sync`)
+//! but not product reduction. For k>32, implement via `reduce_sum(log(x))` then
+//! `exp`. For k=3 (our target), the product is just 2 multiplies — no reduction
+//! needed, the clause fits in a single lane.
+//!
+//! **Parallelism budget at scale:**
+//! - n=1000 vars → 4267 clauses → 134 warps for loss eval → saturates 1 SM
+//! - n=10000 vars → 42670 clauses → 1334 warps → saturates full GPU
+//! - 32 multi-start searches → 32× the above → embarrassingly parallel across SMs
 
 use crate::bcp::ClauseDb;
 use crate::literal::Lit;
@@ -681,6 +721,87 @@ mod tests {
             if let Some(ref assign) = r.assignment {
                 assert!(verify(&db, assign), "k={k}: invalid assignment");
             }
+        }
+    }
+
+    #[test]
+    fn scaling_study() {
+        // Scaling analysis: gradient vs CDCL across problem sizes.
+        // Uses fewer starts (8) for tractability at larger sizes.
+        // Run with: cargo test -p warp-types-sat --release scaling_study -- --nocapture
+        let config = GradientConfig {
+            num_starts: 8,
+            momentum: 0.9,
+            clause_weights: true,
+            ..GradientConfig::default()
+        };
+
+        println!("\n=== Scaling Study: Enhanced Gradient vs CDCL ===");
+        println!(
+            "{:<6} {:>6} {:>10} {:>10} {:>6} {:>6} {:>10}",
+            "vars", "cls", "grad(us)", "cdcl(us)", "g_ok", "c_ok", "best_loss"
+        );
+        println!("{}", "-".repeat(62));
+
+        for &n in &[20, 30, 50, 75, 100, 150, 200] {
+            let seeds = 3u64;
+            let (mut gt, mut ct) = (0u128, 0u128);
+            let (mut gs, mut cs) = (0u32, 0u32);
+            let mut loss_sum = 0.0f64;
+            let cls = ((n as f64) * 4.267).ceil() as usize;
+            // Skip CDCL above 100 vars — O(n²) BCP makes it impractical.
+            let run_cdcl = n <= 100;
+
+            for seed in 0..seeds {
+                let db = generate_3sat_phase_transition(n, seed);
+                let t = Instant::now();
+                let r = gradient_search(&db, n, &config);
+                gt += t.elapsed().as_micros();
+                if r.assignment.is_some() {
+                    gs += 1;
+                }
+                let best = r.starts.iter().map(|s| s.best_loss).fold(f64::MAX, f64::min);
+                loss_sum += best;
+
+                if run_cdcl {
+                    let db = generate_3sat_phase_transition(n, seed);
+                    let t = Instant::now();
+                    if matches!(solver::solve(db, n), solver::SolveResult::Sat(_)) {
+                        cs += 1;
+                    }
+                    ct += t.elapsed().as_micros();
+                }
+            }
+
+            let cdcl_str = if run_cdcl {
+                format!("{:>10}", ct / seeds as u128)
+            } else {
+                "       n/a".to_string()
+            };
+            println!(
+                "{:<6} {:>6} {:>10} {:>10} {:>6} {:>6} {:>10.3}",
+                n,
+                cls,
+                gt / seeds as u128,
+                cdcl_str,
+                gs,
+                if run_cdcl { cs } else { 0 },
+                loss_sum / seeds as f64
+            );
+        }
+
+        // GPU parallelism analysis: work per iteration
+        println!("\n=== GPU Parallelism Axes ===");
+        println!("Each gradient iteration at n vars, ratio 4.267:");
+        for &n in &[100, 1000, 10000] {
+            let clauses = ((n as f64) * 4.267).ceil() as usize;
+            let warps_clause_eval = (clauses + 31) / 32;
+            let warps_grad_accum = (n + 31) / 32;
+            let ops_per_iter = clauses * 3 + n * 13; // ~3 muls/clause + ~13 ops/var for gradient
+            println!(
+                "  n={:<6} clauses={:<8} warps(eval)={:<6} warps(grad)={:<6} ops/iter={:<10}",
+                n, clauses, warps_clause_eval, warps_grad_accum, ops_per_iter
+            );
         }
     }
 }
