@@ -735,4 +735,64 @@ p cnf 5 10
                 stats.propagations, us_per_conf, props_per_conf);
         }
     }
+
+    #[test]
+    fn per_conflict_cost_scaling() {
+        use crate::bench::generate_k_sat;
+        use std::time::Instant;
+
+        // How does per-conflict BCP cost scale with problem size?
+        // Uses decreasing clause/var ratios at larger sizes to ensure
+        // instances remain solvable (phase transition is ~4.267 for 3-SAT).
+        // At larger sizes, watch lists and clause DB grow, stressing cache.
+        println!("\n=== Per-conflict cost scaling ===");
+        println!("{:<6} {:>6} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12} {:>8}",
+            "vars", "ratio", "seed", "result", "ms", "conflicts", "props",
+            "us/conf", "prop/conf");
+        println!("{}", "-".repeat(88));
+
+        // (vars, clause_ratio): lower ratio = easier (more SAT, fewer conflicts)
+        let configs: &[(u32, f64)] = &[
+            (200, 4.267), (300, 4.0), (500, 3.5), (700, 3.0), (1000, 2.5),
+        ];
+
+        for &(n, ratio) in configs {
+            let num_clauses = ((n as f64) * ratio).ceil() as usize;
+            let mut completed = 0;
+            for seed in 0..30u64 {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let t = Instant::now();
+                let (result, stats) = solve_watched_stats(db, n);
+                let elapsed_us = t.elapsed().as_micros();
+                let elapsed_ms = elapsed_us / 1000;
+
+                // Hard timeout: skip if too slow (UNSAT or hard SAT)
+                if elapsed_ms > 5_000 {
+                    continue;
+                }
+                // Need enough conflicts for stable per-conflict measurement
+                if stats.conflicts < 500 {
+                    continue;
+                }
+
+                let tag = match result {
+                    SolveResult::Sat(_) => "SAT",
+                    SolveResult::Unsat => "UNSAT",
+                };
+                let us_per_conf = elapsed_us as f64 / stats.conflicts as f64;
+                let props_per_conf = stats.propagations as f64 / stats.conflicts as f64;
+                println!("{:<6} {:>6.3} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12.1} {:>8.1}",
+                    n, ratio, seed, tag, elapsed_ms, stats.conflicts, stats.propagations,
+                    us_per_conf, props_per_conf);
+
+                completed += 1;
+                if completed >= 3 {
+                    break;
+                }
+            }
+            if completed == 0 {
+                println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
+            }
+        }
+    }
 }

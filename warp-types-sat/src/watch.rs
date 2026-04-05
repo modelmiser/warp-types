@@ -12,7 +12,7 @@
 use crate::bcp::{BcpResult, ClauseDb};
 use crate::literal::Lit;
 use crate::phase::Propagate;
-use crate::trail::{BcpTrail, Trail};
+use crate::trail::Trail;
 
 /// A single entry in a literal's watch list.
 ///
