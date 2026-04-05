@@ -27,23 +27,84 @@ pub struct AnalysisResult {
     pub lbd: u32,
 }
 
-/// Run 1-UIP conflict analysis.
+/// Persistent scratch buffers for conflict analysis.
+///
+/// Allocated once at solver init, reused across all conflicts. Eliminates
+/// the per-conflict heap allocation of `seen` and `levels_seen` vectors.
+pub struct AnalyzeWork {
+    /// Per-variable seen flag. Sized for num_vars at init, cleared
+    /// incrementally via `touched` after each analysis.
+    seen: Vec<bool>,
+    /// Variables touched during this analysis (for incremental clear).
+    touched: Vec<u32>,
+    /// Stack for clause minimization DFS.
+    min_stack: Vec<Lit>,
+    /// Temporary for `to_clear` in minimization.
+    min_to_clear: Vec<u32>,
+    /// Level-seen flags for LBD computation.
+    levels_seen: Vec<bool>,
+}
+
+impl AnalyzeWork {
+    /// Create scratch buffers for a solver with `num_vars` variables.
+    pub fn new(num_vars: usize) -> Self {
+        AnalyzeWork {
+            seen: vec![false; num_vars],
+            touched: Vec::with_capacity(64),
+            min_stack: Vec::with_capacity(32),
+            min_to_clear: Vec::with_capacity(32),
+            levels_seen: Vec::new(), // grown on demand per analysis
+        }
+    }
+
+    /// Ensure buffers cover at least `num_vars` variables (for learned clauses
+    /// that introduce new variable indices — shouldn't happen, but defensive).
+    fn ensure_capacity(&mut self, num_vars: usize) {
+        if num_vars > self.seen.len() {
+            self.seen.resize(num_vars, false);
+        }
+    }
+
+    /// Clear all seen flags touched during the last analysis.
+    fn clear_seen(&mut self) {
+        for &var in &self.touched {
+            self.seen[var as usize] = false;
+        }
+        self.touched.clear();
+    }
+
+    /// Mark a variable as seen and record it for cleanup.
+    #[inline]
+    fn mark_seen(&mut self, var: u32) {
+        self.seen[var as usize] = true;
+        self.touched.push(var);
+    }
+}
+
+/// Run 1-UIP conflict analysis (allocates fresh scratch buffers).
+///
+/// Convenience wrapper for callers that don't reuse buffers (old solver, tests).
+pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) -> AnalysisResult {
+    let num_vars = trail.num_vars().max(db.max_variable() as usize + 1);
+    let mut work = AnalyzeWork::new(num_vars);
+    analyze_conflict_with(&mut work, trail, db, conflict_clause)
+}
+
+/// Run 1-UIP conflict analysis using persistent scratch buffers.
 ///
 /// `conflict_clause` is the index of the clause that caused the conflict.
 /// Returns the learned clause and backtrack level.
-pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) -> AnalysisResult {
+pub fn analyze_conflict_with(
+    work: &mut AnalyzeWork,
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict_clause: usize,
+) -> AnalysisResult {
     let current_level = trail.current_level();
 
-    // Seen set: tracks which variables have been visited during resolution
-    let max_var = db.max_variable().max(
-        trail
-            .entries()
-            .iter()
-            .map(|e| e.lit.var())
-            .max()
-            .unwrap_or(0),
-    );
-    let mut seen = vec![false; max_var as usize + 1];
+    // Ensure seen array covers all variables (defensive — shouldn't grow).
+    let max_var = trail.num_vars();
+    work.ensure_capacity(max_var);
 
     // Start with the conflict clause's literals
     let mut learned = Vec::new();
@@ -51,8 +112,8 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
 
     for &lit in db.clause(conflict_clause).literals {
         let var = lit.var();
-        if !seen[var as usize] {
-            seen[var as usize] = true;
+        if !work.seen[var as usize] {
+            work.mark_seen(var);
             let entry = trail.entry_for_var(var);
             debug_assert!(
                 entry.is_some(),
@@ -78,7 +139,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         // Find the most recent trail entry at the current level that we've seen
         trail_idx -= 1;
         let entry = &entries[trail_idx];
-        if entry.level != current_level || !seen[entry.lit.var() as usize] {
+        if entry.level != current_level || !work.seen[entry.lit.var() as usize] {
             continue;
         }
 
@@ -102,15 +163,15 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
                     entry.lit.var()
                 );
                 num_at_current_level -= 1;
-                seen[entry.lit.var() as usize] = false; // resolved away
-                                                        // Add all other literals from the reason clause
+                work.seen[entry.lit.var() as usize] = false; // resolved away
+                // Add all other literals from the reason clause
                 for &lit in db.clause(reason_clause).literals {
                     let var = lit.var();
                     if var == entry.lit.var() {
                         continue; // skip the resolved variable
                     }
-                    if !seen[var as usize] {
-                        seen[var as usize] = true;
+                    if !work.seen[var as usize] {
+                        work.mark_seen(var);
                         let reason_entry = trail.entry_for_var(var);
                         match reason_entry {
                             Some(e) if e.level == current_level => {
@@ -130,7 +191,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
     // Scan trail backward — the most recent seen entry at this level is the UIP.
     let mut asserting_lit = None;
     for entry in entries.iter().rev() {
-        if entry.level == current_level && seen[entry.lit.var() as usize] {
+        if entry.level == current_level && work.seen[entry.lit.var() as usize] {
             asserting_lit = Some(entry.lit.complement());
             break;
         }
@@ -154,22 +215,23 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
         mask
     };
 
-    let mut to_clear: Vec<u32> = Vec::new();
+    work.min_to_clear.clear();
     let mut minimized = Vec::with_capacity(learned.len());
     minimized.push(learned[0]); // asserting literal always kept
 
     for &l in &learned[1..] {
-        if lit_redundant(trail, db, l, abstract_levels, &mut seen, &mut to_clear) {
-            seen[l.var() as usize] = false; // no longer in clause
+        if lit_redundant_with(work, trail, db, l, abstract_levels) {
+            work.seen[l.var() as usize] = false; // no longer in clause
         } else {
             minimized.push(l);
         }
     }
 
     // Clean up DFS marks from successful redundancy proofs
-    for &var in &to_clear {
-        seen[var as usize] = false;
+    for &var in &work.min_to_clear {
+        work.seen[var as usize] = false;
     }
+    work.min_to_clear.clear();
 
     let learned = minimized;
 
@@ -184,19 +246,24 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
 
     // LBD: count distinct decision levels in the learned clause.
     let lbd = {
-        let mut levels_seen = vec![false; current_level as usize + 1];
+        let level_count = current_level as usize + 1;
+        work.levels_seen.clear();
+        work.levels_seen.resize(level_count, false);
         let mut count = 0u32;
         for lit in &learned {
             if let Some(e) = trail.entry_for_var(lit.var()) {
                 let lv = e.level as usize;
-                if lv < levels_seen.len() && !levels_seen[lv] {
-                    levels_seen[lv] = true;
+                if lv < level_count && !work.levels_seen[lv] {
+                    work.levels_seen[lv] = true;
                     count += 1;
                 }
             }
         }
         count
     };
+
+    // Clean up seen flags for next conflict
+    work.clear_seen();
 
     AnalysisResult {
         learned,
@@ -205,29 +272,19 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
     }
 }
 
-/// Check if a literal is redundant in the learned clause.
+/// Check if a literal is redundant using persistent work buffers.
 ///
-/// A literal is redundant if all literals in its reason clause are either:
-/// - Already in the learned clause (marked in `seen`)
-/// - At decision level 0 (always true, can't contribute to conflict)
-/// - Themselves redundant (recursive, via DFS)
-///
-/// Uses `abstract_levels` (bitmask of decision levels in the learned clause)
-/// as a fast filter: if a variable's level has no bit set, it can't be in
-/// the clause, so the literal isn't redundant.
-///
-/// Marks from successful proofs persist in `seen` (transitivity cache).
-/// On failure, all marks from this check are rolled back via `to_clear`.
-fn lit_redundant(
+/// Same algorithm as the standalone `lit_redundant`, but reuses
+/// `work.min_stack` and `work.min_to_clear` across calls.
+fn lit_redundant_with(
+    work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
     lit: Lit,
     abstract_levels: u64,
-    seen: &mut [bool],
-    to_clear: &mut Vec<u32>,
 ) -> bool {
-    let top = to_clear.len(); // snapshot for rollback on failure
-    let mut stack: Vec<Lit> = Vec::new();
+    let top = work.min_to_clear.len(); // snapshot for rollback on failure
+    work.min_stack.clear();
 
     // Start by examining the reason for lit's assignment
     let entry = match trail.entry_for_var(lit.var()) {
@@ -245,7 +302,7 @@ fn lit_redundant(
         if rv == lit.var() {
             continue;
         }
-        if seen[rv as usize] {
+        if work.seen[rv as usize] {
             continue; // in clause or already proven redundant
         }
         if let Some(re) = trail.entry_for_var(rv) {
@@ -253,18 +310,18 @@ fn lit_redundant(
                 continue; // level 0 literals are always satisfied
             }
         }
-        stack.push(reason_lit);
+        work.min_stack.push(reason_lit);
     }
 
-    while let Some(l) = stack.pop() {
+    while let Some(l) = work.min_stack.pop() {
         let var = l.var();
 
         let re = match trail.entry_for_var(var) {
             Some(e) => e,
             None => {
                 // Unassigned — rollback
-                for v in to_clear.drain(top..) {
-                    seen[v as usize] = false;
+                for v in work.min_to_clear.drain(top..) {
+                    work.seen[v as usize] = false;
                 }
                 return false;
             }
@@ -272,8 +329,8 @@ fn lit_redundant(
 
         // Abstract level filter: if this level can't be in the clause, fail fast
         if (abstract_levels >> (re.level % 64)) & 1 == 0 {
-            for v in to_clear.drain(top..) {
-                seen[v as usize] = false;
+            for v in work.min_to_clear.drain(top..) {
+                work.seen[v as usize] = false;
             }
             return false;
         }
@@ -283,8 +340,8 @@ fn lit_redundant(
                 // Decision variable at a level that MIGHT be in the clause
                 // (passed abstract filter) but isn't actually in the clause
                 // (not in `seen`). Can't be proven redundant.
-                for v in to_clear.drain(top..) {
-                    seen[v as usize] = false;
+                for v in work.min_to_clear.drain(top..) {
+                    work.seen[v as usize] = false;
                 }
                 return false;
             }
@@ -292,8 +349,8 @@ fn lit_redundant(
         };
 
         // Mark as visited (will be cleaned up on failure or at end)
-        seen[var as usize] = true;
-        to_clear.push(var);
+        work.seen[var as usize] = true;
+        work.min_to_clear.push(var);
 
         // Explore reason clause
         for &reason_lit in db.clause(ci).literals {
@@ -301,7 +358,7 @@ fn lit_redundant(
             if rv == var {
                 continue;
             }
-            if seen[rv as usize] {
+            if work.seen[rv as usize] {
                 continue;
             }
             if let Some(rre) = trail.entry_for_var(rv) {
@@ -309,12 +366,13 @@ fn lit_redundant(
                     continue;
                 }
             }
-            stack.push(reason_lit);
+            work.min_stack.push(reason_lit);
         }
     }
 
     true // all paths lead to in-clause or level-0
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -45,6 +45,8 @@ pub struct Trail {
     assignments: Vec<Option<bool>>,
     /// Map from variable to position in `entries` (for O(1) entry lookup).
     var_position: Vec<Option<usize>>,
+    /// Number of unassigned variables. Maintained incrementally for O(1) `all_assigned`.
+    num_unassigned: usize,
 }
 
 impl Trail {
@@ -55,14 +57,17 @@ impl Trail {
             current_level: 0,
             assignments: vec![None; num_vars],
             var_position: vec![None; num_vars],
+            num_unassigned: num_vars,
         }
     }
 
     /// Ensure the assignment array covers at least `num_vars` variables.
     pub fn ensure_capacity(&mut self, num_vars: usize) {
         if num_vars > self.assignments.len() {
+            let added = num_vars - self.assignments.len();
             self.assignments.resize(num_vars, None);
             self.var_position.resize(num_vars, None);
+            self.num_unassigned += added;
         }
     }
 
@@ -92,9 +97,9 @@ impl Trail {
         self.assignments.get(var as usize).copied().flatten()
     }
 
-    /// True when every variable has an assignment.
+    /// True when every variable has an assignment. O(1) via counter.
     pub fn all_assigned(&self) -> bool {
-        self.assignments.iter().all(|a| a.is_some())
+        self.num_unassigned == 0
     }
 
     /// Record a new decision: increments the decision level and assigns.
@@ -111,6 +116,7 @@ impl Trail {
         self.level_starts.push(self.entries.len());
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
         self.var_position[lit.var() as usize] = Some(self.entries.len());
+        self.num_unassigned -= 1;
         self.entries.push(TrailEntry {
             lit,
             level: self.current_level,
@@ -130,6 +136,7 @@ impl Trail {
         );
         self.assignments[lit.var() as usize] = Some(!lit.is_negated());
         self.var_position[lit.var() as usize] = Some(self.entries.len());
+        self.num_unassigned -= 1;
         self.entries.push(TrailEntry {
             lit,
             level: self.current_level,
@@ -157,10 +164,12 @@ impl Trail {
             self.current_level
         );
         let start = self.level_starts[target_level as usize + 1];
+        let retracted = self.entries.len() - start;
         for entry in &self.entries[start..] {
             self.assignments[entry.lit.var() as usize] = None;
             self.var_position[entry.lit.var() as usize] = None;
         }
+        self.num_unassigned += retracted;
         self.entries.truncate(start);
         self.level_starts.truncate(target_level as usize + 1);
         self.current_level = target_level;

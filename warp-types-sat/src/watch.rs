@@ -99,8 +99,6 @@ pub fn run_bcp_watched(
     trail: &mut Trail,
     _phase: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
-    trail.ensure_capacity(db.max_variable() as usize + 1);
-
     // Handle unit/empty original clauses once at initialization.
     // Must not re-run after restarts — deleted clauses have empty literals
     // that look like trivially-false clauses, and the O(n) scan is expensive.

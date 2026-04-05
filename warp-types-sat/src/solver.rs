@@ -4,7 +4,7 @@
 //! The trail is the single source of truth for assignments — BCP writes
 //! through it, backtracking retracts through it. No ghost assignments.
 
-use crate::analyze;
+use crate::analyze::{self, AnalyzeWork};
 use crate::bcp::{self, BcpResult, ClauseDb};
 use crate::literal::Lit;
 use crate::restart::LubyRestarts;
@@ -152,6 +152,7 @@ pub(crate) fn solve_cdcl_core(
     let mut watches = watch::Watches::new(&db, num_vars);
     let mut restarts = LubyRestarts::new(32);
     let mut restart_pending = false;
+    let mut analyze_work = AnalyzeWork::new(num_vars as usize);
 
     // LBD clause deletion with periodic compaction
     db.freeze_original();
@@ -224,7 +225,9 @@ pub(crate) fn solve_cdcl_core(
                             return SolveResult::Unsat;
                         }
 
-                        let analysis = analyze::analyze_conflict(&trail, &db, clause_index);
+                        let analysis = analyze::analyze_conflict_with(
+                            &mut analyze_work, &trail, &db, clause_index,
+                        );
 
                         // ── VSIDS: bump learned clause variables, decay ──
                         for &learned_lit in &analysis.learned {
