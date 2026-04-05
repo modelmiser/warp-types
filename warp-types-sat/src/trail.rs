@@ -137,6 +137,14 @@ impl Trail {
         });
     }
 
+    /// Entries at decision levels strictly above `level`, i.e. the entries that
+    /// `backtrack_to(level)` will retract. Use for pre-backtrack iteration
+    /// (phase saving, heap re-insertion) without scanning the full trail.
+    pub fn entries_above(&self, level: u32) -> &[TrailEntry] {
+        let start = self.level_starts[level as usize + 1];
+        &self.entries[start..]
+    }
+
     /// Backtrack to the given decision level, retracting all assignments above it.
     ///
     /// # Panics

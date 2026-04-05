@@ -6,10 +6,17 @@
 //!
 //! MiniSat optimization: instead of decaying all activities by 0.95 each conflict
 //! (O(n)), increase the bump increment by 1/0.95 (O(1)). Mathematically equivalent.
+//!
+//! Variable selection uses a binary max-heap ordered by activity (O(log n) per
+//! decision vs O(n) linear scan). Variables are removed from the heap when
+//! popped by `pick()` and re-inserted via `notify_unassigned()` during backtrack.
 
 use crate::bcp::ClauseDb;
 
-/// VSIDS branching heuristic with phase saving.
+/// Sentinel: variable is not in the heap.
+const NOT_IN_HEAP: u32 = u32::MAX;
+
+/// VSIDS branching heuristic with phase saving and priority heap.
 pub struct Vsids {
     /// Per-variable activity score.
     activity: Vec<f64>,
@@ -19,27 +26,140 @@ pub struct Vsids {
     decay_factor: f64,
     /// Saved phase (polarity) for each variable.
     phase: Vec<bool>,
+    /// Binary max-heap of variable indices, ordered by activity.
+    heap: Vec<u32>,
+    /// Position of each variable in `heap`. `NOT_IN_HEAP` if absent.
+    heap_pos: Vec<u32>,
 }
 
 impl Vsids {
     /// Create with all activities at zero, all phases defaulting positive.
+    /// All variables start in the heap, ordered by index (higher index = higher
+    /// priority on ties, matching MiniSat convention).
     pub fn new(num_vars: u32) -> Self {
+        let n = num_vars as usize;
+        // Reverse order so higher-indexed vars are near the root (tie-breaking).
+        let heap: Vec<u32> = (0..num_vars).rev().collect();
+        let mut heap_pos = vec![0u32; n];
+        for (i, &var) in heap.iter().enumerate() {
+            heap_pos[var as usize] = i as u32;
+        }
         Vsids {
-            activity: vec![0.0; num_vars as usize],
+            activity: vec![0.0; n],
             increment: 1.0,
             decay_factor: 0.95,
-            phase: vec![true; num_vars as usize],
+            phase: vec![true; n],
+            heap,
+            heap_pos,
         }
     }
 
+    // ── Heap internals ──────────────────────────────────────────────
+
+    /// Compare two variables by activity, breaking ties by index (higher wins).
+    /// Tie-breaking by index ensures deterministic decision order and matches
+    /// the old linear-scan behavior where `max_by` returned the last equal element.
+    #[inline]
+    fn activity_gt(&self, a: u32, b: u32) -> bool {
+        let aa = self.activity[a as usize];
+        let ab = self.activity[b as usize];
+        aa > ab || (aa == ab && a > b)
+    }
+
+    #[inline]
+    fn heap_swap(&mut self, i: usize, j: usize) {
+        let vi = self.heap[i];
+        let vj = self.heap[j];
+        self.heap.swap(i, j);
+        self.heap_pos[vi as usize] = j as u32;
+        self.heap_pos[vj as usize] = i as u32;
+    }
+
+    fn sift_up(&mut self, mut pos: usize) {
+        let var = self.heap[pos];
+        while pos > 0 {
+            let parent = (pos - 1) / 2;
+            if !self.activity_gt(var, self.heap[parent]) {
+                break;
+            }
+            self.heap_swap(pos, parent);
+            pos = parent;
+        }
+    }
+
+    fn sift_down(&mut self, mut pos: usize) {
+        let len = self.heap.len();
+        loop {
+            let left = 2 * pos + 1;
+            if left >= len {
+                break;
+            }
+            let right = left + 1;
+            let child = if right < len && self.activity_gt(self.heap[right], self.heap[left]) {
+                right
+            } else {
+                left
+            };
+            if !self.activity_gt(self.heap[child], self.heap[pos]) {
+                break;
+            }
+            self.heap_swap(pos, child);
+            pos = child;
+        }
+    }
+
+    /// Build heap from scratch in O(n) using bottom-up heapify.
+    fn rebuild_heap(&mut self) {
+        for (i, &var) in self.heap.iter().enumerate() {
+            self.heap_pos[var as usize] = i as u32;
+        }
+        let n = self.heap.len();
+        if n > 1 {
+            for i in (0..n / 2).rev() {
+                self.sift_down(i);
+            }
+        }
+    }
+
+    fn heap_insert(&mut self, var: u32) {
+        if self.heap_pos[var as usize] != NOT_IN_HEAP {
+            return; // already in heap
+        }
+        let pos = self.heap.len();
+        self.heap.push(var);
+        self.heap_pos[var as usize] = pos as u32;
+        self.sift_up(pos);
+    }
+
+    fn heap_pop(&mut self) -> Option<u32> {
+        if self.heap.is_empty() {
+            return None;
+        }
+        let var = self.heap[0];
+        let last = self.heap.len() - 1;
+        if last > 0 {
+            self.heap_swap(0, last);
+        }
+        self.heap_pos[var as usize] = NOT_IN_HEAP;
+        self.heap.pop();
+        if !self.heap.is_empty() {
+            self.sift_down(0);
+        }
+        Some(var)
+    }
+
+    // ── Public API ──────────────────────────────────────────────────
+
     /// Warm-start activities from clause occurrence counts.
     /// Variables appearing more often are more constrained — decide them first.
+    /// Rebuilds the heap after updating all activities.
     pub fn initialize_from_clauses(&mut self, db: &ClauseDb) {
         for ci in 0..db.len() {
             for &lit in &db.clause(ci).literals {
                 self.activity[lit.var() as usize] += 1.0;
             }
         }
+        self.rebuild_heap();
     }
 
     /// Bump activity of a variable (call for each var in the learned clause).
@@ -51,6 +171,12 @@ impl Vsids {
                 *a *= 1e-100;
             }
             self.increment *= 1e-100;
+            // Uniform rescale preserves relative order — heap invariant intact.
+        }
+        // Sift up if in heap (activity only increases).
+        let pos = self.heap_pos[var as usize];
+        if pos != NOT_IN_HEAP {
+            self.sift_up(pos as usize);
         }
     }
 
@@ -60,18 +186,22 @@ impl Vsids {
     }
 
     /// Pick the highest-activity unassigned variable and its saved phase.
-    pub fn pick(&self, assignments: &[Option<bool>]) -> (u32, bool) {
-        let (var, _) = assignments
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.is_none())
-            .max_by(|(i, _), (j, _)| {
-                self.activity[*i]
-                    .partial_cmp(&self.activity[*j])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .expect("pick called with all variables assigned");
-        (var as u32, self.phase[var])
+    ///
+    /// Pops from the max-heap, skipping assigned variables (they are re-inserted
+    /// on backtrack via `notify_unassigned`). O(log n) amortized per decision.
+    pub fn pick(&mut self, assignments: &[Option<bool>]) -> (u32, bool) {
+        while let Some(var) = self.heap_pop() {
+            if assignments[var as usize].is_none() {
+                return (var, self.phase[var as usize]);
+            }
+        }
+        panic!("pick called with all variables assigned");
+    }
+
+    /// Re-insert a variable into the heap after it becomes unassigned.
+    /// Call during backtrack for each retracted variable.
+    pub fn notify_unassigned(&mut self, var: u32) {
+        self.heap_insert(var);
     }
 
     /// Save the phase (polarity) of a variable.
@@ -80,6 +210,7 @@ impl Vsids {
     }
 
     /// Set initial activity for a variable (e.g., from gradient confidence).
+    /// Call `initialize_from_clauses` afterward to rebuild the heap.
     pub fn set_initial_activity(&mut self, var: u32, activity: f64) {
         self.activity[var as usize] = activity;
     }
@@ -162,5 +293,74 @@ mod tests {
         // var 0 appears 2x, var 1 appears 2x, var 2 appears 2x
         let assignments = vec![None, None, None];
         let (_, _) = vsids.pick(&assignments); // should not panic
+    }
+
+    #[test]
+    fn notify_unassigned_reinserts() {
+        let mut vsids = Vsids::new(3);
+        vsids.bump(2);
+        vsids.bump(2);
+
+        let assignments = vec![None, None, None];
+        // Pick var 2 (highest activity) — removes from heap
+        let (var, _) = vsids.pick(&assignments);
+        assert_eq!(var, 2);
+
+        // Re-insert on "backtrack"
+        vsids.notify_unassigned(2);
+
+        // Should pick var 2 again
+        let (var, _) = vsids.pick(&assignments);
+        assert_eq!(var, 2);
+    }
+
+    #[test]
+    fn heap_order_after_multiple_bumps() {
+        let mut vsids = Vsids::new(5);
+        vsids.bump(3); // 3→1
+        vsids.bump(1); // 1→1
+        vsids.bump(1); // 1→2
+        vsids.bump(4); // 4→1
+        vsids.bump(4); // 4→2
+        vsids.bump(4); // 4→3
+        // activities: [0.0, 2.0, 0.0, 1.0, 3.0]
+
+        let assignments = vec![None, None, None, None, None];
+
+        let (v1, _) = vsids.pick(&assignments);
+        assert_eq!(v1, 4); // activity 3.0 (highest)
+
+        let (v2, _) = vsids.pick(&assignments);
+        assert_eq!(v2, 1); // activity 2.0
+
+        let (v3, _) = vsids.pick(&assignments);
+        assert_eq!(v3, 3); // activity 1.0
+    }
+
+    #[test]
+    fn bump_sifts_up_in_heap() {
+        let mut vsids = Vsids::new(3);
+        // Initially all zero activity. Bump var 2.
+        vsids.bump(2);
+
+        let assignments = vec![None, None, None];
+        let (var, _) = vsids.pick(&assignments);
+        assert_eq!(var, 2); // var 2 should be at top after bump
+    }
+
+    #[test]
+    fn double_insert_is_idempotent() {
+        let mut vsids = Vsids::new(2);
+        vsids.bump(0);
+
+        let assignments = vec![None, None];
+        let (var, _) = vsids.pick(&assignments);
+        assert_eq!(var, 0);
+
+        vsids.notify_unassigned(0);
+        vsids.notify_unassigned(0); // duplicate — should be no-op
+
+        let (var, _) = vsids.pick(&assignments);
+        assert_eq!(var, 0);
     }
 }

@@ -172,10 +172,9 @@ pub(crate) fn solve_cdcl_core(
         loop {
             // ── Execute pending restart ──
             if restart_pending && trail.current_level() > 0 {
-                for entry in trail.entries() {
-                    if entry.level > 0 {
-                        vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
-                    }
+                for entry in trail.entries_above(0) {
+                    vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
+                    vsids.notify_unassigned(entry.lit.var());
                 }
                 trail.backtrack_to(0);
                 watches.notify_backtrack(trail.len());
@@ -241,14 +240,13 @@ pub(crate) fn solve_cdcl_core(
                             return SolveResult::Unsat;
                         }
 
-                        // ── Phase saving before backtrack ──
-                        for entry in trail.entries() {
-                            if entry.level > analysis.backtrack_level {
-                                vsids.save_phase(
-                                    entry.lit.var(),
-                                    !entry.lit.is_negated(),
-                                );
-                            }
+                        // ── Phase saving + heap re-insertion before backtrack ──
+                        for entry in trail.entries_above(analysis.backtrack_level) {
+                            vsids.save_phase(
+                                entry.lit.var(),
+                                !entry.lit.is_negated(),
+                            );
+                            vsids.notify_unassigned(entry.lit.var());
                         }
 
                         trail.backtrack_to(analysis.backtrack_level);
@@ -597,10 +595,13 @@ p cnf 3 4
                     let db = generate_3sat_phase_transition(200, seed);
                     assert!(gradient::verify(&db, a), "seed {seed}: invalid assignment");
                     sat_count += 1;
-                    // SAT instances must be fast
+                    // SAT instances must be fast in release mode.
+                    // Debug mode is ~13x slower due to bounds checking;
+                    // use a higher threshold to avoid false failures.
+                    let threshold = if cfg!(debug_assertions) { 60_000 } else { 5_000 };
                     assert!(
-                        elapsed < 5_000,
-                        "seed {seed}: SAT took {elapsed}ms — should be sub-second"
+                        elapsed < threshold,
+                        "seed {seed}: SAT took {elapsed}ms — should be sub-{threshold}ms"
                     );
                     "SAT"
                 }
