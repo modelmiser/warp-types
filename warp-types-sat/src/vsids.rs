@@ -155,7 +155,7 @@ impl Vsids {
     /// Rebuilds the heap after updating all activities.
     pub fn initialize_from_clauses(&mut self, db: &ClauseDb) {
         for ci in 0..db.len() {
-            for &lit in &db.clause(ci).literals {
+            for &lit in db.clause(ci).literals {
                 self.activity[lit.var() as usize] += 1.0;
             }
         }

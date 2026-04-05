@@ -49,7 +49,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
     let mut learned = Vec::new();
     let mut num_at_current_level = 0;
 
-    for &lit in &db.clause(conflict_clause).literals {
+    for &lit in db.clause(conflict_clause).literals {
         let var = lit.var();
         if !seen[var as usize] {
             seen[var as usize] = true;
@@ -104,7 +104,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) ->
                 num_at_current_level -= 1;
                 seen[entry.lit.var() as usize] = false; // resolved away
                                                         // Add all other literals from the reason clause
-                for &lit in &db.clause(reason_clause).literals {
+                for &lit in db.clause(reason_clause).literals {
                     let var = lit.var();
                     if var == entry.lit.var() {
                         continue; // skip the resolved variable
@@ -240,7 +240,7 @@ fn lit_redundant(
     };
 
     // Push reason clause literals (except lit itself) onto stack
-    for &reason_lit in &db.clause(reason_clause).literals {
+    for &reason_lit in db.clause(reason_clause).literals {
         let rv = reason_lit.var();
         if rv == lit.var() {
             continue;
@@ -296,7 +296,7 @@ fn lit_redundant(
         to_clear.push(var);
 
         // Explore reason clause
-        for &reason_lit in &db.clause(ci).literals {
+        for &reason_lit in db.clause(ci).literals {
             let rv = reason_lit.var();
             if rv == var {
                 continue;

@@ -164,7 +164,7 @@ pub fn run_bcp_watched(
             }
 
             // Search clause for a replacement watch (unassigned or true literal).
-            let clause_lits = &db.clause(ci).literals;
+            let clause_lits = db.clause(ci).literals;
             let mut replacement = None;
             for &lit in clause_lits {
                 if lit == w0 || lit == w1 {

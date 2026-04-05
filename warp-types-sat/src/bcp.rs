@@ -35,17 +35,24 @@ pub enum BcpResult {
 }
 
 // ============================================================================
-// Clause database
+// Clause database — flat arena layout
 // ============================================================================
 
-/// A clause: a disjunction of literals.
-#[derive(Debug, Clone)]
-pub struct Clause {
-    /// The literals in this clause.
-    pub literals: Vec<Lit>,
+/// A view into a clause stored in the arena.
+///
+/// Returned by `ClauseDb::clause()`. The `literals` field is a slice into the
+/// contiguous arena — single pointer chase from the offset, no heap indirection.
+pub struct ClauseRef<'a> {
+    /// The literals in this clause (slice into the arena).
+    pub literals: &'a [Lit],
 }
 
-/// Clause database storing original and learned clauses.
+/// Clause database storing original and learned clauses in a flat arena.
+///
+/// All literals are stored contiguously in a single `Vec<Lit>`. Each clause
+/// is identified by its offset and length in the arena. This eliminates the
+/// per-clause heap allocation and second pointer chase of `Vec<Clause>` with
+/// `Vec<Lit>` — every clause access is a single indexed read into the arena.
 ///
 /// Clauses are indexed by insertion order (0, 1, 2, ...).
 /// The solver appends learned clauses during conflict analysis.
@@ -53,7 +60,12 @@ pub struct Clause {
 /// protected from deletion; all subsequent clauses are "learned" and
 /// eligible for LBD-based garbage collection.
 pub struct ClauseDb {
-    clauses: Vec<Clause>,
+    /// Flat arena: all clause literals stored contiguously.
+    arena: Vec<Lit>,
+    /// Start offset of clause `i` in the arena.
+    offsets: Vec<u32>,
+    /// Number of literals in clause `i`.
+    lengths: Vec<u32>,
     /// Number of original (input) clauses. Set by `freeze_original()`.
     num_original: usize,
     /// LBD (Literal Block Distance) score per clause. 0 for original clauses.
@@ -65,7 +77,9 @@ pub struct ClauseDb {
 impl ClauseDb {
     pub fn new() -> Self {
         ClauseDb {
-            clauses: Vec::new(),
+            arena: Vec::new(),
+            offsets: Vec::new(),
+            lengths: Vec::new(),
             num_original: 0,
             lbd: Vec::new(),
             deleted: Vec::new(),
@@ -74,8 +88,12 @@ impl ClauseDb {
 
     /// Add a clause, returns its index.
     pub fn add_clause(&mut self, literals: Vec<Lit>) -> usize {
-        let idx = self.clauses.len();
-        self.clauses.push(Clause { literals });
+        let idx = self.offsets.len();
+        let offset = self.arena.len() as u32;
+        let len = literals.len() as u32;
+        self.arena.extend_from_slice(&literals);
+        self.offsets.push(offset);
+        self.lengths.push(len);
         self.lbd.push(0);
         self.deleted.push(false);
         idx
@@ -84,7 +102,7 @@ impl ClauseDb {
     /// Mark the current clause count as "original". Clauses added after this
     /// point are "learned" and eligible for LBD-based deletion.
     pub fn freeze_original(&mut self) {
-        self.num_original = self.clauses.len();
+        self.num_original = self.offsets.len();
     }
 
     /// Set the LBD score for a clause.
@@ -115,8 +133,9 @@ impl ClauseDb {
     ///
     /// Returns indices of deleted clauses (for watch list cleanup).
     pub fn reduce_learned(&mut self, locked: &[bool]) -> Vec<usize> {
+        let num_clauses = self.offsets.len();
         let mut candidates: Vec<(usize, u16)> = Vec::new();
-        for i in self.num_original..self.clauses.len() {
+        for i in self.num_original..num_clauses {
             if self.deleted[i] {
                 continue;
             }
@@ -136,34 +155,42 @@ impl ClauseDb {
         let to_delete: Vec<usize> = candidates[keep..].iter().map(|&(i, _)| i).collect();
         for &i in &to_delete {
             self.deleted[i] = true;
-            self.clauses[i].literals.clear();
+            // Arena space is reclaimed during compact() — no per-clause free needed.
         }
         to_delete
     }
 
-    /// Compact the database: remove tombstoned clauses and renumber.
+    /// Compact the database: remove tombstoned clauses and rebuild the arena.
     ///
     /// Returns a remap table: `remap[old_index] = Some(new_index)` for live
     /// clauses, `None` for deleted ones. Callers must update all stored clause
     /// indices (trail reasons, watch lists) using this table.
     pub fn compact(&mut self) -> Vec<Option<usize>> {
-        let n = self.clauses.len();
+        let n = self.offsets.len();
         let mut remap: Vec<Option<usize>> = vec![None; n];
+        let mut new_arena = Vec::with_capacity(self.arena.len());
+        let mut new_offsets = Vec::with_capacity(n);
+        let mut new_lengths = Vec::with_capacity(n);
+        let mut new_lbd = Vec::with_capacity(n);
         let mut write = 0;
 
         for read in 0..n {
             if !self.deleted[read] {
                 remap[read] = Some(write);
-                if write != read {
-                    self.clauses.swap(write, read);
-                    self.lbd.swap(write, read);
-                }
+                let start = self.offsets[read] as usize;
+                let len = self.lengths[read] as usize;
+                new_offsets.push(new_arena.len() as u32);
+                new_lengths.push(self.lengths[read]);
+                new_arena.extend_from_slice(&self.arena[start..start + len]);
+                new_lbd.push(self.lbd[read]);
                 write += 1;
             }
         }
 
-        self.clauses.truncate(write);
-        self.lbd.truncate(write);
+        self.arena = new_arena;
+        self.offsets = new_offsets;
+        self.lengths = new_lengths;
+        self.lbd = new_lbd;
         self.deleted.clear();
         self.deleted.resize(write, false);
         // num_original unchanged — original clauses are never deleted
@@ -172,27 +199,26 @@ impl ClauseDb {
 
     /// Number of clauses (original + learned).
     pub fn len(&self) -> usize {
-        self.clauses.len()
+        self.offsets.len()
     }
 
     /// Whether the database contains no clauses.
     pub fn is_empty(&self) -> bool {
-        self.clauses.is_empty()
+        self.offsets.is_empty()
     }
 
     /// Get a clause by index.
-    pub fn clause(&self, idx: usize) -> &Clause {
-        &self.clauses[idx]
+    pub fn clause(&self, idx: usize) -> ClauseRef<'_> {
+        let start = self.offsets[idx] as usize;
+        let len = self.lengths[idx] as usize;
+        ClauseRef {
+            literals: &self.arena[start..start + len],
+        }
     }
 
     /// Highest variable index across all clauses. Returns 0 if empty.
     pub fn max_variable(&self) -> u32 {
-        self.clauses
-            .iter()
-            .flat_map(|c| c.literals.iter())
-            .map(|lit| lit.var())
-            .max()
-            .unwrap_or(0)
+        self.arena.iter().map(|lit| lit.var()).max().unwrap_or(0)
     }
 }
 
@@ -226,9 +252,9 @@ pub fn run_bcp(
 
         // Evaluate non-tileable clauses directly (empty or >32 literals).
         for i in 0..db.len() {
-            let clause = &db.clauses[i];
+            let clause = db.clause(i);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
-                match clause_tile::eval_clause_direct(&clause.literals, trail.assignments()) {
+                match clause_tile::eval_clause_direct(clause.literals, trail.assignments()) {
                     ClauseStatus::Conflict => {
                         return BcpResult::Conflict { clause_index: i };
                     }
@@ -248,13 +274,13 @@ pub fn run_bcp(
         let mut tiles: Vec<ClauseTile<Propagate>> = Vec::new();
 
         for i in 0..db.len() {
-            let clause = &db.clauses[i];
+            let clause = db.clause(i);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
                 continue; // handled in direct evaluation above
             }
             let token = pool.acquire(i).unwrap();
             if let Some(tile) =
-                clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, i)
+                clause_tile::make_clause_tile::<Propagate>(clause.literals, token, i)
             {
                 tiles.push(tile);
             }
