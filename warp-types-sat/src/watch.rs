@@ -272,13 +272,17 @@ pub fn run_bcp_watched(
 
             // ── Long clause path (≥3 literals) ──
 
-            // Read watched pair from inline positions c[0], c[1].
-            // SAFETY: ci < db.len(), positions 0 and 1 exist (clauses with <2
-            // literals never get watch entries).
-            let (c0, c1) = {
-                let c = unsafe { db.clause_unchecked(ci) };
-                (c.literals[0], c.literals[1])
-            }; // borrow of db released — enables mutable access below
+            // Single clause access: read c[0], c[1] and search for replacement
+            // in one borrow scope. NLL releases the borrow after the last use
+            // of `lits` (the replacement search loop), before the mutable
+            // swap_literal_unchecked call below.
+            //
+            // SAFETY: ci < db.len(), clause has ≥2 literals (watch invariant),
+            // all literal codes < 2*num_vars.
+            let c = unsafe { db.clause_unchecked(ci) };
+            let lits = c.literals;
+            let c0 = unsafe { *lits.get_unchecked(0) };
+            let c1 = unsafe { *lits.get_unchecked(1) };
 
             // Determine partner (the other watched literal) and which position
             // in the clause holds false_lit.
@@ -303,19 +307,17 @@ pub fn run_bcp_watched(
 
             // ── Search for replacement watch starting at c[2] ──
             // No need to compare against c[0]/c[1] — they're at known positions.
-            let replacement = {
-                let c = unsafe { db.clause_unchecked(ci) };
-                let mut found = None;
-                for k in 2..c.literals.len() {
-                    let lit = c.literals[k];
-                    // SAFETY: lit comes from a clause in the DB
-                    if unsafe { eval_lit_indexed(lit, bt.lit_values) } != Some(false) {
-                        found = Some((lit, k));
-                        break;
-                    }
+            let mut replacement = None;
+            for k in 2..lits.len() {
+                let lit = unsafe { *lits.get_unchecked(k) };
+                // SAFETY: lit comes from a clause in the DB
+                if unsafe { eval_lit_indexed(lit, bt.lit_values) } != Some(false) {
+                    replacement = Some((lit, k));
+                    break;
                 }
-                found
-            }; // borrow of db released
+            }
+            // NLL: c/lits borrow ends here (last use was in the loop).
+            // Mutable db access for swap_literal_unchecked is now safe.
 
             if let Some((new_watch, k)) = replacement {
                 // Swap replacement into the watched position (c[false_pos])

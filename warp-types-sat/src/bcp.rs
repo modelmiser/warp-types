@@ -250,7 +250,8 @@ impl ClauseDb {
     #[inline]
     pub unsafe fn swap_literal_unchecked(&mut self, idx: usize, a: usize, b: usize) {
         let start = *self.offsets.get_unchecked(idx) as usize;
-        self.arena.swap(start + a, start + b);
+        let ptr = self.arena.as_mut_ptr();
+        std::ptr::swap(ptr.add(start + a), ptr.add(start + b));
     }
 
     /// Highest variable index across all clauses. Returns 0 if empty.

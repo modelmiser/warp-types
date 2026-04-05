@@ -198,6 +198,22 @@ impl Trail {
             .map(|pos| &self.entries[pos])
     }
 
+    /// Unchecked entry lookup for analysis hot path.
+    ///
+    /// Eliminates two bounds checks vs `entry_for_var`: one on `var_position[var]`
+    /// and one on `entries[pos]`. Returns None if the variable is unassigned.
+    ///
+    /// # Safety
+    /// `var` must be < `self.num_vars()`. This is guaranteed for all variables
+    /// from the clause DB (validated at solver startup: `max_variable() < num_vars`).
+    #[inline]
+    pub unsafe fn entry_for_var_unchecked(&self, var: u32) -> Option<&TrailEntry> {
+        match *self.var_position.get_unchecked(var as usize) {
+            Some(pos) => Some(self.entries.get_unchecked(pos)),
+            None => None,
+        }
+    }
+
     /// Remap clause indices in propagation reasons after database compaction.
     pub fn remap_reasons(&mut self, remap: &[Option<usize>]) {
         for entry in &mut self.entries {

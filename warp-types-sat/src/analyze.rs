@@ -11,6 +11,8 @@
 //!
 //! Returns the learned clause and the backtrack level.
 
+use std::time::Instant;
+
 use crate::bcp::ClauseDb;
 use crate::literal::Lit;
 use crate::trail::{Reason, Trail};
@@ -25,6 +27,10 @@ pub struct AnalysisResult {
     /// Literal Block Distance: number of distinct decision levels among the
     /// learned clause's literals. Lower = more useful (a "glue clause" has LBD ≤ 2).
     pub lbd: u32,
+    /// Nanoseconds spent in 1-UIP resolution (backward trail scan + reason clause iteration).
+    pub resolve_ns: u64,
+    /// Nanoseconds spent in clause minimization (litRedundant DFS).
+    pub minimize_ns: u64,
 }
 
 /// Persistent scratch buffers for conflict analysis.
@@ -101,20 +107,23 @@ pub fn analyze_conflict_with(
     conflict_clause: usize,
 ) -> AnalysisResult {
     let current_level = trail.current_level();
+    let t_resolve = Instant::now();
 
     // Ensure seen array covers all variables (defensive — shouldn't grow).
     let max_var = trail.num_vars();
     work.ensure_capacity(max_var);
 
-    // Start with the conflict clause's literals
+    // Start with the conflict clause's literals.
+    // SAFETY: conflict_clause < db.len() (caller invariant).
     let mut learned = Vec::new();
     let mut num_at_current_level = 0;
 
-    for &lit in db.clause(conflict_clause).literals {
+    for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
         let var = lit.var();
         if !work.seen[var as usize] {
             work.mark_seen(var);
-            let entry = trail.entry_for_var(var);
+            // SAFETY: var comes from clause DB, validated var < num_vars at startup.
+            let entry = unsafe { trail.entry_for_var_unchecked(var) };
             debug_assert!(
                 entry.is_some(),
                 "variable {} in conflict clause has no trail entry (unassigned in a conflict?)",
@@ -164,15 +173,17 @@ pub fn analyze_conflict_with(
                 );
                 num_at_current_level -= 1;
                 work.seen[entry.lit.var() as usize] = false; // resolved away
-                // Add all other literals from the reason clause
-                for &lit in db.clause(reason_clause).literals {
+                // Add all other literals from the reason clause.
+                // SAFETY: reason_clause < db.len() (valid propagation reasons).
+                for &lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
                     let var = lit.var();
                     if var == entry.lit.var() {
                         continue; // skip the resolved variable
                     }
                     if !work.seen[var as usize] {
                         work.mark_seen(var);
-                        let reason_entry = trail.entry_for_var(var);
+                        // SAFETY: var from clause DB, validated var < num_vars.
+                        let reason_entry = unsafe { trail.entry_for_var_unchecked(var) };
                         match reason_entry {
                             Some(e) if e.level == current_level => {
                                 num_at_current_level += 1;
@@ -201,9 +212,33 @@ pub fn analyze_conflict_with(
         .expect("1-UIP resolution must find an asserting literal at the current decision level");
     learned.insert(0, lit); // asserting literal first
 
-    // ── Clause minimization ────────────────────────────────────────
+    // Select optimal second watch: the literal with the highest decision level
+    // among non-asserting literals. This ensures that after backtracking to
+    // backtrack_level, c[1] is still assigned (false) — making the clause
+    // immediately unit from BCP's perspective. MiniSat's standard technique.
+    if learned.len() >= 3 {
+        let mut best_pos = 1;
+        let mut best_level = trail.entry_for_var(learned[1].var())
+            .map(|e| e.level).unwrap_or(0);
+        for i in 2..learned.len() {
+            let level = trail.entry_for_var(learned[i].var())
+                .map(|e| e.level).unwrap_or(0);
+            if level > best_level {
+                best_level = level;
+                best_pos = i;
+            }
+        }
+        if best_pos != 1 {
+            learned.swap(1, best_pos);
+        }
+    }
+
+    let resolve_ns = t_resolve.elapsed().as_nanos() as u64;
+
+    // ── Clause minimization ───��──────────────────────────────��─────
     // Remove literals whose propagation reasons are already implied by
     // other literals in the clause. MiniSat's litRedundant algorithm.
+    let t_minimize = Instant::now();
 
     let abstract_levels = {
         let mut mask = 0u64;
@@ -233,6 +268,7 @@ pub fn analyze_conflict_with(
     }
     work.min_to_clear.clear();
 
+    let minimize_ns = t_minimize.elapsed().as_nanos() as u64;
     let learned = minimized;
 
     // Backtrack level: highest level among learned clause literals,
@@ -269,6 +305,8 @@ pub fn analyze_conflict_with(
         learned,
         backtrack_level,
         lbd,
+        resolve_ns,
+        minimize_ns,
     }
 }
 
@@ -286,8 +324,9 @@ fn lit_redundant_with(
     let top = work.min_to_clear.len(); // snapshot for rollback on failure
     work.min_stack.clear();
 
-    // Start by examining the reason for lit's assignment
-    let entry = match trail.entry_for_var(lit.var()) {
+    // Start by examining the reason for lit's assignment.
+    // SAFETY: lit.var() comes from learned clause, all vars < num_vars.
+    let entry = match unsafe { trail.entry_for_var_unchecked(lit.var()) } {
         Some(e) => e,
         None => return false,
     };
@@ -296,8 +335,9 @@ fn lit_redundant_with(
         Reason::Propagation(ci) => ci,
     };
 
-    // Push reason clause literals (except lit itself) onto stack
-    for &reason_lit in db.clause(reason_clause).literals {
+    // Push reason clause literals (except lit itself) onto stack.
+    // SAFETY: reason_clause is a valid propagation reason from the trail.
+    for &reason_lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
         let rv = reason_lit.var();
         if rv == lit.var() {
             continue;
@@ -305,7 +345,8 @@ fn lit_redundant_with(
         if work.seen[rv as usize] {
             continue; // in clause or already proven redundant
         }
-        if let Some(re) = trail.entry_for_var(rv) {
+        // SAFETY: rv from clause DB, validated var < num_vars.
+        if let Some(re) = unsafe { trail.entry_for_var_unchecked(rv) } {
             if re.level == 0 {
                 continue; // level 0 literals are always satisfied
             }
@@ -316,7 +357,8 @@ fn lit_redundant_with(
     while let Some(l) = work.min_stack.pop() {
         let var = l.var();
 
-        let re = match trail.entry_for_var(var) {
+        // SAFETY: var from clause DB, validated var < num_vars.
+        let re = match unsafe { trail.entry_for_var_unchecked(var) } {
             Some(e) => e,
             None => {
                 // Unassigned — rollback
@@ -352,8 +394,9 @@ fn lit_redundant_with(
         work.seen[var as usize] = true;
         work.min_to_clear.push(var);
 
-        // Explore reason clause
-        for &reason_lit in db.clause(ci).literals {
+        // Explore reason clause.
+        // SAFETY: ci is a valid propagation reason from the trail.
+        for &reason_lit in unsafe { db.clause_unchecked(ci) }.literals {
             let rv = reason_lit.var();
             if rv == var {
                 continue;
@@ -361,7 +404,8 @@ fn lit_redundant_with(
             if work.seen[rv as usize] {
                 continue;
             }
-            if let Some(rre) = trail.entry_for_var(rv) {
+            // SAFETY: rv from clause DB, validated var < num_vars.
+            if let Some(rre) = unsafe { trail.entry_for_var_unchecked(rv) } {
                 if rre.level == 0 {
                     continue;
                 }

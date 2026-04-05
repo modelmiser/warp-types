@@ -36,6 +36,10 @@ pub struct SolveStats {
     pub analyze_ns: u64,
     /// Nanoseconds spent in VSIDS (pick + bump + decay).
     pub vsids_ns: u64,
+    /// Nanoseconds within analysis spent on 1-UIP resolution.
+    pub analyze_resolve_ns: u64,
+    /// Nanoseconds within analysis spent on clause minimization.
+    pub analyze_minimize_ns: u64,
 }
 
 /// Solve a CNF instance.
@@ -279,6 +283,8 @@ fn solve_cdcl_core_inner(
                             &mut analyze_work, &trail, &db, clause_index,
                         );
                         stats.analyze_ns += t.elapsed().as_nanos() as u64;
+                        stats.analyze_resolve_ns += analysis.resolve_ns;
+                        stats.analyze_minimize_ns += analysis.minimize_ns;
 
                         // ── VSIDS: bump learned clause variables, decay ──
                         let t = Instant::now();
@@ -819,14 +825,14 @@ p cnf 5 10
         use crate::bench::generate_k_sat;
         use std::time::Instant;
 
-        // Per-phase timing breakdown: where does the 3x gap vs MiniSat live?
-        // BCP? Analysis? VSIDS? This answers that question.
+        // Per-phase timing breakdown with analysis sub-profiling.
+        // Shows where time goes: BCP, analysis (split into resolve + minimize), VSIDS.
         println!("\n=== Phase timing breakdown ===");
-        println!("{:<6} {:>6} {:<6} {:>7} {:>9} {:>6} {:>6} {:>6} {:>6} {:>10} {:>10}",
+        println!("{:<6} {:>6} {:<6} {:>7} {:>9} {:>6} {:>6} {:>6} {:>6} {:>6} {:>10} {:>10}",
             "vars", "ratio", "seed", "ms", "conflicts",
-            "bcp%", "ana%", "vsid%", "otr%",
+            "bcp%", "resv%", "min%", "vsid%", "otr%",
             "ns/prop", "ns/conf");
-        println!("{}", "-".repeat(100));
+        println!("{}", "-".repeat(110));
 
         let configs: &[(u32, f64)] = &[
             (200, 4.267), (300, 4.0), (500, 3.5), (700, 3.0), (1000, 2.5),
@@ -861,9 +867,10 @@ p cnf 5 10
                     wall_ns as f64 / stats.conflicts as f64
                 } else { 0.0 };
 
-                println!("{:<6} {:>6.3} {:<6} {:>7} {:>9} {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>10.1} {:>10.0}",
+                println!("{:<6} {:>6.3} {:<6} {:>7} {:>9} {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>10.1} {:>10.0}",
                     n, ratio, seed, wall_ms, stats.conflicts,
-                    pct(stats.bcp_ns), pct(stats.analyze_ns),
+                    pct(stats.bcp_ns), pct(stats.analyze_resolve_ns),
+                    pct(stats.analyze_minimize_ns),
                     pct(stats.vsids_ns), pct(other_ns),
                     ns_per_prop, ns_per_conf);
 
