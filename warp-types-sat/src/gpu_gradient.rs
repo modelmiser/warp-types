@@ -237,6 +237,158 @@ pub fn gradient_soa(
     }
 }
 
+// ─── Axis 2: Ballot-based discrete verification ─────────────────────
+
+/// Check whether clause `ci` is satisfied under a discrete assignment.
+///
+/// Per-lane kernel body for Axis 2. On GPU, this feeds `warp.ballot()`.
+/// On SimWarp, we collect booleans into a bitmask manually.
+///
+/// For 3-SAT: 3 variable loads + 3 comparisons + 2 ORs.
+#[inline]
+fn clause_satisfied(data: &ClauseDataSoA, assign: &[bool], ci: usize) -> bool {
+    for pos in 0..3 {
+        let val = assign[data.vars[pos][ci] as usize];
+        let sat = if data.negs[pos][ci] { !val } else { val };
+        if sat {
+            return true; // clause satisfied by this literal
+        }
+    }
+    false
+}
+
+/// Verify all clauses via SimWarp ballot simulation.
+///
+/// Each warp batch: 32 lanes check one clause each, results collected
+/// into a bitmask (simulated ballot). All clauses satisfied iff every
+/// real clause's lane is set in the ballot mask.
+///
+/// On GPU this maps to:
+/// ```text
+/// let sat: PerLane<bool> = PerLane::new(clause_satisfied(...));
+/// let ballot: BallotResult = warp.ballot(sat);
+/// // All SAT iff popcount(ballot) >= num_real_clauses_in_batch
+/// ```
+///
+/// Returns `(all_satisfied, num_satisfied, num_total)`.
+pub fn verify_simwarp(data: &ClauseDataSoA, assign: &[bool]) -> (bool, usize, usize) {
+    use warp_types::simwarp::SimWarp;
+
+    let mut total_sat = 0usize;
+    for batch in 0..data.num_batches() {
+        let offset = batch * WARP_SIZE;
+        // Per-lane: check clause satisfaction
+        let sat_lanes = SimWarp::<u32>::new(|lane| {
+            let ci = offset + lane as usize;
+            if ci < data.num_clauses {
+                clause_satisfied(data, assign, ci) as u32
+            } else {
+                1 // padding lanes count as "satisfied"
+            }
+        });
+        // Simulated ballot: collect per-lane booleans into a bitmask.
+        // On real GPU: warp.ballot(PerLane::new(sat)) → BallotResult
+        let mut ballot_mask = 0u64;
+        for lane in 0..WARP_SIZE {
+            if sat_lanes.lane(lane) != 0 {
+                ballot_mask |= 1u64 << lane;
+            }
+        }
+        // popcount of real clauses in this batch
+        let batch_clauses = (data.num_clauses - offset).min(WARP_SIZE);
+        let real_mask = (1u64 << batch_clauses) - 1; // lower batch_clauses bits
+        let batch_sat = (ballot_mask & real_mask).count_ones() as usize;
+        total_sat += batch_sat;
+    }
+    (total_sat == data.num_clauses, total_sat, data.num_clauses)
+}
+
+/// Discretize continuous variables and verify via simulated ballot.
+///
+/// Combines `discretize` (threshold at 0.5) with ballot verification.
+/// Returns `(all_satisfied, assignment)`.
+pub fn discretize_and_verify_simwarp(
+    data: &ClauseDataSoA,
+    x: &[f64],
+) -> (bool, Vec<bool>) {
+    let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
+    let (all_sat, _, _) = verify_simwarp(data, &assign);
+    (all_sat, assign)
+}
+
+// ─── Axis 3: Confidence ranking for hybrid CDCL seeding ─────────────
+
+/// Confidence of variable `v`: distance from the 0.5 decision boundary.
+///
+/// Higher confidence = stronger gradient signal about polarity.
+/// Used to rank variables for hybrid CDCL seeding (TurboSAT strategy).
+#[inline]
+fn var_confidence(x: &[f64], v: usize) -> f64 {
+    (x[v] - 0.5).abs()
+}
+
+/// Rank variables by confidence, returning `(var_index, confidence)` pairs
+/// sorted descending by confidence.
+///
+/// On GPU, this maps to bitonic sort (Axis 3 from the design doc).
+/// `bitonic_sort` requires `Ord` which f64 lacks (NaN), so the GPU
+/// version would scale to `i32` via `(confidence * 1e6) as i32` and
+/// carry variable indices alongside. SimWarp `bitonic_sort` operates
+/// on `i32` with this same encoding.
+///
+/// This CPU version uses a simple sort — the SimWarp version below
+/// validates the bitonic sort encoding.
+pub fn confidence_ranking(x: &[f64]) -> Vec<(usize, f64)> {
+    let mut ranked: Vec<(usize, f64)> = x.iter().enumerate().map(|(v, _)| (v, var_confidence(x, v))).collect();
+    // Sort descending by confidence. f64 partial_cmp is fine here —
+    // confidence values are always in [0, 0.5], no NaN possible.
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    ranked
+}
+
+/// Confidence ranking via SimWarp bitonic sort (i32 encoding).
+///
+/// Encodes each variable's confidence as `(confidence_i32, var_index)` packed
+/// into a single i32: `confidence_i32 << 16 | var_index`. Bitonic sort on
+/// this composite key sorts by confidence (high bits) with var_index as
+/// tiebreaker. After sort, unpack to get ranked variable indices.
+///
+/// Limited to 32 variables per warp (one per lane). For n > 32, multiple
+/// warps handle successive variable chunks; cross-warp merge is future work.
+///
+/// On GPU: `warp.bitonic_sort(PerLane::new(packed_key))`.
+pub fn confidence_ranking_simwarp(x: &[f64]) -> Vec<(usize, f64)> {
+    use warp_types::simwarp::{bitonic_sort, SimWarp};
+
+    let n = x.len().min(WARP_SIZE);
+
+    // Pack: high 15 bits = inverted scaled confidence, low 16 bits = var index.
+    // Bitonic sort is ascending, so invert confidence for descending order.
+    // Confidence ∈ [0.0, 0.5] → scaled to [0, 30000] → inverted to [30000, 0].
+    // Max packed value: 30000 << 16 | 31 = 1,966,080,031 — fits in i32.
+    let packed = SimWarp::<i32>::new(|lane| {
+        if (lane as usize) < n {
+            let conf = var_confidence(x, lane as usize);
+            let conf_scaled = (30_000.0 - conf * 60_000.0) as i32; // invert: low = high confidence
+            (conf_scaled << 16) | (lane as i32)
+        } else {
+            i32::MAX // padding sorts to end (highest = lowest confidence)
+        }
+    });
+
+    let sorted = bitonic_sort(&packed);
+
+    // Unpack: extract var_index and original confidence.
+    (0..n)
+        .map(|lane| {
+            let key = sorted.lane(lane);
+            let var_idx = (key & 0xFFFF) as usize;
+            let conf = var_confidence(x, var_idx);
+            (var_idx, conf)
+        })
+        .collect()
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -471,6 +623,163 @@ mod tests {
         assert!(
             (loss - expected).abs() < 1e-15,
             "negated loss {loss} != expected {expected}"
+        );
+    }
+
+    // ─── Axis 2: Ballot verification tests ───────────────────────────
+
+    #[test]
+    fn ballot_verify_matches_cpu() {
+        // Ballot-based verification must agree with CPU verify() on
+        // the same discrete assignment.
+        for seed in 0..10 {
+            let db = generate_3sat_phase_transition(20, seed);
+            let weights = vec![1.0; db.len()];
+            let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+            // Two assignments: all-true and all-false
+            for &val in &[true, false] {
+                let assign = vec![val; 20];
+                let cpu_sat = gradient::verify(&db, &assign);
+                let (gpu_sat, sat_count, total) = verify_simwarp(&soa, &assign);
+
+                assert_eq!(
+                    cpu_sat, gpu_sat,
+                    "seed {seed}, all-{val}: CPU={cpu_sat}, GPU={gpu_sat} ({sat_count}/{total})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ballot_verify_with_known_solution() {
+        // Use gradient solver to find a SAT assignment, then verify via ballot.
+        for seed in 0..5 {
+            let db = generate_3sat_phase_transition(20, seed);
+            let weights = vec![1.0; db.len()];
+            let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+            let r = gradient::gradient_search(&db, 20, &gradient::GradientConfig::enhanced());
+            if let Some(ref assign) = r.assignment {
+                let (gpu_sat, sat_count, total) = verify_simwarp(&soa, assign);
+                assert!(
+                    gpu_sat,
+                    "seed {seed}: gradient found SAT but ballot says UNSAT ({sat_count}/{total})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ballot_verify_unsat_instance() {
+        // x0 ∧ ¬x0 — trivially UNSAT. No assignment satisfies both.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(0), Lit::pos(0)]); // (x0 ∨ x0 ∨ x0)
+        db.add_clause(vec![Lit::neg(0), Lit::neg(0), Lit::neg(0)]); // (¬x0 ∨ ¬x0 ∨ ¬x0)
+        let weights = vec![1.0; 2];
+        let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+        // x0=true satisfies clause 0 but not clause 1
+        let (sat_t, count_t, _) = verify_simwarp(&soa, &[true]);
+        assert!(!sat_t, "x0=true should not satisfy both clauses");
+        assert_eq!(count_t, 1); // only first clause satisfied
+
+        // x0=false satisfies clause 1 but not clause 0
+        let (sat_f, count_f, _) = verify_simwarp(&soa, &[false]);
+        assert!(!sat_f, "x0=false should not satisfy both clauses");
+        assert_eq!(count_f, 1);
+    }
+
+    #[test]
+    fn discretize_and_verify_round_trip() {
+        // Continuous values near 1.0 for all vars → discretize to true → check.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)]);
+        let weights = vec![1.0];
+        let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+        let x = vec![0.9, 0.8, 0.7]; // all > 0.5 → all true → clause SAT
+        let (sat, assign) = discretize_and_verify_simwarp(&soa, &x);
+        assert!(sat, "high continuous values should discretize to SAT");
+        assert!(assign.iter().all(|&b| b), "all vars should round to true");
+    }
+
+    #[test]
+    fn ballot_padding_does_not_affect_result() {
+        // 3 clauses padded to 32 — padding should not affect verification.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)]);
+        db.add_clause(vec![Lit::pos(0), Lit::neg(1), Lit::pos(2)]);
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1), Lit::neg(2)]);
+        let weights = vec![1.0; 3];
+        let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+        let assign = vec![true, true, true];
+        let cpu_sat = gradient::verify(&db, &assign);
+        let (gpu_sat, sat_count, total) = verify_simwarp(&soa, &assign);
+
+        assert_eq!(cpu_sat, gpu_sat);
+        assert_eq!(total, 3); // only 3 real clauses counted
+        assert_eq!(sat_count, 3); // all-true satisfies all three
+    }
+
+    // ─── Axis 3: Confidence ranking tests ────────────────────────────
+
+    #[test]
+    fn confidence_ranking_order() {
+        // Variables at different distances from 0.5 should rank correctly.
+        let x = vec![0.1, 0.5, 0.9, 0.3, 0.7];
+        // Confidences: 0.4, 0.0, 0.4, 0.2, 0.2
+        // Expected order: var0 or var2 (0.4), then var3 or var4 (0.2), then var1 (0.0)
+        let ranked = confidence_ranking(&x);
+        assert_eq!(ranked.len(), 5);
+        // Top 2 should have confidence 0.4
+        assert!((ranked[0].1 - 0.4).abs() < 1e-10);
+        assert!((ranked[1].1 - 0.4).abs() < 1e-10);
+        // Last should have confidence 0.0
+        assert!((ranked[4].1 - 0.0).abs() < 1e-10);
+        assert_eq!(ranked[4].0, 1); // var1 at exactly 0.5
+    }
+
+    #[test]
+    fn confidence_ranking_simwarp_agrees() {
+        // SimWarp bitonic sort ranking should produce the same order
+        // as the CPU argsort (for n <= 32 variables).
+        let x = init_vars(20);
+        let cpu_ranked = confidence_ranking(&x);
+        let gpu_ranked = confidence_ranking_simwarp(&x);
+
+        assert_eq!(cpu_ranked.len(), gpu_ranked.len());
+
+        // Confidence values should match (order may differ for ties,
+        // but confidence values in sorted order must be the same).
+        let cpu_confs: Vec<f64> = cpu_ranked.iter().map(|r| r.1).collect();
+        let gpu_confs: Vec<f64> = gpu_ranked.iter().map(|r| r.1).collect();
+        for i in 0..cpu_confs.len() {
+            assert!(
+                (cpu_confs[i] - gpu_confs[i]).abs() < 0.01,
+                "rank {i}: CPU conf {:.6} != GPU conf {:.6}",
+                cpu_confs[i],
+                gpu_confs[i]
+            );
+        }
+    }
+
+    #[test]
+    fn confidence_top_k_for_cdcl_seeding() {
+        // Top-k most confident variables should be the ones farthest from 0.5.
+        let x = vec![
+            0.99, 0.50, 0.01, 0.50, 0.50, // var0=high, var2=high, rest=undecided
+            0.50, 0.50, 0.50, 0.50, 0.50,
+        ];
+        let ranked = confidence_ranking_simwarp(&x);
+
+        // Top 2 should be var0 (conf 0.49) and var2 (conf 0.49)
+        let top2_vars: Vec<usize> = ranked[..2].iter().map(|r| r.0).collect();
+        assert!(
+            top2_vars.contains(&0) && top2_vars.contains(&2),
+            "top-2 should be var0 and var2, got {:?}",
+            top2_vars
         );
     }
 }
