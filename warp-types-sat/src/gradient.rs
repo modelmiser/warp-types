@@ -155,10 +155,10 @@ pub struct GradientResult {
 // ─── Variable-to-clause index ─────────────────────────────────────────
 
 /// Maps each variable to the clauses it appears in: (clause_idx, position_in_clause).
-struct VarIndex(Vec<Vec<(usize, usize)>>);
+pub(crate) struct VarIndex(Vec<Vec<(usize, usize)>>);
 
 impl VarIndex {
-    fn build(db: &ClauseDb, num_vars: u32) -> Self {
+    pub(crate) fn build(db: &ClauseDb, num_vars: u32) -> Self {
         let mut occ = vec![Vec::new(); num_vars as usize];
         for ci in 0..db.len() {
             for (pos, lit) in db.clause(ci).literals.iter().enumerate() {
@@ -186,7 +186,7 @@ fn lit_term(lit: Lit, x: &[f64]) -> f64 {
 
 /// Weighted loss: sum over all clauses of w_c * product of literal falseness terms.
 /// Zero iff every clause has at least one fully-true literal.
-fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
+pub(crate) fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
     (0..db.len())
         .map(|ci| {
             weights[ci]
@@ -204,7 +204,7 @@ fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
 /// For clause c containing variable v at position j:
 ///   d(loss_c)/d(x_v) = w_c * sign(l_j) * PROD_{i!=j} term(l_i)
 /// where sign = -1 for positive literal, +1 for negative.
-fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
+pub(crate) fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
     grad.iter_mut().for_each(|g| *g = 0.0);
     for (v, occs) in idx.0.iter().enumerate() {
         for &(ci, pos) in occs {
