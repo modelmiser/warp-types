@@ -22,6 +22,14 @@ pub enum SolveResult {
     Unsat,
 }
 
+/// Statistics from a solve run.
+#[derive(Debug, Default, Clone)]
+pub struct SolveStats {
+    pub conflicts: u64,
+    pub decisions: u64,
+    pub propagations: u64,
+}
+
 /// Solve a CNF instance.
 ///
 /// Takes ownership of the clause database (learned clauses are appended).
@@ -120,6 +128,22 @@ pub fn solve_watched(db: ClauseDb, num_vars: u32) -> SolveResult {
     solve_cdcl_core(db, num_vars, Vsids::new(num_vars))
 }
 
+/// Solve with stats: returns both the result and performance counters.
+pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveStats) {
+    solve_cdcl_core_stats(db, num_vars, Vsids::new(num_vars))
+}
+
+/// Internal CDCL solver with stats.
+fn solve_cdcl_core_stats(
+    mut db: ClauseDb,
+    num_vars: u32,
+    mut vsids: Vsids,
+) -> (SolveResult, SolveStats) {
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats);
+    (result, stats)
+}
+
 /// Internal CDCL solver: watched literals + VSIDS + restarts + phase saving.
 ///
 /// Accepts a pre-configured `Vsids` so callers (e.g., hybrid solver) can
@@ -128,6 +152,15 @@ pub(crate) fn solve_cdcl_core(
     mut db: ClauseDb,
     num_vars: u32,
     mut vsids: Vsids,
+) -> SolveResult {
+    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default())
+}
+
+fn solve_cdcl_core_inner(
+    db: &mut ClauseDb,
+    num_vars: u32,
+    vsids: &mut Vsids,
+    stats: &mut SolveStats,
 ) -> SolveResult {
     for i in 0..db.len() {
         if db.clause(i).literals.is_empty() {
@@ -205,10 +238,13 @@ pub(crate) fn solve_cdcl_core(
             // ── VSIDS decision (highest activity + saved phase) ──
             let (var, polarity) = vsids.pick(trail.assignments());
             let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            stats.decisions += 1;
+            let trail_before = trail.len();
             trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
             let mut bcp_result =
                 watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+            stats.propagations += (trail.len() - trail_before - 1) as u64; // -1 for the decision
 
             // ── Inner conflict resolution loop ──
             loop {
@@ -219,6 +255,7 @@ pub(crate) fn solve_cdcl_core(
                     }
                     BcpResult::Conflict { clause_index } => {
                         conflicts += 1;
+                        stats.conflicts += 1;
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
@@ -269,8 +306,10 @@ pub(crate) fn solve_cdcl_core(
 
                         let bt = analyzed.backtrack();
                         propagate = bt.propagate();
+                        let trail_before_bcp = trail.len();
                         bcp_result =
                             watch::run_bcp_watched(&db, &mut watches, &mut trail, &propagate);
+                        stats.propagations += (trail.len() - trail_before_bcp) as u64;
                     }
                 }
             }
@@ -662,6 +701,38 @@ p cnf 5 10
                     clause, assign
                 );
             }
+        }
+    }
+
+    #[test]
+    fn per_conflict_cost_profile() {
+        use crate::bench::generate_3sat_phase_transition;
+        use std::time::Instant;
+
+        println!("\n=== Per-conflict cost breakdown (200 vars) ===");
+        println!("{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12} {:>8}",
+            "seed", "result", "ms", "conflicts", "decisions", "props",
+            "us/conf", "prop/conf");
+        println!("{}", "-".repeat(90));
+
+        for seed in 0..10 {
+            let db = generate_3sat_phase_transition(200, seed);
+            let t = Instant::now();
+            let (result, stats) = solve_watched_stats(db, 200);
+            let elapsed_us = t.elapsed().as_micros();
+            let tag = match result {
+                SolveResult::Sat(_) => "SAT",
+                SolveResult::Unsat => "UNSAT",
+            };
+            let us_per_conf = if stats.conflicts > 0 {
+                elapsed_us as f64 / stats.conflicts as f64
+            } else { 0.0 };
+            let props_per_conf = if stats.conflicts > 0 {
+                stats.propagations as f64 / stats.conflicts as f64
+            } else { 0.0 };
+            println!("{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12.1} {:>8.1}",
+                seed, tag, elapsed_us / 1000, stats.conflicts, stats.decisions,
+                stats.propagations, us_per_conf, props_per_conf);
         }
     }
 }
