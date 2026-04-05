@@ -62,14 +62,14 @@ use crate::literal::Lit;
 
 // ─── RNG (deterministic, no dependency) ───────────────────────────────
 
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Rng(seed)
     }
 
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self
             .0
             .wrapping_mul(6364136223846793005)
@@ -78,7 +78,7 @@ impl Rng {
     }
 
     /// Random f64 in [0.05, 0.95] — avoids boundary initialization.
-    fn unit(&mut self) -> f64 {
+    pub(crate) fn unit(&mut self) -> f64 {
         0.05 + (self.next() >> 11) as f64 / (1u64 << 53) as f64 * 0.9
     }
 }

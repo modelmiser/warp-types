@@ -389,6 +389,164 @@ pub fn confidence_ranking_simwarp(x: &[f64]) -> Vec<(usize, f64)> {
         .collect()
 }
 
+// ─── End-to-end: gradient search via GPU kernel path ─────────────────
+
+/// Update clause weights via SoA layout (EMA on violation frequency).
+///
+/// Same formula as `gradient.rs::update_weights` but over `ClauseDataSoA`:
+/// `w = 0.9 * w + 0.1 * (violated ? 1 : 0)`.
+fn update_weights_soa(data: &mut ClauseDataSoA, assign: &[bool]) {
+    for ci in 0..data.num_clauses {
+        let satisfied = clause_satisfied(data, assign, ci);
+        data.weights[ci] = 0.9 * data.weights[ci] + if satisfied { 0.0 } else { 0.1 };
+    }
+}
+
+/// Gradient search using the GPU kernel path (SimWarp evaluation).
+///
+/// Functionally identical to `gradient::gradient_search` — same algorithm,
+/// same RNG, same convergence behavior — but uses the warp-parallel
+/// primitives for loss, gradient, and verification:
+///
+/// - **Loss**: `total_loss_simwarp` (Axis 1: clause-parallel butterfly reduce)
+/// - **Gradient**: `gradient_soa` (SoA reverse index, same math)
+/// - **Verify**: `verify_simwarp` (Axis 2: simulated ballot + popcount)
+/// - **Weight update**: `update_weights_soa` (per-clause EMA via SoA)
+///
+/// On GPU, each of these becomes a kernel launch (or fused kernel).
+/// On CPU via SimWarp, they validate the parallel algorithm produces
+/// identical optimization trajectories to the sequential CPU path.
+pub fn gradient_search_simwarp(
+    db: &ClauseDb,
+    num_vars: u32,
+    config: &crate::gradient::GradientConfig,
+) -> crate::gradient::GradientResult {
+    use crate::gradient::{GradientResult, Rng, StartOutcome};
+
+    let n = num_vars as usize;
+
+    if db.is_empty() {
+        return GradientResult {
+            assignment: Some(vec![false; n]),
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+    if num_vars == 0 {
+        return GradientResult {
+            assignment: None,
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+
+    // One-time SoA packing (on GPU: host→device transfer).
+    let initial_weights = vec![1.0; db.len()];
+    let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
+    let var_idx = VarIndexSoA::build(&soa_template, num_vars);
+
+    let mut result = GradientResult {
+        assignment: None,
+        best_continuous: None,
+        starts: Vec::with_capacity(config.num_starts),
+        clause_evals: 0,
+    };
+    let mut global_best_loss = f64::MAX;
+
+    for si in 0..config.num_starts {
+        if result.assignment.is_some() {
+            break;
+        }
+
+        let mut rng = Rng::new(config.seed.wrapping_add(si as u64));
+        let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
+        let mut grad = vec![0.0; n];
+        let mut velocity = vec![0.0; n];
+        // Clone SoA for this start (weights reset to 1.0).
+        let mut soa = soa_template.clone();
+        let mut lr = config.learning_rate;
+        let mut best_loss = f64::MAX;
+        let mut found = false;
+
+        for iter in 0..config.max_iters {
+            // Axis 1: clause-parallel loss via SimWarp butterfly reduce.
+            let l = total_loss_simwarp(&soa, &x);
+            result.clause_evals += soa.num_clauses;
+
+            if l < best_loss {
+                best_loss = l;
+            }
+
+            // Periodically discretize and verify (Axis 2: simulated ballot).
+            if l < 1.0 || iter % 10 == 0 {
+                let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
+                let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+                if all_sat {
+                    result.assignment = Some(assign);
+                    result.starts.push(StartOutcome {
+                        best_loss: l,
+                        iterations: iter + 1,
+                        satisfied: true,
+                    });
+                    found = true;
+                    break;
+                }
+                if config.clause_weights {
+                    update_weights_soa(&mut soa, &assign);
+                }
+            }
+
+            // Gradient via SoA reverse index.
+            gradient_soa(&soa, &x, &var_idx, &mut grad);
+
+            let grad_norm_sq: f64 = grad.iter().map(|g| g * g).sum();
+            if grad_norm_sq < 1e-20 {
+                break;
+            }
+
+            // Variable update (same as CPU — no warp primitive needed).
+            if config.momentum > 0.0 {
+                for i in 0..n {
+                    velocity[i] = config.momentum * velocity[i] + grad[i];
+                    x[i] = (x[i] - lr * velocity[i]).clamp(0.0, 1.0);
+                }
+            } else {
+                for i in 0..n {
+                    x[i] = (x[i] - lr * grad[i]).clamp(0.0, 1.0);
+                }
+            }
+            lr *= config.lr_decay;
+        }
+
+        if !found {
+            let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
+            let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+            if all_sat {
+                result.assignment = Some(assign);
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: true,
+                });
+            } else {
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: false,
+                });
+            }
+            if best_loss < global_best_loss {
+                global_best_loss = best_loss;
+                result.best_continuous = Some(x);
+            }
+        }
+    }
+
+    result
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -780,6 +938,141 @@ mod tests {
             top2_vars.contains(&0) && top2_vars.contains(&2),
             "top-2 should be var0 and var2, got {:?}",
             top2_vars
+        );
+    }
+
+    // ─── End-to-end: SimWarp gradient search tests ───────────────────
+
+    #[test]
+    fn simwarp_search_matches_cpu_vanilla() {
+        // Vanilla gradient search: SimWarp path must find the same solutions
+        // as CPU path with the same RNG seeds.
+        let config = gradient::GradientConfig::default();
+        for seed in 0..10 {
+            let db1 = generate_3sat_phase_transition(20, seed);
+            let db2 = generate_3sat_phase_transition(20, seed);
+
+            let cpu = gradient::gradient_search(&db1, 20, &config);
+            let gpu = gradient_search_simwarp(&db2, 20, &config);
+
+            assert_eq!(
+                cpu.assignment.is_some(),
+                gpu.assignment.is_some(),
+                "seed {seed}: CPU found={} GPU found={}",
+                cpu.assignment.is_some(),
+                gpu.assignment.is_some()
+            );
+
+            // If both found solutions, verify both are valid.
+            if let (Some(ref ca), Some(ref ga)) = (&cpu.assignment, &gpu.assignment) {
+                let db3 = generate_3sat_phase_transition(20, seed);
+                assert!(gradient::verify(&db3, ca), "seed {seed}: CPU assignment invalid");
+                let db4 = generate_3sat_phase_transition(20, seed);
+                assert!(gradient::verify(&db4, ga), "seed {seed}: GPU assignment invalid");
+            }
+
+            // Per-start diagnostics should match.
+            assert_eq!(
+                cpu.starts.len(),
+                gpu.starts.len(),
+                "seed {seed}: different number of starts completed"
+            );
+            for (i, (cs, gs)) in cpu.starts.iter().zip(gpu.starts.iter()).enumerate() {
+                assert_eq!(
+                    cs.satisfied, gs.satisfied,
+                    "seed {seed} start {i}: CPU satisfied={} GPU satisfied={}",
+                    cs.satisfied, gs.satisfied
+                );
+                assert!(
+                    (cs.best_loss - gs.best_loss).abs() < 1e-8,
+                    "seed {seed} start {i}: CPU loss {:.10} != GPU loss {:.10}",
+                    cs.best_loss,
+                    gs.best_loss
+                );
+                assert_eq!(
+                    cs.iterations, gs.iterations,
+                    "seed {seed} start {i}: CPU iters={} GPU iters={}",
+                    cs.iterations, gs.iterations
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn simwarp_search_matches_cpu_enhanced() {
+        // Enhanced config (momentum + clause weights): more divergence-prone
+        // because weight updates compound differently with floating point.
+        let config = gradient::GradientConfig::enhanced();
+        for seed in 0..10 {
+            let db1 = generate_3sat_phase_transition(20, seed);
+            let db2 = generate_3sat_phase_transition(20, seed);
+
+            let cpu = gradient::gradient_search(&db1, 20, &config);
+            let gpu = gradient_search_simwarp(&db2, 20, &config);
+
+            assert_eq!(
+                cpu.assignment.is_some(),
+                gpu.assignment.is_some(),
+                "seed {seed}: CPU found={} GPU found={}",
+                cpu.assignment.is_some(),
+                gpu.assignment.is_some()
+            );
+
+            // Loss values should match closely (clause weight EMA may accumulate
+            // tiny floating-point differences, but the trajectory should be identical
+            // since both use the same RNG and the same math).
+            for (i, (cs, gs)) in cpu.starts.iter().zip(gpu.starts.iter()).enumerate() {
+                assert_eq!(cs.satisfied, gs.satisfied, "seed {seed} start {i}");
+                assert!(
+                    (cs.best_loss - gs.best_loss).abs() < 1e-6,
+                    "seed {seed} start {i}: CPU loss {:.10} != GPU loss {:.10}",
+                    cs.best_loss,
+                    gs.best_loss
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn simwarp_search_never_claims_false_sat() {
+        // Soundness: SimWarp path must never return a solution that doesn't verify.
+        for seed in 0..20 {
+            let db1 = generate_3sat_phase_transition(30, seed);
+            let db2 = generate_3sat_phase_transition(30, seed);
+
+            let gpu = gradient_search_simwarp(&db1, 30, &gradient::GradientConfig::enhanced());
+            if let Some(ref assign) = gpu.assignment {
+                assert!(
+                    gradient::verify(&db2, assign),
+                    "seed {seed}: SimWarp returned invalid assignment"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn simwarp_search_50var() {
+        // Larger instance: 50 vars at phase transition (~213 clauses).
+        // SimWarp path should find solutions at the same rate as CPU.
+        let config = gradient::GradientConfig::enhanced();
+        let mut cpu_found = 0;
+        let mut gpu_found = 0;
+        let seeds = 10;
+
+        for seed in 0..seeds {
+            let db1 = generate_3sat_phase_transition(50, seed);
+            let db2 = generate_3sat_phase_transition(50, seed);
+
+            if gradient::gradient_search(&db1, 50, &config).assignment.is_some() {
+                cpu_found += 1;
+            }
+            if gradient_search_simwarp(&db2, 50, &config).assignment.is_some() {
+                gpu_found += 1;
+            }
+        }
+        assert_eq!(
+            cpu_found, gpu_found,
+            "50-var: CPU found {cpu_found}/{seeds}, GPU found {gpu_found}/{seeds}"
         );
     }
 }
