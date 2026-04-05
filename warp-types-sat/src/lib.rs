@@ -40,6 +40,7 @@ pub(crate) mod bench;
 pub mod clause;
 pub mod clause_tile;
 pub mod dimacs;
+pub mod gradient;
 pub mod literal;
 pub mod phase;
 pub mod scheduler;
