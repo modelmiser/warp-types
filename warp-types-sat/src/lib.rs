@@ -60,8 +60,11 @@ pub use phase::{
 };
 pub use session::{with_session, SolverSession};
 pub use analyze::{
-    ConflictProfile, DagSummary, ProofDag, ResolutionStep,
-    clause_reuse_frequency, pivot_frequency, working_width_profile,
+    ConflictProfile, Correlation, DagSummary, ProofDag, ResolutionStep,
+    clause_reuse_frequency, correlate_centrality_vs_bump_freq,
+    correlate_depth_vs_clause_reuse, correlate_depth_vs_next_bcp,
+    correlate_pivot_vs_gradient, pearson_r, pivot_frequency,
+    working_width_profile,
 };
 pub use bcp::CRef;
 pub use solver::{solve, solve_watched, solve_watched_stats, SolveResult, SolveStats};

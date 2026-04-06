@@ -1507,4 +1507,89 @@ p cnf 5 10
         assert_eq!(dag.total_edges, expected_edges,
             "total edges must equal sum of chain lengths");
     }
+
+    #[test]
+    fn seed_3_level_4_correlations() {
+        // Level 4: The payoff. Four correlations between DAG topology and
+        // solver behavior. Any strong correlation (|r| > 0.3) suggests a
+        // concrete heuristic improvement.
+        use crate::bench::generate_k_sat;
+        use crate::analyze::{
+            correlate_depth_vs_next_bcp,
+            correlate_depth_vs_clause_reuse,
+            correlate_centrality_vs_bump_freq,
+            correlate_pivot_vs_gradient,
+        };
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+
+        // Run multiple seeds for statistical robustness
+        let mut all_correlations: Vec<[f64; 4]> = Vec::new();
+
+        println!("\n=== Seed-3 Level 4: Topology ↔ Solver Correlations ===");
+
+        for seed in [42u64, 7, 99, 123, 256] {
+            let db = generate_k_sat(n, num_clauses, 3, seed);
+
+            // Compute cold gradient (all unassigned) on the original formula
+            let cold_assignments: Vec<Option<bool>> = vec![None; n as usize];
+            let tg = crate::gradient::gradient_at_trail(&db, n, &cold_assignments);
+
+            let (result, profiles, learned_crefs) = solve_instrumented(db, n, 10_000);
+
+            if profiles.len() < 100 {
+                println!("  seed {seed}: only {} conflicts, skipping", profiles.len());
+                continue;
+            }
+
+            // Correlation 1: depth(C) vs bcp_props(C+1)
+            let c1 = correlate_depth_vs_next_bcp(&profiles);
+
+            // Correlation 2: depth vs learned clause reuse
+            let c2 = correlate_depth_vs_clause_reuse(&profiles, &learned_crefs);
+
+            // Correlation 3: pivot centrality vs bump frequency
+            let c3 = correlate_centrality_vs_bump_freq(&profiles, n);
+
+            // Correlation 4: pivot frequency vs gradient magnitude
+            let c4 = correlate_pivot_vs_gradient(&profiles, &tg.magnitudes);
+
+            let result_str = match &result {
+                SolveResult::Sat(_) => "SAT",
+                SolveResult::Unsat => "UNSAT",
+                SolveResult::Unknown => "UNK",
+            };
+            println!("  seed {seed} ({result_str}, {} conflicts):", profiles.len());
+            println!("    C1 depth→next_bcp:     r={:+.3}  r²={:.3}  n={}",
+                c1.r, c1.r_squared, c1.n);
+            println!("    C2 depth→clause_reuse: r={:+.3}  r²={:.3}  n={}",
+                c2.r, c2.r_squared, c2.n);
+            println!("    C3 centrality→bumps:   r={:+.3}  r²={:.3}  n={}",
+                c3.r, c3.r_squared, c3.n);
+            println!("    C4 pivot→gradient:     r={:+.3}  r²={:.3}  n={}",
+                c4.r, c4.r_squared, c4.n);
+
+            all_correlations.push([c1.r, c2.r, c3.r, c4.r]);
+        }
+
+        // Aggregate: mean |r| across seeds
+        if !all_correlations.is_empty() {
+            let k = all_correlations.len() as f64;
+            let names = ["depth→next_bcp", "depth→clause_reuse", "centrality→bumps", "pivot→gradient"];
+            println!("\n  Aggregate across {} seeds:", all_correlations.len());
+            for (j, name) in names.iter().enumerate() {
+                let mean_r: f64 = all_correlations.iter().map(|c| c[j]).sum::<f64>() / k;
+                let mean_abs_r: f64 = all_correlations.iter().map(|c| c[j].abs()).sum::<f64>() / k;
+                let consistent_sign = all_correlations.iter().all(|c| c[j].signum() == all_correlations[0][j].signum());
+                let sign_tag = if consistent_sign { "consistent" } else { "mixed" };
+                println!("    {name}: mean_r={mean_r:+.3}, mean_|r|={mean_abs_r:.3} ({sign_tag} sign)");
+            }
+
+            // Significance threshold: |r| > 0.1 consistently across seeds
+            // Strong signal: |r| > 0.3
+            // The test passes regardless — this is an observatory, not a gate
+            println!("\n  Legend: |r| > 0.3 = strong, |r| > 0.1 = weak, < 0.1 = noise");
+        }
+    }
 }
