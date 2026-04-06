@@ -1,6 +1,7 @@
 [toolchain]
-channel = "nightly-2026-03-19"
+channel = "nightly-2026-04-03"
 components = ["rust-src", "clippy", "rustfmt"]
+targets = ["nvptx64-nvidia-cuda"]
 # GPU kernels require nightly for abi_ptx and asm_experimental_arch.
 # The type system itself works on stable Rust (1.75+).
 # Pin nightly for reproducible artifact evaluation.

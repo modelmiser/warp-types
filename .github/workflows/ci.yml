@@ -18,16 +18,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-03-19
+          toolchain: nightly-2026-04-03
           components: rustfmt
+          targets: nvptx64-nvidia-cuda
       - name: Format check
         run: cargo fmt --check
       - name: Build
-        run: cargo build --workspace --exclude sat-kernels --verbose
+        run: cargo build --workspace --verbose
       - name: Unit tests
-        run: cargo test --workspace --exclude sat-kernels --lib --verbose
+        run: cargo test --workspace --lib --verbose
       - name: Unit tests (all features)
-        run: cargo test --workspace --exclude sat-kernels --lib --all-features --verbose
+        run: cargo test --workspace --lib --all-features --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests
@@ -39,10 +40,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-03-19
+          toolchain: nightly-2026-04-03
           components: clippy, rustfmt
+          targets: nvptx64-nvidia-cuda
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --exclude sat-kernels -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   toolchain-freshness:
     runs-on: ubuntu-latest
