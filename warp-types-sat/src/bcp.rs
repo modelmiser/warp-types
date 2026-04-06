@@ -12,7 +12,7 @@
 //!
 //! The phase-typed session ensures BCP only runs during the Propagate phase.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseStatus, ClauseTile};
@@ -125,6 +125,9 @@ pub struct ClauseDb {
     num_original: usize,
     /// Highest variable index seen (tracked incrementally for O(1) access).
     max_var: u32,
+    /// Optional per-clause resolution depth (for depth-weighted deletion).
+    /// Only populated during instrumented solving.
+    depth: HashMap<CRef, u16>,
 }
 
 impl ClauseDb {
@@ -135,6 +138,7 @@ impl ClauseDb {
             original_limit: 0,
             num_original: 0,
             max_var: 0,
+            depth: HashMap::new(),
         }
     }
 
@@ -221,6 +225,52 @@ impl ClauseDb {
         to_delete
     }
 
+    /// Store the resolution depth for a learned clause.
+    pub fn set_depth(&mut self, cref: CRef, depth: u16) {
+        self.depth.insert(cref, depth);
+    }
+
+    /// Retrieve the resolution depth for a clause (0 if not set).
+    pub fn get_depth(&self, cref: CRef) -> u16 {
+        self.depth.get(&cref).copied().unwrap_or(0)
+    }
+
+    /// Depth-weighted learned clause deletion.
+    ///
+    /// Scores each candidate clause by `LBD + depth_weight * resolution_depth`
+    /// (both as f64), then deletes the top half by score. `depth_weight = 0.0`
+    /// is equivalent to `reduce_learned`.
+    pub fn reduce_learned_weighted(
+        &mut self,
+        locked: &HashSet<CRef>,
+        depth_weight: f64,
+    ) -> Vec<CRef> {
+        let mut candidates: Vec<(CRef, f64)> = Vec::new();
+        let mut pos = self.original_limit;
+        while (pos as usize) < self.arena.len() {
+            let h = self.arena[pos as usize];
+            let len = header_len(h);
+            if !header_is_deleted(h) && !locked.contains(&pos) && header_lbd(h) > 2 {
+                let lbd = header_lbd(h) as f64;
+                let d = self.depth.get(&pos).copied().unwrap_or(0) as f64;
+                let score = lbd + depth_weight * d;
+                candidates.push((pos, score));
+            }
+            pos += 1 + len;
+        }
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let keep = candidates.len() / 2;
+        let to_delete: Vec<CRef> = candidates[keep..].iter().map(|&(cref, _)| cref).collect();
+        for &cref in &to_delete {
+            let h = self.arena[cref as usize];
+            let len = header_len(h);
+            let lbd = header_lbd(h);
+            self.arena[cref as usize] = make_header(len, lbd, true);
+            self.depth.remove(&cref);
+        }
+        to_delete
+    }
+
     /// Compact the database: remove tombstoned clauses and rebuild the arena.
     ///
     /// Returns a remap table of `(old_cref, new_cref)` pairs for live clauses,
@@ -255,9 +305,18 @@ impl ClauseDb {
             new_original_limit = new_arena.len() as u32;
         }
 
+        // Remap depth table
+        let mut new_depth = HashMap::new();
+        for &(old, new_cref) in &remap {
+            if let Some(&d) = self.depth.get(&old) {
+                new_depth.insert(new_cref, d);
+            }
+        }
+
         self.arena = new_arena;
         self.num_clauses = new_num_clauses;
         self.original_limit = new_original_limit;
+        self.depth = new_depth;
         // num_original unchanged — original clauses are never deleted
         remap
     }

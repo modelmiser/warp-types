@@ -221,3 +221,58 @@ Added `variable_update` and `grad_norm_reduce` kernels to keep x, grad, velocity
 ## 18. GPU Loss Crossover — 14x at 5000 vars, ~17μs Floor
 
 **Crossover at ~1500 vars (~6400 clauses).** Below that, the ~17μs GPU launch floor (upload `x` + kernel dispatch + download partial sums) dominates. Above 2000 vars, GPU wins decisively: 4.3x at 2K, 14x at 5K. GPU time barely grows (19.9→21.9μs from 2K→5K) while CPU scales linearly (85→306μs). At industrial SAT sizes (100K+ clauses), expect 100x+. The 17μs floor is split roughly: ~8μs cudarc launch overhead, ~5μs `x` upload (num_vars × 8 bytes), ~4μs partial sum download. For the gradient loop (loss called every iteration), this means GPU is worth it only when the per-iteration compute dominates the per-iteration transfer — i.e., large clause counts.
+## 19. Level 2 Proof DAG Mining — ConflictProfile as Observable
+
+Per-conflict profiling at 200-var phase transition (10K budget) reveals the solver's conflict structure: avg resolution depth 16.1, avg LBD 8.8, avg backtrack distance 1.3, avg BCP propagations 42.4. Key findings:
+
+**Pivot frequency is heavily skewed.** 200 unique pivot variables, max frequency 1,999 (10x average). Some variables are structurally central to proofs — they appear as pivots in many independent conflict derivations. This is the "bottleneck variable" hypothesis that Level 4 will test against VSIDS activity scores.
+
+**Clause reuse follows a power law.** 10,304 unique reason clauses, max reuse 1,026. A tiny fraction of clauses do most of the resolution work. This aligns with glue clause theory — LBD ≤ 2 clauses should correlate with high reuse frequency.
+
+**Depth and clause size are weakly correlated (r=0.192).** Deeper resolution chains produce slightly larger clauses, but the relationship is loose — they carry partially independent information. Both are worth tracking for Level 4 heuristic correlations.
+
+**Backtrack distance is surprisingly small (avg 1.3).** Most conflicts resolve by backtracking 1-2 levels, even on hard instances. This suggests the solver rarely makes deeply wrong decisions — it gets stuck locally, not globally.
+
+## 20. Level 3 Proof DAG — Near-Tree Structure with Shared Inputs
+
+The proof DAG on 200-var 3-SAT (10K conflicts) has 10,923 nodes and 160K edges, with sharing ratio 0.997 (near-tree). This reveals an important structural distinction: the proof's *derivation structure* is almost a tree (each learned clause's derivation is unique), but the *input clauses* feeding those derivations are heavily shared (max fan-out 1,026). The "sharing" that matters for solver heuristics is fan-out, not edge-level reuse.
+
+Width profile is hourglass-shaped: depth 0 (1,983), depth 1 (2,064 — wider!), then exponential decay. The depth-1 bulge means the solver generates more first-generation learned clauses than there are input clauses participating in resolution. Variable centrality is extreme: x1 has 1,999 pivot appearances vs ~800 average — a 2.5x skew for the top variable.
+
+## 21. Level 4 Correlations — One Actionable, One Tautological, Two Null
+
+Four topology↔solver correlations across 5 seeds (200-var 3-SAT, 10K budget each):
+
+**C2: depth→clause_reuse (r=-0.174, consistent negative) — ACTIONABLE.** Shallow resolution chains produce clauses that get reused more often as reasons in future conflicts. Suggests clause deletion could penalize high resolution-depth clauses as an independent signal alongside LBD. Depth and LBD are only weakly related (r=0.192 from Level 2), so depth provides partially independent information about clause utility.
+
+**C3 (FIXED): centrality→VSIDS (Spearman r_s=+0.524) — THE REAL FINDING.** Original C3 was tautological. Fixed version uses Spearman rank correlation with actual final VSIDS activity scores. VSIDS captures ~26% of variance in proof-structure variable importance. The ~74% gap is unexploited signal — variables that are frequent pivots (structurally central to proofs) but don't have proportionally high VSIDS scores. Pivots get resolved away and don't appear in learned clauses; VSIDS only bumps learned-clause variables. These are genuinely different structural roles.
+
+**C2 EXPERIMENT (FAILED): depth-weighted deletion.** A/B test on 20 seeds: adding α·resolution_depth to LBD deletion score increases conflicts by 6-14% at α≥0.25. Depth is downstream of LBD (shallow chains → short clauses → low LBD), not independent of it. The correlation (r=-0.174) was real but the causal structure prevents it from being actionable in deletion.
+
+**C1: depth→next_bcp (r=+0.157, consistent) — REAL BUT WEAK.** Deep chains → slightly more BCP work next cycle. Only 2.5% variance explained. Not actionable.
+
+**C4: pivot→gradient (r≈0, mixed sign) — NULL.** Cold gradient magnitude has no relationship to pivot centrality. The seed-1↔seed-3 bridge hypothesis fails: gradient-VSIDS works empirically because gradients are computed *at the trail*, but the proof structure doesn't encode a persistent gradient signal.
+
+## 22. Pivot-Augmented VSIDS — 37% Conflict Reduction at 200 Vars
+
+Bumping pivot variables by `scale × increment` during conflict analysis (in addition to standard learned-clause bumps) produces a massive effect at 200-var phase transition:
+
+| Scale | Conflicts | Solved | vs Base |
+|------:|----------:|-------:|--------:|
+| 0.00  | 537,448   | 16/20  |    —    |
+| 0.25  | 393,767   | 19/20  | -26.7%  |
+| 0.50  | 339,922   | 20/20  | -36.8%  |
+| 1.00  | 336,138   | 20/20  | -37.5%  |
+| 2.00  | 591,942   | 14/20  | +10.1%  |
+
+Sweet spot: scale 0.5-1.0. Scale 2.0 overshoots (over-prioritizes pivots, loses decision diversity).
+
+**Does not scale to 300-var** (all scales within ±5% of baseline, 0-2/20 solved with 50K budget). Either the budget is too small to reveal differences, or pivot frequency becomes less discriminating at larger n.
+
+**Mechanism:** C3 showed VSIDS captures 26% of pivot centrality. Pivots are resolved away during conflict analysis and don't appear in learned clauses, so standard VSIDS misses them. The augmented bump feeds this structural signal back into decisions. The 74% gap is genuine unexploited information — at 200 vars.
+
+**Scaling diagnosis (300v × 200K budget + entropy):** The 300-var null is NOT a budget artifact (+0.4%/+2.8% with 4× budget). Pivot frequency entropy is identical at 200v and 300v (H_norm ≈ 0.97), so the signal doesn't degrade. The real issue: the improvement is constant-factor (~37%) but phase-transition difficulty is exponential. At 200v, most seeds are near the solvability boundary; at 300v, 18/20 are deep in the exponential regime where no constant-factor heuristic helps.
+
+**Combination with gradient (seed-1×3):** Pivot-only (-32.1%) beats combined gradient+pivot (-28.1%). Gradient-only is +8.3% worse than baseline. The signals interfere: gradient probes overwrite VSIDS saved phases, disrupting the search diversity that correct variable ordering (from pivots) relies on. Pivot bumps baked into production `solve_watched()` at DEFAULT_PIVOT_BUMP_SCALE=0.5.
+
+**Arc summary:** Started with a falsified hypothesis (trail gradients → CDCL improvement). The instrumentation infrastructure (resolution chains, conflict profiles, proof DAGs) enabled a different discovery: pivot centrality is a strong, unexploited VSIDS signal. From falsification to -32% conflict reduction in the production solver.

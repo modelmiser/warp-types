@@ -164,7 +164,16 @@ impl Vsids {
 
     /// Bump activity of a variable (call for each var in the learned clause).
     pub fn bump(&mut self, var: u32) {
-        self.activity[var as usize] += self.increment;
+        self.bump_scaled(var, 1.0);
+    }
+
+    /// Bump activity of a variable with a scaling factor on the increment.
+    ///
+    /// `scale = 1.0` is identical to `bump()`. `scale = 0.5` gives half the
+    /// normal bump — useful for pivot-augmented VSIDS where pivots should be
+    /// boosted but less aggressively than learned-clause variables.
+    pub fn bump_scaled(&mut self, var: u32, scale: f64) {
+        self.activity[var as usize] += self.increment * scale;
         // Rescale to prevent floating-point overflow.
         if self.activity[var as usize] > 1e100 {
             for a in &mut self.activity {
@@ -204,6 +213,11 @@ impl Vsids {
         self.heap_insert(var);
     }
 
+    /// Read-only access to the per-variable activity scores.
+    pub fn activities(&self) -> &[f64] {
+        &self.activity
+    }
+
     /// Save the phase (polarity) of a variable.
     pub fn save_phase(&mut self, var: u32, polarity: bool) {
         self.phase[var as usize] = polarity;
@@ -218,6 +232,48 @@ impl Vsids {
     /// Set phase hint for a variable (e.g., from gradient polarity).
     pub fn set_phase(&mut self, var: u32, polarity: bool) {
         self.phase[var as usize] = polarity;
+    }
+
+    /// Apply trail-gradient signal to unassigned variables.
+    ///
+    /// For each unassigned variable: set phase to gradient-suggested polarity
+    /// and give a small activity bump proportional to gradient magnitude.
+    /// Assigned variables are left untouched.
+    ///
+    /// `boost_scale` controls how much the gradient magnitude affects activity.
+    /// 0.0 = phase-only, no activity change. Higher = more aggressive reordering.
+    pub fn apply_trail_gradient(
+        &mut self,
+        magnitudes: &[f64],
+        polarities: &[bool],
+        assignments: &[Option<bool>],
+        boost_scale: f64,
+    ) {
+        let n = self.activity.len();
+        debug_assert_eq!(magnitudes.len(), n);
+        debug_assert_eq!(polarities.len(), n);
+        debug_assert_eq!(assignments.len(), n);
+
+        let mut needs_rebuild = false;
+        for v in 0..n {
+            if assignments[v].is_some() {
+                continue; // skip assigned vars
+            }
+            // Phase hint from gradient direction
+            self.phase[v] = polarities[v];
+
+            // Activity boost proportional to gradient magnitude
+            if boost_scale > 0.0 {
+                let boost = magnitudes[v] * boost_scale;
+                if boost > 0.0 {
+                    self.activity[v] += boost;
+                    needs_rebuild = true;
+                }
+            }
+        }
+        if needs_rebuild {
+            self.rebuild_heap();
+        }
     }
 }
 

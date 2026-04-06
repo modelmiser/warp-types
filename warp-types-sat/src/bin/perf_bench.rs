@@ -22,6 +22,7 @@ fn main() {
     let tag = match result {
         SolveResult::Sat(_) => "SAT",
         SolveResult::Unsat => "UNSAT",
+        SolveResult::Unknown => "UNKNOWN",
     };
     eprintln!(
         "{tag}: {conf} conflicts, {props} propagations, {dec} decisions",

@@ -396,6 +396,75 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
     result
 }
 
+/// Single-gradient probe at the current CDCL trail position.
+///
+/// Constructs x[] from the trail: assigned vars = 0.0/1.0, unassigned = 0.5.
+/// Computes ONE gradient at this point. Cost: O(m) where m = total literals
+/// across all clauses. No descent loop.
+///
+/// The gradient magnitude for each unassigned variable tells us: "how much
+/// would the loss decrease if I nudged this variable from 0.5?" This is
+/// lookahead information — it sees the effect on unsatisfied clauses before
+/// CDCL commits a decision.
+///
+/// Returns magnitudes (for activity boosting) and the gradient-suggested
+/// polarity for phase hints.
+pub(crate) fn gradient_at_trail(
+    db: &ClauseDb,
+    num_vars: u32,
+    assignments: &[Option<bool>],
+) -> TrailGradient {
+    let n = num_vars as usize;
+    if n == 0 || db.is_empty() {
+        return TrailGradient {
+            magnitudes: vec![0.0; n],
+            polarities: vec![true; n],
+        };
+    }
+
+    let crefs = db.crefs();
+    if crefs.is_empty() {
+        return TrailGradient {
+            magnitudes: vec![0.0; n],
+            polarities: vec![true; n],
+        };
+    }
+
+    // Build x[] from trail: assigned = 0.0/1.0, unassigned = 0.5
+    let mut x = vec![0.5f64; n];
+    for (v, &a) in assignments.iter().enumerate() {
+        if let Some(val) = a {
+            x[v] = if val { 1.0 } else { 0.0 };
+        }
+    }
+
+    let idx = VarIndex::build(db, num_vars, &crefs);
+    let weights = vec![1.0; crefs.len()];
+    let mut grad = vec![0.0; n];
+
+    gradient(db, &crefs, &x, &idx, &weights, &mut grad);
+
+    // For unassigned vars: gradient sign tells us which polarity reduces loss.
+    // Negative gradient → increasing x (setting true) reduces loss.
+    // Positive gradient → decreasing x (setting false) reduces loss.
+    // For assigned vars: polarity is irrelevant (already decided).
+    let polarities: Vec<bool> = grad.iter().map(|&g| g < 0.0).collect();
+    let magnitudes: Vec<f64> = grad.iter().map(|g| g.abs()).collect();
+
+    TrailGradient {
+        magnitudes,
+        polarities,
+    }
+}
+
+/// Result of a single-gradient probe at the current trail position.
+pub(crate) struct TrailGradient {
+    /// |∂L/∂x_v| per variable — gradient magnitude for activity boosting.
+    pub magnitudes: Vec<f64>,
+    /// Gradient-suggested polarity per variable (true if gradient points toward x=1).
+    pub polarities: Vec<bool>,
+}
+
 // ─── Hybrid solver ────────────────────────────────────────────────────
 
 /// Hybrid gradient→CDCL solver.
@@ -800,6 +869,32 @@ mod tests {
                 "  n={:<6} clauses={:<8} warps(eval)={:<6} warps(grad)={:<6} ops/iter={:<10}",
                 n, clauses, warps_clause_eval, warps_grad_accum, ops_per_iter
             );
+        }
+    }
+
+    #[test]
+    fn trail_gradient_soundness() {
+        // Trail-gradient solver must agree with pure CDCL on SAT/UNSAT.
+        for seed in 0..20 {
+            let db1 = generate_3sat_phase_transition(30, seed);
+            let db2 = generate_3sat_phase_transition(30, seed);
+
+            let cdcl = solver::solve_watched(db1, 30);
+            let tg = solver::solve_watched_trail_gradient(db2, 30, 50, 1.0);
+
+            let cdcl_sat = matches!(cdcl, solver::SolveResult::Sat(_));
+            let tg_sat = matches!(tg, solver::SolveResult::Sat(_));
+
+            assert_eq!(cdcl_sat, tg_sat,
+                "seed {seed}: CDCL={}, TG={}",
+                if cdcl_sat {"SAT"} else {"UNSAT"},
+                if tg_sat {"SAT"} else {"UNSAT"});
+
+            if let solver::SolveResult::Sat(ref assign) = tg {
+                let db3 = generate_3sat_phase_transition(30, seed);
+                assert!(verify(&db3, assign),
+                    "seed {seed}: trail-gradient returned invalid assignment");
+            }
         }
     }
 }

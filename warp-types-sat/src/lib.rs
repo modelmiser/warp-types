@@ -61,5 +61,12 @@ pub use phase::{
     Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
 };
 pub use session::{with_session, SolverSession};
+pub use analyze::{
+    ConflictProfile, Correlation, DagSummary, ProofDag, ResolutionStep,
+    clause_reuse_frequency, correlate_centrality_vs_bump_freq,
+    correlate_centrality_vs_vsids, correlate_depth_vs_clause_reuse,
+    correlate_depth_vs_next_bcp, correlate_pivot_vs_gradient,
+    pearson_r, pivot_frequency, spearman_rank_r, working_width_profile,
+};
 pub use bcp::CRef;
-pub use solver::{solve, solve_watched, solve_watched_stats, SolveResult, SolveStats};
+pub use solver::{solve, solve_watched, solve_watched_stats, solve_instrumented, InstrumentedResult, SolveResult, SolveStats};
