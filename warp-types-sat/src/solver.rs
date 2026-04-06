@@ -200,6 +200,11 @@ fn solve_cdcl_core_inner(
     let mut restart_pending = false;
     let mut analyze_work = AnalyzeWork::new(num_vars as usize);
 
+    // Warm-start VSIDS from clause occurrence counts. Variables appearing in
+    // more clauses are more constrained — decide them first. Adds to any
+    // pre-seeded activities (e.g., from gradient solver), then rebuilds heap.
+    vsids.initialize_from_clauses(db);
+
     // LBD clause deletion with periodic compaction
     db.freeze_original();
     let mut conflicts: u64 = 0;
