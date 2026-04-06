@@ -91,6 +91,10 @@ pub struct AnalyzeWork {
     min_to_clear: Vec<u32>,
     /// Level-seen flags for LBD computation.
     levels_seen: Vec<bool>,
+    /// Pivot variables from the most recent conflict analysis.
+    /// Populated during resolution — each resolved-away variable is a pivot.
+    /// Reused across conflicts (cleared at the start of each analysis).
+    pub pivots: Vec<u32>,
 }
 
 impl AnalyzeWork {
@@ -102,6 +106,7 @@ impl AnalyzeWork {
             min_stack: Vec::with_capacity(32),
             min_to_clear: Vec::with_capacity(32),
             levels_seen: Vec::new(), // grown on demand per analysis
+            pivots: Vec::with_capacity(32),
         }
     }
 
@@ -154,6 +159,7 @@ pub fn analyze_conflict_with(
     // Ensure seen array covers all variables (defensive — shouldn't grow).
     let max_var = trail.num_vars();
     work.ensure_capacity(max_var);
+    work.pivots.clear();
 
     // Start with the conflict clause's literals.
     // SAFETY: conflict_clause < db.len() (caller invariant).
@@ -214,6 +220,7 @@ pub fn analyze_conflict_with(
                     entry.lit.var()
                 );
                 num_at_current_level -= 1;
+                work.pivots.push(entry.lit.var()); // pivot = resolved-away variable
                 work.seen[entry.lit.var() as usize] = false; // resolved away
                 // Add all other literals from the reason clause.
                 // SAFETY: reason_clause < db.len() (valid propagation reasons).

@@ -139,10 +139,16 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
     })
 }
 
+/// Default pivot bump scale for production solver.
+/// Derived from seed-3 C3 experiment: 0.5 gives ~35% conflict reduction
+/// on 200-var random 3-SAT without overshooting.
+const DEFAULT_PIVOT_BUMP_SCALE: f64 = 0.5;
+
 /// Solve a CNF instance using watched-literal BCP with VSIDS and Luby restarts.
 ///
 /// Full CDCL loop: two-watched-literal BCP, VSIDS branching heuristic with
-/// phase saving, Luby restart policy (base interval 100 conflicts).
+/// phase saving + pivot-augmented bumps, Luby restart policy (base interval
+/// 100 conflicts).
 pub fn solve_watched(db: ClauseDb, num_vars: u32) -> SolveResult {
     solve_cdcl_core(db, num_vars, Vsids::new(num_vars))
 }
@@ -159,7 +165,7 @@ fn solve_cdcl_core_stats(
     mut vsids: Vsids,
 ) -> (SolveResult, SolveStats) {
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, 0);
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, 0, DEFAULT_PIVOT_BUMP_SCALE);
     (result, stats)
 }
 
@@ -168,7 +174,7 @@ pub fn solve_watched_budget(db: ClauseDb, num_vars: u32, conflict_limit: u64) ->
     let mut db = db;
     let mut vsids = Vsids::new(num_vars);
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, conflict_limit);
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, conflict_limit, DEFAULT_PIVOT_BUMP_SCALE);
     (result, stats)
 }
 
@@ -181,7 +187,7 @@ pub(crate) fn solve_cdcl_core(
     num_vars: u32,
     mut vsids: Vsids,
 ) -> SolveResult {
-    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), 0, 0.0, 0)
+    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), 0, 0.0, 0, DEFAULT_PIVOT_BUMP_SCALE)
 }
 
 /// CDCL solver with periodic trail-gradient probing (seed-1a).
@@ -198,7 +204,7 @@ pub fn solve_watched_trail_gradient(
     let mut db = db;
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
-    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), probe_interval, boost_scale, 0)
+    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), probe_interval, boost_scale, 0, 0.0)
 }
 
 /// CDCL with trail-gradient probing, returning stats.
@@ -213,7 +219,32 @@ pub fn solve_watched_trail_gradient_stats(
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, probe_interval, boost_scale, conflict_limit);
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, probe_interval, boost_scale, conflict_limit, 0.0);
+    (result, stats)
+}
+
+/// CDCL with both trail-gradient probing AND pivot-augmented VSIDS.
+///
+/// Combines seed-1 (gradient phase hints + activity boost) and seed-3
+/// (pivot decision bumps). These are orthogonal signals: gradients shape
+/// polarity (which value to try), pivots shape variable ordering (which
+/// variable to decide next).
+pub fn solve_watched_combined(
+    db: ClauseDb,
+    num_vars: u32,
+    probe_interval: u64,
+    gradient_boost: f64,
+    pivot_bump_scale: f64,
+    conflict_limit: u64,
+) -> (SolveResult, SolveStats) {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(
+        &mut db, num_vars, &mut vsids, &mut stats,
+        probe_interval, gradient_boost, conflict_limit, pivot_bump_scale,
+    );
     (result, stats)
 }
 
@@ -225,6 +256,7 @@ fn solve_cdcl_core_inner(
     trail_gradient_interval: u64,
     trail_gradient_boost: f64,
     conflict_limit: u64,
+    pivot_bump_scale: f64,
 ) -> SolveResult {
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
@@ -362,10 +394,15 @@ fn solve_cdcl_core_inner(
                         stats.analyze_resolve_ns += analysis.resolve_ns;
                         stats.analyze_minimize_ns += analysis.minimize_ns;
 
-                        // ── VSIDS: bump learned clause variables, decay ──
+                        // ── VSIDS: bump learned clause variables + pivots, decay ──
                         let t = Instant::now();
                         for &learned_lit in &analysis.learned {
                             vsids.bump(learned_lit.var());
+                        }
+                        if pivot_bump_scale > 0.0 {
+                            for &pv in &analyze_work.pivots {
+                                vsids.bump_scaled(pv, pivot_bump_scale);
+                            }
                         }
                         vsids.decay();
                         stats.vsids_ns += t.elapsed().as_nanos() as u64;
@@ -1925,6 +1962,88 @@ p cnf 5 10
                 println!("  {:>6} {:>6} {:>10} {:>10} {:>10.3} {:>10.4} {:>10}",
                     nv, seed, n_pivots, total, h, h_norm, max_f);
             }
+        }
+    }
+
+    #[test]
+    fn seed_1a_3_combined_ab_test() {
+        // Seed-1 × Seed-3 combination: gradient phase hints + pivot decision bumps.
+        //
+        // These are orthogonal signals:
+        //   - Gradient (seed-1): shapes POLARITY (which value to try)
+        //   - Pivot (seed-3): shapes VARIABLE ORDER (which variable to decide)
+        //
+        // If they're truly orthogonal, the combined effect should be
+        // multiplicative (or at least additive). If they interfere, combined
+        // could be worse than either alone.
+        //
+        // Test: 20 seeds × 200v, 50K budget. Compare:
+        //   (A) baseline
+        //   (B) gradient-only (interval=50, boost=1.0)
+        //   (C) pivot-only (scale=0.5)
+        //   (D) combined (gradient + pivot)
+        use crate::bench::generate_k_sat;
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let budget = 50_000u64;
+        let num_seeds = 20;
+
+        struct Config {
+            name: &'static str,
+            gradient_interval: u64,
+            gradient_boost: f64,
+            pivot_scale: f64,
+        }
+
+        let configs = [
+            Config { name: "A: baseline",       gradient_interval: 0,  gradient_boost: 0.0, pivot_scale: 0.0 },
+            Config { name: "B: gradient-only",   gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 0.0 },
+            Config { name: "C: pivot-only",      gradient_interval: 0,  gradient_boost: 0.0, pivot_scale: 0.5 },
+            Config { name: "D: combined",        gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 0.5 },
+            Config { name: "E: combined(1.0)",   gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 1.0 },
+            Config { name: "F: grad+pivot(K200)",gradient_interval: 200,gradient_boost: 1.0, pivot_scale: 0.5 },
+        ];
+
+        println!("\n=== Seed-1a×3 Combined A/B Test ===");
+        println!("  n={n}, ratio=4.267, budget={budget}, seeds=0..{num_seeds}");
+        println!("  {:<25} {:>10} {:>10} {:>10} {:>10}",
+            "config", "conflicts", "solved", "unknown", "vs_base%");
+        println!("  {}", "-".repeat(70));
+
+        let mut baseline_conflicts = 0u64;
+
+        for cfg in &configs {
+            let mut total_conflicts = 0u64;
+            let mut solved = 0u32;
+            let mut unknown = 0u32;
+
+            for seed in 0..num_seeds {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let (result, _stats) = solve_watched_combined(
+                    db, n,
+                    cfg.gradient_interval, cfg.gradient_boost,
+                    cfg.pivot_scale, budget,
+                );
+
+                match result {
+                    SolveResult::Sat(_) | SolveResult::Unsat => solved += 1,
+                    SolveResult::Unknown => unknown += 1,
+                }
+                // Count conflicts from Unknown instances too
+                total_conflicts += _stats.conflicts;
+            }
+
+            if cfg.pivot_scale == 0.0 && cfg.gradient_interval == 0 {
+                baseline_conflicts = total_conflicts;
+            }
+
+            let vs_base = if baseline_conflicts > 0 {
+                ((total_conflicts as f64 / baseline_conflicts as f64) - 1.0) * 100.0
+            } else { 0.0 };
+
+            println!("  {:<25} {:>10} {:>10} {:>10} {:>+10.1}",
+                cfg.name, total_conflicts, solved, unknown, vs_base);
         }
     }
 }
