@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::analyze::{self, AnalyzeWork};
+use crate::analyze::{self, AnalyzeWork, ConflictProfile};
 use crate::bcp::{self, BcpResult, CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::restart::LubyRestarts;
@@ -432,27 +432,27 @@ fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
 
 /// Solve with resolution chain instrumentation for proof DAG mining.
 ///
-/// Returns the solve result plus per-conflict resolution depths.
+/// Returns the solve result plus per-conflict profiles containing
+/// resolution chains, solver state, and BCP propagation counts.
 /// Uses the instrumented analysis path — slightly slower due to
 /// Vec::push per resolution step, but captures the full chain.
 pub fn solve_instrumented(
     mut db: ClauseDb,
     num_vars: u32,
     conflict_limit: u64,
-) -> (SolveResult, Vec<u32>) {
-    // resolution_depths[i] = number of resolution steps in conflict i
-    let mut resolution_depths: Vec<u32> = Vec::new();
+) -> (SolveResult, Vec<ConflictProfile>) {
+    let mut profiles: Vec<ConflictProfile> = Vec::new();
 
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
-            return (SolveResult::Unsat, resolution_depths);
+            return (SolveResult::Unsat, profiles);
         }
     }
     if num_vars == 0 {
         return if db.is_empty() {
-            (SolveResult::Sat(vec![]), resolution_depths)
+            (SolveResult::Sat(vec![]), profiles)
         } else {
-            (SolveResult::Unsat, resolution_depths)
+            (SolveResult::Unsat, profiles)
         };
     }
 
@@ -474,7 +474,7 @@ pub fn solve_instrumented(
             watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate)
         {
             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-            return (SolveResult::Unsat, resolution_depths);
+            return (SolveResult::Unsat, profiles);
         }
         let mut idle = propagate.finish_no_conflict();
 
@@ -503,15 +503,18 @@ pub fn solve_instrumented(
 
             if trail.all_assigned() {
                 let _ = idle.sat();
-                return (SolveResult::Sat(trail.assignment_vec()), resolution_depths);
+                return (SolveResult::Sat(trail.assignment_vec()), profiles);
             }
 
             let (var, polarity) = vsids.pick(trail.assignments());
             let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            let trail_before_decision = trail.len();
             trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
             let mut bcp_result =
                 watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate);
+            // BCP propagations = trail growth from BCP (excludes the decision itself)
+            let mut bcp_props_this_cycle = (trail.len() - trail_before_decision - 1) as u32;
 
             loop {
                 match bcp_result {
@@ -524,20 +527,35 @@ pub fn solve_instrumented(
 
                         if conflict_limit > 0 && conflicts >= conflict_limit {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unknown, resolution_depths);
+                            return (SolveResult::Unknown, profiles);
                         }
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unsat, resolution_depths);
+                            return (SolveResult::Unsat, profiles);
                         }
+
+                        let trail_size = trail.len();
+                        let current_level = trail.current_level();
 
                         // Use instrumented analysis
                         let analysis = analyze::analyze_conflict_instrumented(
                             &mut analyze_work, &trail, &db, clause,
                         );
 
-                        resolution_depths.push(analysis.resolution_chain.len() as u32);
+                        let resolution_depth = analysis.resolution_chain.len() as u32;
+
+                        profiles.push(ConflictProfile {
+                            conflict_id: conflicts - 1, // 0-indexed
+                            decision_level: current_level,
+                            resolution_depth,
+                            learned_clause_size: analysis.learned.len(),
+                            learned_lbd: analysis.lbd,
+                            backtrack_distance: current_level - analysis.backtrack_level,
+                            trail_size_at_conflict: trail_size,
+                            resolution_chain: analysis.resolution_chain,
+                            bcp_propagations: bcp_props_this_cycle,
+                        });
 
                         for &learned_lit in &analysis.learned {
                             vsids.bump(learned_lit.var());
@@ -549,7 +567,7 @@ pub fn solve_instrumented(
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
-                            return (SolveResult::Unsat, resolution_depths);
+                            return (SolveResult::Unsat, profiles);
                         }
 
                         for entry in trail.entries_above(analysis.backtrack_level) {
@@ -573,8 +591,11 @@ pub fn solve_instrumented(
 
                         let bt = analyzed.backtrack();
                         propagate = bt.propagate();
+                        let trail_before_bcp = trail.len();
                         bcp_result =
                             watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate);
+                        // Update BCP prop count for next potential conflict in this cycle
+                        bcp_props_this_cycle = (trail.len() - trail_before_bcp) as u32;
                     }
                 }
             }
@@ -1224,9 +1245,9 @@ p cnf 5 10
 
             for seed in 0..20u64 {
                 let db = generate_k_sat(n, num_clauses, 3, seed);
-                let (result, depths) = solve_instrumented(db, n, conflict_budget);
+                let (result, profiles) = solve_instrumented(db, n, conflict_budget);
 
-                all_depths.extend_from_slice(&depths);
+                all_depths.extend(profiles.iter().map(|p| p.resolution_depth));
                 match result {
                     SolveResult::Sat(_) => instances_solved += 1,
                     SolveResult::Unsat => instances_solved += 1,
@@ -1282,6 +1303,112 @@ p cnf 5 10
                 println!("  *** KILL SIGNAL: median depth {} < 3 — DAGs too shallow ***", median);
             } else {
                 println!("  Resolution chains have structure (median depth {} >= 3)", median);
+            }
+        }
+    }
+
+    #[test]
+    fn seed_3_conflict_profiles_structural_invariants() {
+        // Level 2 structural invariants: every ConflictProfile field must
+        // be self-consistent with the solver's state at conflict time.
+        use crate::bench::generate_k_sat;
+        use crate::analyze::{pivot_frequency, clause_reuse_frequency, working_width_profile};
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let db = generate_k_sat(n, num_clauses, 3, 42);
+        let (result, profiles) = solve_instrumented(db, n, 10_000);
+
+        assert!(!profiles.is_empty(), "should have conflicts to profile");
+
+        // ── Per-profile invariants ──
+        for (i, p) in profiles.iter().enumerate() {
+            assert_eq!(p.conflict_id, i as u64,
+                "conflict_id must be sequential 0-indexed");
+
+            assert!(p.decision_level > 0,
+                "conflict at level 0 should terminate, not profile");
+
+            assert_eq!(p.resolution_depth, p.resolution_chain.len() as u32,
+                "resolution_depth must match chain length");
+
+            assert!(p.learned_clause_size > 0,
+                "learned clause must have at least 1 literal (asserting)");
+
+            assert!(p.learned_lbd > 0 && p.learned_lbd <= p.learned_clause_size as u32,
+                "LBD must be in [1, clause_size], got lbd={} size={}",
+                p.learned_lbd, p.learned_clause_size);
+
+            assert!(p.backtrack_distance <= p.decision_level,
+                "can't backtrack further than current level");
+
+            assert!(p.trail_size_at_conflict > 0,
+                "trail must have at least one assignment at conflict");
+
+            // Working widths in chain should all be > 0
+            let widths = working_width_profile(&p.resolution_chain);
+            for (j, &w) in widths.iter().enumerate() {
+                assert!(w > 0, "working width at step {} must be > 0", j);
+            }
+        }
+
+        // ── Topology: pivot frequency ──
+        let pivots = pivot_frequency(&profiles);
+        if !pivots.is_empty() {
+            let max_pivot_freq = *pivots.values().max().unwrap();
+            println!("  Pivot frequency: {} unique vars, max freq {}", pivots.len(), max_pivot_freq);
+            // At least some variables should be pivoted more than once
+            // (on 200-var instances with 10K conflicts, this is guaranteed)
+            assert!(max_pivot_freq > 1, "should see repeated pivots");
+        }
+
+        // ── Topology: clause reuse ──
+        let reuse = clause_reuse_frequency(&profiles);
+        if !reuse.is_empty() {
+            let max_reuse = *reuse.values().max().unwrap();
+            println!("  Clause reuse: {} unique clauses, max reuse {}", reuse.len(), max_reuse);
+            assert!(max_reuse > 1, "should see clause reuse");
+        }
+
+        // ── Scatter data: resolution depth vs learned clause size ──
+        let mut depth_vs_size: Vec<(u32, usize)> = profiles.iter()
+            .map(|p| (p.resolution_depth, p.learned_clause_size))
+            .collect();
+        depth_vs_size.sort();
+
+        println!("\n=== Seed-3 Level 2: Conflict Profiles (n={n}, 10K budget) ===");
+        println!("  {} profiles collected", profiles.len());
+        println!("  Result: {:?}", match &result {
+            SolveResult::Sat(_) => "SAT",
+            SolveResult::Unsat => "UNSAT",
+            SolveResult::Unknown => "UNKNOWN",
+        });
+
+        // Depth distribution
+        let depths: Vec<u32> = profiles.iter().map(|p| p.resolution_depth).collect();
+        let avg_depth = depths.iter().map(|&d| d as f64).sum::<f64>() / depths.len() as f64;
+        let avg_size = profiles.iter().map(|p| p.learned_clause_size as f64).sum::<f64>() / profiles.len() as f64;
+        let avg_lbd = profiles.iter().map(|p| p.learned_lbd as f64).sum::<f64>() / profiles.len() as f64;
+        let avg_bt = profiles.iter().map(|p| p.backtrack_distance as f64).sum::<f64>() / profiles.len() as f64;
+        let avg_bcp = profiles.iter().map(|p| p.bcp_propagations as f64).sum::<f64>() / profiles.len() as f64;
+
+        println!("  Avg depth={avg_depth:.1}, size={avg_size:.1}, lbd={avg_lbd:.1}, backtrack={avg_bt:.1}, bcp_props={avg_bcp:.1}");
+
+        // Correlation: resolution depth vs learned clause size
+        // Pearson r — positive correlation expected (deeper chains → larger clauses)
+        if profiles.len() > 10 {
+            let n_f = profiles.len() as f64;
+            let sum_d: f64 = depths.iter().map(|&d| d as f64).sum();
+            let sum_s: f64 = profiles.iter().map(|p| p.learned_clause_size as f64).sum();
+            let sum_dd: f64 = depths.iter().map(|&d| (d as f64) * (d as f64)).sum();
+            let sum_ss: f64 = profiles.iter().map(|p| (p.learned_clause_size as f64).powi(2)).sum();
+            let sum_ds: f64 = profiles.iter().map(|p| p.resolution_depth as f64 * p.learned_clause_size as f64).sum();
+
+            let numer = n_f * sum_ds - sum_d * sum_s;
+            let denom = ((n_f * sum_dd - sum_d * sum_d) * (n_f * sum_ss - sum_s * sum_s)).sqrt();
+            if denom > 0.0 {
+                let r = numer / denom;
+                println!("  Pearson r(depth, clause_size) = {r:.3}");
             }
         }
     }

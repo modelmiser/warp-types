@@ -29,6 +29,33 @@ pub struct ResolutionStep {
     pub working_width: usize,
 }
 
+/// Per-conflict profile for proof DAG mining (Level 2).
+///
+/// Captures solver state at the moment of conflict alongside the
+/// resolution chain from 1-UIP analysis. This is the primary data
+/// structure for Level 3 DAG topology analysis and Level 4 correlations.
+#[derive(Debug, Clone)]
+pub struct ConflictProfile {
+    /// Monotonic conflict counter (0-indexed).
+    pub conflict_id: u64,
+    /// Decision level at which the conflict was detected.
+    pub decision_level: u32,
+    /// Number of resolution steps to reach 1-UIP (chain length).
+    pub resolution_depth: u32,
+    /// Size of the learned clause after minimization.
+    pub learned_clause_size: usize,
+    /// Literal Block Distance of the learned clause.
+    pub learned_lbd: u32,
+    /// Decision levels backtracked: current_level - backtrack_level.
+    pub backtrack_distance: u32,
+    /// Trail size (number of assigned variables) at the moment of conflict.
+    pub trail_size_at_conflict: usize,
+    /// Full resolution chain from 1-UIP analysis.
+    pub resolution_chain: Vec<ResolutionStep>,
+    /// Number of BCP propagations between the last decision and this conflict.
+    pub bcp_propagations: u32,
+}
+
 /// Result of conflict analysis.
 pub struct AnalysisResult {
     /// The learned clause (asserting clause). The first literal is the
@@ -616,6 +643,50 @@ fn lit_redundant_with(
     }
 
     true // all paths lead to in-clause or level-0
+}
+
+// ── Topology helpers for ConflictProfile analysis (Level 2) ──────────
+
+use std::collections::HashMap;
+
+/// Count how often each variable appears as a pivot across all profiles.
+///
+/// High-frequency pivots are "bottleneck" variables — structurally central
+/// to the proof. Correlating with VSIDS activity tests whether the solver
+/// already knows what the proof structure reveals.
+pub fn pivot_frequency(profiles: &[ConflictProfile]) -> HashMap<u32, usize> {
+    let mut freq: HashMap<u32, usize> = HashMap::new();
+    for p in profiles {
+        for step in &p.resolution_chain {
+            *freq.entry(step.pivot_var).or_insert(0) += 1;
+        }
+    }
+    freq
+}
+
+/// Count how often each clause appears as a reason clause across all profiles.
+///
+/// High-reuse clauses are structurally important — they participate in many
+/// different conflict derivations. Input clauses with high reuse encode
+/// "hard" constraints; learned clauses with high reuse are good "glue."
+pub fn clause_reuse_frequency(profiles: &[ConflictProfile]) -> HashMap<CRef, usize> {
+    let mut freq: HashMap<CRef, usize> = HashMap::new();
+    for p in profiles {
+        for step in &p.resolution_chain {
+            *freq.entry(step.reason_clause).or_insert(0) += 1;
+        }
+    }
+    freq
+}
+
+/// Extract the working-width profile from a single resolution chain.
+///
+/// Returns the sequence of working widths at each resolution step.
+/// Width expansion (growing) suggests the solver is pulling in many
+/// variables; width contraction (shrinking) suggests convergence toward
+/// the 1-UIP. The shape of this curve characterizes the conflict.
+pub fn working_width_profile(chain: &[ResolutionStep]) -> Vec<usize> {
+    chain.iter().map(|step| step.working_width).collect()
 }
 
 
