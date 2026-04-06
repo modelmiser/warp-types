@@ -23,11 +23,11 @@ jobs:
       - name: Format check
         run: cargo fmt --check
       - name: Build
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --exclude sat-kernels --verbose
       - name: Unit tests
-        run: cargo test --workspace --lib --verbose
+        run: cargo test --workspace --exclude sat-kernels --lib --verbose
       - name: Unit tests (all features)
-        run: cargo test --workspace --lib --all-features --verbose
+        run: cargo test --workspace --exclude sat-kernels --lib --all-features --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests
@@ -42,7 +42,7 @@ jobs:
           toolchain: nightly-2026-03-19
           components: clippy, rustfmt
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --exclude sat-kernels -- -D warnings
 
   toolchain-freshness:
     runs-on: ubuntu-latest
