@@ -218,15 +218,24 @@ pub fn run_bcp_watched(
         // watches.lists.len() == 2*num_vars (from Watches::new).
         let ws_slot = unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) };
         let mut ws = std::mem::take(ws_slot);
-        let mut j = 0;
 
-        // SAFETY for ws unchecked accesses throughout this loop:
-        // Invariant: j <= i. j starts at 0, incremented only when i increments.
-        // i < ws.len() is the loop condition. Therefore j <= i < ws.len(),
-        // so both ws[i] reads and ws[j] writes are in bounds.
-        let mut i = 0;
-        while i < ws.len() {
-            let entry = unsafe { *ws.get_unchecked(i) };
+        // Pointer-based iteration (MiniSat's pattern): src/dst/end instead
+        // of i/j/ws.len(). Three pointer registers vs 4-5 index registers.
+        // The compiler no longer maintains redundant loop counters (countdown,
+        // i, i+1, ptr offset) — a single pointer advance per iteration.
+        //
+        // SAFETY invariant: dst <= src <= ws_end throughout.
+        // src starts at ws.as_mut_ptr(), dst = src, ws_end = src + ws.len().
+        // dst only advances when src advances (compaction: skip deleted).
+        // All entries within [ws.as_ptr(), ws_end) are valid WatchEntry values.
+        let ws_base = ws.as_mut_ptr();
+        let ws_end = unsafe { ws_base.add(ws.len()) };
+        let mut src = ws_base;
+        let mut dst = ws_base;
+
+        while src < ws_end {
+            let entry = unsafe { *src };
+            src = unsafe { src.add(1) };
 
             // ── Blocker check FIRST (no clause DB access) ──
             // This is the hot path: 50-70% of entries are skipped here.
@@ -235,9 +244,8 @@ pub fn run_bcp_watched(
             // SAFETY: blocker literal comes from a clause in the DB.
             let blocker_val = unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) };
             if blocker_val == Some(true) {
-                unsafe { *ws.get_unchecked_mut(j) = entry };
-                j += 1;
-                i += 1;
+                unsafe { *dst = entry };
+                dst = unsafe { dst.add(1) };
                 continue;
             }
 
@@ -250,7 +258,6 @@ pub fn run_bcp_watched(
             // SAFETY: cref comes from WatchEntry, set only from valid clause
             // CRefs during Watches::new() or add_clause().
             if unsafe { db.is_deleted_unchecked(cref) } {
-                i += 1;
                 continue;
             }
 
@@ -259,18 +266,17 @@ pub fn run_bcp_watched(
             // No clause DB access needed — decide propagation/conflict from
             // the blocker value alone.
             if entry.is_binary() {
-                unsafe { *ws.get_unchecked_mut(j) = entry };
-                j += 1;
-                i += 1;
+                unsafe { *dst = entry };
+                dst = unsafe { dst.add(1) };
                 // blocker_val is Some(false) or None (Some(true) handled above)
                 if blocker_val == Some(false) {
                     // Both literals false → CONFLICT
-                    while i < ws.len() {
-                        unsafe { *ws.get_unchecked_mut(j) = *ws.get_unchecked(i) };
-                        j += 1;
-                        i += 1;
-                    }
-                    ws.truncate(j);
+                    // Drain remaining entries (memmove: regions may overlap)
+                    let remaining = unsafe { ws_end.offset_from(src) } as usize;
+                    unsafe { std::ptr::copy(src, dst, remaining) };
+                    dst = unsafe { dst.add(remaining) };
+                    let new_len = unsafe { dst.offset_from(ws_base) } as usize;
+                    unsafe { ws.set_len(new_len) };
                     *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
                     return BcpResult::Conflict { clause: cref };
                 }
@@ -306,11 +312,10 @@ pub fn run_bcp_watched(
             // ── Partner satisfied → clause satisfied, keep watch ──
             // SAFETY: partner is a watched literal from the DB
             if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
-                unsafe { *ws.get_unchecked_mut(j) = WatchEntry::new(
+                unsafe { *dst = WatchEntry::new(
                     entry.clause_and_flags & !BINARY_FLAG, partner, false,
                 ) };
-                j += 1;
-                i += 1;
+                dst = unsafe { dst.add(1) };
                 continue;
             }
 
@@ -337,28 +342,25 @@ pub fn run_bcp_watched(
                 unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
                     WatchEntry::new(cref, partner, false)
                 );
-                // Entry removed from false_lit's list (not copied to ws[j])
-                i += 1;
+                // Entry removed from false_lit's list (not copied to dst)
                 continue;
             }
 
             // No replacement found — clause is unit under current assignment.
             // Keep this entry in the watch list.
-            unsafe { *ws.get_unchecked_mut(j) = entry };
-            j += 1;
-            i += 1;
+            unsafe { *dst = entry };
+            dst = unsafe { dst.add(1) };
 
             // SAFETY: partner is a watched literal from the DB
             let partner_val = unsafe { eval_lit_indexed(partner, bt.lit_values) };
             if partner_val == Some(false) {
                 // Both watched literals false, no replacement → CONFLICT
-                // Drain remaining entries before returning
-                while i < ws.len() {
-                    unsafe { *ws.get_unchecked_mut(j) = *ws.get_unchecked(i) };
-                    j += 1;
-                    i += 1;
-                }
-                ws.truncate(j);
+                // Drain remaining entries
+                let remaining = unsafe { ws_end.offset_from(src) } as usize;
+                unsafe { std::ptr::copy(src, dst, remaining) };
+                dst = unsafe { dst.add(remaining) };
+                let new_len = unsafe { dst.offset_from(ws_base) } as usize;
+                unsafe { ws.set_len(new_len) };
                 // SAFETY: false_lit.code() < 2*num_vars
                 *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
                 return BcpResult::Conflict { clause: cref };
@@ -369,7 +371,8 @@ pub fn run_bcp_watched(
             // else: partner is true — satisfied during this BCP round
         }
 
-        ws.truncate(j);
+        let new_len = unsafe { dst.offset_from(ws_base) } as usize;
+        unsafe { ws.set_len(new_len) };
         // SAFETY: false_lit.code() < 2*num_vars
         *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
     }
