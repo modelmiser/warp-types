@@ -432,27 +432,28 @@ fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
 
 /// Solve with resolution chain instrumentation for proof DAG mining.
 ///
-/// Returns the solve result plus per-conflict profiles containing
-/// resolution chains, solver state, and BCP propagation counts.
-/// Uses the instrumented analysis path — slightly slower due to
-/// Vec::push per resolution step, but captures the full chain.
+/// Returns the solve result, per-conflict profiles, and the CRef of each
+/// learned clause (parallel to profiles — `learned_crefs[i]` is the clause
+/// learned at conflict `i`). Together these are sufficient to build the
+/// proof DAG via `ProofDag::build`.
 pub fn solve_instrumented(
     mut db: ClauseDb,
     num_vars: u32,
     conflict_limit: u64,
-) -> (SolveResult, Vec<ConflictProfile>) {
+) -> (SolveResult, Vec<ConflictProfile>, Vec<CRef>) {
     let mut profiles: Vec<ConflictProfile> = Vec::new();
+    let mut learned_crefs: Vec<CRef> = Vec::new();
 
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
-            return (SolveResult::Unsat, profiles);
+            return (SolveResult::Unsat, profiles, learned_crefs);
         }
     }
     if num_vars == 0 {
         return if db.is_empty() {
-            (SolveResult::Sat(vec![]), profiles)
+            (SolveResult::Sat(vec![]), profiles, learned_crefs)
         } else {
-            (SolveResult::Unsat, profiles)
+            (SolveResult::Unsat, profiles, learned_crefs)
         };
     }
 
@@ -474,7 +475,7 @@ pub fn solve_instrumented(
             watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate)
         {
             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-            return (SolveResult::Unsat, profiles);
+            return (SolveResult::Unsat, profiles, learned_crefs);
         }
         let mut idle = propagate.finish_no_conflict();
 
@@ -503,7 +504,7 @@ pub fn solve_instrumented(
 
             if trail.all_assigned() {
                 let _ = idle.sat();
-                return (SolveResult::Sat(trail.assignment_vec()), profiles);
+                return (SolveResult::Sat(trail.assignment_vec()), profiles, learned_crefs);
             }
 
             let (var, polarity) = vsids.pick(trail.assignments());
@@ -527,12 +528,12 @@ pub fn solve_instrumented(
 
                         if conflict_limit > 0 && conflicts >= conflict_limit {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unknown, profiles);
+                            return (SolveResult::Unknown, profiles, learned_crefs);
                         }
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unsat, profiles);
+                            return (SolveResult::Unsat, profiles, learned_crefs);
                         }
 
                         let trail_size = trail.len();
@@ -567,7 +568,7 @@ pub fn solve_instrumented(
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
-                            return (SolveResult::Unsat, profiles);
+                            return (SolveResult::Unsat, profiles, learned_crefs);
                         }
 
                         for entry in trail.entries_above(analysis.backtrack_level) {
@@ -584,6 +585,7 @@ pub fn solve_instrumented(
                         db.set_lbd(cref, lbd as u16);
                         watches.add_clause(&db, cref);
                         trail.record_propagation(asserting_lit, cref);
+                        learned_crefs.push(cref);
 
                         if restarts.on_conflict() {
                             restart_pending = true;
@@ -1245,7 +1247,7 @@ p cnf 5 10
 
             for seed in 0..20u64 {
                 let db = generate_k_sat(n, num_clauses, 3, seed);
-                let (result, profiles) = solve_instrumented(db, n, conflict_budget);
+                let (result, profiles, _learned_crefs) = solve_instrumented(db, n, conflict_budget);
 
                 all_depths.extend(profiles.iter().map(|p| p.resolution_depth));
                 match result {
@@ -1317,7 +1319,7 @@ p cnf 5 10
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
         let db = generate_k_sat(n, num_clauses, 3, 42);
-        let (result, profiles) = solve_instrumented(db, n, 10_000);
+        let (result, profiles, _learned_crefs) = solve_instrumented(db, n, 10_000);
 
         assert!(!profiles.is_empty(), "should have conflicts to profile");
 
@@ -1411,5 +1413,98 @@ p cnf 5 10
                 println!("  Pearson r(depth, clause_size) = {r:.3}");
             }
         }
+    }
+
+    #[test]
+    fn seed_3_proof_dag_topology() {
+        // Level 3: Build proof DAG from conflict profiles, validate topology.
+        use crate::bench::generate_k_sat;
+        use crate::analyze::ProofDag;
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let db = generate_k_sat(n, num_clauses, 3, 42);
+        let (result, profiles, learned_crefs) = solve_instrumented(db, n, 10_000);
+
+        assert!(!profiles.is_empty(), "need conflicts to build DAG");
+        assert_eq!(profiles.len(), learned_crefs.len(),
+            "one learned CRef per profile");
+
+        // Build the proof DAG
+        let dag = ProofDag::build(&profiles, &learned_crefs);
+        let summary = dag.summary();
+
+        println!("\n=== Seed-3 Level 3: Proof DAG Topology (n={n}, 10K budget) ===");
+        println!("  Result: {:?}", match &result {
+            SolveResult::Sat(_) => "SAT",
+            SolveResult::Unsat => "UNSAT",
+            SolveResult::Unknown => "UNKNOWN",
+        });
+        println!("  Nodes: {} total ({} input, {} learned)",
+            summary.num_nodes, summary.num_input, summary.num_learned);
+        println!("  Edges: {} total, {} unique", summary.total_edges, summary.unique_edges);
+        println!("  Sharing ratio: {:.3} (1.0 = tree, lower = more sharing)",
+            summary.sharing_ratio);
+        println!("  Max depth: {}", summary.max_depth);
+        println!("  Max fan-out: {} (most-reused clause)", summary.max_fan_out);
+        println!("  Max fan-in: {} (deepest resolution chain)", summary.max_fan_in);
+        println!("  Avg fan-out: {:.2}", summary.avg_fan_out);
+
+        // ── Structural invariants ──
+
+        // Every learned clause should appear as a node
+        assert!(summary.num_learned > 0, "should have learned clauses");
+
+        // Learned clauses have fan_in > 0 (they were derived by resolution)
+        // Input clauses have fan_in == 0
+        let learned_set: std::collections::HashSet<CRef> =
+            dag.learned_crefs.iter().copied().collect();
+        for (&cref, node) in &dag.nodes {
+            if !learned_set.contains(&cref) {
+                // Input clauses: never produced by resolution
+                assert_eq!(node.fan_in, 0,
+                    "input clause should have fan_in=0");
+                assert_eq!(node.depth, 0,
+                    "input clause must have depth 0");
+            }
+            // Learned clauses at depth > 0 is expected (derived from
+            // input clauses or earlier learned clauses)
+        }
+
+        // Sharing ratio: should be < 1.0 for any non-trivial solve
+        // (many chains share the same reason clauses)
+        assert!(summary.sharing_ratio < 1.0,
+            "should have sharing (ratio={:.3})", summary.sharing_ratio);
+
+        // Width profile
+        let widths = dag.width_profile();
+        println!("  Width profile (first 10 depths):");
+        for (d, &w) in widths.iter().enumerate().take(10) {
+            println!("    depth {d}: {w} nodes");
+        }
+
+        // Depth 0 is the widest layer (input clauses that were used as reasons)
+        assert!(widths[0] > 0, "depth 0 should have nodes");
+
+        // Variable centrality (top 10)
+        let centrality = ProofDag::variable_centrality(&profiles);
+        println!("  Top 10 pivot variables (var, count):");
+        for &(var, count) in centrality.iter().take(10) {
+            println!("    x{var}: {count}");
+        }
+
+        // The most central variable should have significant frequency
+        if let Some(&(top_var, top_count)) = centrality.first() {
+            assert!(top_count > 100,
+                "top pivot var x{} has count {} — expected > 100 on 200-var instance",
+                top_var, top_count);
+        }
+
+        // Total edges should equal sum of all resolution chain lengths
+        let expected_edges: usize = profiles.iter()
+            .map(|p| p.resolution_chain.len())
+            .sum();
+        assert_eq!(dag.total_edges, expected_edges,
+            "total edges must equal sum of chain lengths");
     }
 }

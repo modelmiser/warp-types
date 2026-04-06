@@ -689,6 +689,202 @@ pub fn working_width_profile(chain: &[ResolutionStep]) -> Vec<usize> {
     chain.iter().map(|step| step.working_width).collect()
 }
 
+// ── Proof DAG topology analysis (Level 3) ────────────────────────────
+
+/// A node in the proof DAG. Represents a clause (input or learned).
+#[derive(Debug, Clone, Default)]
+pub struct DagNode {
+    /// Number of resolution chains that produced this clause as output.
+    /// For input clauses this is always 0. For learned clauses, 1.
+    pub fan_in: u32,
+    /// Number of times this clause was used as a reason clause in any
+    /// resolution chain (across all conflicts).
+    pub fan_out: u32,
+    /// Depth from roots. Input clauses have depth 0. A learned clause's
+    /// depth = 1 + max depth among its reason clauses.
+    pub depth: u32,
+}
+
+/// Proof DAG built from conflict profiles.
+///
+/// Nodes are clauses (identified by CRef). Edges are resolution steps:
+/// each reason_clause in a chain → the learned clause of that conflict.
+/// The "learned clause CRef" for conflict i is stored in `learned_crefs`.
+///
+/// This is a forest of resolution chains with sharing: two chains that
+/// reference the same reason clause share a node.
+#[derive(Debug)]
+pub struct ProofDag {
+    /// Per-node metadata, keyed by CRef.
+    pub nodes: HashMap<CRef, DagNode>,
+    /// For each conflict (by conflict_id), the CRef of the learned clause.
+    /// Must be supplied externally since analysis doesn't know the CRef
+    /// assigned to the learned clause (that happens in the solver).
+    pub learned_crefs: Vec<CRef>,
+    /// Total edge count (sum of all resolution chain lengths).
+    pub total_edges: usize,
+    /// Number of unique (reason_clause, learned_clause) pairs.
+    pub unique_edges: usize,
+}
+
+/// Edge in the proof DAG: reason clause → learned clause via pivot.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct DagEdge {
+    reason: CRef,
+    learned: CRef,
+}
+
+impl ProofDag {
+    /// Build the proof DAG from conflict profiles and their learned clause CRefs.
+    ///
+    /// `learned_crefs[i]` is the CRef assigned to the learned clause from
+    /// conflict `i`. This must be tracked by the solver (not by analysis).
+    pub fn build(profiles: &[ConflictProfile], learned_crefs: &[CRef]) -> Self {
+        assert_eq!(
+            profiles.len(),
+            learned_crefs.len(),
+            "one learned CRef per conflict profile"
+        );
+
+        let mut nodes: HashMap<CRef, DagNode> = HashMap::new();
+        let mut edge_set: std::collections::HashSet<DagEdge> = std::collections::HashSet::new();
+        let mut total_edges: usize = 0;
+
+        for (i, profile) in profiles.iter().enumerate() {
+            let learned_cref = learned_crefs[i];
+
+            // Learned clause node: fan_in = number of reason clauses
+            let learned_node = nodes.entry(learned_cref).or_default();
+            learned_node.fan_in = profile.resolution_chain.len() as u32;
+
+            // Each reason clause in the chain is a parent of the learned clause
+            for step in &profile.resolution_chain {
+                // Reason clause node: increment fan_out
+                let reason_node = nodes.entry(step.reason_clause).or_default();
+                reason_node.fan_out += 1;
+
+                edge_set.insert(DagEdge {
+                    reason: step.reason_clause,
+                    learned: learned_cref,
+                });
+                total_edges += 1;
+            }
+        }
+
+        // BFS depth computation: input clauses (fan_in == 0) are depth 0.
+        // Learned clauses: depth = 1 + max depth among reason clauses.
+        // Since learned clauses from earlier conflicts can be reason clauses
+        // for later conflicts, process in conflict order (topological).
+        for node in nodes.values_mut() {
+            if node.fan_in == 0 {
+                node.depth = 0;
+            }
+        }
+
+        for (i, profile) in profiles.iter().enumerate() {
+            let learned_cref = learned_crefs[i];
+            let mut max_reason_depth: u32 = 0;
+            for step in &profile.resolution_chain {
+                let reason_depth = nodes.get(&step.reason_clause).map(|n| n.depth).unwrap_or(0);
+                max_reason_depth = max_reason_depth.max(reason_depth);
+            }
+            if let Some(node) = nodes.get_mut(&learned_cref) {
+                node.depth = max_reason_depth + 1;
+            }
+        }
+
+        ProofDag {
+            nodes,
+            learned_crefs: learned_crefs.to_vec(),
+            total_edges,
+            unique_edges: edge_set.len(),
+        }
+    }
+
+    /// DAG-vs-tree sharing ratio.
+    ///
+    /// Returns `unique_edges / total_edges`. A ratio of 1.0 means no
+    /// sharing (pure tree). Lower values indicate more sharing — the same
+    /// reason clause is used in multiple chains.
+    /// Returns 1.0 if there are no edges (degenerate case).
+    pub fn sharing_ratio(&self) -> f64 {
+        if self.total_edges == 0 {
+            return 1.0;
+        }
+        self.unique_edges as f64 / self.total_edges as f64
+    }
+
+    /// Width profile: number of learned clauses produced at each depth level.
+    ///
+    /// `result[d]` = count of nodes with `depth == d`. Large widths at
+    /// shallow depths indicate many independent conflict chains; large
+    /// widths at deep depths indicate cascading learned-clause-on-learned-clause
+    /// resolution.
+    pub fn width_profile(&self) -> Vec<usize> {
+        let max_depth = self.nodes.values().map(|n| n.depth).max().unwrap_or(0) as usize;
+        let mut widths = vec![0usize; max_depth + 1];
+        for node in self.nodes.values() {
+            widths[node.depth as usize] += 1;
+        }
+        widths
+    }
+
+    /// Variable centrality: pivot frequency within the DAG.
+    ///
+    /// Same as the Level 2 `pivot_frequency` but scoped to a specific DAG
+    /// instance. Returns (variable, count) pairs sorted by descending count.
+    pub fn variable_centrality(profiles: &[ConflictProfile]) -> Vec<(u32, usize)> {
+        let freq = pivot_frequency(profiles);
+        let mut sorted: Vec<(u32, usize)> = freq.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted
+    }
+
+    /// Summary statistics for the DAG.
+    pub fn summary(&self) -> DagSummary {
+        let num_nodes = self.nodes.len();
+        let num_input = self.nodes.values().filter(|n| n.fan_in == 0).count();
+        let num_learned = num_nodes - num_input;
+        let max_depth = self.nodes.values().map(|n| n.depth).max().unwrap_or(0);
+        let max_fan_out = self.nodes.values().map(|n| n.fan_out).max().unwrap_or(0);
+        let max_fan_in = self.nodes.values().map(|n| n.fan_in).max().unwrap_or(0);
+
+        let avg_fan_out = if num_nodes > 0 {
+            self.nodes.values().map(|n| n.fan_out as f64).sum::<f64>() / num_nodes as f64
+        } else {
+            0.0
+        };
+
+        DagSummary {
+            num_nodes,
+            num_input,
+            num_learned,
+            max_depth,
+            max_fan_out,
+            max_fan_in,
+            avg_fan_out,
+            sharing_ratio: self.sharing_ratio(),
+            total_edges: self.total_edges,
+            unique_edges: self.unique_edges,
+        }
+    }
+}
+
+/// Summary statistics for a proof DAG.
+#[derive(Debug, Clone)]
+pub struct DagSummary {
+    pub num_nodes: usize,
+    pub num_input: usize,
+    pub num_learned: usize,
+    pub max_depth: u32,
+    pub max_fan_out: u32,
+    pub max_fan_in: u32,
+    pub avg_fan_out: f64,
+    pub sharing_ratio: f64,
+    pub total_edges: usize,
+    pub unique_edges: usize,
+}
+
 
 #[cfg(test)]
 mod tests {

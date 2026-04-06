@@ -59,6 +59,9 @@ pub use phase::{
     Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
 };
 pub use session::{with_session, SolverSession};
-pub use analyze::{ConflictProfile, ResolutionStep, pivot_frequency, clause_reuse_frequency, working_width_profile};
+pub use analyze::{
+    ConflictProfile, DagSummary, ProofDag, ResolutionStep,
+    clause_reuse_frequency, pivot_frequency, working_width_profile,
+};
 pub use bcp::CRef;
 pub use solver::{solve, solve_watched, solve_watched_stats, SolveResult, SolveStats};
