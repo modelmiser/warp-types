@@ -1837,4 +1837,94 @@ p cnf 5 10
 
         println!("\n  Baseline 200v: solved {baseline_solved}/{num_seeds}, conflicts {baseline_conflicts}");
     }
+
+    #[test]
+    fn seed_3_pivot_scaling_diagnosis() {
+        // Diagnose WHY pivot-augmented VSIDS doesn't help at 300v:
+        //   (a) Budget ceiling? → re-run with 200K budget
+        //   (b) Pivot entropy collapse? → measure Shannon entropy of pivot freq
+        //
+        // If (a): budget was masking the signal; mechanism scales.
+        // If (b): pivot distribution flattens at larger n; mechanism is
+        //         fundamentally size-limited.
+        use crate::analyze::pivot_frequency;
+        use crate::bench::generate_k_sat;
+
+        let num_seeds = 20;
+        let scales = [0.0, 0.5, 1.0];
+
+        // ── Part A: 300v with 200K budget ──────────────────────────────
+        let n = 300u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let budget = 200_000u64;
+
+        println!("\n=== Seed-3 Scaling Diagnosis: 300v × 200K budget ===");
+        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%");
+
+        let mut baseline = 0u64;
+
+        for &scale in &scales {
+            let mut total_conflicts = 0u64;
+            let mut solved = 0u32;
+            let mut unknown = 0u32;
+
+            for seed in 0..num_seeds {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let ir = solve_instrumented_pivot_augmented(db, n, budget, scale);
+                total_conflicts += ir.profiles.len() as u64;
+                match ir.result {
+                    SolveResult::Sat(_) | SolveResult::Unsat => solved += 1,
+                    SolveResult::Unknown => unknown += 1,
+                }
+            }
+
+            if scale == 0.0 { baseline = total_conflicts; }
+
+            let vs_base = if baseline > 0 {
+                ((total_conflicts as f64 / baseline as f64) - 1.0) * 100.0
+            } else { 0.0 };
+
+            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base);
+        }
+
+        // ── Part B: Pivot frequency entropy at 200v vs 300v ────────────
+        // Shannon entropy H = -Σ p_i log2(p_i) where p_i = freq_i / total
+        // Normalized entropy H/log2(n_pivots) ∈ [0,1]. Near 1 = uniform
+        // (pivots are interchangeable), near 0 = skewed (some pivots dominate).
+        println!("\n=== Pivot Frequency Entropy ===");
+        println!("  {:>6} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "n", "seed", "n_pivots", "total", "H_bits", "H_norm", "max_freq");
+
+        for &nv in &[200u32, 300u32] {
+            let nc = ((nv as f64) * 4.267).ceil() as usize;
+            // Use 50K budget to match original conditions
+            for seed in [0u64, 5, 10, 15] {
+                let db = generate_k_sat(nv, nc, 3, seed);
+                let ir = solve_instrumented(db, nv, 50_000);
+                let freq = pivot_frequency(&ir.profiles);
+
+                if freq.is_empty() { continue; }
+
+                let total: usize = freq.values().sum();
+                let n_pivots = freq.len();
+                let max_f = *freq.values().max().unwrap();
+
+                // Shannon entropy
+                let h: f64 = freq.values()
+                    .map(|&f| {
+                        let p = f as f64 / total as f64;
+                        if p > 0.0 { -p * p.log2() } else { 0.0 }
+                    })
+                    .sum();
+
+                let h_max = (n_pivots as f64).log2();
+                let h_norm = if h_max > 0.0 { h / h_max } else { 0.0 };
+
+                println!("  {:>6} {:>6} {:>10} {:>10} {:>10.3} {:>10.4} {:>10}",
+                    nv, seed, n_pivots, total, h, h_norm, max_f);
+            }
+        }
+    }
 }

@@ -168,3 +168,5 @@ Sweet spot: scale 0.5-1.0. Scale 2.0 overshoots (over-prioritizes pivots, loses 
 **Does not scale to 300-var** (all scales within ±5% of baseline, 0-2/20 solved with 50K budget). Either the budget is too small to reveal differences, or pivot frequency becomes less discriminating at larger n.
 
 **Mechanism:** C3 showed VSIDS captures 26% of pivot centrality. Pivots are resolved away during conflict analysis and don't appear in learned clauses, so standard VSIDS misses them. The augmented bump feeds this structural signal back into decisions. The 74% gap is genuine unexploited information — at 200 vars.
+
+**Scaling diagnosis (300v × 200K budget + entropy):** The 300-var null is NOT a budget artifact (+0.4%/+2.8% with 4× budget). Pivot frequency entropy is identical at 200v and 300v (H_norm ≈ 0.97), so the signal doesn't degrade. The real issue: the improvement is constant-factor (~37%) but phase-transition difficulty is exponential. At 200v, most seeds are near the solvability boundary; at 300v, 18/20 are deep in the exponential regime where no constant-factor heuristic helps.
