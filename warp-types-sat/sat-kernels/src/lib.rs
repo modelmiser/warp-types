@@ -99,3 +99,84 @@ pub fn clause_loss_reduce(
         *output.add(bid as usize) = batch_sum.get();
     }
 }
+
+// ============================================================================
+// Kernel 2: Fused loss + gradient (loss reduce + 3 atomicAdd per clause)
+//
+// Same loss computation as kernel 1, plus gradient scatter:
+//   d(loss_c)/d(x_v) = weight * sign(lit_v) * PROD_{j≠v} term(lit_j)
+//   sign = +1 if negated, -1 if positive
+//
+// Each thread atomicAdds its 3 gradient contributions to grad[var].
+// Zero the grad array before launch (host-side memset).
+// ============================================================================
+
+/// Fused loss evaluation + gradient accumulation.
+///
+/// Combines `clause_loss_reduce` with per-clause gradient scatter.
+/// Each thread computes loss AND 3 gradient contributions, atomicAdding
+/// them to a per-variable gradient array. Eliminates the CPU gradient
+/// pass entirely for large instances.
+///
+/// # Additional parameters
+/// - `grad`: Per-variable gradient accumulator (num_vars f64s, zeroed before launch)
+#[warp_kernel]
+pub fn clause_loss_grad_fused(
+    vars0: *const u32,
+    vars1: *const u32,
+    vars2: *const u32,
+    negs0: *const u32,
+    negs1: *const u32,
+    negs2: *const u32,
+    weights: *const f64,
+    x: *const f64,
+    output: *mut f64,
+    grad: *mut f64,
+    num_clauses: u32,
+) {
+    let warp: Warp<All> = Warp::kernel_entry();
+
+    let bid = warp_types::gpu::block_id_x();
+    let tid = warp_types::gpu::thread_id_x();
+    let ci = bid * 32 + tid;
+
+    // Load clause data (coalesced)
+    let v0 = *vars0.add(ci as usize);
+    let v1 = *vars1.add(ci as usize);
+    let v2 = *vars2.add(ci as usize);
+    let n0 = *negs0.add(ci as usize);
+    let n1 = *negs1.add(ci as usize);
+    let n2 = *negs2.add(ci as usize);
+    let w = *weights.add(ci as usize);
+
+    // Load variable values (scattered, L1 cached)
+    let x0 = *x.add(v0 as usize);
+    let x1 = *x.add(v1 as usize);
+    let x2 = *x.add(v2 as usize);
+
+    // Falseness terms
+    let t0 = if n0 != 0 { x0 } else { 1.0 - x0 };
+    let t1 = if n1 != 0 { x1 } else { 1.0 - x1 };
+    let t2 = if n2 != 0 { x2 } else { 1.0 - x2 };
+    let loss = w * t0 * t1 * t2;
+
+    // ── Loss: butterfly reduce (same as kernel 1) ──
+    let batch_sum = warp.reduce_sum(data::PerLane::new(loss));
+    if tid == 0 {
+        *output.add(bid as usize) = batch_sum.get();
+    }
+
+    // ── Gradient: 3 atomicAdds per clause ──
+    // d(loss_c)/d(x_v) = sign_v * weight * PROD_{j≠v} term_j
+    // Only real clauses contribute (padding has w=0, so grad contribution = 0).
+    // We skip the atomics for padding to avoid unnecessary contention.
+    if (ci as u32) < num_clauses {
+        let s0 = if n0 != 0 { 1.0f64 } else { -1.0 };
+        let s1 = if n1 != 0 { 1.0f64 } else { -1.0 };
+        let s2 = if n2 != 0 { 1.0f64 } else { -1.0 };
+
+        warp_types::gpu::atomic_add_f64(grad.add(v0 as usize), w * s0 * t1 * t2);
+        warp_types::gpu::atomic_add_f64(grad.add(v1 as usize), w * s1 * t0 * t2);
+        warp_types::gpu::atomic_add_f64(grad.add(v2 as usize), w * s2 * t0 * t1);
+    }
+}

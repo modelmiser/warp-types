@@ -70,6 +70,21 @@ pub fn block_dim_x() -> u32 {
     dim
 }
 
+/// Atomic add for f64 in global memory.
+/// PTX: `atom.global.add.f64` (native since sm_60).
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
+    let result: f64;
+    core::arch::asm!(
+        "atom.global.add.f64 {result}, [{addr}], {val};",
+        result = out(reg64) result,
+        addr = in(reg64) addr,
+        val = in(reg64) val,
+    );
+    result
+}
+
 /// Butterfly shuffle: exchange with lane (lane_id XOR lane_mask).
 /// PTX: `shfl.sync.bfly.b32`
 #[cfg(target_arch = "nvptx64")]

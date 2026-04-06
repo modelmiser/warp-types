@@ -154,10 +154,50 @@ impl GpuContext {
         Ok(partial_sums.iter().sum())
     }
 
+    /// Fused loss + gradient on GPU. Single kernel launch.
+    ///
+    /// Returns `(total_loss, gradient_vec)`. The gradient is accumulated via
+    /// f64 atomicAdd — non-deterministic reduction order means results match
+    /// CPU to ~1e-10 but are not bit-identical.
+    pub fn total_loss_and_grad(
+        &self,
+        gpu_data: &GpuClauseData,
+        x: &[f64],
+        num_vars: usize,
+    ) -> Result<(f64, Vec<f64>), GpuError> {
+        let s = &self.stream;
+
+        let dev_x = s.clone_htod(x)?;
+        // Zero-initialized gradient accumulator
+        let dev_grad = s.clone_htod(&vec![0.0f64; num_vars])?;
+
+        unsafe {
+            s.launch_builder(&self.kernels.clause_loss_grad_fused)
+                .arg(&gpu_data.vars0)
+                .arg(&gpu_data.vars1)
+                .arg(&gpu_data.vars2)
+                .arg(&gpu_data.negs0)
+                .arg(&gpu_data.negs1)
+                .arg(&gpu_data.negs2)
+                .arg(&gpu_data.weights)
+                .arg(&dev_x)
+                .arg(&gpu_data.output)
+                .arg(&dev_grad)
+                .arg(&gpu_data.num_clauses)
+                .launch(LaunchConfig {
+                    grid_dim: (gpu_data.num_batches, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let partial_sums = s.clone_dtoh(&gpu_data.output)?;
+        let grad = s.clone_dtoh(&dev_grad)?;
+        Ok((partial_sums.iter().sum(), grad))
+    }
+
     /// GPU device name (for diagnostics).
     pub fn device_name(&self) -> String {
-        // CudaStream doesn't expose context name directly;
-        // the caller prints it from CudaContext::name() at init time.
         "GPU".to_string()
     }
 }

@@ -642,7 +642,6 @@ pub fn gradient_search_gpu(
     // One-time SoA packing + GPU upload.
     let initial_weights = vec![1.0; db.len()];
     let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
-    let var_idx = VarIndexSoA::build(&soa_template, num_vars);
 
     let mut result = GradientResult {
         assignment: None,
@@ -669,9 +668,10 @@ pub fn gradient_search_gpu(
         let mut found = false;
 
         for iter in 0..config.max_iters {
-            // Axis 1: clause-parallel loss on GPU hardware.
-            let l = ctx.total_loss(&gpu_data, &x)
-                .expect("GPU kernel launch failed");
+            // Fused: loss + gradient in one kernel launch (Axis 1 + 1b).
+            let (l, gpu_grad) = ctx.total_loss_and_grad(&gpu_data, &x, n)
+                .expect("GPU fused kernel failed");
+            grad.copy_from_slice(&gpu_grad);
             result.clause_evals += soa.num_clauses;
 
             if l < best_loss {
@@ -694,14 +694,10 @@ pub fn gradient_search_gpu(
                 }
                 if config.clause_weights {
                     update_weights_soa(&mut soa, &assign);
-                    // Re-upload adapted weights to GPU.
                     ctx.update_weights(&mut gpu_data, &soa)
                         .expect("GPU weight re-upload failed");
                 }
             }
-
-            // Gradient via SoA reverse index (CPU — Axis 1b not yet on GPU).
-            gradient_soa(&soa, &x, &var_idx, &mut grad);
 
             let grad_norm_sq: f64 = grad.iter().map(|g| g * g).sum();
             if grad_norm_sq < 1e-20 {
