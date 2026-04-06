@@ -148,3 +148,18 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Branch mispredictions are invariant to code structure** (8.26→8.06 misses/prop across all four states). The ~8 misses/prop are inherent to the BCP algorithm's data-dependent blocker checks. At ~15-20 cycle penalty each, misprediction accounts for **28% of total cycles** — the dominant remaining bottleneck. Reducing this requires algorithmic changes (better watch ordering, branch-free evaluation) not micro-optimization.
 
 **Methodology:** `perf stat` with `cpu_atom/instructions/u` on `taskset -c 16`. Instructions are deterministic (±0.0002%). Cycles are ±0.3%. Use `warp-types-sat/src/bin/perf_bench.rs` (500v, seed 1, 5190 conflicts).
+
+## 13. Branchless false_pos — Profile-Guided Branch Elimination
+
+**`perf record -e cpu_atom/branch-misses/u` + `perf annotate` identified 4 misprediction clusters** in the BCP inner loop:
+
+| Cluster | Source | % of BCP misses | Nature |
+|---------|--------|-----------------|--------|
+| Replacement search exit | for-loop `break` on first non-false literal | ~19% | Predictor learns "continue", mispredicts on replacement found |
+| Blocker hit/miss | `blocker_val == Some(true)` | ~13% | Data-dependent on assignment |
+| Partner satisfied | `partner == Some(true)` | ~9% | Data-dependent on assignment |
+| false_pos determination | `c0 == false_lit` | ~8% | ~50/50, compiler emitted branch not cmov |
+
+**The false_pos branch was a simple conditional select** (`if c0 == false_lit { (c1,0) } else { (c0,1) }`) that LLVM compiled to a `cmpl + jne` with two separate load paths instead of a conditional move. The fix: bitmask selection via `wrapping_neg()` — `Lit` is `#[repr(transparent)]` over u32, so `(c1.code() & mask) | (c0.code() & !mask)` is safe and compiles to 3 ALU ops with zero branches.
+
+**Result: -1.28 branch misses/prop (8.06→6.78), -10% cycles, +11% IPC.** Instruction count unchanged (+0.2%). The cycle savings (~43 cyc/prop) imply a ~34-cycle effective misprediction penalty — higher than Gracemont's nominal ~15-cycle pipeline depth, suggesting mispredictions also evict prefetched watch list and clause data from L1, compounding the cost with downstream cache misses.

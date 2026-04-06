@@ -299,15 +299,20 @@ pub fn run_bcp_watched(
             let c0 = unsafe { *lits.get_unchecked(0) };
             let c1 = unsafe { *lits.get_unchecked(1) };
 
-            // Determine partner (the other watched literal) and which position
-            // in the clause holds false_lit.
-            let (partner, false_pos) = if c0 == false_lit {
-                (c1, 0usize)
-            } else {
-                debug_assert_eq!(c1, false_lit,
-                    "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
-                (c0, 1usize)
+            // Branchless partner/false_pos: exactly one of c[0],c[1] equals
+            // false_lit. Select the *other* as partner. The compiler emitted a
+            // branch for the original if/else (~8% of BCP branch misses) because
+            // the two code paths loaded from different clause positions. Bitmask
+            // selection eliminates the branch entirely.
+            debug_assert!(c0 == false_lit || c1 == false_lit,
+                "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
+            let c0_is_false = (c0 == false_lit) as u32;
+            let mask = c0_is_false.wrapping_neg(); // 0xFFFF_FFFF or 0
+            // SAFETY: Lit is #[repr(transparent)] over u32; both codes are valid.
+            let partner: Lit = unsafe {
+                std::mem::transmute((c1.code() & mask) | (c0.code() & !mask))
             };
+            let false_pos = (1 ^ c0_is_false) as usize;
 
             // ── Partner satisfied → clause satisfied, keep watch ──
             // SAFETY: partner is a watched literal from the DB
