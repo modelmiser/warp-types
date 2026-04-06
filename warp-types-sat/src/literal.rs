@@ -12,6 +12,7 @@ pub type Variable = u32;
 /// Encoding: `variable * 2 + polarity` where polarity 0 = positive, 1 = negative.
 /// This is the standard internal encoding used by MiniSat, CaDiCaL, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct Lit(u32);
 
 impl Lit {

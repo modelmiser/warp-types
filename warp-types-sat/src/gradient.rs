@@ -57,7 +57,7 @@
 //! - n=10000 vars → 42670 clauses → 1334 warps → saturates full GPU
 //! - 32 multi-start searches → 32× the above → embarrassingly parallel across SMs
 
-use crate::bcp::ClauseDb;
+use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
 
 // ─── RNG (deterministic, no dependency) ───────────────────────────────
@@ -154,14 +154,15 @@ pub struct GradientResult {
 
 // ─── Variable-to-clause index ─────────────────────────────────────────
 
-/// Maps each variable to the clauses it appears in: (clause_idx, position_in_clause).
+/// Maps each variable to the clauses it appears in: (sequential_index, position_in_clause).
+/// The sequential index maps into a `crefs: Vec<CRef>` for clause DB access.
 pub(crate) struct VarIndex(Vec<Vec<(usize, usize)>>);
 
 impl VarIndex {
-    pub(crate) fn build(db: &ClauseDb, num_vars: u32) -> Self {
+    pub(crate) fn build(db: &ClauseDb, num_vars: u32, crefs: &[CRef]) -> Self {
         let mut occ = vec![Vec::new(); num_vars as usize];
-        for ci in 0..db.len() {
-            for (pos, lit) in db.clause(ci).literals.iter().enumerate() {
+        for (ci, &cref) in crefs.iter().enumerate() {
+            for (pos, lit) in db.clause(cref).literals.iter().enumerate() {
                 occ[lit.var() as usize].push((ci, pos));
             }
         }
@@ -186,11 +187,13 @@ fn lit_term(lit: Lit, x: &[f64]) -> f64 {
 
 /// Weighted loss: sum over all clauses of w_c * product of literal falseness terms.
 /// Zero iff every clause has at least one fully-true literal.
-pub(crate) fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
-    (0..db.len())
-        .map(|ci| {
+pub(crate) fn loss(db: &ClauseDb, crefs: &[CRef], x: &[f64], weights: &[f64]) -> f64 {
+    crefs
+        .iter()
+        .enumerate()
+        .map(|(ci, &cref)| {
             weights[ci]
-                * db.clause(ci)
+                * db.clause(cref)
                     .literals
                     .iter()
                     .map(|&l| lit_term(l, x))
@@ -204,11 +207,11 @@ pub(crate) fn loss(db: &ClauseDb, x: &[f64], weights: &[f64]) -> f64 {
 /// For clause c containing variable v at position j:
 ///   d(loss_c)/d(x_v) = w_c * sign(l_j) * PROD_{i!=j} term(l_i)
 /// where sign = -1 for positive literal, +1 for negative.
-pub(crate) fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
+pub(crate) fn gradient(db: &ClauseDb, crefs: &[CRef], x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
     grad.iter_mut().for_each(|g| *g = 0.0);
     for (v, occs) in idx.0.iter().enumerate() {
         for &(ci, pos) in occs {
-            let lits = &db.clause(ci).literals;
+            let lits = &db.clause(crefs[ci]).literals;
             let prod_others: f64 = lits
                 .iter()
                 .enumerate()
@@ -223,8 +226,8 @@ pub(crate) fn gradient(db: &ClauseDb, x: &[f64], idx: &VarIndex, weights: &[f64]
 
 /// Check whether a discrete assignment satisfies all clauses.
 pub fn verify(db: &ClauseDb, assign: &[bool]) -> bool {
-    (0..db.len()).all(|ci| {
-        db.clause(ci).literals.iter().any(|&lit| {
+    db.iter_crefs().all(|cref| {
+        db.clause(cref).literals.iter().any(|&lit| {
             let val = assign[lit.var() as usize];
             if lit.is_negated() {
                 !val
@@ -243,9 +246,9 @@ fn discretize(x: &[f64]) -> Vec<bool> {
 /// Update clause weights via EMA on violation frequency.
 /// Unsatisfied clauses accumulate weight; satisfied clauses decay.
 /// Formula: w = 0.9 * w + 0.1 * (violated ? 1 : 0)
-fn update_weights(db: &ClauseDb, assign: &[bool], weights: &mut [f64]) {
-    for ci in 0..db.len() {
-        let satisfied = db.clause(ci).literals.iter().any(|&lit| {
+fn update_weights(db: &ClauseDb, crefs: &[CRef], assign: &[bool], weights: &mut [f64]) {
+    for (ci, &cref) in crefs.iter().enumerate() {
+        let satisfied = db.clause(cref).literals.iter().any(|&lit| {
             let val = assign[lit.var() as usize];
             if lit.is_negated() {
                 !val
@@ -291,7 +294,8 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
         };
     }
 
-    let idx = VarIndex::build(db, num_vars);
+    let crefs = db.crefs();
+    let idx = VarIndex::build(db, num_vars, &crefs);
     let mut result = GradientResult {
         assignment: None,
         best_continuous: None,
@@ -309,14 +313,14 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
         let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
         let mut grad = vec![0.0; n];
         let mut velocity = vec![0.0; n];
-        let mut weights = vec![1.0; db.len()];
+        let mut weights = vec![1.0; crefs.len()];
         let mut lr = config.learning_rate;
         let mut best_loss = f64::MAX;
         let mut found = false;
 
         for iter in 0..config.max_iters {
-            let l = loss(db, &x, &weights);
-            result.clause_evals += db.len();
+            let l = loss(db, &crefs, &x, &weights);
+            result.clause_evals += crefs.len();
 
             if l < best_loss {
                 best_loss = l;
@@ -337,12 +341,12 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
                 }
                 // Clause weight adaptation: upweight persistently violated clauses.
                 if config.clause_weights {
-                    update_weights(db, &assign, &mut weights);
+                    update_weights(db, &crefs, &assign, &mut weights);
                 }
             }
 
             // Gradient step
-            gradient(db, &x, &idx, &weights, &mut grad);
+            gradient(db, &crefs, &x, &idx, &weights, &mut grad);
 
             // Early exit on vanishing gradient (stuck at stationary point).
             let grad_norm_sq: f64 = grad.iter().map(|g| g * g).sum();
@@ -495,21 +499,22 @@ mod tests {
     fn loss_decreases() {
         let db = generate_3sat_phase_transition(20, 42);
         let n = 20usize;
-        let idx = VarIndex::build(&db, 20);
-        let weights = vec![1.0; db.len()];
+        let crefs = db.crefs();
+        let idx = VarIndex::build(&db, 20, &crefs);
+        let weights = vec![1.0; crefs.len()];
 
         let mut rng = Rng::new(42);
         let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
         let mut grad = vec![0.0; n];
 
-        let initial = loss(&db, &x, &weights);
+        let initial = loss(&db, &crefs, &x, &weights);
         for _ in 0..200 {
-            gradient(&db, &x, &idx, &weights, &mut grad);
+            gradient(&db, &crefs, &x, &idx, &weights, &mut grad);
             for i in 0..n {
                 x[i] = (x[i] - 0.01 * grad[i]).clamp(0.0, 1.0);
             }
         }
-        let final_loss = loss(&db, &x, &weights);
+        let final_loss = loss(&db, &crefs, &x, &weights);
         assert!(
             final_loss < initial,
             "loss should decrease: {initial} -> {final_loss}"

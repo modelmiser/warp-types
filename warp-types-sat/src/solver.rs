@@ -4,10 +4,11 @@
 //! The trail is the single source of truth for assignments — BCP writes
 //! through it, backtracking retracts through it. No ghost assignments.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::analyze::{self, AnalyzeWork};
-use crate::bcp::{self, BcpResult, ClauseDb};
+use crate::bcp::{self, BcpResult, CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::restart::LubyRestarts;
 use crate::session;
@@ -47,8 +48,8 @@ pub struct SolveStats {
 /// Takes ownership of the clause database (learned clauses are appended).
 pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
     // Empty clause → trivially UNSAT (a disjunction of zero literals is false).
-    for i in 0..db.len() {
-        if db.clause(i).literals.is_empty() {
+    for cref in db.iter_crefs() {
+        if db.clause(cref).literals.is_empty() {
             return SolveResult::Unsat;
         }
     }
@@ -100,13 +101,13 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
                         idle = propagate.finish_no_conflict();
                         break;
                     }
-                    BcpResult::Conflict { clause_index } => {
+                    BcpResult::Conflict { clause } => {
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
                             return SolveResult::Unsat;
                         }
 
-                        let analysis = analyze::analyze_conflict(&trail, &db, clause_index);
+                        let analysis = analyze::analyze_conflict(&trail, &db, clause);
 
                         let conflict = propagate.finish_conflict();
                         let analyzed = conflict.analyze();
@@ -119,8 +120,8 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
                         trail.backtrack_to(analysis.backtrack_level);
 
                         let asserting_lit = analysis.learned[0];
-                        let clause_idx = db.add_clause(analysis.learned);
-                        trail.record_propagation(asserting_lit, clause_idx);
+                        let cref = db.add_clause(analysis.learned);
+                        trail.record_propagation(asserting_lit, cref);
 
                         let bt = analyzed.backtrack();
                         propagate = bt.propagate();
@@ -174,8 +175,8 @@ fn solve_cdcl_core_inner(
     vsids: &mut Vsids,
     stats: &mut SolveStats,
 ) -> SolveResult {
-    for i in 0..db.len() {
-        if db.clause(i).literals.is_empty() {
+    for cref in db.iter_crefs() {
+        if db.clause(cref).literals.is_empty() {
             return SolveResult::Unsat;
         }
     }
@@ -228,10 +229,10 @@ fn solve_cdcl_core_inner(
 
                 // ── Learned clause deletion + compaction ──
                 if conflicts >= next_reduce {
-                    let locked = build_locked_set(&trail, db.len());
+                    let locked = build_locked_set(&trail);
                     let deleted = db.reduce_learned(&locked);
                     if !deleted.is_empty() {
-                        // Compact db → contiguous indices for cache locality
+                        // Compact db → contiguous CRefs for cache locality
                         let remap = db.compact();
                         trail.remap_reasons(&remap);
                         // Rebuild watches from the now-compact database
@@ -269,7 +270,7 @@ fn solve_cdcl_core_inner(
                         idle = propagate.finish_no_conflict();
                         break;
                     }
-                    BcpResult::Conflict { clause_index } => {
+                    BcpResult::Conflict { clause } => {
                         conflicts += 1;
                         stats.conflicts += 1;
 
@@ -280,7 +281,7 @@ fn solve_cdcl_core_inner(
 
                         let t = Instant::now();
                         let analysis = analyze::analyze_conflict_with(
-                            &mut analyze_work, &trail, &db, clause_index,
+                            &mut analyze_work, &trail, &db, clause,
                         );
                         stats.analyze_ns += t.elapsed().as_nanos() as u64;
                         stats.analyze_resolve_ns += analysis.resolve_ns;
@@ -316,10 +317,10 @@ fn solve_cdcl_core_inner(
 
                         let asserting_lit = analysis.learned[0];
                         let lbd = analysis.lbd;
-                        let clause_idx = db.add_clause(analysis.learned);
-                        db.set_lbd(clause_idx, lbd as u16);
-                        watches.add_clause(db, clause_idx);
-                        trail.record_propagation(asserting_lit, clause_idx);
+                        let cref = db.add_clause(analysis.learned);
+                        db.set_lbd(cref, lbd as u16);
+                        watches.add_clause(db, cref);
+                        trail.record_propagation(asserting_lit, cref);
 
                         // ── Restart check ──
                         if restarts.on_conflict() {
@@ -341,16 +342,14 @@ fn solve_cdcl_core_inner(
     })
 }
 
-/// Build a boolean array marking which clauses are "locked" — currently
+/// Build a set of CRefs for clauses that are "locked" — currently
 /// serving as a propagation reason for an assignment on the trail.
 /// Locked clauses must not be deleted.
-fn build_locked_set(trail: &Trail, num_clauses: usize) -> Vec<bool> {
-    let mut locked = vec![false; num_clauses];
+fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
+    let mut locked = HashSet::new();
     for entry in trail.entries() {
-        if let Reason::Propagation(ci) = entry.reason {
-            if ci < locked.len() {
-                locked[ci] = true;
-            }
+        if let Reason::Propagation(cref) = entry.reason {
+            locked.insert(cref);
         }
     }
     locked

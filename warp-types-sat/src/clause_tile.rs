@@ -16,6 +16,7 @@
 //! On CPU, we simulate tile-local operations using SimWarp segments.
 //! On GPU, these map directly to `Tile<SIZE>` ballot/reduce operations.
 
+use crate::bcp::CRef;
 use crate::clause::ClauseToken;
 use crate::literal::Lit;
 use crate::phase::Phase;
@@ -57,8 +58,8 @@ pub struct ClauseTile<P: Phase> {
     clause_len: usize,
     /// Tile size (4, 8, 16, or 32).
     tile_size: usize,
-    /// Original clause database index (survives bin-packing reorder).
-    db_index: usize,
+    /// Original clause arena reference (survives bin-packing reorder).
+    db_ref: CRef,
     /// Ownership token (affine).
     _token: ClauseToken,
     /// Phase marker.
@@ -76,9 +77,9 @@ impl<P: Phase> ClauseTile<P> {
         self.tile_size
     }
 
-    /// Original clause database index.
-    pub fn db_index(&self) -> usize {
-        self.db_index
+    /// Original clause arena reference.
+    pub fn db_ref(&self) -> CRef {
+        self.db_ref
     }
 
     /// Recover the clause token (release ownership).
@@ -105,7 +106,7 @@ fn tile_size_for(clause_len: usize) -> usize {
     }
 }
 
-/// Create a clause tile from literals, a clause token, and the database index.
+/// Create a clause tile from literals, a clause token, and the arena reference.
 ///
 /// Deduplicates literals (removes exact duplicates). Detects tautologies
 /// (clause containing both `x` and `¬x`) and returns `None` for them.
@@ -113,7 +114,7 @@ fn tile_size_for(clause_len: usize) -> usize {
 pub fn make_clause_tile<P: Phase>(
     literals: &[Lit],
     token: ClauseToken,
-    db_index: usize,
+    db_ref: CRef,
 ) -> Option<ClauseTile<P>> {
     if literals.is_empty() || literals.len() > 32 {
         // Empty clauses (trivially false) and oversize clauses (>32 literals)
@@ -147,7 +148,7 @@ pub fn make_clause_tile<P: Phase>(
         literals: deduped,
         clause_len,
         tile_size: ts,
-        db_index,
+        db_ref,
         _token: token,
         _phase: PhantomData,
     })
@@ -296,14 +297,14 @@ impl ClauseBatch {
         }
     }
 
-    /// Check all clauses in the batch. Returns (db_index, status) for each.
+    /// Check all clauses in the batch. Returns (db_ref, status) for each.
     ///
     /// On GPU, this would be a single warp-wide ballot per check,
     /// with each tile segment computing independently.
-    pub fn check_all(&self, assignments: &[Option<bool>]) -> Vec<(usize, ClauseStatus)> {
+    pub fn check_all(&self, assignments: &[Option<bool>]) -> Vec<(CRef, ClauseStatus)> {
         self.tiles
             .iter()
-            .map(|tile| (tile.db_index(), tile.check(assignments)))
+            .map(|tile| (tile.db_ref(), tile.check(assignments)))
             .collect()
     }
 
@@ -360,7 +361,7 @@ mod tests {
 
     fn make_test_tile(lits: &[Lit], pool: &mut ClausePool, idx: usize) -> ClauseTile<Propagate> {
         let token = pool.acquire(idx).unwrap();
-        make_clause_tile::<Propagate>(lits, token, idx).expect("tautological clause in test")
+        make_clause_tile::<Propagate>(lits, token, idx as CRef).expect("tautological clause in test")
     }
 
     #[test]

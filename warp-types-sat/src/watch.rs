@@ -15,7 +15,7 @@
 //! (one fewer cache line access vs a separate `watched` array) and lets the
 //! replacement search start at c[2] (no w0/w1 comparison).
 
-use crate::bcp::{BcpResult, ClauseDb};
+use crate::bcp::{BcpResult, CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::phase::Propagate;
 use crate::trail::Trail;
@@ -60,8 +60,8 @@ impl WatchEntry {
     }
 
     #[inline]
-    fn clause_index(&self) -> usize {
-        (self.clause_and_flags & !BINARY_FLAG) as usize
+    fn clause_ref(&self) -> CRef {
+        self.clause_and_flags & !BINARY_FLAG
     }
 
     #[inline]
@@ -95,8 +95,11 @@ impl Watches {
         let num_lits = 2 * num_vars as usize;
         let mut lists = vec![Vec::new(); num_lits];
 
-        for ci in 0..db.len() {
-            let lits = &db.clause(ci).literals;
+        for cref in db.iter_crefs() {
+            if db.is_deleted(cref) {
+                continue;
+            }
+            let lits = &db.clause(cref).literals;
             if lits.len() < 2 {
                 continue;
             }
@@ -104,8 +107,8 @@ impl Watches {
             let w1 = lits[1];
             let binary = lits.len() == 2;
             // Each watch entry stores the *other* watched literal as blocker
-            lists[w0.code() as usize].push(WatchEntry::new(ci as u32, w1, binary));
-            lists[w1.code() as usize].push(WatchEntry::new(ci as u32, w0, binary));
+            lists[w0.code() as usize].push(WatchEntry::new(cref, w1, binary));
+            lists[w1.code() as usize].push(WatchEntry::new(cref, w0, binary));
         }
 
         Watches {
@@ -119,17 +122,16 @@ impl Watches {
     ///
     /// Reads c[0] and c[1] as the watched pair (caller must ensure the
     /// asserting literal is at c[0] and the second watch is at c[1]).
-    pub fn add_clause(&mut self, db: &ClauseDb, clause_idx: usize) {
-        let lits = &db.clause(clause_idx).literals;
+    pub fn add_clause(&mut self, db: &ClauseDb, cref: CRef) {
+        let lits = &db.clause(cref).literals;
         if lits.len() < 2 {
             return;
         }
         let w0 = lits[0];
         let w1 = lits[1];
-        let ci = clause_idx as u32;
         let binary = lits.len() == 2;
-        self.lists[w0.code() as usize].push(WatchEntry::new(ci, w1, binary));
-        self.lists[w1.code() as usize].push(WatchEntry::new(ci, w0, binary));
+        self.lists[w0.code() as usize].push(WatchEntry::new(cref, w1, binary));
+        self.lists[w1.code() as usize].push(WatchEntry::new(cref, w0, binary));
     }
 
     /// Reset queue head after backtracking (trail is shorter now).
@@ -178,19 +180,19 @@ pub fn run_bcp_watched(
     // Handle unit/empty original clauses once at initialization.
     if !watches.initial_scan_done {
         watches.initial_scan_done = true;
-        for ci in 0..db.len() {
-            if db.is_deleted(ci) {
+        for cref in db.iter_crefs() {
+            if db.is_deleted(cref) {
                 continue;
             }
-            let lits = &db.clause(ci).literals;
+            let lits = &db.clause(cref).literals;
             if lits.is_empty() {
-                return BcpResult::Conflict { clause_index: ci };
+                return BcpResult::Conflict { clause: cref };
             }
             if lits.len() == 1 {
                 let lit = lits[0];
                 match bt.lit_values[lit.code() as usize] {
-                    None => bt.record_propagation(lit, ci),
-                    Some(false) => return BcpResult::Conflict { clause_index: ci },
+                    None => bt.record_propagation(lit, cref),
+                    Some(false) => return BcpResult::Conflict { clause: cref },
                     Some(true) => {}
                 }
             }
@@ -225,11 +227,11 @@ pub fn run_bcp_watched(
         let mut i = 0;
         while i < ws.len() {
             let entry = unsafe { *ws.get_unchecked(i) };
-            let ci = entry.clause_index();
+            let cref = entry.clause_ref();
 
-            // SAFETY: ci comes from WatchEntry, set only from valid clause
-            // indices during Watches::new() or add_clause().
-            if unsafe { db.is_deleted_unchecked(ci) } {
+            // SAFETY: cref comes from WatchEntry, set only from valid clause
+            // CRefs during Watches::new() or add_clause().
+            if unsafe { db.is_deleted_unchecked(cref) } {
                 i += 1;
                 continue;
             }
@@ -263,10 +265,10 @@ pub fn run_bcp_watched(
                     }
                     ws.truncate(j);
                     *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
-                    return BcpResult::Conflict { clause_index: ci };
+                    return BcpResult::Conflict { clause: cref };
                 }
                 // blocker_val is None → propagate partner
-                bt.record_propagation(entry.blocker, ci);
+                bt.record_propagation(entry.blocker, cref);
                 continue;
             }
 
@@ -277,9 +279,9 @@ pub fn run_bcp_watched(
             // of `lits` (the replacement search loop), before the mutable
             // swap_literal_unchecked call below.
             //
-            // SAFETY: ci < db.len(), clause has ≥2 literals (watch invariant),
-            // all literal codes < 2*num_vars.
-            let c = unsafe { db.clause_unchecked(ci) };
+            // SAFETY: cref points to a valid header, clause has ≥2 literals
+            // (watch invariant), all literal codes < 2*num_vars.
+            let c = unsafe { db.clause_unchecked(cref) };
             let lits = c.literals;
             let c0 = unsafe { *lits.get_unchecked(0) };
             let c1 = unsafe { *lits.get_unchecked(1) };
@@ -290,7 +292,7 @@ pub fn run_bcp_watched(
                 (c1, 0usize)
             } else {
                 debug_assert_eq!(c1, false_lit,
-                    "clause {ci} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
+                    "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
                 (c0, 1usize)
             };
 
@@ -321,12 +323,12 @@ pub fn run_bcp_watched(
 
             if let Some((new_watch, k)) = replacement {
                 // Swap replacement into the watched position (c[false_pos])
-                // SAFETY: ci < db.len(), false_pos ∈ {0,1}, k ∈ [2, clause_len)
-                unsafe { db.swap_literal_unchecked(ci, false_pos, k) };
+                // SAFETY: cref valid, false_pos ∈ {0,1}, k ∈ [2, clause_len)
+                unsafe { db.swap_literal_unchecked(cref, false_pos, k) };
                 // Add watch for the new literal (long clause, not binary)
                 // SAFETY: new_watch.code() < 2*num_vars
                 unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
-                    WatchEntry::new(ci as u32, partner, false)
+                    WatchEntry::new(cref, partner, false)
                 );
                 // Entry removed from false_lit's list (not copied to ws[j])
                 i += 1;
@@ -352,10 +354,10 @@ pub fn run_bcp_watched(
                 ws.truncate(j);
                 // SAFETY: false_lit.code() < 2*num_vars
                 *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
-                return BcpResult::Conflict { clause_index: ci };
+                return BcpResult::Conflict { clause: cref };
             } else if partner_val.is_none() {
                 // Partner unassigned → unit clause, propagate partner
-                bt.record_propagation(partner, ci);
+                bt.record_propagation(partner, cref);
             }
             // else: partner is true — satisfied during this BCP round
         }
@@ -408,7 +410,7 @@ mod tests {
         trail.new_decision(Lit::pos(0));
         assert_eq!(
             bcp_after_decision(&mut db, &mut w, &mut trail),
-            BcpResult::Conflict { clause_index: 0 }
+            BcpResult::Conflict { clause: 0 }
         );
     }
 

@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 
-use crate::bcp::{BcpResult, ClauseDb};
+use crate::bcp::{BcpResult, CRef, ClauseDb};
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseBatch, ClauseStatus, ClauseTile};
 use crate::phase::Propagate;
@@ -19,27 +19,36 @@ use crate::trail::Trail;
 /// Tracks which clauses need checking and redistributes work.
 pub struct ClauseScheduler {
     pool: ClausePool,
-    pending: VecDeque<usize>,
-    done: Vec<usize>,
-    num_clauses: usize,
+    /// All clause CRefs in insertion order (maps sequential index ↔ CRef).
+    crefs: Vec<CRef>,
+    /// Pending clause CRefs.
+    pending: VecDeque<CRef>,
+    /// Completed clause CRefs.
+    done: Vec<CRef>,
+    /// Reverse map: CRef → sequential index (for ClausePool).
+    cref_to_seq: std::collections::HashMap<CRef, usize>,
 }
 
 /// Result of one scheduler round.
 pub struct SchedulerRound {
     pub num_propagated: usize,
-    pub conflict: Option<usize>,
+    pub conflict: Option<CRef>,
     pub clauses_checked: usize,
     pub tiles_recycled: usize,
 }
 
 impl ClauseScheduler {
     pub fn new(db: &ClauseDb) -> Self {
-        let n = db.len();
+        let crefs: Vec<CRef> = db.crefs();
+        let n = crefs.len();
+        let cref_to_seq: std::collections::HashMap<CRef, usize> =
+            crefs.iter().enumerate().map(|(i, &c)| (c, i)).collect();
         ClauseScheduler {
             pool: ClausePool::new(n),
-            pending: (0..n).collect::<VecDeque<_>>(),
+            pending: crefs.iter().copied().collect::<VecDeque<_>>(),
             done: Vec::new(),
-            num_clauses: n,
+            cref_to_seq,
+            crefs,
         }
     }
 
@@ -53,8 +62,8 @@ impl ClauseScheduler {
 
     pub fn reset_round(&mut self) {
         self.done.clear();
-        self.pool = ClausePool::new(self.num_clauses);
-        self.pending = (0..self.num_clauses).collect::<VecDeque<_>>();
+        self.pool = ClausePool::new(self.crefs.len());
+        self.pending = self.crefs.iter().copied().collect::<VecDeque<_>>();
     }
 
     fn fill_batch(&mut self, db: &ClauseDb) -> Option<ClauseBatch> {
@@ -62,8 +71,8 @@ impl ClauseScheduler {
         let mut lanes_used = 0usize;
 
         while !self.pending.is_empty() {
-            let clause_idx = self.pending[0];
-            let clause = db.clause(clause_idx);
+            let cref = self.pending[0];
+            let clause = db.clause(cref);
             let tile_size = clause_tile_size(clause.literals.len());
 
             if lanes_used + tile_size > 32 {
@@ -71,13 +80,14 @@ impl ClauseScheduler {
             }
 
             self.pending.pop_front();
+            let seq_idx = self.cref_to_seq[&cref];
             let token = self
                 .pool
-                .acquire(clause_idx)
+                .acquire(seq_idx)
                 .expect("clause already acquired — affine discipline violated");
 
             if let Some(tile) =
-                clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, clause_idx)
+                clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, cref)
             {
                 lanes_used += tile.tile_size();
                 tiles.push(tile);
@@ -108,24 +118,24 @@ impl ClauseScheduler {
         // Evaluate non-tileable clauses directly (empty or >32 literals).
         let mut i = 0;
         while i < self.pending.len() {
-            let clause_idx = self.pending[i];
-            let clause = db.clause(clause_idx);
+            let cref = self.pending[i];
+            let clause = db.clause(cref);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
                 self.pending.remove(i);
                 match clause_tile::eval_clause_direct(&clause.literals, trail.assignments()) {
                     ClauseStatus::Conflict => {
-                        round.conflict = Some(clause_idx);
+                        round.conflict = Some(cref);
                         return round;
                     }
                     ClauseStatus::Unit { propagate } => {
                         if trail.value(propagate.var()).is_none() {
-                            trail.record_propagation(propagate, clause_idx);
+                            trail.record_propagation(propagate, cref);
                             round.num_propagated += 1;
                         }
-                        self.done.push(clause_idx);
+                        self.done.push(cref);
                     }
                     ClauseStatus::Satisfied => {
-                        self.done.push(clause_idx);
+                        self.done.push(cref);
                     }
                     ClauseStatus::Unresolved { .. } => {
                         // Still unresolved — will retry next round after reset
@@ -141,28 +151,28 @@ impl ClauseScheduler {
             let results = batch.check_all(trail.assignments());
             round.clauses_checked += results.len();
 
-            let mut recycle_indices = Vec::new();
+            let mut recycle_crefs = Vec::new();
 
-            for &(db_index, ref status) in &results {
+            for &(db_ref, ref status) in &results {
                 match status {
                     ClauseStatus::Conflict => {
-                        round.conflict = Some(db_index);
+                        round.conflict = Some(db_ref);
                         return round;
                     }
                     ClauseStatus::Satisfied => {
-                        self.done.push(db_index);
-                        recycle_indices.push(db_index);
+                        self.done.push(db_ref);
+                        recycle_crefs.push(db_ref);
                     }
                     ClauseStatus::Unit { propagate } => {
                         if trail.value(propagate.var()).is_none() {
-                            trail.record_propagation(*propagate, db_index);
+                            trail.record_propagation(*propagate, db_ref);
                             round.num_propagated += 1;
                         }
-                        self.done.push(db_index);
-                        recycle_indices.push(db_index);
+                        self.done.push(db_ref);
+                        recycle_crefs.push(db_ref);
                     }
                     ClauseStatus::Unresolved { .. } => {
-                        recycle_indices.push(db_index);
+                        recycle_crefs.push(db_ref);
                     }
                 }
             }
@@ -172,7 +182,7 @@ impl ClauseScheduler {
                 self.pool.release(token);
             }
 
-            round.tiles_recycled += recycle_indices.len();
+            round.tiles_recycled += recycle_crefs.len();
         }
 
         round
@@ -208,10 +218,8 @@ pub fn run_bcp_scheduled(
     loop {
         let round = scheduler.run_round(db, trail, phase_proof);
 
-        if let Some(clause_idx) = round.conflict {
-            return BcpResult::Conflict {
-                clause_index: clause_idx,
-            };
+        if let Some(cref) = round.conflict {
+            return BcpResult::Conflict { clause: cref };
         }
 
         if round.num_propagated == 0 {
@@ -267,7 +275,7 @@ mod tests {
         trail.new_decision(Lit::pos(0));
         let result = scheduled_bcp(&db, &mut trail);
 
-        assert_eq!(result, BcpResult::Conflict { clause_index: 0 });
+        assert_eq!(result, BcpResult::Conflict { clause: 0 });
     }
 
     #[test]

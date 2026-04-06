@@ -59,4 +59,5 @@ pub use phase::{
     Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
 };
 pub use session::{with_session, SolverSession};
+pub use bcp::CRef;
 pub use solver::{solve, solve_watched, solve_watched_stats, SolveResult, SolveStats};

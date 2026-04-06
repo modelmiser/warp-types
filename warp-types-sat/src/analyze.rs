@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use crate::bcp::ClauseDb;
+use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::trail::{Reason, Trail};
 
@@ -90,7 +90,7 @@ impl AnalyzeWork {
 /// Run 1-UIP conflict analysis (allocates fresh scratch buffers).
 ///
 /// Convenience wrapper for callers that don't reuse buffers (old solver, tests).
-pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: usize) -> AnalysisResult {
+pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: CRef) -> AnalysisResult {
     let num_vars = trail.num_vars().max(db.max_variable() as usize + 1);
     let mut work = AnalyzeWork::new(num_vars);
     analyze_conflict_with(&mut work, trail, db, conflict_clause)
@@ -104,7 +104,7 @@ pub fn analyze_conflict_with(
     work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
-    conflict_clause: usize,
+    conflict_clause: CRef,
 ) -> AnalysisResult {
     let current_level = trail.current_level();
     let t_resolve = Instant::now();
@@ -436,15 +436,15 @@ mod tests {
         // Backtrack level: 0
 
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // clause 0: ¬x0 ∨ x1
-        db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // clause 1: ¬x0 ∨ ¬x1
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // c0: ¬x0 ∨ x1
+        let c1 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // c1: ¬x0 ∨ ¬x1
 
         let mut trail = Trail::new(2);
 
         trail.new_decision(Lit::pos(0)); // level 1: x0=T
-        trail.record_propagation(Lit::pos(1), 0); // x1=T from clause 0
+        trail.record_propagation(Lit::pos(1), c0); // x1=T from c0
 
-        let result = analyze_conflict(&trail, &db, 1);
+        let result = analyze_conflict(&trail, &db, c1);
 
         // Learned clause should contain ¬x0 (the asserting literal)
         assert_eq!(result.learned.len(), 1);
@@ -467,16 +467,16 @@ mod tests {
         // Backtrack level: 1 (from ¬x0 at level 1)
 
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // clause 0: ¬x1 ∨ x2
-        db.add_clause(vec![Lit::neg(0), Lit::neg(2)]); // clause 1: ¬x0 ∨ ¬x2
+        let c0 = db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // c0: ¬x1 ∨ x2
+        let c1 = db.add_clause(vec![Lit::neg(0), Lit::neg(2)]); // c1: ¬x0 ∨ ¬x2
 
         let mut trail = Trail::new(3);
 
         trail.new_decision(Lit::pos(0)); // level 1: x0=T
         trail.new_decision(Lit::pos(1)); // level 2: x1=T
-        trail.record_propagation(Lit::pos(2), 0); // x2=T from clause 0
+        trail.record_propagation(Lit::pos(2), c0); // x2=T from c0
 
-        let result = analyze_conflict(&trail, &db, 1);
+        let result = analyze_conflict(&trail, &db, c1);
 
         assert_eq!(result.learned[0], Lit::neg(2)); // asserting: ¬x2
         assert!(result.learned.contains(&Lit::neg(0))); // from level 1
@@ -544,19 +544,19 @@ mod tests {
         // Minimized: {¬x4, ¬x0}
 
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // c0: ¬x0 ∨ x1
-        db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // c1: ¬x1 ∨ x2
-        db.add_clause(vec![Lit::neg(3), Lit::pos(4)]); // c2: ¬x3 ∨ x4
-        db.add_clause(vec![Lit::neg(0), Lit::neg(2), Lit::neg(4)]); // c3: ¬x0 ∨ ¬x2 ∨ ¬x4
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // c0: ¬x0 ∨ x1
+        let c1 = db.add_clause(vec![Lit::neg(1), Lit::pos(2)]); // c1: ¬x1 ∨ x2
+        let c2 = db.add_clause(vec![Lit::neg(3), Lit::pos(4)]); // c2: ¬x3 ∨ x4
+        let c3 = db.add_clause(vec![Lit::neg(0), Lit::neg(2), Lit::neg(4)]); // c3: ¬x0 ∨ ¬x2 ∨ ¬x4
 
         let mut trail = Trail::new(5);
         trail.new_decision(Lit::pos(0)); // level 1: x0=T
-        trail.record_propagation(Lit::pos(1), 0); // x1=T from c0
-        trail.record_propagation(Lit::pos(2), 1); // x2=T from c1
+        trail.record_propagation(Lit::pos(1), c0); // x1=T from c0
+        trail.record_propagation(Lit::pos(2), c1); // x2=T from c1
         trail.new_decision(Lit::pos(3)); // level 2: x3=T
-        trail.record_propagation(Lit::pos(4), 2); // x4=T from c2
+        trail.record_propagation(Lit::pos(4), c2); // x4=T from c2
 
-        let result = analyze_conflict(&trail, &db, 3);
+        let result = analyze_conflict(&trail, &db, c3);
 
         // Asserting literal: ¬x4
         assert_eq!(result.learned[0], Lit::neg(4));
@@ -580,13 +580,13 @@ mod tests {
         // Both are decisions — neither can be removed.
 
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // c0: ¬x0 ∨ ¬x1
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]); // c0: ¬x0 ∨ ¬x1
 
         let mut trail = Trail::new(2);
         trail.new_decision(Lit::pos(0)); // level 1
         trail.new_decision(Lit::pos(1)); // level 2
 
-        let result = analyze_conflict(&trail, &db, 0);
+        let result = analyze_conflict(&trail, &db, c0);
 
         assert_eq!(result.learned[0], Lit::neg(1)); // asserting
         assert!(result.learned.contains(&Lit::neg(0)));
@@ -612,17 +612,17 @@ mod tests {
         // So ¬x2 can't be removed. Clause stays {¬x3, ¬x2}.
 
         let mut db = ClauseDb::new();
-        db.add_clause(vec![Lit::pos(0)]); // c0: x0 (unit)
-        db.add_clause(vec![Lit::neg(0), Lit::neg(1), Lit::pos(2)]); // c1: ¬x0 ∨ ¬x1 ∨ x2
-        db.add_clause(vec![Lit::neg(2), Lit::neg(3)]); // c2: ¬x2 ∨ ¬x3
+        let c0 = db.add_clause(vec![Lit::pos(0)]); // c0: x0 (unit)
+        let c1 = db.add_clause(vec![Lit::neg(0), Lit::neg(1), Lit::pos(2)]); // c1: ¬x0 ∨ ¬x1 ∨ x2
+        let c2 = db.add_clause(vec![Lit::neg(2), Lit::neg(3)]); // c2: ¬x2 ∨ ¬x3
 
         let mut trail = Trail::new(4);
-        trail.record_propagation(Lit::pos(0), 0); // level 0: x0=T from c0
+        trail.record_propagation(Lit::pos(0), c0); // level 0: x0=T from c0
         trail.new_decision(Lit::pos(1)); // level 1: x1=T
-        trail.record_propagation(Lit::pos(2), 1); // x2=T from c1
+        trail.record_propagation(Lit::pos(2), c1); // x2=T from c1
         trail.new_decision(Lit::pos(3)); // level 2: x3=T
 
-        let result = analyze_conflict(&trail, &db, 2);
+        let result = analyze_conflict(&trail, &db, c2);
 
         assert_eq!(result.learned[0], Lit::neg(3));
         assert!(result.learned.contains(&Lit::neg(2)));

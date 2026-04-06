@@ -12,11 +12,23 @@
 //!
 //! The phase-typed session ensures BCP only runs during the Propagate phase.
 
+use std::collections::HashSet;
+
 use crate::clause::ClausePool;
 use crate::clause_tile::{self, ClauseStatus, ClauseTile};
 use crate::literal::Lit;
 use crate::phase::Propagate;
 use crate::trail::Trail;
+
+// ============================================================================
+// Clause reference (CRef) — arena offset
+// ============================================================================
+
+/// A clause reference: word offset into the clause arena.
+///
+/// Points to the inline header; literals follow at `cref + 1`.
+/// Stored in `WatchEntry`, `Reason::Propagation`, and `BcpResult::Conflict`.
+pub type CRef = u32;
 
 // ============================================================================
 // BCP result
@@ -30,84 +42,131 @@ use crate::trail::Trail;
 pub enum BcpResult {
     /// Propagation completed without conflict.
     Ok,
-    /// A conflict was found. Contains the conflicting clause index.
-    Conflict { clause_index: usize },
+    /// A conflict was found. Contains the conflicting clause's arena reference.
+    Conflict { clause: CRef },
 }
 
 // ============================================================================
-// Clause database — flat arena layout
+// Inline clause header
+// ============================================================================
+//
+// Each clause occupies `1 + len` words in the arena:
+//   [header][lit0][lit1]...[litN-1]
+//
+// Header layout (u32):
+//   bit  31:      deleted flag
+//   bits 30-20:   LBD (11 bits, max 2047)
+//   bits 19-0:    length (20 bits, max 1_048_575 literals)
+
+const HEADER_DELETED_BIT: u32 = 1 << 31;
+const HEADER_LBD_SHIFT: u32 = 20;
+const HEADER_LBD_MASK: u32 = 0x7FF;
+const HEADER_LEN_MASK: u32 = 0xF_FFFF;
+
+#[inline]
+fn make_header(len: u32, lbd: u16, deleted: bool) -> u32 {
+    let d = if deleted { HEADER_DELETED_BIT } else { 0 };
+    d | ((lbd as u32 & HEADER_LBD_MASK) << HEADER_LBD_SHIFT) | (len & HEADER_LEN_MASK)
+}
+
+#[inline]
+fn header_len(h: u32) -> u32 {
+    h & HEADER_LEN_MASK
+}
+
+#[inline]
+fn header_lbd(h: u32) -> u16 {
+    ((h >> HEADER_LBD_SHIFT) & HEADER_LBD_MASK) as u16
+}
+
+#[inline]
+fn header_is_deleted(h: u32) -> bool {
+    h & HEADER_DELETED_BIT != 0
+}
+
+// ============================================================================
+// Clause database — inline-header arena layout
 // ============================================================================
 
 /// A view into a clause stored in the arena.
 ///
 /// Returned by `ClauseDb::clause()`. The `literals` field is a slice into the
-/// contiguous arena — single pointer chase from the offset, no heap indirection.
+/// contiguous arena — header + literals are adjacent cache-line neighbors.
 pub struct ClauseRef<'a> {
     /// The literals in this clause (slice into the arena).
     pub literals: &'a [Lit],
 }
 
-/// Clause database storing original and learned clauses in a flat arena.
+/// Clause database storing original and learned clauses in a flat arena
+/// with inline headers.
 ///
-/// All literals are stored contiguously in a single `Vec<Lit>`. Each clause
-/// is identified by its offset and length in the arena. This eliminates the
-/// per-clause heap allocation and second pointer chase of `Vec<Clause>` with
-/// `Vec<Lit>` — every clause access is a single indexed read into the arena.
+/// Layout: each clause occupies `1 + len` words in the arena:
+///   `[header][lit0][lit1]...[litN-1]`
+/// where `header` packs length, LBD, and deleted flag into a single u32.
 ///
-/// Clauses are indexed by insertion order (0, 1, 2, ...).
+/// A `CRef` is the arena index of the header word. Clause access reads the
+/// header (1 word) then slices the adjacent literals — single contiguous
+/// cache-line read. This eliminates the separate `offsets[]`, `lengths[]`,
+/// `lbd[]`, and `deleted[]` arrays of the previous design.
+///
+/// Clauses are referenced by CRef (arena offset), not by sequential index.
 /// The solver appends learned clauses during conflict analysis.
-/// After `freeze_original()`, clauses at indices `0..num_original` are
+/// After `freeze_original()`, clauses before `original_limit` are
 /// protected from deletion; all subsequent clauses are "learned" and
 /// eligible for LBD-based garbage collection.
 pub struct ClauseDb {
-    /// Flat arena: all clause literals stored contiguously.
-    arena: Vec<Lit>,
-    /// Start offset of clause `i` in the arena.
-    offsets: Vec<u32>,
-    /// Number of literals in clause `i`.
-    lengths: Vec<u32>,
-    /// Number of original (input) clauses. Set by `freeze_original()`.
+    /// Flat arena: inline headers + literal codes stored contiguously.
+    arena: Vec<u32>,
+    /// Number of clauses (including deleted/tombstoned).
+    num_clauses: usize,
+    /// Arena offset past the last original clause. Learned clauses start here.
+    original_limit: u32,
+    /// Number of original (input) clauses.
     num_original: usize,
-    /// LBD (Literal Block Distance) score per clause. 0 for original clauses.
-    lbd: Vec<u16>,
-    /// Tombstone flag: true if the clause has been deleted.
-    deleted: Vec<bool>,
+    /// Highest variable index seen (tracked incrementally for O(1) access).
+    max_var: u32,
 }
 
 impl ClauseDb {
     pub fn new() -> Self {
         ClauseDb {
             arena: Vec::new(),
-            offsets: Vec::new(),
-            lengths: Vec::new(),
+            num_clauses: 0,
+            original_limit: 0,
             num_original: 0,
-            lbd: Vec::new(),
-            deleted: Vec::new(),
+            max_var: 0,
         }
     }
 
-    /// Add a clause, returns its index.
-    pub fn add_clause(&mut self, literals: Vec<Lit>) -> usize {
-        let idx = self.offsets.len();
-        let offset = self.arena.len() as u32;
+    /// Add a clause, returns its CRef (arena offset of the header word).
+    pub fn add_clause(&mut self, literals: Vec<Lit>) -> CRef {
+        let cref = self.arena.len() as u32;
         let len = literals.len() as u32;
-        self.arena.extend_from_slice(&literals);
-        self.offsets.push(offset);
-        self.lengths.push(len);
-        self.lbd.push(0);
-        self.deleted.push(false);
-        idx
+        self.arena.push(make_header(len, 0, false));
+        for &lit in &literals {
+            self.arena.push(lit.code());
+            let v = lit.var();
+            if v > self.max_var {
+                self.max_var = v;
+            }
+        }
+        self.num_clauses += 1;
+        cref
     }
 
     /// Mark the current clause count as "original". Clauses added after this
     /// point are "learned" and eligible for LBD-based deletion.
     pub fn freeze_original(&mut self) {
-        self.num_original = self.offsets.len();
+        self.original_limit = self.arena.len() as u32;
+        self.num_original = self.num_clauses;
     }
 
     /// Set the LBD score for a clause.
-    pub fn set_lbd(&mut self, idx: usize, lbd: u16) {
-        self.lbd[idx] = lbd;
+    pub fn set_lbd(&mut self, cref: CRef, lbd: u16) {
+        let h = self.arena[cref as usize];
+        let len = header_len(h);
+        let deleted = header_is_deleted(h);
+        self.arena[cref as usize] = make_header(len, lbd, deleted);
     }
 
     /// Number of original (non-learned) clauses.
@@ -116,126 +175,128 @@ impl ClauseDb {
     }
 
     /// Check if a clause has been deleted (tombstoned).
-    pub fn is_deleted(&self, idx: usize) -> bool {
-        self.deleted[idx]
+    pub fn is_deleted(&self, cref: CRef) -> bool {
+        header_is_deleted(self.arena[cref as usize])
     }
 
     /// Unchecked deleted check for the BCP hot loop.
     ///
     /// # Safety
-    /// `idx` must be < `self.len()`.
+    /// `cref` must point to a valid header in the arena.
     #[inline]
-    pub unsafe fn is_deleted_unchecked(&self, idx: usize) -> bool {
-        *self.deleted.get_unchecked(idx)
+    pub unsafe fn is_deleted_unchecked(&self, cref: CRef) -> bool {
+        header_is_deleted(*self.arena.get_unchecked(cref as usize))
     }
 
     /// Delete the worst learned clauses by LBD score.
     ///
     /// Keeps clauses that are:
-    /// - Original (index < num_original)
+    /// - Original (CRef < original_limit)
     /// - Locked (currently a propagation reason on the trail)
     /// - "Glue" clauses: LBD ≤ 2 (binary learned clauses are always useful)
     ///
-    /// Strategy: sort by LBD, keep the best half. This is the standard
-    /// MiniSat/Glucose approach for balancing clause quality retention
-    /// against watch list growth.
+    /// Strategy: sort by LBD, keep the best half. Standard MiniSat/Glucose.
     ///
-    /// Returns indices of deleted clauses (for watch list cleanup).
-    pub fn reduce_learned(&mut self, locked: &[bool]) -> Vec<usize> {
-        let num_clauses = self.offsets.len();
-        let mut candidates: Vec<(usize, u16)> = Vec::new();
-        for i in self.num_original..num_clauses {
-            if self.deleted[i] {
-                continue;
+    /// Returns CRefs of deleted clauses (for watch list cleanup).
+    pub fn reduce_learned(&mut self, locked: &HashSet<CRef>) -> Vec<CRef> {
+        let mut candidates: Vec<(CRef, u16)> = Vec::new();
+        let mut pos = self.original_limit;
+        while (pos as usize) < self.arena.len() {
+            let h = self.arena[pos as usize];
+            let len = header_len(h);
+            if !header_is_deleted(h) && !locked.contains(&pos) && header_lbd(h) > 2 {
+                candidates.push((pos, header_lbd(h)));
             }
-            if i < locked.len() && locked[i] {
-                continue;
-            }
-            // Protect glue clauses (LBD ≤ 2) — they bridge few decision levels
-            // and provide critical implication chains
-            if self.lbd[i] <= 2 {
-                continue;
-            }
-            candidates.push((i, self.lbd[i]));
+            pos += 1 + len;
         }
-        // Sort by LBD ascending (best/lowest first), delete the worst half
         candidates.sort_by_key(|&(_, lbd)| lbd);
         let keep = candidates.len() / 2;
-        let to_delete: Vec<usize> = candidates[keep..].iter().map(|&(i, _)| i).collect();
-        for &i in &to_delete {
-            self.deleted[i] = true;
-            // Arena space is reclaimed during compact() — no per-clause free needed.
+        let to_delete: Vec<CRef> = candidates[keep..].iter().map(|&(cref, _)| cref).collect();
+        for &cref in &to_delete {
+            let h = self.arena[cref as usize];
+            let len = header_len(h);
+            let lbd = header_lbd(h);
+            self.arena[cref as usize] = make_header(len, lbd, true);
         }
         to_delete
     }
 
     /// Compact the database: remove tombstoned clauses and rebuild the arena.
     ///
-    /// Returns a remap table: `remap[old_index] = Some(new_index)` for live
-    /// clauses, `None` for deleted ones. Callers must update all stored clause
-    /// indices (trail reasons, watch lists) using this table.
-    pub fn compact(&mut self) -> Vec<Option<usize>> {
-        let n = self.offsets.len();
-        let mut remap: Vec<Option<usize>> = vec![None; n];
+    /// Returns a remap table of `(old_cref, new_cref)` pairs for live clauses,
+    /// sorted by old_cref. Callers must update all stored clause references
+    /// (trail reasons, watch lists) using this table.
+    pub fn compact(&mut self) -> Vec<(CRef, CRef)> {
         let mut new_arena = Vec::with_capacity(self.arena.len());
-        let mut new_offsets = Vec::with_capacity(n);
-        let mut new_lengths = Vec::with_capacity(n);
-        let mut new_lbd = Vec::with_capacity(n);
-        let mut write = 0;
+        let mut remap = Vec::new();
+        let mut new_original_limit = 0u32;
+        let mut new_num_clauses = 0usize;
+        let mut past_original = false;
 
-        for read in 0..n {
-            if !self.deleted[read] {
-                remap[read] = Some(write);
-                let start = self.offsets[read] as usize;
-                let len = self.lengths[read] as usize;
-                new_offsets.push(new_arena.len() as u32);
-                new_lengths.push(self.lengths[read]);
-                new_arena.extend_from_slice(&self.arena[start..start + len]);
-                new_lbd.push(self.lbd[read]);
-                write += 1;
+        let mut pos = 0u32;
+        while (pos as usize) < self.arena.len() {
+            if !past_original && pos >= self.original_limit {
+                new_original_limit = new_arena.len() as u32;
+                past_original = true;
             }
+            let h = self.arena[pos as usize];
+            let len = header_len(h) as usize;
+            if !header_is_deleted(h) {
+                let new_cref = new_arena.len() as u32;
+                remap.push((pos, new_cref));
+                // Push header with deleted flag cleared
+                new_arena.push(make_header(len as u32, header_lbd(h), false));
+                new_arena.extend_from_slice(&self.arena[pos as usize + 1..pos as usize + 1 + len]);
+                new_num_clauses += 1;
+            }
+            pos += 1 + len as u32;
+        }
+        if !past_original {
+            new_original_limit = new_arena.len() as u32;
         }
 
         self.arena = new_arena;
-        self.offsets = new_offsets;
-        self.lengths = new_lengths;
-        self.lbd = new_lbd;
-        self.deleted.clear();
-        self.deleted.resize(write, false);
+        self.num_clauses = new_num_clauses;
+        self.original_limit = new_original_limit;
         // num_original unchanged — original clauses are never deleted
         remap
     }
 
-    /// Number of clauses (original + learned).
+    /// Number of clauses (original + learned, including tombstoned).
     pub fn len(&self) -> usize {
-        self.offsets.len()
+        self.num_clauses
     }
 
     /// Whether the database contains no clauses.
     pub fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
+        self.num_clauses == 0
     }
 
-    /// Get a clause by index.
-    pub fn clause(&self, idx: usize) -> ClauseRef<'_> {
-        let start = self.offsets[idx] as usize;
-        let len = self.lengths[idx] as usize;
-        ClauseRef {
-            literals: &self.arena[start..start + len],
-        }
+    /// Get a clause by CRef.
+    ///
+    /// Reads the inline header for length, then returns a slice into the
+    /// adjacent literal words. Single contiguous cache-line access.
+    pub fn clause(&self, cref: CRef) -> ClauseRef<'_> {
+        let pos = cref as usize;
+        let len = header_len(self.arena[pos]) as usize;
+        // SAFETY: Lit is #[repr(transparent)] over u32.
+        let literals = unsafe {
+            std::slice::from_raw_parts(self.arena.as_ptr().add(pos + 1) as *const Lit, len)
+        };
+        ClauseRef { literals }
     }
 
     /// Unchecked clause access for the BCP hot loop.
     ///
     /// # Safety
-    /// `idx` must be < `self.len()`. The clause's arena range must be valid
-    /// (guaranteed by construction — add_clause sets offsets/lengths from arena).
+    /// `cref` must point to a valid header in the arena.
     #[inline]
-    pub unsafe fn clause_unchecked(&self, idx: usize) -> ClauseRef<'_> {
-        let start = *self.offsets.get_unchecked(idx) as usize;
-        let len = *self.lengths.get_unchecked(idx) as usize;
+    pub unsafe fn clause_unchecked(&self, cref: CRef) -> ClauseRef<'_> {
+        let pos = cref as usize;
+        let len = header_len(*self.arena.get_unchecked(pos)) as usize;
+        let raw_ptr = self.arena.as_ptr().add(pos + 1) as *const Lit;
         ClauseRef {
-            literals: self.arena.get_unchecked(start..start + len),
+            literals: std::slice::from_raw_parts(raw_ptr, len),
         }
     }
 
@@ -246,23 +307,63 @@ impl ClauseDb {
     /// swap it into the watched position.
     ///
     /// # Safety
-    /// `idx` must be < `self.len()`. `a` and `b` must be < clause length.
+    /// `cref` must be valid. `a` and `b` must be < clause length.
     #[inline]
-    pub unsafe fn swap_literal_unchecked(&mut self, idx: usize, a: usize, b: usize) {
-        let start = *self.offsets.get_unchecked(idx) as usize;
+    pub unsafe fn swap_literal_unchecked(&mut self, cref: CRef, a: usize, b: usize) {
+        let pos = cref as usize;
         let ptr = self.arena.as_mut_ptr();
-        std::ptr::swap(ptr.add(start + a), ptr.add(start + b));
+        std::ptr::swap(ptr.add(pos + 1 + a), ptr.add(pos + 1 + b));
     }
 
     /// Highest variable index across all clauses. Returns 0 if empty.
     pub fn max_variable(&self) -> u32 {
-        self.arena.iter().map(|lit| lit.var()).max().unwrap_or(0)
+        self.max_var
+    }
+
+    /// Iterate all clause references in insertion order.
+    ///
+    /// Walks the arena linearly — O(n) in total. CRef iteration replaces
+    /// the old `for i in 0..db.len()` pattern.
+    pub fn iter_crefs(&self) -> CRefIter<'_> {
+        CRefIter {
+            arena: &self.arena,
+            pos: 0,
+        }
+    }
+
+    /// Collect all clause references into a Vec.
+    ///
+    /// Convenience method for code that needs random access by sequential
+    /// index (gradient solver, SoA construction). Not needed on the BCP
+    /// hot path, which accesses clauses by CRef from WatchEntry.
+    pub fn crefs(&self) -> Vec<CRef> {
+        self.iter_crefs().collect()
     }
 }
 
 impl Default for ClauseDb {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Iterator over clause references in the arena.
+pub struct CRefIter<'a> {
+    arena: &'a [u32],
+    pos: u32,
+}
+
+impl<'a> Iterator for CRefIter<'a> {
+    type Item = CRef;
+
+    fn next(&mut self) -> Option<CRef> {
+        if (self.pos as usize) >= self.arena.len() {
+            return None;
+        }
+        let cref = self.pos;
+        let len = header_len(self.arena[self.pos as usize]);
+        self.pos += 1 + len;
+        Some(cref)
     }
 }
 
@@ -284,21 +385,22 @@ pub fn run_bcp(
     _phase_proof: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
     trail.ensure_capacity(db.max_variable() as usize + 1);
+    let crefs: Vec<CRef> = db.crefs();
 
     loop {
         let mut found_unit = false;
 
         // Evaluate non-tileable clauses directly (empty or >32 literals).
-        for i in 0..db.len() {
-            let clause = db.clause(i);
+        for &cref in &crefs {
+            let clause = db.clause(cref);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
                 match clause_tile::eval_clause_direct(clause.literals, trail.assignments()) {
                     ClauseStatus::Conflict => {
-                        return BcpResult::Conflict { clause_index: i };
+                        return BcpResult::Conflict { clause: cref };
                     }
                     ClauseStatus::Unit { propagate } => {
                         if trail.value(propagate.var()).is_none() {
-                            trail.record_propagation(propagate, i);
+                            trail.record_propagation(propagate, cref);
                             found_unit = true;
                         }
                     }
@@ -308,17 +410,17 @@ pub fn run_bcp(
         }
 
         // Tile-based evaluation for clauses that fit (1-32 literals).
-        let mut pool = ClausePool::new(db.len());
+        let mut pool = ClausePool::new(crefs.len());
         let mut tiles: Vec<ClauseTile<Propagate>> = Vec::new();
 
-        for i in 0..db.len() {
-            let clause = db.clause(i);
+        for (seq_i, &cref) in crefs.iter().enumerate() {
+            let clause = db.clause(cref);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
                 continue; // handled in direct evaluation above
             }
-            let token = pool.acquire(i).unwrap();
+            let token = pool.acquire(seq_i).unwrap();
             if let Some(tile) =
-                clause_tile::make_clause_tile::<Propagate>(clause.literals, token, i)
+                clause_tile::make_clause_tile::<Propagate>(clause.literals, token, cref)
             {
                 tiles.push(tile);
             }
@@ -328,16 +430,14 @@ pub fn run_bcp(
 
         for batch in &batches {
             let results = batch.check_all(trail.assignments());
-            for &(db_index, ref status) in &results {
+            for &(db_ref, ref status) in &results {
                 match status {
                     ClauseStatus::Conflict => {
-                        return BcpResult::Conflict {
-                            clause_index: db_index,
-                        };
+                        return BcpResult::Conflict { clause: db_ref };
                     }
                     ClauseStatus::Unit { propagate } => {
                         if trail.value(propagate.var()).is_none() {
-                            trail.record_propagation(*propagate, db_index);
+                            trail.record_propagation(*propagate, db_ref);
                             found_unit = true;
                         }
                     }
@@ -395,7 +495,7 @@ mod tests {
         trail.new_decision(Lit::pos(0)); // x0=true → conflict
         let result = bcp_after_decision(&db, &mut trail);
 
-        assert_eq!(result, BcpResult::Conflict { clause_index: 0 });
+        assert_eq!(result, BcpResult::Conflict { clause: 0 });
     }
 
     #[test]
@@ -473,7 +573,7 @@ mod tests {
                 clause_tile::make_clause_tile::<Propagate>(
                     &[Lit::pos(0), Lit::pos(1)],
                     pool.acquire(i).unwrap(),
-                    i,
+                    i as CRef,
                 )
             })
             .collect();

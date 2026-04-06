@@ -10,6 +10,7 @@
 //! - The decision level
 //! - The reason (decision or propagation by a specific clause)
 
+use crate::bcp::CRef;
 use crate::literal::Lit;
 
 /// Why a variable was assigned.
@@ -17,8 +18,8 @@ use crate::literal::Lit;
 pub enum Reason {
     /// Chosen by the decide heuristic.
     Decision,
-    /// Forced by unit propagation from the clause at this index.
-    Propagation(usize),
+    /// Forced by unit propagation from the clause at this CRef.
+    Propagation(CRef),
 }
 
 /// A single trail entry.
@@ -139,7 +140,7 @@ impl Trail {
     ///
     /// # Panics
     /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
-    pub fn record_propagation(&mut self, lit: Lit, reason_clause: usize) {
+    pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
         debug_assert!(
             self.assignments[lit.var() as usize].is_none(),
             "record_propagation on already-assigned variable {}",
@@ -214,11 +215,20 @@ impl Trail {
         }
     }
 
-    /// Remap clause indices in propagation reasons after database compaction.
-    pub fn remap_reasons(&mut self, remap: &[Option<usize>]) {
+    /// Remap clause references in propagation reasons after database compaction.
+    ///
+    /// `remap` is a sorted list of `(old_cref, new_cref)` pairs produced by
+    /// `ClauseDb::compact()`. Uses binary search for O(log n) per trail entry.
+    pub fn remap_reasons(&mut self, remap: &[(CRef, CRef)]) {
         for entry in &mut self.entries {
-            if let Reason::Propagation(ref mut ci) = entry.reason {
-                *ci = remap[*ci].expect("live trail reason was deleted during compaction");
+            if let Reason::Propagation(ref mut cref) = entry.reason {
+                match remap.binary_search_by_key(cref, |&(old, _)| old) {
+                    Ok(i) => *cref = remap[i].1,
+                    Err(_) => panic!(
+                        "live trail reason CRef {} not found in compaction remap",
+                        cref
+                    ),
+                }
             }
         }
     }
@@ -298,12 +308,13 @@ impl<'a> BcpTrail<'a> {
     /// Uses unchecked indexing for `assigns` and `var_position` since all
     /// variables come from clauses validated at solver startup (var < num_vars).
     #[inline]
-    pub fn record_propagation(&mut self, lit: Lit, reason_clause: usize) {
+    pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
         let var = lit.var() as usize;
         debug_assert!(
             var < self.assigns.len(),
             "BcpTrail::record_propagation variable {} out of bounds (len {})",
-            var, self.assigns.len()
+            var,
+            self.assigns.len()
         );
         debug_assert!(
             self.assigns[var].is_none(),

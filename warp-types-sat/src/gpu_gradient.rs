@@ -39,7 +39,6 @@
 //! ```
 
 use crate::bcp::ClauseDb;
-use crate::literal::Lit;
 
 const WARP_SIZE: usize = 32;
 
@@ -78,9 +77,10 @@ impl ClauseDataSoA {
         let mut negs = [Vec::new(), Vec::new(), Vec::new()];
         let mut weights = Vec::new();
         let mut skipped = 0usize;
+        let crefs = db.crefs();
 
-        for ci in 0..db.len() {
-            let lits = &db.clause(ci).literals;
+        for (ci, &cref) in crefs.iter().enumerate() {
+            let lits = &db.clause(cref).literals;
             if lits.len() != 3 {
                 skipped += 1;
                 continue;
@@ -608,6 +608,7 @@ mod tests {
     use super::*;
     use crate::bench::generate_3sat_phase_transition;
     use crate::gradient;
+    use crate::literal::Lit;
 
     /// Deterministic variable initialization: golden ratio spacing in [0.05, 0.95].
     fn init_vars(n: usize) -> Vec<f64> {
@@ -630,8 +631,8 @@ mod tests {
         assert_eq!(soa.padded_len % WARP_SIZE, 0);
         assert!(soa.padded_len >= soa.num_clauses);
 
-        for ci in 0..db.len() {
-            let lits = &db.clause(ci).literals;
+        for (ci, cref) in db.iter_crefs().enumerate() {
+            let lits = &db.clause(cref).literals;
             for pos in 0..3 {
                 assert_eq!(soa.vars[pos][ci], lits[pos].var(), "clause {ci} pos {pos}");
                 assert_eq!(soa.negs[pos][ci], lits[pos].is_negated(), "clause {ci} pos {pos}");
@@ -650,7 +651,8 @@ mod tests {
 
             let x = init_vars(20);
 
-            let cpu = gradient::loss(&db, &x, &weights);
+            let crefs = db.crefs();
+            let cpu = gradient::loss(&db, &crefs, &x, &weights);
             let gpu = total_loss_simwarp(&soa, &x);
 
             assert!(
@@ -669,7 +671,8 @@ mod tests {
 
         let x = init_vars(20);
 
-        let cpu = gradient::loss(&db, &x, &weights);
+        let crefs = db.crefs();
+        let cpu = gradient::loss(&db, &crefs, &x, &weights);
         let gpu = total_loss_simwarp(&soa, &x);
 
         assert!(
@@ -689,9 +692,10 @@ mod tests {
             let x = init_vars(20);
 
             // CPU reference gradient
-            let cpu_idx = gradient::VarIndex::build(&db, 20);
+            let crefs = db.crefs();
+            let cpu_idx = gradient::VarIndex::build(&db, 20, &crefs);
             let mut cpu_grad = vec![0.0; 20];
-            gradient::gradient(&db, &x, &cpu_idx, &weights, &mut cpu_grad);
+            gradient::gradient(&db, &crefs, &x, &cpu_idx, &weights, &mut cpu_grad);
 
             // SoA gradient
             let soa_idx = VarIndexSoA::build(&soa, 20);
@@ -811,7 +815,8 @@ mod tests {
 
         let x = init_vars(100);
 
-        let cpu = gradient::loss(&db, &x, &weights);
+        let crefs = db.crefs();
+        let cpu = gradient::loss(&db, &crefs, &x, &weights);
         let gpu = total_loss_simwarp(&soa, &x);
 
         assert!(
