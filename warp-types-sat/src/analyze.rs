@@ -114,9 +114,16 @@ pub fn analyze_conflict_with(
     work.ensure_capacity(max_var);
 
     // Start with the conflict clause's literals.
+    // Accumulate abstract_levels during resolution (eliminates a second pass
+    // over the learned clause for the minimization filter).
     // SAFETY: conflict_clause < db.len() (caller invariant).
-    let mut learned = Vec::new();
+    // Reserve slot 0 for the asserting literal (filled after UIP is found).
+    // This avoids the O(n) insert(0, lit) while preserving literal ordering
+    // (push+swap would reorder, changing which literal wins second-watch ties).
+    let mut learned = Vec::with_capacity(16);
+    learned.push(Lit::pos(0)); // placeholder — overwritten below
     let mut num_at_current_level = 0;
+    let mut abstract_levels = 0u64;
 
     for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
         let var = lit.var();
@@ -133,14 +140,20 @@ pub fn analyze_conflict_with(
                 Some(e) if e.level == current_level => {
                     num_at_current_level += 1;
                 }
-                Some(_) | None => {
+                Some(e) => {
+                    learned.push(lit);
+                    abstract_levels |= 1u64 << (e.level % 64);
+                }
+                None => {
                     learned.push(lit);
                 }
             }
         }
     }
 
-    // Resolve backward through trail until 1 literal at current level remains
+    // Resolve backward through trail until 1 literal at current level remains.
+    // After the loop, continue scanning to find the 1-UIP (avoids a full
+    // trail rescan from the end).
     let entries = trail.entries();
     let mut trail_idx = entries.len();
 
@@ -188,7 +201,11 @@ pub fn analyze_conflict_with(
                             Some(e) if e.level == current_level => {
                                 num_at_current_level += 1;
                             }
-                            Some(_) | None => {
+                            Some(e) => {
+                                learned.push(lit);
+                                abstract_levels |= 1u64 << (e.level % 64);
+                            }
+                            None => {
                                 learned.push(lit);
                             }
                         }
@@ -198,19 +215,21 @@ pub fn analyze_conflict_with(
         }
     }
 
-    // Find the 1-UIP: the single remaining seen variable at the current level.
-    // Scan trail backward — the most recent seen entry at this level is the UIP.
-    let mut asserting_lit = None;
-    for entry in entries.iter().rev() {
+    // Find the 1-UIP: continue scanning from where the resolution loop stopped.
+    // The UIP is the most recent seen entry at the current level after all
+    // resolution steps — it's at or below trail_idx, so scanning from there
+    // avoids redundantly walking entries already processed.
+    loop {
+        trail_idx -= 1;
+        let entry = &entries[trail_idx];
         if entry.level == current_level && work.seen[entry.lit.var() as usize] {
-            asserting_lit = Some(entry.lit.complement());
+            // Overwrite the reserved placeholder at position 0 (O(1),
+            // preserves ordering of non-asserting literals at [1..]).
+            learned[0] = entry.lit.complement();
+            abstract_levels |= 1u64 << (current_level % 64);
             break;
         }
     }
-
-    let lit = asserting_lit
-        .expect("1-UIP resolution must find an asserting literal at the current decision level");
-    learned.insert(0, lit); // asserting literal first
 
     // Select optimal second watch: the literal with the highest decision level
     // among non-asserting literals. This ensures that after backtracking to
@@ -218,10 +237,11 @@ pub fn analyze_conflict_with(
     // immediately unit from BCP's perspective. MiniSat's standard technique.
     if learned.len() >= 3 {
         let mut best_pos = 1;
-        let mut best_level = trail.entry_for_var(learned[1].var())
+        // SAFETY: all vars in learned come from the clause DB, validated var < num_vars.
+        let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
             .map(|e| e.level).unwrap_or(0);
         for i in 2..learned.len() {
-            let level = trail.entry_for_var(learned[i].var())
+            let level = unsafe { trail.entry_for_var_unchecked(learned[i].var()) }
                 .map(|e| e.level).unwrap_or(0);
             if level > best_level {
                 best_level = level;
@@ -240,16 +260,7 @@ pub fn analyze_conflict_with(
     // other literals in the clause. MiniSat's litRedundant algorithm.
     let t_minimize = Instant::now();
 
-    let abstract_levels = {
-        let mut mask = 0u64;
-        for &l in &learned {
-            if let Some(e) = trail.entry_for_var(l.var()) {
-                mask |= 1u64 << (e.level % 64);
-            }
-        }
-        mask
-    };
-
+    // abstract_levels was accumulated during resolution — no second pass needed.
     work.min_to_clear.clear();
     let mut minimized = Vec::with_capacity(learned.len());
     minimized.push(learned[0]); // asserting literal always kept
@@ -273,21 +284,23 @@ pub fn analyze_conflict_with(
 
     // Backtrack level: highest level among learned clause literals,
     // excluding the asserting literal (which is at current_level).
+    // SAFETY: all vars from clause DB, validated var < num_vars.
     let backtrack_level = learned
         .iter()
         .skip(1) // skip asserting literal
-        .filter_map(|lit| trail.entry_for_var(lit.var()).map(|e| e.level))
+        .filter_map(|lit| unsafe { trail.entry_for_var_unchecked(lit.var()) }.map(|e| e.level))
         .max()
         .unwrap_or(0);
 
     // LBD: count distinct decision levels in the learned clause.
+    // SAFETY: all vars from clause DB, validated var < num_vars.
     let lbd = {
         let level_count = current_level as usize + 1;
         work.levels_seen.clear();
         work.levels_seen.resize(level_count, false);
         let mut count = 0u32;
         for lit in &learned {
-            if let Some(e) = trail.entry_for_var(lit.var()) {
+            if let Some(e) = unsafe { trail.entry_for_var_unchecked(lit.var()) } {
                 let lv = e.level as usize;
                 if lv < level_count && !work.levels_seen[lv] {
                     work.levels_seen[lv] = true;
