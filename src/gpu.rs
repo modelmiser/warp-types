@@ -50,6 +50,26 @@ pub fn thread_id_x() -> u32 {
     id
 }
 
+/// Get the current block's X index within the grid.
+/// PTX: `%ctaid.x` (equivalent to CUDA's `blockIdx.x`).
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub fn block_id_x() -> u32 {
+    let id: u32;
+    unsafe { core::arch::asm!("mov.u32 {}, %ctaid.x;", out(reg32) id) };
+    id
+}
+
+/// Get the block dimension (number of threads) in X.
+/// PTX: `%ntid.x` (equivalent to CUDA's `blockDim.x`).
+#[cfg(target_arch = "nvptx64")]
+#[inline(always)]
+pub fn block_dim_x() -> u32 {
+    let dim: u32;
+    unsafe { core::arch::asm!("mov.u32 {}, %ntid.x;", out(reg32) dim) };
+    dim
+}
+
 /// Butterfly shuffle: exchange with lane (lane_id XOR lane_mask).
 /// PTX: `shfl.sync.bfly.b32`
 #[cfg(target_arch = "nvptx64")]

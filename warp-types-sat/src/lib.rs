@@ -41,6 +41,8 @@ pub mod clause;
 pub mod clause_tile;
 pub mod dimacs;
 pub mod gpu_gradient;
+#[cfg(feature = "gpu")]
+pub mod gpu_launcher;
 pub mod gradient;
 pub mod literal;
 pub mod phase;

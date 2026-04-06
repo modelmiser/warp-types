@@ -197,3 +197,13 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Per-propagation cost also improved: 493 → 489 insn, 392 → 364 cyc.** Better decisions keep the solver in search regions where BCP encounters more satisfied blockers, shorter replacement searches, and shallower conflicts. Per-prop cost is NOT independent of decision quality — they compound.
 
 **This is the standard MiniSat initialization**, implemented months ago and sitting unused. The function already handled pre-seeded activities correctly (uses `+=` not assignment, rebuilds heap after). Wiring it up required zero API changes.
+
+## 17. GPU SAT Gradient Kernel — SoA + Butterfly Reduce in f64
+
+**The infrastructure gap was smaller than expected.** warp-types already had: `GpuShuffle for f64` (splits into two `shfl.sync.bfly.b32` instructions), `Warp<All>.reduce_sum(PerLane<f64>)` (5 butterfly stages), `#[warp_kernel]` proc macro, and `WarpBuilder` for PTX compilation. The only missing piece was `block_id_x()` (PTX `%ctaid.x`) for multi-block launches — one function, three lines.
+
+**The kernel is 10 loads + 4 multiplies + 10 shuffles per clause.** SoA layout gives coalesced reads for all 7 SoA arrays (vars × 3, negs × 3, weights × 1). The three variable lookups (`x[var_i]`) are scattered reads, but L1 caches them well since variables are shared across many clauses. The butterfly reduce is pure register traffic — no shared memory needed.
+
+**f64 on H200 Hopper**: Native FP64 at 1:2 ratio vs FP32 (not the 1:64 ratio of consumer GPUs). Each shuffle-XOR for f64 emits two 32-bit shuffles. The kernel is compute-bound on the multiplies, not the shuffles.
+
+**Design pattern: CPU SimWarp → GPU kernel.** Write and validate the math on CPU using SimWarp (real multi-lane shuffle semantics), then the kernel is a mechanical translation — same operations, same order, same result. The GPU test just confirms f64 bit-identical results between SimWarp and real hardware.

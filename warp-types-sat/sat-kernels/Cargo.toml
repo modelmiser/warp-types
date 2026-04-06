@@ -1,0 +1,10 @@
+[workspace]
+
+[package]
+name = "sat-kernels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+warp-types = { path = "../.." }
