@@ -80,9 +80,12 @@ impl AnalyzeWork {
     }
 
     /// Mark a variable as seen and record it for cleanup.
+    ///
+    /// # Safety
+    /// `var` must be < `self.seen.len()` (i.e., < num_vars).
     #[inline]
-    fn mark_seen(&mut self, var: u32) {
-        self.seen[var as usize] = true;
+    unsafe fn mark_seen(&mut self, var: u32) {
+        *self.seen.get_unchecked_mut(var as usize) = true;
         self.touched.push(var);
     }
 }
@@ -127,8 +130,9 @@ pub fn analyze_conflict_with(
 
     for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
         let var = lit.var();
-        if !work.seen[var as usize] {
-            work.mark_seen(var);
+        // SAFETY: var from clause DB, validated var < num_vars at startup.
+        if !unsafe { *work.seen.get_unchecked(var as usize) } {
+            unsafe { work.mark_seen(var) };
             // SAFETY: var comes from clause DB, validated var < num_vars at startup.
             let entry = unsafe { trail.entry_for_var_unchecked(var) };
             debug_assert!(
@@ -157,20 +161,22 @@ pub fn analyze_conflict_with(
     let entries = trail.entries();
     let mut trail_idx = entries.len();
 
+    // SAFETY for unchecked indexing throughout resolution:
+    // - trail_idx starts at entries.len(), decrements, always finds a matching
+    //   entry before reaching 0 (the current-level decision guarantees this).
+    // - All var values come from clause literals, validated var < num_vars
+    //   at solver startup. work.seen.len() == num_vars.
     while num_at_current_level > 1 {
-        // Find the most recent trail entry at the current level that we've seen
         trail_idx -= 1;
-        let entry = &entries[trail_idx];
-        if entry.level != current_level || !work.seen[entry.lit.var() as usize] {
+        let entry = unsafe { entries.get_unchecked(trail_idx) };
+        if entry.level != current_level
+            || !unsafe { *work.seen.get_unchecked(entry.lit.var() as usize) }
+        {
             continue;
         }
 
-        // This literal is at the current level and in our working clause.
-        // Resolve it away using its reason clause.
         match entry.reason {
             Reason::Decision => {
-                // Decisions can't be resolved — this shouldn't happen if
-                // there's more than 1 literal at the current level
                 debug_assert!(
                     num_at_current_level <= 1,
                     "hit decision during resolution with {} literals remaining at current level",
@@ -185,17 +191,14 @@ pub fn analyze_conflict_with(
                     entry.lit.var()
                 );
                 num_at_current_level -= 1;
-                work.seen[entry.lit.var() as usize] = false; // resolved away
-                // Add all other literals from the reason clause.
-                // SAFETY: reason_clause < db.len() (valid propagation reasons).
+                unsafe { *work.seen.get_unchecked_mut(entry.lit.var() as usize) = false };
                 for &lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
                     let var = lit.var();
                     if var == entry.lit.var() {
-                        continue; // skip the resolved variable
+                        continue;
                     }
-                    if !work.seen[var as usize] {
-                        work.mark_seen(var);
-                        // SAFETY: var from clause DB, validated var < num_vars.
+                    if !unsafe { *work.seen.get_unchecked(var as usize) } {
+                        unsafe { work.mark_seen(var) };
                         let reason_entry = unsafe { trail.entry_for_var_unchecked(var) };
                         match reason_entry {
                             Some(e) if e.level == current_level => {
@@ -221,8 +224,10 @@ pub fn analyze_conflict_with(
     // avoids redundantly walking entries already processed.
     loop {
         trail_idx -= 1;
-        let entry = &entries[trail_idx];
-        if entry.level == current_level && work.seen[entry.lit.var() as usize] {
+        let entry = unsafe { entries.get_unchecked(trail_idx) };
+        if entry.level == current_level
+            && unsafe { *work.seen.get_unchecked(entry.lit.var() as usize) }
+        {
             // Overwrite the reserved placeholder at position 0 (O(1),
             // preserves ordering of non-asserting literals at [1..]).
             learned[0] = entry.lit.complement();
@@ -267,7 +272,8 @@ pub fn analyze_conflict_with(
 
     for &l in &learned[1..] {
         if lit_redundant_with(work, trail, db, l, abstract_levels) {
-            work.seen[l.var() as usize] = false; // no longer in clause
+            // SAFETY: l.var() from clause DB, validated < num_vars.
+            unsafe { *work.seen.get_unchecked_mut(l.var() as usize) = false };
         } else {
             minimized.push(l);
         }
@@ -275,7 +281,8 @@ pub fn analyze_conflict_with(
 
     // Clean up DFS marks from successful redundancy proofs
     for &var in &work.min_to_clear {
-        work.seen[var as usize] = false;
+        // SAFETY: var was pushed from clause DB vars, all < num_vars.
+        unsafe { *work.seen.get_unchecked_mut(var as usize) = false };
     }
     work.min_to_clear.clear();
 
@@ -348,20 +355,20 @@ fn lit_redundant_with(
         Reason::Propagation(ci) => ci,
     };
 
-    // Push reason clause literals (except lit itself) onto stack.
-    // SAFETY: reason_clause is a valid propagation reason from the trail.
+    // SAFETY for unchecked indexing throughout minimization:
+    // All var/rv values come from clause literals, validated var < num_vars
+    // at solver startup. work.seen.len() == num_vars.
     for &reason_lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
         let rv = reason_lit.var();
         if rv == lit.var() {
             continue;
         }
-        if work.seen[rv as usize] {
-            continue; // in clause or already proven redundant
+        if unsafe { *work.seen.get_unchecked(rv as usize) } {
+            continue;
         }
-        // SAFETY: rv from clause DB, validated var < num_vars.
         if let Some(re) = unsafe { trail.entry_for_var_unchecked(rv) } {
             if re.level == 0 {
-                continue; // level 0 literals are always satisfied
+                continue;
             }
         }
         work.min_stack.push(reason_lit);
@@ -370,54 +377,44 @@ fn lit_redundant_with(
     while let Some(l) = work.min_stack.pop() {
         let var = l.var();
 
-        // SAFETY: var from clause DB, validated var < num_vars.
         let re = match unsafe { trail.entry_for_var_unchecked(var) } {
             Some(e) => e,
             None => {
-                // Unassigned — rollback
                 for v in work.min_to_clear.drain(top..) {
-                    work.seen[v as usize] = false;
+                    unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
                 }
                 return false;
             }
         };
 
-        // Abstract level filter: if this level can't be in the clause, fail fast
         if (abstract_levels >> (re.level % 64)) & 1 == 0 {
             for v in work.min_to_clear.drain(top..) {
-                work.seen[v as usize] = false;
+                unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
             }
             return false;
         }
 
         let ci = match re.reason {
             Reason::Decision => {
-                // Decision variable at a level that MIGHT be in the clause
-                // (passed abstract filter) but isn't actually in the clause
-                // (not in `seen`). Can't be proven redundant.
                 for v in work.min_to_clear.drain(top..) {
-                    work.seen[v as usize] = false;
+                    unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
                 }
                 return false;
             }
             Reason::Propagation(ci) => ci,
         };
 
-        // Mark as visited (will be cleaned up on failure or at end)
-        work.seen[var as usize] = true;
+        unsafe { *work.seen.get_unchecked_mut(var as usize) = true };
         work.min_to_clear.push(var);
 
-        // Explore reason clause.
-        // SAFETY: ci is a valid propagation reason from the trail.
         for &reason_lit in unsafe { db.clause_unchecked(ci) }.literals {
             let rv = reason_lit.var();
             if rv == var {
                 continue;
             }
-            if work.seen[rv as usize] {
+            if unsafe { *work.seen.get_unchecked(rv as usize) } {
                 continue;
             }
-            // SAFETY: rv from clause DB, validated var < num_vars.
             if let Some(rre) = unsafe { trail.entry_for_var_unchecked(rv) } {
                 if rre.level == 0 {
                     continue;

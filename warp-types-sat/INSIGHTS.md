@@ -179,3 +179,11 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **The 34-cycle effective misprediction penalty is NOT cache-related.** It's purely speculative execution waste — Gracemont's out-of-order window discards more µops on flush than the nominal 15-stage pipeline would suggest. This means branch-miss cost at 500v is "hard" — there's no latency-hiding trick available; the only remedies are fewer mispredictions (algorithmic) or fewer iterations (search behavior).
 
 **Prefetch would matter at 1000+ vars** where the arena exceeds L2 and clause accesses hit L3 (~30 cycles) or DRAM (100+ cycles). At that scale, the 28-instruction overhead becomes a bargain for hiding 30-100 cycle latencies. File this as a conditional optimization: `#[cfg]`-gated, enabled for large instances.
+
+## 15. Analysis Unchecked Indexing — Instructions Down, Cycles Flat
+
+**Eliminated ~13 bounds checks across resolution and minimization hot loops.** Same pattern as BCP Insight #9: `work.seen[var]` → `get_unchecked`, `entries[trail_idx]` → `get_unchecked`. Safety argument: all vars from clause DB (validated < num_vars at startup), trail_idx bounded by algorithm termination.
+
+**Result: -2.4% instructions (505→493/prop), cycles flat (-0.5%, noise).** The BCP equivalent gave 25% because BCP's 731-line function had acute i-cache pressure from panic paths. Analysis functions are shorter — the cold panic paths don't compete for hot cache lines. The always-predicted-correct bounds check branches cost ~0 cycles each (unlike data-dependent branches where misprediction matters).
+
+**Retained for instruction budget and future scaling.** 5.5M fewer retired instructions per solve. At larger problem sizes where analysis grows faster than BCP (Insight #11: analysis is 15% at 200v, 29% at 500v), the i-cache benefit will compound.
