@@ -923,6 +923,76 @@ pub fn pearson_r(xs: &[f64], ys: &[f64]) -> f64 {
     numer / denom
 }
 
+/// Compute Spearman rank correlation between two equal-length slices.
+///
+/// Converts values to fractional ranks (average rank for ties), then
+/// computes Pearson r on the ranks. This measures monotonic (not just
+/// linear) association — appropriate for comparing rankings like
+/// "VSIDS activity rank" vs "pivot centrality rank".
+pub fn spearman_rank_r(xs: &[f64], ys: &[f64]) -> f64 {
+    assert_eq!(xs.len(), ys.len());
+    let n = xs.len();
+    if n < 2 {
+        return f64::NAN;
+    }
+    let rank_x = fractional_ranks(xs);
+    let rank_y = fractional_ranks(ys);
+    pearson_r(&rank_x, &rank_y)
+}
+
+/// Convert values to fractional ranks (1-based, average rank for ties).
+fn fractional_ranks(values: &[f64]) -> Vec<f64> {
+    let n = values.len();
+    let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut ranks = vec![0.0; n];
+    let mut i = 0;
+    while i < n {
+        // Find the run of tied values
+        let mut j = i + 1;
+        while j < n && indexed[j].1 == indexed[i].1 {
+            j += 1;
+        }
+        // Average rank for this tie group (1-based)
+        let avg_rank = (i + j) as f64 / 2.0 + 0.5;
+        for k in i..j {
+            ranks[indexed[k].0] = avg_rank;
+        }
+        i = j;
+    }
+    ranks
+}
+
+/// Correlation 3 (fixed): Pivot centrality vs actual VSIDS activity.
+///
+/// Uses Spearman rank correlation to compare the ranking of variables
+/// by pivot frequency against their ranking by final VSIDS activity score.
+/// This tests whether VSIDS already captures the proof structure's
+/// variable importance, without the tautological proxy.
+pub fn correlate_centrality_vs_vsids(
+    profiles: &[ConflictProfile],
+    vsids_activities: &[f64],
+) -> Correlation {
+    let num_vars = vsids_activities.len();
+    let pivot_freq = pivot_frequency(profiles);
+
+    let mut xs: Vec<f64> = Vec::new();
+    let mut ys: Vec<f64> = Vec::new();
+    for var in 0..num_vars {
+        let pf = *pivot_freq.get(&(var as u32)).unwrap_or(&0);
+        let va = vsids_activities[var];
+        // Include all variables with any signal
+        if pf > 0 || va > 0.0 {
+            xs.push(pf as f64);
+            ys.push(va);
+        }
+    }
+
+    let r = spearman_rank_r(&xs, &ys);
+    Correlation { r, r_squared: r * r, n: xs.len(), name: "centrality_vs_vsids_rank".into() }
+}
+
 /// Correlation 1: Resolution depth at conflict C vs BCP propagations at C+1.
 ///
 /// Tests whether deep resolution chains predict more BCP work before the

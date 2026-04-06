@@ -430,30 +430,44 @@ fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
     locked
 }
 
+/// Result of an instrumented solve run.
+#[derive(Debug)]
+pub struct InstrumentedResult {
+    pub result: SolveResult,
+    /// Per-conflict profiles (Level 2).
+    pub profiles: Vec<ConflictProfile>,
+    /// CRef of each learned clause, parallel to `profiles`.
+    pub learned_crefs: Vec<CRef>,
+    /// Final VSIDS activity scores per variable.
+    pub vsids_activities: Vec<f64>,
+}
+
 /// Solve with resolution chain instrumentation for proof DAG mining.
 ///
-/// Returns the solve result, per-conflict profiles, and the CRef of each
-/// learned clause (parallel to profiles — `learned_crefs[i]` is the clause
-/// learned at conflict `i`). Together these are sufficient to build the
-/// proof DAG via `ProofDag::build`.
+/// Returns an `InstrumentedResult` containing the solve result, per-conflict
+/// profiles, learned clause CRefs, and final VSIDS activities.
 pub fn solve_instrumented(
     mut db: ClauseDb,
     num_vars: u32,
     conflict_limit: u64,
-) -> (SolveResult, Vec<ConflictProfile>, Vec<CRef>) {
+) -> InstrumentedResult {
     let mut profiles: Vec<ConflictProfile> = Vec::new();
     let mut learned_crefs: Vec<CRef> = Vec::new();
 
+    let mk = |result, profiles, learned_crefs, activities: Vec<f64>| InstrumentedResult {
+        result, profiles, learned_crefs, vsids_activities: activities,
+    };
+
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
-            return (SolveResult::Unsat, profiles, learned_crefs);
+            return mk(SolveResult::Unsat, profiles, learned_crefs, vec![]);
         }
     }
     if num_vars == 0 {
         return if db.is_empty() {
-            (SolveResult::Sat(vec![]), profiles, learned_crefs)
+            mk(SolveResult::Sat(vec![]), profiles, learned_crefs, vec![])
         } else {
-            (SolveResult::Unsat, profiles, learned_crefs)
+            mk(SolveResult::Unsat, profiles, learned_crefs, vec![])
         };
     }
 
@@ -475,7 +489,7 @@ pub fn solve_instrumented(
             watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate)
         {
             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-            return (SolveResult::Unsat, profiles, learned_crefs);
+            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
         }
         let mut idle = propagate.finish_no_conflict();
 
@@ -504,7 +518,7 @@ pub fn solve_instrumented(
 
             if trail.all_assigned() {
                 let _ = idle.sat();
-                return (SolveResult::Sat(trail.assignment_vec()), profiles, learned_crefs);
+                return mk(SolveResult::Sat(trail.assignment_vec()), profiles, learned_crefs, vsids.activities().to_vec());
             }
 
             let (var, polarity) = vsids.pick(trail.assignments());
@@ -528,12 +542,12 @@ pub fn solve_instrumented(
 
                         if conflict_limit > 0 && conflicts >= conflict_limit {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unknown, profiles, learned_crefs);
+                            return mk(SolveResult::Unknown, profiles, learned_crefs, vsids.activities().to_vec());
                         }
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return (SolveResult::Unsat, profiles, learned_crefs);
+                            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
                         }
 
                         let trail_size = trail.len();
@@ -568,7 +582,7 @@ pub fn solve_instrumented(
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
-                            return (SolveResult::Unsat, profiles, learned_crefs);
+                            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
                         }
 
                         for entry in trail.entries_above(analysis.backtrack_level) {
@@ -1247,7 +1261,8 @@ p cnf 5 10
 
             for seed in 0..20u64 {
                 let db = generate_k_sat(n, num_clauses, 3, seed);
-                let (result, profiles, _learned_crefs) = solve_instrumented(db, n, conflict_budget);
+                let ir = solve_instrumented(db, n, conflict_budget);
+                let (result, profiles) = (ir.result, ir.profiles);
 
                 all_depths.extend(profiles.iter().map(|p| p.resolution_depth));
                 match result {
@@ -1319,7 +1334,8 @@ p cnf 5 10
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
         let db = generate_k_sat(n, num_clauses, 3, 42);
-        let (result, profiles, _learned_crefs) = solve_instrumented(db, n, 10_000);
+        let ir = solve_instrumented(db, n, 10_000);
+        let (result, profiles) = (ir.result, ir.profiles);
 
         assert!(!profiles.is_empty(), "should have conflicts to profile");
 
@@ -1424,7 +1440,8 @@ p cnf 5 10
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
         let db = generate_k_sat(n, num_clauses, 3, 42);
-        let (result, profiles, learned_crefs) = solve_instrumented(db, n, 10_000);
+        let ir = solve_instrumented(db, n, 10_000);
+        let (result, profiles, learned_crefs) = (ir.result, ir.profiles, ir.learned_crefs);
 
         assert!(!profiles.is_empty(), "need conflicts to build DAG");
         assert_eq!(profiles.len(), learned_crefs.len(),
@@ -1517,7 +1534,6 @@ p cnf 5 10
         use crate::analyze::{
             correlate_depth_vs_next_bcp,
             correlate_depth_vs_clause_reuse,
-            correlate_centrality_vs_bump_freq,
             correlate_pivot_vs_gradient,
         };
 
@@ -1536,36 +1552,36 @@ p cnf 5 10
             let cold_assignments: Vec<Option<bool>> = vec![None; n as usize];
             let tg = crate::gradient::gradient_at_trail(&db, n, &cold_assignments);
 
-            let (result, profiles, learned_crefs) = solve_instrumented(db, n, 10_000);
+            let ir = solve_instrumented(db, n, 10_000);
 
-            if profiles.len() < 100 {
-                println!("  seed {seed}: only {} conflicts, skipping", profiles.len());
+            if ir.profiles.len() < 100 {
+                println!("  seed {seed}: only {} conflicts, skipping", ir.profiles.len());
                 continue;
             }
 
             // Correlation 1: depth(C) vs bcp_props(C+1)
-            let c1 = correlate_depth_vs_next_bcp(&profiles);
+            let c1 = correlate_depth_vs_next_bcp(&ir.profiles);
 
             // Correlation 2: depth vs learned clause reuse
-            let c2 = correlate_depth_vs_clause_reuse(&profiles, &learned_crefs);
+            let c2 = correlate_depth_vs_clause_reuse(&ir.profiles, &ir.learned_crefs);
 
-            // Correlation 3: pivot centrality vs bump frequency
-            let c3 = correlate_centrality_vs_bump_freq(&profiles, n);
+            // Correlation 3 (fixed): pivot centrality vs actual VSIDS activity (Spearman rank)
+            let c3 = crate::analyze::correlate_centrality_vs_vsids(&ir.profiles, &ir.vsids_activities);
 
             // Correlation 4: pivot frequency vs gradient magnitude
-            let c4 = correlate_pivot_vs_gradient(&profiles, &tg.magnitudes);
+            let c4 = correlate_pivot_vs_gradient(&ir.profiles, &tg.magnitudes);
 
-            let result_str = match &result {
+            let result_str = match &ir.result {
                 SolveResult::Sat(_) => "SAT",
                 SolveResult::Unsat => "UNSAT",
                 SolveResult::Unknown => "UNK",
             };
-            println!("  seed {seed} ({result_str}, {} conflicts):", profiles.len());
+            println!("  seed {seed} ({result_str}, {} conflicts):", ir.profiles.len());
             println!("    C1 depth→next_bcp:     r={:+.3}  r²={:.3}  n={}",
                 c1.r, c1.r_squared, c1.n);
             println!("    C2 depth→clause_reuse: r={:+.3}  r²={:.3}  n={}",
                 c2.r, c2.r_squared, c2.n);
-            println!("    C3 centrality→bumps:   r={:+.3}  r²={:.3}  n={}",
+            println!("    C3 centrality→VSIDS:   r={:+.3}  r²={:.3}  n={} (Spearman rank)",
                 c3.r, c3.r_squared, c3.n);
             println!("    C4 pivot→gradient:     r={:+.3}  r²={:.3}  n={}",
                 c4.r, c4.r_squared, c4.n);
@@ -1576,7 +1592,7 @@ p cnf 5 10
         // Aggregate: mean |r| across seeds
         if !all_correlations.is_empty() {
             let k = all_correlations.len() as f64;
-            let names = ["depth→next_bcp", "depth→clause_reuse", "centrality→bumps", "pivot→gradient"];
+            let names = ["depth→next_bcp", "depth→clause_reuse", "centrality→VSIDS", "pivot→gradient"];
             println!("\n  Aggregate across {} seeds:", all_correlations.len());
             for (j, name) in names.iter().enumerate() {
                 let mean_r: f64 = all_correlations.iter().map(|c| c[j]).sum::<f64>() / k;

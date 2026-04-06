@@ -204,6 +204,11 @@ impl Vsids {
         self.heap_insert(var);
     }
 
+    /// Read-only access to the per-variable activity scores.
+    pub fn activities(&self) -> &[f64] {
+        &self.activity
+    }
+
     /// Save the phase (polarity) of a variable.
     pub fn save_phase(&mut self, var: u32, polarity: bool) {
         self.phase[var as usize] = polarity;
