@@ -601,6 +601,190 @@ pub fn hybrid_solve_simwarp(
     crate::solver::solve_cdcl_core(db, num_vars, vsids)
 }
 
+// ─── GPU hardware path ──────────────────────────────────────────────
+
+/// Gradient search with GPU-accelerated loss evaluation.
+///
+/// Identical to `gradient_search_simwarp` except the inner-loop loss
+/// call runs on real GPU hardware via `GpuContext::total_loss()`.
+/// Gradient, verification, and weight update remain on CPU.
+///
+/// Upload SoA once; re-upload `x` each iteration (cheap: num_vars × 8 bytes).
+/// Re-upload weights only when clause weight adaptation triggers.
+#[cfg(feature = "gpu")]
+pub fn gradient_search_gpu(
+    db: &ClauseDb,
+    num_vars: u32,
+    config: &crate::gradient::GradientConfig,
+    ctx: &crate::gpu_launcher::GpuContext,
+) -> crate::gradient::GradientResult {
+    use crate::gradient::{GradientResult, Rng, StartOutcome};
+
+    let n = num_vars as usize;
+
+    if db.is_empty() {
+        return GradientResult {
+            assignment: Some(vec![false; n]),
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+    if num_vars == 0 {
+        return GradientResult {
+            assignment: None,
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+
+    // One-time SoA packing + GPU upload.
+    let initial_weights = vec![1.0; db.len()];
+    let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
+    let var_idx = VarIndexSoA::build(&soa_template, num_vars);
+
+    let mut result = GradientResult {
+        assignment: None,
+        best_continuous: None,
+        starts: Vec::with_capacity(config.num_starts),
+        clause_evals: 0,
+    };
+    let mut global_best_loss = f64::MAX;
+
+    for si in 0..config.num_starts {
+        if result.assignment.is_some() {
+            break;
+        }
+
+        let mut rng = Rng::new(config.seed.wrapping_add(si as u64));
+        let mut x: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
+        let mut grad = vec![0.0; n];
+        let mut velocity = vec![0.0; n];
+        let mut soa = soa_template.clone();
+        let mut gpu_data = ctx.upload_clause_data(&soa)
+            .expect("GPU upload failed");
+        let mut lr = config.learning_rate;
+        let mut best_loss = f64::MAX;
+        let mut found = false;
+
+        for iter in 0..config.max_iters {
+            // Axis 1: clause-parallel loss on GPU hardware.
+            let l = ctx.total_loss(&gpu_data, &x)
+                .expect("GPU kernel launch failed");
+            result.clause_evals += soa.num_clauses;
+
+            if l < best_loss {
+                best_loss = l;
+            }
+
+            // Periodically discretize and verify (CPU — Axis 2 ballot not yet on GPU).
+            if l < 1.0 || iter % 10 == 0 {
+                let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
+                let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+                if all_sat {
+                    result.assignment = Some(assign);
+                    result.starts.push(StartOutcome {
+                        best_loss: l,
+                        iterations: iter + 1,
+                        satisfied: true,
+                    });
+                    found = true;
+                    break;
+                }
+                if config.clause_weights {
+                    update_weights_soa(&mut soa, &assign);
+                    // Re-upload adapted weights to GPU.
+                    ctx.update_weights(&mut gpu_data, &soa)
+                        .expect("GPU weight re-upload failed");
+                }
+            }
+
+            // Gradient via SoA reverse index (CPU — Axis 1b not yet on GPU).
+            gradient_soa(&soa, &x, &var_idx, &mut grad);
+
+            let grad_norm_sq: f64 = grad.iter().map(|g| g * g).sum();
+            if grad_norm_sq < 1e-20 {
+                break;
+            }
+
+            // Variable update (CPU — trivial, no GPU benefit).
+            if config.momentum > 0.0 {
+                for i in 0..n {
+                    velocity[i] = config.momentum * velocity[i] + grad[i];
+                    x[i] = (x[i] - lr * velocity[i]).clamp(0.0, 1.0);
+                }
+            } else {
+                for i in 0..n {
+                    x[i] = (x[i] - lr * grad[i]).clamp(0.0, 1.0);
+                }
+            }
+            lr *= config.lr_decay;
+        }
+
+        if !found {
+            let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
+            let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+            if all_sat {
+                result.assignment = Some(assign);
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: true,
+                });
+            } else {
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: false,
+                });
+            }
+            if best_loss < global_best_loss {
+                global_best_loss = best_loss;
+                result.best_continuous = Some(x);
+            }
+        }
+    }
+
+    result
+}
+
+/// Hybrid gradient→CDCL solver with GPU-accelerated gradient phase.
+///
+/// Same TurboSAT strategy as `hybrid_solve_simwarp`:
+/// - **Phase 1**: `gradient_search_gpu` (GPU loss + CPU gradient/verify)
+/// - **Phase 2-3**: `confidence_ranking_simwarp` (CPU bitonic sort → VSIDS warm-start)
+/// - **Phase 4**: `solve_cdcl_core` (CPU CDCL)
+#[cfg(feature = "gpu")]
+pub fn hybrid_solve_gpu(
+    db: crate::bcp::ClauseDb,
+    num_vars: u32,
+    config: &crate::gradient::GradientConfig,
+    ctx: &crate::gpu_launcher::GpuContext,
+) -> crate::solver::SolveResult {
+    use crate::solver::SolveResult;
+    use crate::vsids::Vsids;
+
+    let grad = gradient_search_gpu(&db, num_vars, config, ctx);
+
+    if let Some(assign) = grad.assignment {
+        return SolveResult::Sat(assign);
+    }
+
+    let mut vsids = Vsids::new(num_vars);
+    if let Some(ref x) = grad.best_continuous {
+        let ranked = confidence_ranking_simwarp(x);
+        for &(var, conf) in ranked.iter() {
+            let var = var as u32;
+            vsids.set_phase(var, x[var as usize] >= 0.5);
+            vsids.set_initial_activity(var, conf * 20.0);
+        }
+    }
+    vsids.initialize_from_clauses(&db);
+
+    crate::solver::solve_cdcl_core(db, num_vars, vsids)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]

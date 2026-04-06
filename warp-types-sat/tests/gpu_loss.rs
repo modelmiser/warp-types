@@ -1,12 +1,16 @@
-//! GPU kernel correctness test: compare GPU loss against SimWarp loss.
+//! GPU kernel correctness tests.
 //!
 //! Run with: cargo test --features gpu -- gpu_loss
-//! Requires CUDA-capable GPU (tested on H200 via RunPod).
+//! Requires CUDA-capable GPU (tested on RTX 4000 Ada).
 
 #![cfg(feature = "gpu")]
 
 use warp_types_sat::bench::generate_3sat_phase_transition;
-use warp_types_sat::gpu_gradient::{total_loss_simwarp, ClauseDataSoA};
+use warp_types_sat::gpu_gradient::{
+    gradient_search_gpu, gradient_search_simwarp, hybrid_solve_gpu, hybrid_solve_simwarp,
+    total_loss_simwarp, ClauseDataSoA,
+};
+use warp_types_sat::gradient::GradientConfig;
 use warp_types_sat::gpu_launcher::GpuContext;
 
 /// Deterministic variable initialization: golden ratio spacing in [0.05, 0.95].
@@ -88,4 +92,101 @@ fn gpu_loss_larger_instance() {
         "100-var: SimWarp {simwarp_loss:.12} != GPU {gpu_loss:.12} (diff {:.2e})",
         (simwarp_loss - gpu_loss).abs()
     );
+}
+
+// ─── Gradient search: GPU vs SimWarp ─────────────────────────────────
+
+#[test]
+fn gpu_gradient_search_matches_simwarp() {
+    // Both paths use the same RNG seed, same algorithm — only the loss
+    // evaluation differs (GPU kernel vs SimWarp). Results must match.
+    let ctx = GpuContext::new().expect("CUDA init failed");
+
+    for seed in 0..5u64 {
+        let db = generate_3sat_phase_transition(20, seed);
+        let config = GradientConfig {
+            seed,
+            num_starts: 3,
+            max_iters: 200,
+            ..GradientConfig::default()
+        };
+
+        let simwarp = gradient_search_simwarp(&db, 20, &config);
+        let gpu = gradient_search_gpu(&db, 20, &config, &ctx);
+
+        // Same number of starts attempted
+        assert_eq!(
+            simwarp.starts.len(),
+            gpu.starts.len(),
+            "seed {seed}: start count mismatch"
+        );
+
+        // Same SAT/UNSAT outcome
+        assert_eq!(
+            simwarp.assignment.is_some(),
+            gpu.assignment.is_some(),
+            "seed {seed}: assignment presence mismatch"
+        );
+
+        // If both found SAT, assignments must match
+        if let (Some(ref sw_assign), Some(ref gpu_assign)) =
+            (&simwarp.assignment, &gpu.assignment)
+        {
+            assert_eq!(
+                sw_assign, gpu_assign,
+                "seed {seed}: assignments differ"
+            );
+        }
+
+        // Per-start loss trajectories must match
+        for (i, (sw, gp)) in simwarp.starts.iter().zip(gpu.starts.iter()).enumerate() {
+            assert!(
+                (sw.best_loss - gp.best_loss).abs() < 1e-10,
+                "seed {seed} start {i}: SimWarp best_loss {:.12} != GPU {:.12}",
+                sw.best_loss,
+                gp.best_loss
+            );
+            assert_eq!(
+                sw.iterations, gp.iterations,
+                "seed {seed} start {i}: iteration count mismatch"
+            );
+        }
+    }
+}
+
+#[test]
+fn gpu_hybrid_solve_matches_simwarp() {
+    // End-to-end: gradient→CDCL hybrid must produce same result via GPU or SimWarp.
+    let ctx = GpuContext::new().expect("CUDA init failed");
+
+    for seed in 0..5u64 {
+        let db = generate_3sat_phase_transition(20, seed);
+        let config = GradientConfig {
+            seed,
+            num_starts: 3,
+            max_iters: 200,
+            ..GradientConfig::default()
+        };
+
+        // ClauseDb doesn't impl Clone — generate twice (same seed = same db).
+        let db2 = generate_3sat_phase_transition(20, seed);
+        let sw_result = hybrid_solve_simwarp(db, 20, &config);
+        let gpu_result = hybrid_solve_gpu(db2, 20, &config, &ctx);
+
+        // Same SAT/UNSAT outcome
+        match (&sw_result, &gpu_result) {
+            (
+                warp_types_sat::SolveResult::Sat(sw_a),
+                warp_types_sat::SolveResult::Sat(gpu_a),
+            ) => {
+                assert_eq!(sw_a, gpu_a, "seed {seed}: SAT assignments differ");
+            }
+            (warp_types_sat::SolveResult::Unsat, warp_types_sat::SolveResult::Unsat) => {}
+            _ => panic!(
+                "seed {seed}: outcome mismatch: SimWarp={:?} GPU={:?}",
+                matches!(sw_result, warp_types_sat::SolveResult::Sat(_)),
+                matches!(gpu_result, warp_types_sat::SolveResult::Sat(_)),
+            ),
+        }
+    }
 }
