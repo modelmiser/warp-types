@@ -48,5 +48,8 @@ fn main() {
         warp_types_sat::solver::SolveResult::Unsat => {
             println!("s UNSATISFIABLE");
         }
+        warp_types_sat::solver::SolveResult::Unknown => {
+            println!("s UNKNOWN");
+        }
     }
 }

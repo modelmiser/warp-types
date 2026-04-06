@@ -23,6 +23,8 @@ pub enum SolveResult {
     Sat(Vec<bool>),
     /// Unsatisfiable.
     Unsat,
+    /// Conflict budget exhausted — neither SAT nor UNSAT proven.
+    Unknown,
 }
 
 /// Statistics from a solve run.
@@ -41,6 +43,10 @@ pub struct SolveStats {
     pub analyze_resolve_ns: u64,
     /// Nanoseconds within analysis spent on clause minimization.
     pub analyze_minimize_ns: u64,
+    /// Nanoseconds spent in trail-gradient probes.
+    pub trail_gradient_ns: u64,
+    /// Number of trail-gradient probes performed.
+    pub trail_gradient_probes: u64,
 }
 
 /// Solve a CNF instance.
@@ -153,7 +159,16 @@ fn solve_cdcl_core_stats(
     mut vsids: Vsids,
 ) -> (SolveResult, SolveStats) {
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats);
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, 0);
+    (result, stats)
+}
+
+/// Solve with a conflict budget. Returns Unknown if budget exhausted.
+pub fn solve_watched_budget(db: ClauseDb, num_vars: u32, conflict_limit: u64) -> (SolveResult, SolveStats) {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, conflict_limit);
     (result, stats)
 }
 
@@ -166,7 +181,40 @@ pub(crate) fn solve_cdcl_core(
     num_vars: u32,
     mut vsids: Vsids,
 ) -> SolveResult {
-    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default())
+    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), 0, 0.0, 0)
+}
+
+/// CDCL solver with periodic trail-gradient probing (seed-1a).
+///
+/// Every `probe_interval` conflicts, computes a single gradient at the current
+/// trail position and uses it to set phase hints and optionally boost activities
+/// for unassigned variables.
+pub fn solve_watched_trail_gradient(
+    db: ClauseDb,
+    num_vars: u32,
+    probe_interval: u64,
+    boost_scale: f64,
+) -> SolveResult {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), probe_interval, boost_scale, 0)
+}
+
+/// CDCL with trail-gradient probing, returning stats.
+pub fn solve_watched_trail_gradient_stats(
+    db: ClauseDb,
+    num_vars: u32,
+    probe_interval: u64,
+    boost_scale: f64,
+    conflict_limit: u64,
+) -> (SolveResult, SolveStats) {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, probe_interval, boost_scale, conflict_limit);
+    (result, stats)
 }
 
 fn solve_cdcl_core_inner(
@@ -174,6 +222,9 @@ fn solve_cdcl_core_inner(
     num_vars: u32,
     vsids: &mut Vsids,
     stats: &mut SolveStats,
+    trail_gradient_interval: u64,
+    trail_gradient_boost: f64,
+    conflict_limit: u64,
 ) -> SolveResult {
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
@@ -205,6 +256,9 @@ fn solve_cdcl_core_inner(
     let mut conflicts: u64 = 0;
     let reduce_interval: u64 = 2000;
     let mut next_reduce: u64 = reduce_interval;
+
+    // Trail-gradient probe schedule (seed-1a)
+    let mut next_probe: u64 = trail_gradient_interval;
 
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
@@ -243,6 +297,21 @@ fn solve_cdcl_core_inner(
                 }
             }
 
+            // ── Trail-gradient probe (seed-1a) ──
+            if trail_gradient_interval > 0 && conflicts >= next_probe {
+                let t = Instant::now();
+                let tg = crate::gradient::gradient_at_trail(db, num_vars, trail.assignments());
+                vsids.apply_trail_gradient(
+                    &tg.magnitudes,
+                    &tg.polarities,
+                    trail.assignments(),
+                    trail_gradient_boost,
+                );
+                stats.trail_gradient_ns += t.elapsed().as_nanos() as u64;
+                stats.trail_gradient_probes += 1;
+                next_probe = conflicts + trail_gradient_interval;
+            }
+
             if trail.all_assigned() {
                 let _ = idle.sat();
                 return SolveResult::Sat(trail.assignment_vec());
@@ -273,6 +342,12 @@ fn solve_cdcl_core_inner(
                     BcpResult::Conflict { clause } => {
                         conflicts += 1;
                         stats.conflicts += 1;
+
+                        // Conflict budget exhausted
+                        if conflict_limit > 0 && conflicts >= conflict_limit {
+                            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                            return SolveResult::Unknown;
+                        }
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
@@ -380,6 +455,7 @@ mod tests {
         match solve(db, 1) {
             SolveResult::Sat(assign) => assert!(assign[0]),
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -392,6 +468,7 @@ mod tests {
         match solve(db, 1) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -404,6 +481,7 @@ mod tests {
         match solve(db, 2) {
             SolveResult::Sat(assign) => assert!(assign[1]),
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -414,6 +492,7 @@ mod tests {
         match solve(inst.db, inst.num_vars) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -435,6 +514,7 @@ p cnf 6 9
         match solve(inst.db, inst.num_vars) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -451,6 +531,7 @@ p cnf 3 4
         match solve(inst.db, inst.num_vars) {
             SolveResult::Sat(_) => {}
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -461,6 +542,7 @@ p cnf 3 4
         match solve(db, 1) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT for empty clause"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -470,6 +552,7 @@ p cnf 3 4
         match solve(db, 0) {
             SolveResult::Sat(assign) => assert!(assign.is_empty()),
             SolveResult::Unsat => panic!("expected SAT for vacuous formula"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -480,6 +563,7 @@ p cnf 3 4
         match solve(db, 0) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT for 0-var formula with clauses"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -489,6 +573,7 @@ p cnf 3 4
         match solve(db, 5) {
             SolveResult::Sat(_) => {}
             SolveResult::Unsat => panic!("expected SAT for vacuously satisfiable formula"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -501,6 +586,7 @@ p cnf 3 4
         match solve_watched(db, 1) {
             SolveResult::Sat(a) => assert!(a[0]),
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -512,6 +598,7 @@ p cnf 3 4
         match solve_watched(db, 1) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -533,6 +620,7 @@ p cnf 6 9
         match solve_watched(inst.db, inst.num_vars) {
             SolveResult::Unsat => {}
             SolveResult::Sat(_) => panic!("expected UNSAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -549,6 +637,7 @@ p cnf 3 4
         match solve_watched(inst.db, inst.num_vars) {
             SolveResult::Sat(_) => {}
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -633,6 +722,7 @@ p cnf 3 4
                 assert!(assign[1..].iter().any(|&v| v));
             }
             SolveResult::Unsat => panic!("expected SAT"),
+            _ => panic!("unexpected Unknown"),
         }
     }
 
@@ -671,6 +761,7 @@ p cnf 3 4
                     "SAT"
                 }
                 SolveResult::Unsat => "UNSAT",
+                _ => panic!("unexpected Unknown"),
             };
             println!("{:<6} {:>10} {:>8}", seed, elapsed, tag);
             // Skip slow UNSAT seeds — clause deletion not yet implemented
@@ -746,6 +837,7 @@ p cnf 5 10
             let tag = match result {
                 SolveResult::Sat(_) => "SAT",
                 SolveResult::Unsat => "UNSAT",
+                _ => panic!("unexpected Unknown"),
             };
             let us_per_conf = if stats.conflicts > 0 {
                 elapsed_us as f64 / stats.conflicts as f64
@@ -801,6 +893,7 @@ p cnf 5 10
                 let tag = match result {
                     SolveResult::Sat(_) => "SAT",
                     SolveResult::Unsat => "UNSAT",
+                    _ => panic!("unexpected Unknown"),
                 };
                 let us_per_conf = elapsed_us as f64 / stats.conflicts as f64;
                 let props_per_conf = stats.propagations as f64 / stats.conflicts as f64;
@@ -853,6 +946,7 @@ p cnf 5 10
                 let _ = match result {
                     SolveResult::Sat(_) => "SAT",
                     SolveResult::Unsat => "UNSAT",
+                    _ => panic!("unexpected Unknown"),
                 };
 
                 let total_accounted = stats.bcp_ns + stats.analyze_ns + stats.vsids_ns;
@@ -879,6 +973,86 @@ p cnf 5 10
             if completed == 0 {
                 println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
             }
+        }
+    }
+
+    #[test]
+    fn seed_1a_kill_signal() {
+        // Kill signal: 100 instances at n=300, ratio=4.26.
+        // If trail-gradient doesn't improve median solve time by >10%, it's dead.
+        //
+        // Uses a conflict budget (50K) instead of wall-clock timeout to bound
+        // UNSAT instances. Instances exceeding the budget return Unknown and
+        // are skipped — they're too hard for any config to solve.
+        use crate::bench::generate_k_sat;
+
+        let n = 300u32;
+        let ratio = 4.26;
+        let num_clauses = ((n as f64) * ratio).ceil() as usize;
+        let num_instances = 100u64;
+        let conflict_budget = 50_000u64;
+
+        struct Config {
+            name: &'static str,
+            interval: u64,
+            boost: f64,
+        }
+        let configs = [
+            Config { name: "CDCL (baseline)", interval: 0, boost: 0.0 },
+            Config { name: "TG phase K=50", interval: 50, boost: 0.0 },
+            Config { name: "TG phase K=200", interval: 200, boost: 0.0 },
+            Config { name: "TG ph+bst K=50 b=1", interval: 50, boost: 1.0 },
+            Config { name: "TG ph+bst K=200 b=1", interval: 200, boost: 1.0 },
+            Config { name: "TG ph+bst K=50 b=5", interval: 50, boost: 5.0 },
+        ];
+
+        println!("\n=== Seed-1a Kill Signal: n={n}, ratio={ratio}, {num_instances} instances, budget={conflict_budget} conflicts ===");
+        println!("{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
+            "solver", "p25(us)", "p50(us)", "p75(us)", "SAT", "UNK", "UNSAT", "probe_ns/p");
+        println!("{}", "-".repeat(105));
+
+        for cfg in &configs {
+            let mut times = Vec::new();
+            let mut sat_count = 0u32;
+            let mut unknown_count = 0u32;
+            let mut unsat_count = 0u32;
+            let mut total_probe_ns = 0u64;
+            let mut total_probes = 0u64;
+
+            for seed in 0..num_instances {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let t = Instant::now();
+                let (result, stats) = if cfg.interval == 0 {
+                    solve_watched_budget(db, n, conflict_budget)
+                } else {
+                    solve_watched_trail_gradient_stats(db, n, cfg.interval, cfg.boost, conflict_budget)
+                };
+                let elapsed = t.elapsed();
+
+                match result {
+                    SolveResult::Unknown => { unknown_count += 1; continue; }
+                    SolveResult::Sat(_) => { sat_count += 1; }
+                    SolveResult::Unsat => { unsat_count += 1; }
+                }
+
+                times.push(elapsed);
+                total_probe_ns += stats.trail_gradient_ns;
+                total_probes += stats.trail_gradient_probes;
+            }
+
+            times.sort();
+            let pct = |v: &[std::time::Duration], p: usize| -> u128 {
+                if v.is_empty() { return 0; }
+                v[v.len() * p / 100].as_micros()
+            };
+            let ns_per_probe = if total_probes > 0 {
+                total_probe_ns / total_probes
+            } else { 0 };
+
+            println!("{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
+                cfg.name,
+                pct(&times, 25), pct(&times, 50), pct(&times, 75),
+                sat_count, unknown_count, unsat_count, ns_per_probe);
         }
     }
 }
