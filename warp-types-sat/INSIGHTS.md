@@ -126,3 +126,11 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Conflict drain paths use `std::ptr::copy` (memmove) instead of element-by-element loops.** The regions CAN overlap: dst ≤ src but dst + remaining > src when few entries have been removed (j close to i). The initial implementation incorrectly used `copy_nonoverlapping` (UB for overlapping regions) — caught during assembly review.
 
 **Combined with blocker-before-deleted: 8-10% total improvement at 500v, up to 40% at 200v.** P-core equivalent dropped from ~82-94 to ~74-85 ns/prop. Gap from MiniSat narrowed from 1.3-1.5x to 1.2-1.4x.
+
+## 11. Order-Preserving O(1) Insert in Conflict Analysis
+
+**`learned.insert(0, lit)` is O(n) but the naive fix `push + swap` changes literal ordering and diverges the solver's search path.** The second-watch selection breaks ties by position — reordering non-asserting literals changes which literal becomes c[1], altering watches and cascading through the entire search tree. For seed 0 at 200v: conflict count went from 17,144 to 6,105 — a completely different solve from a semantically-correct optimization.
+
+**Fix: reserve slot 0 with a placeholder before resolution begins.** `learned.push(Lit::pos(0))` at init, `learned[0] = asserting_lit` after UIP found. O(1) overwrite, literal ordering preserved, search path identical.
+
+**Additional analysis optimizations:** Continue UIP scan from `trail_idx` instead of rescanning the full trail; accumulate `abstract_levels` during resolution (eliminate second pass); unchecked indexing in cold paths. Combined: resolution phase shrank ~10% (13% → 11-12% of total at 500v), 2-5% overall wall time.
