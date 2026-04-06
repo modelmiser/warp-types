@@ -17,6 +17,18 @@ use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::trail::{Reason, Trail};
 
+/// A single resolution step in 1-UIP analysis.
+#[derive(Debug, Clone)]
+pub struct ResolutionStep {
+    /// The reason clause being resolved against.
+    pub reason_clause: CRef,
+    /// The variable being eliminated (the pivot).
+    pub pivot_var: u32,
+    /// Width of the working clause after this resolution
+    /// (number of seen variables at current level + learned literals so far).
+    pub working_width: usize,
+}
+
 /// Result of conflict analysis.
 pub struct AnalysisResult {
     /// The learned clause (asserting clause). The first literal is the
@@ -31,6 +43,9 @@ pub struct AnalysisResult {
     pub resolve_ns: u64,
     /// Nanoseconds spent in clause minimization (litRedundant DFS).
     pub minimize_ns: u64,
+    /// Resolution chain: sequence of resolution steps to reach 1-UIP.
+    /// Empty unless instrumentation is enabled via `analyze_conflict_instrumented`.
+    pub resolution_chain: Vec<ResolutionStep>,
 }
 
 /// Persistent scratch buffers for conflict analysis.
@@ -307,6 +322,192 @@ pub fn analyze_conflict_with(
         lbd,
         resolve_ns,
         minimize_ns,
+        resolution_chain: Vec::new(),
+    }
+}
+
+/// Run 1-UIP conflict analysis with resolution chain capture.
+///
+/// Same as `analyze_conflict_with` but records each resolution step.
+/// Use for proof DAG mining — adds ~1 Vec::push per resolution step.
+pub fn analyze_conflict_instrumented(
+    work: &mut AnalyzeWork,
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict_clause: CRef,
+) -> AnalysisResult {
+    let current_level = trail.current_level();
+    let t_resolve = Instant::now();
+
+    let max_var = trail.num_vars();
+    work.ensure_capacity(max_var);
+
+    let mut learned = Vec::new();
+    let mut num_at_current_level = 0;
+    let mut resolution_chain = Vec::new();
+
+    for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
+        let var = lit.var();
+        if !work.seen[var as usize] {
+            work.mark_seen(var);
+            let entry = unsafe { trail.entry_for_var_unchecked(var) };
+            match entry {
+                Some(e) if e.level == current_level => {
+                    num_at_current_level += 1;
+                }
+                Some(_) | None => {
+                    learned.push(lit);
+                }
+            }
+        }
+    }
+
+    let entries = trail.entries();
+    let mut trail_idx = entries.len();
+
+    while num_at_current_level > 1 {
+        trail_idx -= 1;
+        let entry = &entries[trail_idx];
+        if entry.level != current_level || !work.seen[entry.lit.var() as usize] {
+            continue;
+        }
+
+        match entry.reason {
+            Reason::Decision => {
+                debug_assert!(num_at_current_level <= 1);
+                break;
+            }
+            Reason::Propagation(reason_clause) => {
+                debug_assert!(!db.is_deleted(reason_clause));
+                num_at_current_level -= 1;
+                work.seen[entry.lit.var() as usize] = false;
+                for &lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
+                    let var = lit.var();
+                    if var == entry.lit.var() {
+                        continue;
+                    }
+                    if !work.seen[var as usize] {
+                        work.mark_seen(var);
+                        let reason_entry = unsafe { trail.entry_for_var_unchecked(var) };
+                        match reason_entry {
+                            Some(e) if e.level == current_level => {
+                                num_at_current_level += 1;
+                            }
+                            Some(_) | None => {
+                                learned.push(lit);
+                            }
+                        }
+                    }
+                }
+
+                // Record this resolution step
+                resolution_chain.push(ResolutionStep {
+                    reason_clause,
+                    pivot_var: entry.lit.var(),
+                    working_width: num_at_current_level + learned.len(),
+                });
+            }
+        }
+    }
+
+    // Find the 1-UIP
+    let mut asserting_lit = None;
+    for entry in entries.iter().rev() {
+        if entry.level == current_level && work.seen[entry.lit.var() as usize] {
+            asserting_lit = Some(entry.lit.complement());
+            break;
+        }
+    }
+
+    let lit = asserting_lit
+        .expect("1-UIP resolution must find an asserting literal at the current decision level");
+    learned.insert(0, lit);
+
+    if learned.len() >= 3 {
+        let mut best_pos = 1;
+        let mut best_level = trail.entry_for_var(learned[1].var())
+            .map(|e| e.level).unwrap_or(0);
+        for i in 2..learned.len() {
+            let level = trail.entry_for_var(learned[i].var())
+                .map(|e| e.level).unwrap_or(0);
+            if level > best_level {
+                best_level = level;
+                best_pos = i;
+            }
+        }
+        if best_pos != 1 {
+            learned.swap(1, best_pos);
+        }
+    }
+
+    let resolve_ns = t_resolve.elapsed().as_nanos() as u64;
+
+    // Clause minimization (same as non-instrumented path)
+    let t_minimize = Instant::now();
+
+    let abstract_levels = {
+        let mut mask = 0u64;
+        for &l in &learned {
+            if let Some(e) = trail.entry_for_var(l.var()) {
+                mask |= 1u64 << (e.level % 64);
+            }
+        }
+        mask
+    };
+
+    work.min_to_clear.clear();
+    let mut minimized = Vec::with_capacity(learned.len());
+    minimized.push(learned[0]);
+
+    for &l in &learned[1..] {
+        if lit_redundant_with(work, trail, db, l, abstract_levels) {
+            work.seen[l.var() as usize] = false;
+        } else {
+            minimized.push(l);
+        }
+    }
+
+    for &var in &work.min_to_clear {
+        work.seen[var as usize] = false;
+    }
+    work.min_to_clear.clear();
+
+    let minimize_ns = t_minimize.elapsed().as_nanos() as u64;
+    let learned = minimized;
+
+    let backtrack_level = learned
+        .iter()
+        .skip(1)
+        .filter_map(|lit| trail.entry_for_var(lit.var()).map(|e| e.level))
+        .max()
+        .unwrap_or(0);
+
+    let lbd = {
+        let level_count = current_level as usize + 1;
+        work.levels_seen.clear();
+        work.levels_seen.resize(level_count, false);
+        let mut count = 0u32;
+        for lit in &learned {
+            if let Some(e) = trail.entry_for_var(lit.var()) {
+                let lv = e.level as usize;
+                if lv < level_count && !work.levels_seen[lv] {
+                    work.levels_seen[lv] = true;
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
+    work.clear_seen();
+
+    AnalysisResult {
+        learned,
+        backtrack_level,
+        lbd,
+        resolve_ns,
+        minimize_ns,
+        resolution_chain,
     }
 }
 

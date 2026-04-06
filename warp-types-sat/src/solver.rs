@@ -430,6 +430,158 @@ fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
     locked
 }
 
+/// Solve with resolution chain instrumentation for proof DAG mining.
+///
+/// Returns the solve result plus per-conflict resolution depths.
+/// Uses the instrumented analysis path — slightly slower due to
+/// Vec::push per resolution step, but captures the full chain.
+pub fn solve_instrumented(
+    mut db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+) -> (SolveResult, Vec<u32>) {
+    // resolution_depths[i] = number of resolution steps in conflict i
+    let mut resolution_depths: Vec<u32> = Vec::new();
+
+    for cref in db.iter_crefs() {
+        if db.clause(cref).literals.is_empty() {
+            return (SolveResult::Unsat, resolution_depths);
+        }
+    }
+    if num_vars == 0 {
+        return if db.is_empty() {
+            (SolveResult::Sat(vec![]), resolution_depths)
+        } else {
+            (SolveResult::Unsat, resolution_depths)
+        };
+    }
+
+    let mut trail = Trail::new(num_vars as usize);
+    let mut watches = watch::Watches::new(&db, num_vars);
+    let mut restarts = LubyRestarts::new(32);
+    let mut restart_pending = false;
+    let mut analyze_work = AnalyzeWork::new(num_vars as usize);
+    let mut vsids = Vsids::new(num_vars);
+
+    db.freeze_original();
+    let mut conflicts: u64 = 0;
+    let reduce_interval: u64 = 2000;
+    let mut next_reduce: u64 = reduce_interval;
+
+    session::with_session(|initial_session| {
+        let propagate = initial_session.propagate();
+        if let BcpResult::Conflict { .. } =
+            watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate)
+        {
+            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+            return (SolveResult::Unsat, resolution_depths);
+        }
+        let mut idle = propagate.finish_no_conflict();
+
+        loop {
+            if restart_pending && trail.current_level() > 0 {
+                for entry in trail.entries_above(0) {
+                    vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
+                    vsids.notify_unassigned(entry.lit.var());
+                }
+                trail.backtrack_to(0);
+                watches.notify_backtrack(trail.len());
+                restart_pending = false;
+
+                if conflicts >= next_reduce {
+                    let locked = build_locked_set(&trail);
+                    let deleted = db.reduce_learned(&locked);
+                    if !deleted.is_empty() {
+                        let remap = db.compact();
+                        trail.remap_reasons(&remap);
+                        watches = watch::Watches::new(&db, num_vars);
+                        watches.set_queue_head(trail.len());
+                    }
+                    next_reduce = conflicts + reduce_interval;
+                }
+            }
+
+            if trail.all_assigned() {
+                let _ = idle.sat();
+                return (SolveResult::Sat(trail.assignment_vec()), resolution_depths);
+            }
+
+            let (var, polarity) = vsids.pick(trail.assignments());
+            let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            trail.new_decision(lit);
+            let mut propagate = idle.decide().propagate();
+            let mut bcp_result =
+                watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate);
+
+            loop {
+                match bcp_result {
+                    BcpResult::Ok => {
+                        idle = propagate.finish_no_conflict();
+                        break;
+                    }
+                    BcpResult::Conflict { clause } => {
+                        conflicts += 1;
+
+                        if conflict_limit > 0 && conflicts >= conflict_limit {
+                            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                            return (SolveResult::Unknown, resolution_depths);
+                        }
+
+                        if trail.current_level() == 0 {
+                            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                            return (SolveResult::Unsat, resolution_depths);
+                        }
+
+                        // Use instrumented analysis
+                        let analysis = analyze::analyze_conflict_instrumented(
+                            &mut analyze_work, &trail, &db, clause,
+                        );
+
+                        resolution_depths.push(analysis.resolution_chain.len() as u32);
+
+                        for &learned_lit in &analysis.learned {
+                            vsids.bump(learned_lit.var());
+                        }
+                        vsids.decay();
+
+                        let conflict = propagate.finish_conflict();
+                        let analyzed = conflict.analyze();
+
+                        if analysis.learned.is_empty() {
+                            let _ = analyzed.backtrack().unsat();
+                            return (SolveResult::Unsat, resolution_depths);
+                        }
+
+                        for entry in trail.entries_above(analysis.backtrack_level) {
+                            vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
+                            vsids.notify_unassigned(entry.lit.var());
+                        }
+
+                        trail.backtrack_to(analysis.backtrack_level);
+                        watches.notify_backtrack(trail.len());
+
+                        let asserting_lit = analysis.learned[0];
+                        let lbd = analysis.lbd;
+                        let cref = db.add_clause(analysis.learned);
+                        db.set_lbd(cref, lbd as u16);
+                        watches.add_clause(&db, cref);
+                        trail.record_propagation(asserting_lit, cref);
+
+                        if restarts.on_conflict() {
+                            restart_pending = true;
+                        }
+
+                        let bt = analyzed.backtrack();
+                        propagate = bt.propagate();
+                        bcp_result =
+                            watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate);
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// Pick the next unassigned variable. Simple sequential scan.
 ///
 /// Always decides positive polarity (`Lit::pos`). This is correct but naive —
@@ -1053,6 +1205,84 @@ p cnf 5 10
                 cfg.name,
                 pct(&times, 25), pct(&times, 50), pct(&times, 75),
                 sat_count, unknown_count, unsat_count, ns_per_probe);
+        }
+    }
+
+    #[test]
+    fn seed_3_resolution_depth_kill_signal() {
+        // Kill signal for seed-3: if median resolution depth < 3, DAGs are
+        // too shallow to mine. Run on 200-var and 300-var instances.
+        use crate::bench::generate_k_sat;
+
+        let conflict_budget = 50_000u64;
+
+        for &(n, ratio) in &[(200u32, 4.267), (300, 4.26)] {
+            let num_clauses = ((n as f64) * ratio).ceil() as usize;
+            let mut all_depths: Vec<u32> = Vec::new();
+            let mut instances_solved = 0u32;
+            let mut instances_unknown = 0u32;
+
+            for seed in 0..20u64 {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let (result, depths) = solve_instrumented(db, n, conflict_budget);
+
+                all_depths.extend_from_slice(&depths);
+                match result {
+                    SolveResult::Sat(_) => instances_solved += 1,
+                    SolveResult::Unsat => instances_solved += 1,
+                    SolveResult::Unknown => instances_unknown += 1,
+                }
+            }
+
+            all_depths.sort();
+            let len = all_depths.len();
+            if len == 0 {
+                println!("n={n}: no conflicts recorded");
+                continue;
+            }
+
+            let median = all_depths[len / 2];
+            let p25 = all_depths[len / 4];
+            let p75 = all_depths[3 * len / 4];
+            let p90 = all_depths[9 * len / 10];
+            let p99 = all_depths[99 * len / 100];
+            let max = *all_depths.last().unwrap();
+            let mean = all_depths.iter().map(|&d| d as f64).sum::<f64>() / len as f64;
+
+            // Depth distribution histogram (buckets: 0, 1, 2, 3-5, 6-10, 11-20, 21+)
+            let mut buckets = [0u32; 7];
+            for &d in &all_depths {
+                let b = match d {
+                    0 => 0,
+                    1 => 1,
+                    2 => 2,
+                    3..=5 => 3,
+                    6..=10 => 4,
+                    11..=20 => 5,
+                    _ => 6,
+                };
+                buckets[b] += 1;
+            }
+
+            println!("\n=== Seed-3 Resolution Depth: n={n}, ratio={ratio} ===");
+            println!("  Instances: {} solved, {} budget-exhausted, {} total conflicts",
+                instances_solved, instances_unknown, len);
+            println!("  Depth: p25={p25}, median={median}, mean={mean:.1}, p75={p75}, p90={p90}, p99={p99}, max={max}");
+            println!("  Distribution:");
+            println!("    depth=0:    {:>6} ({:>5.1}%)", buckets[0], 100.0 * buckets[0] as f64 / len as f64);
+            println!("    depth=1:    {:>6} ({:>5.1}%)", buckets[1], 100.0 * buckets[1] as f64 / len as f64);
+            println!("    depth=2:    {:>6} ({:>5.1}%)", buckets[2], 100.0 * buckets[2] as f64 / len as f64);
+            println!("    depth=3-5:  {:>6} ({:>5.1}%)", buckets[3], 100.0 * buckets[3] as f64 / len as f64);
+            println!("    depth=6-10: {:>6} ({:>5.1}%)", buckets[4], 100.0 * buckets[4] as f64 / len as f64);
+            println!("    depth=11-20:{:>6} ({:>5.1}%)", buckets[5], 100.0 * buckets[5] as f64 / len as f64);
+            println!("    depth=21+:  {:>6} ({:>5.1}%)", buckets[6], 100.0 * buckets[6] as f64 / len as f64);
+
+            // Kill signal: median depth < 3 means DAGs are too shallow
+            if median < 3 {
+                println!("  *** KILL SIGNAL: median depth {} < 3 — DAGs too shallow ***", median);
+            } else {
+                println!("  Resolution chains have structure (median depth {} >= 3)", median);
+            }
         }
     }
 }
