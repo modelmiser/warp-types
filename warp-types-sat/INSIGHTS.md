@@ -251,7 +251,7 @@ Four topology↔solver correlations across 5 seeds (200-var 3-SAT, 10K budget ea
 
 **C1: depth→next_bcp (r=+0.157, consistent) — REAL BUT WEAK.** Deep chains → slightly more BCP work next cycle. Only 2.5% variance explained. Not actionable.
 
-**C4: pivot→gradient (r≈0, mixed sign) — NULL.** Cold gradient magnitude has no relationship to pivot centrality. The seed-1↔seed-3 bridge hypothesis fails: gradient-VSIDS works empirically because gradients are computed *at the trail*, but the proof structure doesn't encode a persistent gradient signal.
+**C4: pivot→gradient (r≈0, mixed sign) — NULL.** Cold gradient magnitude has no relationship to pivot centrality. The gradient↔pivot bridge hypothesis fails: gradient-VSIDS works empirically because gradients are computed *at the trail*, but the proof structure doesn't encode a persistent gradient signal.
 
 ## 22. Pivot-Augmented VSIDS — 37% Conflict Reduction at 200 Vars
 
@@ -273,6 +273,6 @@ Sweet spot: scale 0.5-1.0. Scale 2.0 overshoots (over-prioritizes pivots, loses 
 
 **Scaling diagnosis (300v × 200K budget + entropy):** The 300-var null is NOT a budget artifact (+0.4%/+2.8% with 4× budget). Pivot frequency entropy is identical at 200v and 300v (H_norm ≈ 0.97), so the signal doesn't degrade. The real issue: the improvement is constant-factor (~37%) but phase-transition difficulty is exponential. At 200v, most seeds are near the solvability boundary; at 300v, 18/20 are deep in the exponential regime where no constant-factor heuristic helps.
 
-**Combination with gradient (seed-1×3):** Pivot-only (-32.1%) beats combined gradient+pivot (-28.1%). Gradient-only is +8.3% worse than baseline. The signals interfere: gradient probes overwrite VSIDS saved phases, disrupting the search diversity that correct variable ordering (from pivots) relies on. Pivot bumps baked into production `solve_watched()` at DEFAULT_PIVOT_BUMP_SCALE=0.5.
+**Combination with gradient:** Pivot-only (-32.1%) beats combined gradient+pivot (-28.1%). Gradient-only is +8.3% worse than baseline. The signals interfere: gradient probes overwrite VSIDS saved phases, disrupting the search diversity that correct variable ordering (from pivots) relies on. Pivot bumps baked into production `solve_watched()` at DEFAULT_PIVOT_BUMP_SCALE=0.5.
 
 **Arc summary:** Started with a falsified hypothesis (trail gradients → CDCL improvement). The instrumentation infrastructure (resolution chains, conflict profiles, proof DAGs) enabled a different discovery: pivot centrality is a strong, unexploited VSIDS signal. From falsification to -32% conflict reduction in the production solver.

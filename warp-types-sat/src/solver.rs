@@ -140,8 +140,8 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
 }
 
 /// Default pivot bump scale for production solver.
-/// Derived from seed-3 C3 experiment: 0.5 gives ~35% conflict reduction
-/// on 200-var random 3-SAT without overshooting.
+/// 0.5 gives ~35% conflict reduction on 200-var random 3-SAT without
+/// overshooting. Derived from pivot centrality correlation experiments.
 const DEFAULT_PIVOT_BUMP_SCALE: f64 = 0.5;
 
 /// Solve a CNF instance using watched-literal BCP with VSIDS and Luby restarts.
@@ -270,8 +270,8 @@ pub fn solve_watched_trail_gradient_stats(
 
 /// CDCL with both trail-gradient probing AND pivot-augmented VSIDS.
 ///
-/// Combines seed-1 (gradient phase hints + activity boost) and seed-3
-/// (pivot decision bumps). These are orthogonal signals: gradients shape
+/// Combines gradient (phase hints + activity boost) and pivot-augmented
+/// VSIDS (decision bumps from resolution pivots). These are orthogonal signals: gradients shape
 /// polarity (which value to try), pivots shape variable ordering (which
 /// variable to decide next).
 pub fn solve_watched_combined(
@@ -1549,8 +1549,8 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_resolution_depth_kill_signal() {
-        // Kill signal for seed-3: if median resolution depth < 3, DAGs are
+    fn resolution_depth_kill_signal() {
+        // Kill signal: if median resolution depth < 3, DAGs are
         // too shallow to mine. Run on 200-var and 300-var instances.
         use crate::bench::generate_k_sat;
 
@@ -1605,7 +1605,7 @@ p cnf 5 10
                 buckets[b] += 1;
             }
 
-            println!("\n=== Seed-3 Resolution Depth: n={n}, ratio={ratio} ===");
+            println!("\n=== Resolution Depth Kill Signal: n={n}, ratio={ratio} ===");
             println!(
                 "  Instances: {} solved, {} budget-exhausted, {} total conflicts",
                 instances_solved, instances_unknown, len
@@ -1664,7 +1664,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_conflict_profiles_structural_invariants() {
+    fn conflict_profiles_structural_invariants() {
         // Level 2 structural invariants: every ConflictProfile field must
         // be self-consistent with the solver's state at conflict time.
         use crate::analyze::{clause_reuse_frequency, pivot_frequency, working_width_profile};
@@ -1758,7 +1758,7 @@ p cnf 5 10
             .collect();
         depth_vs_size.sort();
 
-        println!("\n=== Seed-3 Level 2: Conflict Profiles (n={n}, 10K budget) ===");
+        println!("\n=== Level 2: Conflict Profiles (n={n}, 10K budget) ===");
         println!("  {} profiles collected", profiles.len());
         println!(
             "  Result: {:?}",
@@ -1818,7 +1818,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_proof_dag_topology() {
+    fn proof_dag_topology() {
         // Level 3: Build proof DAG from conflict profiles, validate topology.
         use crate::analyze::ProofDag;
         use crate::bench::generate_k_sat;
@@ -1840,7 +1840,7 @@ p cnf 5 10
         let dag = ProofDag::build(&profiles, &learned_crefs);
         let summary = dag.summary();
 
-        println!("\n=== Seed-3 Level 3: Proof DAG Topology (n={n}, 10K budget) ===");
+        println!("\n=== Level 3: Proof DAG Topology (n={n}, 10K budget) ===");
         println!(
             "  Result: {:?}",
             match &result {
@@ -1935,7 +1935,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_level_4_correlations() {
+    fn level_4_correlations() {
         // Level 4: The payoff. Four correlations between DAG topology and
         // solver behavior. Any strong correlation (|r| > 0.3) suggests a
         // concrete heuristic improvement.
@@ -1951,7 +1951,7 @@ p cnf 5 10
         // Run multiple seeds for statistical robustness
         let mut all_correlations: Vec<[f64; 4]> = Vec::new();
 
-        println!("\n=== Seed-3 Level 4: Topology ↔ Solver Correlations ===");
+        println!("\n=== Level 4: Topology ↔ Solver Correlations ===");
 
         for seed in [42u64, 7, 99, 123, 256] {
             let db = generate_k_sat(n, num_clauses, 3, seed);
@@ -2046,7 +2046,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_depth_weighted_deletion_ab_test() {
+    fn depth_weighted_deletion_ab_test() {
         // C2 experiment: does depth-weighted clause deletion reduce conflict count?
         //
         // A = baseline LBD-only deletion (depth_weight = 0.0)
@@ -2064,7 +2064,7 @@ p cnf 5 10
         // Test several depth weights
         let weights = [0.0, 0.1, 0.25, 0.5, 1.0];
 
-        println!("\n=== Seed-3 C2 Experiment: Depth-Weighted Deletion ===");
+        println!("\n=== C2 Experiment: Depth-Weighted Deletion ===");
         println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
         println!(
             "  {:>8} {:>10} {:>10} {:>10} {:>10}",
@@ -2107,7 +2107,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_pivot_augmented_vsids_ab_test() {
+    fn pivot_augmented_vsids_ab_test() {
         // C3 follow-up: does feeding pivot centrality back into VSIDS
         // reduce conflict count?
         //
@@ -2131,7 +2131,7 @@ p cnf 5 10
 
         let scales = [0.0, 0.25, 0.5, 1.0, 2.0];
 
-        println!("\n=== Seed-3 C3 Experiment: Pivot-Augmented VSIDS ===");
+        println!("\n=== C3 Experiment: Pivot-Augmented VSIDS ===");
         println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
         println!(
             "  {:>8} {:>10} {:>10} {:>10} {:>10}",
@@ -2222,7 +2222,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_3_pivot_scaling_diagnosis() {
+    fn pivot_scaling_diagnosis() {
         // Diagnose WHY pivot-augmented VSIDS doesn't help at 300v:
         //   (a) Budget ceiling? → re-run with 200K budget
         //   (b) Pivot entropy collapse? → measure Shannon entropy of pivot freq
@@ -2241,7 +2241,7 @@ p cnf 5 10
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
         let budget = 200_000u64;
 
-        println!("\n=== Seed-3 Scaling Diagnosis: 300v × 200K budget ===");
+        println!("\n=== Scaling Diagnosis: 300v × 200K budget ===");
         println!(
             "  {:>8} {:>10} {:>10} {:>10} {:>10}",
             "scale", "conflicts", "solved", "unknown", "vs_base%"
@@ -2332,11 +2332,11 @@ p cnf 5 10
 
     #[test]
     fn combined_gradient_pivot_ab_test() {
-        // Seed-1 × Seed-3 combination: gradient phase hints + pivot decision bumps.
+        // Combined experiment: gradient phase hints + pivot decision bumps.
         //
         // These are orthogonal signals:
-        //   - Gradient (seed-1): shapes POLARITY (which value to try)
-        //   - Pivot (seed-3): shapes VARIABLE ORDER (which variable to decide)
+        //   - Gradient: shapes POLARITY (which value to try)
+        //   - Pivot: shapes VARIABLE ORDER (which variable to decide)
         //
         // If they're truly orthogonal, the combined effect should be
         // multiplicative (or at least additive). If they interfere, combined
