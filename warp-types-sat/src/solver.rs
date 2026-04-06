@@ -165,16 +165,38 @@ fn solve_cdcl_core_stats(
     mut vsids: Vsids,
 ) -> (SolveResult, SolveStats) {
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, 0, DEFAULT_PIVOT_BUMP_SCALE);
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+    );
     (result, stats)
 }
 
 /// Solve with a conflict budget. Returns Unknown if budget exhausted.
-pub fn solve_watched_budget(db: ClauseDb, num_vars: u32, conflict_limit: u64) -> (SolveResult, SolveStats) {
+pub fn solve_watched_budget(
+    db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+) -> (SolveResult, SolveStats) {
     let mut db = db;
     let mut vsids = Vsids::new(num_vars);
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, 0, 0.0, conflict_limit, DEFAULT_PIVOT_BUMP_SCALE);
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        0,
+        0.0,
+        conflict_limit,
+        DEFAULT_PIVOT_BUMP_SCALE,
+    );
     (result, stats)
 }
 
@@ -182,12 +204,17 @@ pub fn solve_watched_budget(db: ClauseDb, num_vars: u32, conflict_limit: u64) ->
 ///
 /// Accepts a pre-configured `Vsids` so callers (e.g., hybrid solver) can
 /// warm-start activity scores and phase hints from external sources.
-pub(crate) fn solve_cdcl_core(
-    mut db: ClauseDb,
-    num_vars: u32,
-    mut vsids: Vsids,
-) -> SolveResult {
-    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), 0, 0.0, 0, DEFAULT_PIVOT_BUMP_SCALE)
+pub(crate) fn solve_cdcl_core(mut db: ClauseDb, num_vars: u32, mut vsids: Vsids) -> SolveResult {
+    solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+    )
 }
 
 /// CDCL solver with periodic trail-gradient probing.
@@ -204,7 +231,16 @@ pub fn solve_watched_trail_gradient(
     let mut db = db;
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
-    solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), probe_interval, boost_scale, 0, 0.0)
+    solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        probe_interval,
+        boost_scale,
+        0,
+        0.0,
+    )
 }
 
 /// CDCL with trail-gradient probing, returning stats.
@@ -219,7 +255,16 @@ pub fn solve_watched_trail_gradient_stats(
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
     let mut stats = SolveStats::default();
-    let result = solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut stats, probe_interval, boost_scale, conflict_limit, 0.0);
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        probe_interval,
+        boost_scale,
+        conflict_limit,
+        0.0,
+    );
     (result, stats)
 }
 
@@ -242,8 +287,14 @@ pub fn solve_watched_combined(
     vsids.initialize_from_clauses(&db);
     let mut stats = SolveStats::default();
     let result = solve_cdcl_core_inner(
-        &mut db, num_vars, &mut vsids, &mut stats,
-        probe_interval, gradient_boost, conflict_limit, pivot_bump_scale,
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        probe_interval,
+        gradient_boost,
+        conflict_limit,
+        pivot_bump_scale,
     );
     (result, stats)
 }
@@ -358,14 +409,17 @@ fn solve_cdcl_core_inner(
             let t = Instant::now();
             let (var, polarity) = vsids.pick(trail.assignments());
             stats.vsids_ns += t.elapsed().as_nanos() as u64;
-            let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            let lit = if polarity {
+                Lit::pos(var)
+            } else {
+                Lit::neg(var)
+            };
             stats.decisions += 1;
             let trail_before = trail.len();
             trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
             let t = Instant::now();
-            let mut bcp_result =
-                watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
+            let mut bcp_result = watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
             stats.bcp_ns += t.elapsed().as_nanos() as u64;
             stats.propagations += (trail.len() - trail_before - 1) as u64; // -1 for the decision
 
@@ -392,9 +446,8 @@ fn solve_cdcl_core_inner(
                         }
 
                         let t = Instant::now();
-                        let analysis = analyze::analyze_conflict_with(
-                            &mut analyze_work, &trail, &db, clause,
-                        );
+                        let analysis =
+                            analyze::analyze_conflict_with(&mut analyze_work, &trail, &db, clause);
                         stats.analyze_ns += t.elapsed().as_nanos() as u64;
                         stats.analyze_resolve_ns += analysis.resolve_ns;
                         stats.analyze_minimize_ns += analysis.minimize_ns;
@@ -422,10 +475,7 @@ fn solve_cdcl_core_inner(
 
                         // ── Phase saving + heap re-insertion before backtrack ──
                         for entry in trail.entries_above(analysis.backtrack_level) {
-                            vsids.save_phase(
-                                entry.lit.var(),
-                                !entry.lit.is_negated(),
-                            );
+                            vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
                             vsids.notify_unassigned(entry.lit.var());
                         }
 
@@ -488,11 +538,7 @@ pub struct InstrumentedResult {
 ///
 /// Returns an `InstrumentedResult` containing the solve result, per-conflict
 /// profiles, learned clause CRefs, and final VSIDS activities.
-pub fn solve_instrumented(
-    db: ClauseDb,
-    num_vars: u32,
-    conflict_limit: u64,
-) -> InstrumentedResult {
+pub fn solve_instrumented(db: ClauseDb, num_vars: u32, conflict_limit: u64) -> InstrumentedResult {
     solve_instrumented_inner(db, num_vars, conflict_limit, 0.0, 0.0)
 }
 
@@ -538,7 +584,10 @@ fn solve_instrumented_inner(
     let mut learned_crefs: Vec<CRef> = Vec::new();
 
     let mk = |result, profiles, learned_crefs, activities: Vec<f64>| InstrumentedResult {
-        result, profiles, learned_crefs, vsids_activities: activities,
+        result,
+        profiles,
+        learned_crefs,
+        vsids_activities: activities,
     };
 
     for cref in db.iter_crefs() {
@@ -572,7 +621,12 @@ fn solve_instrumented_inner(
             watch::run_bcp_watched(&mut db, &mut watches, &mut trail, &propagate)
         {
             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
+            return mk(
+                SolveResult::Unsat,
+                profiles,
+                learned_crefs,
+                vsids.activities().to_vec(),
+            );
         }
         let mut idle = propagate.finish_no_conflict();
 
@@ -611,11 +665,20 @@ fn solve_instrumented_inner(
 
             if trail.all_assigned() {
                 let _ = idle.sat();
-                return mk(SolveResult::Sat(trail.assignment_vec()), profiles, learned_crefs, vsids.activities().to_vec());
+                return mk(
+                    SolveResult::Sat(trail.assignment_vec()),
+                    profiles,
+                    learned_crefs,
+                    vsids.activities().to_vec(),
+                );
             }
 
             let (var, polarity) = vsids.pick(trail.assignments());
-            let lit = if polarity { Lit::pos(var) } else { Lit::neg(var) };
+            let lit = if polarity {
+                Lit::pos(var)
+            } else {
+                Lit::neg(var)
+            };
             let trail_before_decision = trail.len();
             trail.new_decision(lit);
             let mut propagate = idle.decide().propagate();
@@ -635,12 +698,22 @@ fn solve_instrumented_inner(
 
                         if conflict_limit > 0 && conflicts >= conflict_limit {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return mk(SolveResult::Unknown, profiles, learned_crefs, vsids.activities().to_vec());
+                            return mk(
+                                SolveResult::Unknown,
+                                profiles,
+                                learned_crefs,
+                                vsids.activities().to_vec(),
+                            );
                         }
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
+                            return mk(
+                                SolveResult::Unsat,
+                                profiles,
+                                learned_crefs,
+                                vsids.activities().to_vec(),
+                            );
                         }
 
                         let trail_size = trail.len();
@@ -648,7 +721,10 @@ fn solve_instrumented_inner(
 
                         // Use instrumented analysis
                         let analysis = analyze::analyze_conflict_instrumented(
-                            &mut analyze_work, &trail, &db, clause,
+                            &mut analyze_work,
+                            &trail,
+                            &db,
+                            clause,
                         );
 
                         let resolution_depth = analysis.resolution_chain.len() as u32;
@@ -686,7 +762,12 @@ fn solve_instrumented_inner(
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
-                            return mk(SolveResult::Unsat, profiles, learned_crefs, vsids.activities().to_vec());
+                            return mk(
+                                SolveResult::Unsat,
+                                profiles,
+                                learned_crefs,
+                                vsids.activities().to_vec(),
+                            );
                         }
 
                         for entry in trail.entries_above(analysis.backtrack_level) {
@@ -961,7 +1042,10 @@ p cnf 3 4
         use std::time::Instant;
 
         println!("\n=== solve (old BCP) vs solve_watched (watched literals) ===");
-        println!("{:<6} {:>10} {:>10} {:>8}", "vars", "old(us)", "watch(us)", "speedup");
+        println!(
+            "{:<6} {:>10} {:>10} {:>8}",
+            "vars", "old(us)", "watch(us)", "speedup"
+        );
         println!("{}", "-".repeat(40));
 
         for &n in &[20, 50, 100] {
@@ -1049,7 +1133,11 @@ p cnf 3 4
                     // SAT instances must be fast in release mode.
                     // Debug mode is ~13x slower due to bounds checking;
                     // use a higher threshold to avoid false failures.
-                    let threshold = if cfg!(debug_assertions) { 60_000 } else { 5_000 };
+                    let threshold = if cfg!(debug_assertions) {
+                        60_000
+                    } else {
+                        5_000
+                    };
                     assert!(
                         elapsed < threshold,
                         "seed {seed}: SAT took {elapsed}ms — should be sub-{threshold}ms"
@@ -1066,7 +1154,10 @@ p cnf 3 4
                 break;
             }
         }
-        assert!(sat_count > 0, "should find at least one SAT instance in 10 seeds");
+        assert!(
+            sat_count > 0,
+            "should find at least one SAT instance in 10 seeds"
+        );
     }
 
     #[test]
@@ -1120,9 +1211,10 @@ p cnf 5 10
         use std::time::Instant;
 
         println!("\n=== Per-conflict cost breakdown (200 vars) ===");
-        println!("{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12} {:>8}",
-            "seed", "result", "ms", "conflicts", "decisions", "props",
-            "us/conf", "prop/conf");
+        println!(
+            "{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12} {:>8}",
+            "seed", "result", "ms", "conflicts", "decisions", "props", "us/conf", "prop/conf"
+        );
         println!("{}", "-".repeat(90));
 
         for seed in 0..10 {
@@ -1137,13 +1229,25 @@ p cnf 5 10
             };
             let us_per_conf = if stats.conflicts > 0 {
                 elapsed_us as f64 / stats.conflicts as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             let props_per_conf = if stats.conflicts > 0 {
                 stats.propagations as f64 / stats.conflicts as f64
-            } else { 0.0 };
-            println!("{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12.1} {:>8.1}",
-                seed, tag, elapsed_us / 1000, stats.conflicts, stats.decisions,
-                stats.propagations, us_per_conf, props_per_conf);
+            } else {
+                0.0
+            };
+            println!(
+                "{:<6} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12.1} {:>8.1}",
+                seed,
+                tag,
+                elapsed_us / 1000,
+                stats.conflicts,
+                stats.decisions,
+                stats.propagations,
+                us_per_conf,
+                props_per_conf
+            );
         }
     }
 
@@ -1157,14 +1261,19 @@ p cnf 5 10
         // instances remain solvable (phase transition is ~4.267 for 3-SAT).
         // At larger sizes, watch lists and clause DB grow, stressing cache.
         println!("\n=== Per-conflict cost scaling ===");
-        println!("{:<6} {:>6} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12} {:>8}",
-            "vars", "ratio", "seed", "result", "ms", "conflicts", "props",
-            "us/conf", "prop/conf");
+        println!(
+            "{:<6} {:>6} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12} {:>8}",
+            "vars", "ratio", "seed", "result", "ms", "conflicts", "props", "us/conf", "prop/conf"
+        );
         println!("{}", "-".repeat(88));
 
         // (vars, clause_ratio): lower ratio = easier (more SAT, fewer conflicts)
         let configs: &[(u32, f64)] = &[
-            (200, 4.267), (300, 4.0), (500, 3.5), (700, 3.0), (1000, 2.5),
+            (200, 4.267),
+            (300, 4.0),
+            (500, 3.5),
+            (700, 3.0),
+            (1000, 2.5),
         ];
 
         for &(n, ratio) in configs {
@@ -1193,9 +1302,18 @@ p cnf 5 10
                 };
                 let us_per_conf = elapsed_us as f64 / stats.conflicts as f64;
                 let props_per_conf = stats.propagations as f64 / stats.conflicts as f64;
-                println!("{:<6} {:>6.3} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12.1} {:>8.1}",
-                    n, ratio, seed, tag, elapsed_ms, stats.conflicts, stats.propagations,
-                    us_per_conf, props_per_conf);
+                println!(
+                    "{:<6} {:>6.3} {:<6} {:>8} {:>8} {:>10} {:>10} {:>12.1} {:>8.1}",
+                    n,
+                    ratio,
+                    seed,
+                    tag,
+                    elapsed_ms,
+                    stats.conflicts,
+                    stats.propagations,
+                    us_per_conf,
+                    props_per_conf
+                );
 
                 completed += 1;
                 if completed >= 3 {
@@ -1203,7 +1321,10 @@ p cnf 5 10
                 }
             }
             if completed == 0 {
-                println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
+                println!(
+                    "{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)",
+                    n, ratio
+                );
             }
         }
     }
@@ -1216,14 +1337,29 @@ p cnf 5 10
         // Per-phase timing breakdown with analysis sub-profiling.
         // Shows where time goes: BCP, analysis (split into resolve + minimize), VSIDS.
         println!("\n=== Phase timing breakdown ===");
-        println!("{:<6} {:>6} {:<6} {:>7} {:>9} {:>6} {:>6} {:>6} {:>6} {:>6} {:>10} {:>10}",
-            "vars", "ratio", "seed", "ms", "conflicts",
-            "bcp%", "resv%", "min%", "vsid%", "otr%",
-            "ns/prop", "ns/conf");
+        println!(
+            "{:<6} {:>6} {:<6} {:>7} {:>9} {:>6} {:>6} {:>6} {:>6} {:>6} {:>10} {:>10}",
+            "vars",
+            "ratio",
+            "seed",
+            "ms",
+            "conflicts",
+            "bcp%",
+            "resv%",
+            "min%",
+            "vsid%",
+            "otr%",
+            "ns/prop",
+            "ns/conf"
+        );
         println!("{}", "-".repeat(110));
 
         let configs: &[(u32, f64)] = &[
-            (200, 4.267), (300, 4.0), (500, 3.5), (700, 3.0), (1000, 2.5),
+            (200, 4.267),
+            (300, 4.0),
+            (500, 3.5),
+            (700, 3.0),
+            (1000, 2.5),
         ];
 
         for &(n, ratio) in configs {
@@ -1236,8 +1372,12 @@ p cnf 5 10
                 let wall_ns = t.elapsed().as_nanos() as u64;
                 let wall_ms = wall_ns / 1_000_000;
 
-                if wall_ms > 5_000 { continue; }
-                if stats.conflicts < 500 { continue; }
+                if wall_ms > 5_000 {
+                    continue;
+                }
+                if stats.conflicts < 500 {
+                    continue;
+                }
 
                 let _ = match result {
                     SolveResult::Sat(_) => "SAT",
@@ -1251,10 +1391,14 @@ p cnf 5 10
                 let pct = |ns: u64| -> f64 { 100.0 * ns as f64 / wall_ns as f64 };
                 let ns_per_prop = if stats.propagations > 0 {
                     stats.bcp_ns as f64 / stats.propagations as f64
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
                 let ns_per_conf = if stats.conflicts > 0 {
                     wall_ns as f64 / stats.conflicts as f64
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
 
                 println!("{:<6} {:>6.3} {:<6} {:>7} {:>9} {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}% {:>10.1} {:>10.0}",
                     n, ratio, seed, wall_ms, stats.conflicts,
@@ -1264,10 +1408,15 @@ p cnf 5 10
                     ns_per_prop, ns_per_conf);
 
                 completed += 1;
-                if completed >= 3 { break; }
+                if completed >= 3 {
+                    break;
+                }
             }
             if completed == 0 {
-                println!("{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)", n, ratio);
+                println!(
+                    "{:<6} {:>6.3} (no seeds with >=500 conflicts in <5s)",
+                    n, ratio
+                );
             }
         }
     }
@@ -1294,17 +1443,43 @@ p cnf 5 10
             boost: f64,
         }
         let configs = [
-            Config { name: "CDCL (baseline)", interval: 0, boost: 0.0 },
-            Config { name: "TG phase K=50", interval: 50, boost: 0.0 },
-            Config { name: "TG phase K=200", interval: 200, boost: 0.0 },
-            Config { name: "TG ph+bst K=50 b=1", interval: 50, boost: 1.0 },
-            Config { name: "TG ph+bst K=200 b=1", interval: 200, boost: 1.0 },
-            Config { name: "TG ph+bst K=50 b=5", interval: 50, boost: 5.0 },
+            Config {
+                name: "CDCL (baseline)",
+                interval: 0,
+                boost: 0.0,
+            },
+            Config {
+                name: "TG phase K=50",
+                interval: 50,
+                boost: 0.0,
+            },
+            Config {
+                name: "TG phase K=200",
+                interval: 200,
+                boost: 0.0,
+            },
+            Config {
+                name: "TG ph+bst K=50 b=1",
+                interval: 50,
+                boost: 1.0,
+            },
+            Config {
+                name: "TG ph+bst K=200 b=1",
+                interval: 200,
+                boost: 1.0,
+            },
+            Config {
+                name: "TG ph+bst K=50 b=5",
+                interval: 50,
+                boost: 5.0,
+            },
         ];
 
         println!("\n=== Trail-Gradient Kill Signal: n={n}, ratio={ratio}, {num_instances} instances, budget={conflict_budget} conflicts ===");
-        println!("{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
-            "solver", "p25(us)", "p50(us)", "p75(us)", "SAT", "UNK", "UNSAT", "probe_ns/p");
+        println!(
+            "{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
+            "solver", "p25(us)", "p50(us)", "p75(us)", "SAT", "UNK", "UNSAT", "probe_ns/p"
+        );
         println!("{}", "-".repeat(105));
 
         for cfg in &configs {
@@ -1321,14 +1496,27 @@ p cnf 5 10
                 let (result, stats) = if cfg.interval == 0 {
                     solve_watched_budget(db, n, conflict_budget)
                 } else {
-                    solve_watched_trail_gradient_stats(db, n, cfg.interval, cfg.boost, conflict_budget)
+                    solve_watched_trail_gradient_stats(
+                        db,
+                        n,
+                        cfg.interval,
+                        cfg.boost,
+                        conflict_budget,
+                    )
                 };
                 let elapsed = t.elapsed();
 
                 match result {
-                    SolveResult::Unknown => { unknown_count += 1; continue; }
-                    SolveResult::Sat(_) => { sat_count += 1; }
-                    SolveResult::Unsat => { unsat_count += 1; }
+                    SolveResult::Unknown => {
+                        unknown_count += 1;
+                        continue;
+                    }
+                    SolveResult::Sat(_) => {
+                        sat_count += 1;
+                    }
+                    SolveResult::Unsat => {
+                        unsat_count += 1;
+                    }
                 }
 
                 times.push(elapsed);
@@ -1338,17 +1526,28 @@ p cnf 5 10
 
             times.sort();
             let pct = |v: &[std::time::Duration], p: usize| -> u128 {
-                if v.is_empty() { return 0; }
+                if v.is_empty() {
+                    return 0;
+                }
                 v[v.len() * p / 100].as_micros()
             };
             let ns_per_probe = if total_probes > 0 {
                 total_probe_ns / total_probes
-            } else { 0 };
+            } else {
+                0
+            };
 
-            println!("{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
+            println!(
+                "{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
                 cfg.name,
-                pct(&times, 25), pct(&times, 50), pct(&times, 75),
-                sat_count, unknown_count, unsat_count, ns_per_probe);
+                pct(&times, 25),
+                pct(&times, 50),
+                pct(&times, 75),
+                sat_count,
+                unknown_count,
+                unsat_count,
+                ns_per_probe
+            );
         }
     }
 
@@ -1410,23 +1609,59 @@ p cnf 5 10
             }
 
             println!("\n=== Seed-3 Resolution Depth: n={n}, ratio={ratio} ===");
-            println!("  Instances: {} solved, {} budget-exhausted, {} total conflicts",
-                instances_solved, instances_unknown, len);
+            println!(
+                "  Instances: {} solved, {} budget-exhausted, {} total conflicts",
+                instances_solved, instances_unknown, len
+            );
             println!("  Depth: p25={p25}, median={median}, mean={mean:.1}, p75={p75}, p90={p90}, p99={p99}, max={max}");
             println!("  Distribution:");
-            println!("    depth=0:    {:>6} ({:>5.1}%)", buckets[0], 100.0 * buckets[0] as f64 / len as f64);
-            println!("    depth=1:    {:>6} ({:>5.1}%)", buckets[1], 100.0 * buckets[1] as f64 / len as f64);
-            println!("    depth=2:    {:>6} ({:>5.1}%)", buckets[2], 100.0 * buckets[2] as f64 / len as f64);
-            println!("    depth=3-5:  {:>6} ({:>5.1}%)", buckets[3], 100.0 * buckets[3] as f64 / len as f64);
-            println!("    depth=6-10: {:>6} ({:>5.1}%)", buckets[4], 100.0 * buckets[4] as f64 / len as f64);
-            println!("    depth=11-20:{:>6} ({:>5.1}%)", buckets[5], 100.0 * buckets[5] as f64 / len as f64);
-            println!("    depth=21+:  {:>6} ({:>5.1}%)", buckets[6], 100.0 * buckets[6] as f64 / len as f64);
+            println!(
+                "    depth=0:    {:>6} ({:>5.1}%)",
+                buckets[0],
+                100.0 * buckets[0] as f64 / len as f64
+            );
+            println!(
+                "    depth=1:    {:>6} ({:>5.1}%)",
+                buckets[1],
+                100.0 * buckets[1] as f64 / len as f64
+            );
+            println!(
+                "    depth=2:    {:>6} ({:>5.1}%)",
+                buckets[2],
+                100.0 * buckets[2] as f64 / len as f64
+            );
+            println!(
+                "    depth=3-5:  {:>6} ({:>5.1}%)",
+                buckets[3],
+                100.0 * buckets[3] as f64 / len as f64
+            );
+            println!(
+                "    depth=6-10: {:>6} ({:>5.1}%)",
+                buckets[4],
+                100.0 * buckets[4] as f64 / len as f64
+            );
+            println!(
+                "    depth=11-20:{:>6} ({:>5.1}%)",
+                buckets[5],
+                100.0 * buckets[5] as f64 / len as f64
+            );
+            println!(
+                "    depth=21+:  {:>6} ({:>5.1}%)",
+                buckets[6],
+                100.0 * buckets[6] as f64 / len as f64
+            );
 
             // Kill signal: median depth < 3 means DAGs are too shallow
             if median < 3 {
-                println!("  *** KILL SIGNAL: median depth {} < 3 — DAGs too shallow ***", median);
+                println!(
+                    "  *** KILL SIGNAL: median depth {} < 3 — DAGs too shallow ***",
+                    median
+                );
             } else {
-                println!("  Resolution chains have structure (median depth {} >= 3)", median);
+                println!(
+                    "  Resolution chains have structure (median depth {} >= 3)",
+                    median
+                );
             }
         }
     }
@@ -1435,8 +1670,8 @@ p cnf 5 10
     fn seed_3_conflict_profiles_structural_invariants() {
         // Level 2 structural invariants: every ConflictProfile field must
         // be self-consistent with the solver's state at conflict time.
+        use crate::analyze::{clause_reuse_frequency, pivot_frequency, working_width_profile};
         use crate::bench::generate_k_sat;
-        use crate::analyze::{pivot_frequency, clause_reuse_frequency, working_width_profile};
 
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
@@ -1448,27 +1683,43 @@ p cnf 5 10
 
         // ── Per-profile invariants ──
         for (i, p) in profiles.iter().enumerate() {
-            assert_eq!(p.conflict_id, i as u64,
-                "conflict_id must be sequential 0-indexed");
+            assert_eq!(
+                p.conflict_id, i as u64,
+                "conflict_id must be sequential 0-indexed"
+            );
 
-            assert!(p.decision_level > 0,
-                "conflict at level 0 should terminate, not profile");
+            assert!(
+                p.decision_level > 0,
+                "conflict at level 0 should terminate, not profile"
+            );
 
-            assert_eq!(p.resolution_depth, p.resolution_chain.len() as u32,
-                "resolution_depth must match chain length");
+            assert_eq!(
+                p.resolution_depth,
+                p.resolution_chain.len() as u32,
+                "resolution_depth must match chain length"
+            );
 
-            assert!(p.learned_clause_size > 0,
-                "learned clause must have at least 1 literal (asserting)");
+            assert!(
+                p.learned_clause_size > 0,
+                "learned clause must have at least 1 literal (asserting)"
+            );
 
-            assert!(p.learned_lbd > 0 && p.learned_lbd <= p.learned_clause_size as u32,
+            assert!(
+                p.learned_lbd > 0 && p.learned_lbd <= p.learned_clause_size as u32,
                 "LBD must be in [1, clause_size], got lbd={} size={}",
-                p.learned_lbd, p.learned_clause_size);
+                p.learned_lbd,
+                p.learned_clause_size
+            );
 
-            assert!(p.backtrack_distance <= p.decision_level,
-                "can't backtrack further than current level");
+            assert!(
+                p.backtrack_distance <= p.decision_level,
+                "can't backtrack further than current level"
+            );
 
-            assert!(p.trail_size_at_conflict > 0,
-                "trail must have at least one assignment at conflict");
+            assert!(
+                p.trail_size_at_conflict > 0,
+                "trail must have at least one assignment at conflict"
+            );
 
             // Working widths in chain should all be > 0
             let widths = working_width_profile(&p.resolution_chain);
@@ -1481,7 +1732,11 @@ p cnf 5 10
         let pivots = pivot_frequency(&profiles);
         if !pivots.is_empty() {
             let max_pivot_freq = *pivots.values().max().unwrap();
-            println!("  Pivot frequency: {} unique vars, max freq {}", pivots.len(), max_pivot_freq);
+            println!(
+                "  Pivot frequency: {} unique vars, max freq {}",
+                pivots.len(),
+                max_pivot_freq
+            );
             // At least some variables should be pivoted more than once
             // (on 200-var instances with 10K conflicts, this is guaranteed)
             assert!(max_pivot_freq > 1, "should see repeated pivots");
@@ -1491,31 +1746,52 @@ p cnf 5 10
         let reuse = clause_reuse_frequency(&profiles);
         if !reuse.is_empty() {
             let max_reuse = *reuse.values().max().unwrap();
-            println!("  Clause reuse: {} unique clauses, max reuse {}", reuse.len(), max_reuse);
+            println!(
+                "  Clause reuse: {} unique clauses, max reuse {}",
+                reuse.len(),
+                max_reuse
+            );
             assert!(max_reuse > 1, "should see clause reuse");
         }
 
         // ── Scatter data: resolution depth vs learned clause size ──
-        let mut depth_vs_size: Vec<(u32, usize)> = profiles.iter()
+        let mut depth_vs_size: Vec<(u32, usize)> = profiles
+            .iter()
             .map(|p| (p.resolution_depth, p.learned_clause_size))
             .collect();
         depth_vs_size.sort();
 
         println!("\n=== Seed-3 Level 2: Conflict Profiles (n={n}, 10K budget) ===");
         println!("  {} profiles collected", profiles.len());
-        println!("  Result: {:?}", match &result {
-            SolveResult::Sat(_) => "SAT",
-            SolveResult::Unsat => "UNSAT",
-            SolveResult::Unknown => "UNKNOWN",
-        });
+        println!(
+            "  Result: {:?}",
+            match &result {
+                SolveResult::Sat(_) => "SAT",
+                SolveResult::Unsat => "UNSAT",
+                SolveResult::Unknown => "UNKNOWN",
+            }
+        );
 
         // Depth distribution
         let depths: Vec<u32> = profiles.iter().map(|p| p.resolution_depth).collect();
         let avg_depth = depths.iter().map(|&d| d as f64).sum::<f64>() / depths.len() as f64;
-        let avg_size = profiles.iter().map(|p| p.learned_clause_size as f64).sum::<f64>() / profiles.len() as f64;
-        let avg_lbd = profiles.iter().map(|p| p.learned_lbd as f64).sum::<f64>() / profiles.len() as f64;
-        let avg_bt = profiles.iter().map(|p| p.backtrack_distance as f64).sum::<f64>() / profiles.len() as f64;
-        let avg_bcp = profiles.iter().map(|p| p.bcp_propagations as f64).sum::<f64>() / profiles.len() as f64;
+        let avg_size = profiles
+            .iter()
+            .map(|p| p.learned_clause_size as f64)
+            .sum::<f64>()
+            / profiles.len() as f64;
+        let avg_lbd =
+            profiles.iter().map(|p| p.learned_lbd as f64).sum::<f64>() / profiles.len() as f64;
+        let avg_bt = profiles
+            .iter()
+            .map(|p| p.backtrack_distance as f64)
+            .sum::<f64>()
+            / profiles.len() as f64;
+        let avg_bcp = profiles
+            .iter()
+            .map(|p| p.bcp_propagations as f64)
+            .sum::<f64>()
+            / profiles.len() as f64;
 
         println!("  Avg depth={avg_depth:.1}, size={avg_size:.1}, lbd={avg_lbd:.1}, backtrack={avg_bt:.1}, bcp_props={avg_bcp:.1}");
 
@@ -1526,8 +1802,14 @@ p cnf 5 10
             let sum_d: f64 = depths.iter().map(|&d| d as f64).sum();
             let sum_s: f64 = profiles.iter().map(|p| p.learned_clause_size as f64).sum();
             let sum_dd: f64 = depths.iter().map(|&d| (d as f64) * (d as f64)).sum();
-            let sum_ss: f64 = profiles.iter().map(|p| (p.learned_clause_size as f64).powi(2)).sum();
-            let sum_ds: f64 = profiles.iter().map(|p| p.resolution_depth as f64 * p.learned_clause_size as f64).sum();
+            let sum_ss: f64 = profiles
+                .iter()
+                .map(|p| (p.learned_clause_size as f64).powi(2))
+                .sum();
+            let sum_ds: f64 = profiles
+                .iter()
+                .map(|p| p.resolution_depth as f64 * p.learned_clause_size as f64)
+                .sum();
 
             let numer = n_f * sum_ds - sum_d * sum_s;
             let denom = ((n_f * sum_dd - sum_d * sum_d) * (n_f * sum_ss - sum_s * sum_s)).sqrt();
@@ -1541,8 +1823,8 @@ p cnf 5 10
     #[test]
     fn seed_3_proof_dag_topology() {
         // Level 3: Build proof DAG from conflict profiles, validate topology.
-        use crate::bench::generate_k_sat;
         use crate::analyze::ProofDag;
+        use crate::bench::generate_k_sat;
 
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
@@ -1551,27 +1833,46 @@ p cnf 5 10
         let (result, profiles, learned_crefs) = (ir.result, ir.profiles, ir.learned_crefs);
 
         assert!(!profiles.is_empty(), "need conflicts to build DAG");
-        assert_eq!(profiles.len(), learned_crefs.len(),
-            "one learned CRef per profile");
+        assert_eq!(
+            profiles.len(),
+            learned_crefs.len(),
+            "one learned CRef per profile"
+        );
 
         // Build the proof DAG
         let dag = ProofDag::build(&profiles, &learned_crefs);
         let summary = dag.summary();
 
         println!("\n=== Seed-3 Level 3: Proof DAG Topology (n={n}, 10K budget) ===");
-        println!("  Result: {:?}", match &result {
-            SolveResult::Sat(_) => "SAT",
-            SolveResult::Unsat => "UNSAT",
-            SolveResult::Unknown => "UNKNOWN",
-        });
-        println!("  Nodes: {} total ({} input, {} learned)",
-            summary.num_nodes, summary.num_input, summary.num_learned);
-        println!("  Edges: {} total, {} unique", summary.total_edges, summary.unique_edges);
-        println!("  Sharing ratio: {:.3} (1.0 = tree, lower = more sharing)",
-            summary.sharing_ratio);
+        println!(
+            "  Result: {:?}",
+            match &result {
+                SolveResult::Sat(_) => "SAT",
+                SolveResult::Unsat => "UNSAT",
+                SolveResult::Unknown => "UNKNOWN",
+            }
+        );
+        println!(
+            "  Nodes: {} total ({} input, {} learned)",
+            summary.num_nodes, summary.num_input, summary.num_learned
+        );
+        println!(
+            "  Edges: {} total, {} unique",
+            summary.total_edges, summary.unique_edges
+        );
+        println!(
+            "  Sharing ratio: {:.3} (1.0 = tree, lower = more sharing)",
+            summary.sharing_ratio
+        );
         println!("  Max depth: {}", summary.max_depth);
-        println!("  Max fan-out: {} (most-reused clause)", summary.max_fan_out);
-        println!("  Max fan-in: {} (deepest resolution chain)", summary.max_fan_in);
+        println!(
+            "  Max fan-out: {} (most-reused clause)",
+            summary.max_fan_out
+        );
+        println!(
+            "  Max fan-in: {} (deepest resolution chain)",
+            summary.max_fan_in
+        );
         println!("  Avg fan-out: {:.2}", summary.avg_fan_out);
 
         // ── Structural invariants ──
@@ -1586,10 +1887,8 @@ p cnf 5 10
         for (&cref, node) in &dag.nodes {
             if !learned_set.contains(&cref) {
                 // Input clauses: never produced by resolution
-                assert_eq!(node.fan_in, 0,
-                    "input clause should have fan_in=0");
-                assert_eq!(node.depth, 0,
-                    "input clause must have depth 0");
+                assert_eq!(node.fan_in, 0, "input clause should have fan_in=0");
+                assert_eq!(node.depth, 0, "input clause must have depth 0");
             }
             // Learned clauses at depth > 0 is expected (derived from
             // input clauses or earlier learned clauses)
@@ -1597,8 +1896,11 @@ p cnf 5 10
 
         // Sharing ratio: should be < 1.0 for any non-trivial solve
         // (many chains share the same reason clauses)
-        assert!(summary.sharing_ratio < 1.0,
-            "should have sharing (ratio={:.3})", summary.sharing_ratio);
+        assert!(
+            summary.sharing_ratio < 1.0,
+            "should have sharing (ratio={:.3})",
+            summary.sharing_ratio
+        );
 
         // Width profile
         let widths = dag.width_profile();
@@ -1619,17 +1921,20 @@ p cnf 5 10
 
         // The most central variable should have significant frequency
         if let Some(&(top_var, top_count)) = centrality.first() {
-            assert!(top_count > 100,
+            assert!(
+                top_count > 100,
                 "top pivot var x{} has count {} — expected > 100 on 200-var instance",
-                top_var, top_count);
+                top_var,
+                top_count
+            );
         }
 
         // Total edges should equal sum of all resolution chain lengths
-        let expected_edges: usize = profiles.iter()
-            .map(|p| p.resolution_chain.len())
-            .sum();
-        assert_eq!(dag.total_edges, expected_edges,
-            "total edges must equal sum of chain lengths");
+        let expected_edges: usize = profiles.iter().map(|p| p.resolution_chain.len()).sum();
+        assert_eq!(
+            dag.total_edges, expected_edges,
+            "total edges must equal sum of chain lengths"
+        );
     }
 
     #[test]
@@ -1637,12 +1942,11 @@ p cnf 5 10
         // Level 4: The payoff. Four correlations between DAG topology and
         // solver behavior. Any strong correlation (|r| > 0.3) suggests a
         // concrete heuristic improvement.
-        use crate::bench::generate_k_sat;
         use crate::analyze::{
-            correlate_depth_vs_next_bcp,
-            correlate_depth_vs_clause_reuse,
+            correlate_depth_vs_clause_reuse, correlate_depth_vs_next_bcp,
             correlate_pivot_vs_gradient,
         };
+        use crate::bench::generate_k_sat;
 
         let n = 200u32;
         let num_clauses = ((n as f64) * 4.267).ceil() as usize;
@@ -1662,7 +1966,10 @@ p cnf 5 10
             let ir = solve_instrumented(db, n, 10_000);
 
             if ir.profiles.len() < 100 {
-                println!("  seed {seed}: only {} conflicts, skipping", ir.profiles.len());
+                println!(
+                    "  seed {seed}: only {} conflicts, skipping",
+                    ir.profiles.len()
+                );
                 continue;
             }
 
@@ -1673,7 +1980,8 @@ p cnf 5 10
             let c2 = correlate_depth_vs_clause_reuse(&ir.profiles, &ir.learned_crefs);
 
             // Correlation 3 (fixed): pivot centrality vs actual VSIDS activity (Spearman rank)
-            let c3 = crate::analyze::correlate_centrality_vs_vsids(&ir.profiles, &ir.vsids_activities);
+            let c3 =
+                crate::analyze::correlate_centrality_vs_vsids(&ir.profiles, &ir.vsids_activities);
 
             // Correlation 4: pivot frequency vs gradient magnitude
             let c4 = correlate_pivot_vs_gradient(&ir.profiles, &tg.magnitudes);
@@ -1683,15 +1991,26 @@ p cnf 5 10
                 SolveResult::Unsat => "UNSAT",
                 SolveResult::Unknown => "UNK",
             };
-            println!("  seed {seed} ({result_str}, {} conflicts):", ir.profiles.len());
-            println!("    C1 depth→next_bcp:     r={:+.3}  r²={:.3}  n={}",
-                c1.r, c1.r_squared, c1.n);
-            println!("    C2 depth→clause_reuse: r={:+.3}  r²={:.3}  n={}",
-                c2.r, c2.r_squared, c2.n);
-            println!("    C3 centrality→VSIDS:   r={:+.3}  r²={:.3}  n={} (Spearman rank)",
-                c3.r, c3.r_squared, c3.n);
-            println!("    C4 pivot→gradient:     r={:+.3}  r²={:.3}  n={}",
-                c4.r, c4.r_squared, c4.n);
+            println!(
+                "  seed {seed} ({result_str}, {} conflicts):",
+                ir.profiles.len()
+            );
+            println!(
+                "    C1 depth→next_bcp:     r={:+.3}  r²={:.3}  n={}",
+                c1.r, c1.r_squared, c1.n
+            );
+            println!(
+                "    C2 depth→clause_reuse: r={:+.3}  r²={:.3}  n={}",
+                c2.r, c2.r_squared, c2.n
+            );
+            println!(
+                "    C3 centrality→VSIDS:   r={:+.3}  r²={:.3}  n={} (Spearman rank)",
+                c3.r, c3.r_squared, c3.n
+            );
+            println!(
+                "    C4 pivot→gradient:     r={:+.3}  r²={:.3}  n={}",
+                c4.r, c4.r_squared, c4.n
+            );
 
             all_correlations.push([c1.r, c2.r, c3.r, c4.r]);
         }
@@ -1699,14 +2018,27 @@ p cnf 5 10
         // Aggregate: mean |r| across seeds
         if !all_correlations.is_empty() {
             let k = all_correlations.len() as f64;
-            let names = ["depth→next_bcp", "depth→clause_reuse", "centrality→VSIDS", "pivot→gradient"];
+            let names = [
+                "depth→next_bcp",
+                "depth→clause_reuse",
+                "centrality→VSIDS",
+                "pivot→gradient",
+            ];
             println!("\n  Aggregate across {} seeds:", all_correlations.len());
             for (j, name) in names.iter().enumerate() {
                 let mean_r: f64 = all_correlations.iter().map(|c| c[j]).sum::<f64>() / k;
                 let mean_abs_r: f64 = all_correlations.iter().map(|c| c[j].abs()).sum::<f64>() / k;
-                let consistent_sign = all_correlations.iter().all(|c| c[j].signum() == all_correlations[0][j].signum());
-                let sign_tag = if consistent_sign { "consistent" } else { "mixed" };
-                println!("    {name}: mean_r={mean_r:+.3}, mean_|r|={mean_abs_r:.3} ({sign_tag} sign)");
+                let consistent_sign = all_correlations
+                    .iter()
+                    .all(|c| c[j].signum() == all_correlations[0][j].signum());
+                let sign_tag = if consistent_sign {
+                    "consistent"
+                } else {
+                    "mixed"
+                };
+                println!(
+                    "    {name}: mean_r={mean_r:+.3}, mean_|r|={mean_abs_r:.3} ({sign_tag} sign)"
+                );
             }
 
             // Significance threshold: |r| > 0.1 consistently across seeds
@@ -1737,8 +2069,10 @@ p cnf 5 10
 
         println!("\n=== Seed-3 C2 Experiment: Depth-Weighted Deletion ===");
         println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
-        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
-            "α", "conflicts", "solved", "unknown", "vs_base%");
+        println!(
+            "  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "α", "conflicts", "solved", "unknown", "vs_base%"
+        );
 
         let mut baseline_conflicts = 0u64;
 
@@ -1768,8 +2102,10 @@ p cnf 5 10
                 0.0
             };
 
-            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
-                weight, total_conflicts, solved, unknown, vs_base);
+            println!(
+                "  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                weight, total_conflicts, solved, unknown, vs_base
+            );
         }
     }
 
@@ -1800,8 +2136,10 @@ p cnf 5 10
 
         println!("\n=== Seed-3 C3 Experiment: Pivot-Augmented VSIDS ===");
         println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
-        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
-            "scale", "conflicts", "solved", "unknown", "vs_base%");
+        println!(
+            "  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%"
+        );
 
         let mut baseline_conflicts = 0u64;
         let mut baseline_solved = 0u32;
@@ -1833,8 +2171,10 @@ p cnf 5 10
                 0.0
             };
 
-            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
-                scale, total_conflicts, solved, unknown, vs_base);
+            println!(
+                "  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base
+            );
         }
 
         // Also run on 300-var to check scaling behavior
@@ -1842,8 +2182,10 @@ p cnf 5 10
         let num_clauses_large = ((n_large as f64) * 4.267).ceil() as usize;
 
         println!("\n  --- Scaling check: n={n_large} ---");
-        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
-            "scale", "conflicts", "solved", "unknown", "vs_base%");
+        println!(
+            "  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%"
+        );
 
         let mut baseline_large = 0u64;
 
@@ -1873,8 +2215,10 @@ p cnf 5 10
                 0.0
             };
 
-            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
-                scale, total_conflicts, solved, unknown, vs_base);
+            println!(
+                "  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base
+            );
         }
 
         println!("\n  Baseline 200v: solved {baseline_solved}/{num_seeds}, conflicts {baseline_conflicts}");
@@ -1901,8 +2245,10 @@ p cnf 5 10
         let budget = 200_000u64;
 
         println!("\n=== Seed-3 Scaling Diagnosis: 300v × 200K budget ===");
-        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
-            "scale", "conflicts", "solved", "unknown", "vs_base%");
+        println!(
+            "  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%"
+        );
 
         let mut baseline = 0u64;
 
@@ -1921,14 +2267,20 @@ p cnf 5 10
                 }
             }
 
-            if scale == 0.0 { baseline = total_conflicts; }
+            if scale == 0.0 {
+                baseline = total_conflicts;
+            }
 
             let vs_base = if baseline > 0 {
                 ((total_conflicts as f64 / baseline as f64) - 1.0) * 100.0
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
-            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
-                scale, total_conflicts, solved, unknown, vs_base);
+            println!(
+                "  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base
+            );
         }
 
         // ── Part B: Pivot frequency entropy at 200v vs 300v ────────────
@@ -1936,8 +2288,10 @@ p cnf 5 10
         // Normalized entropy H/log2(n_pivots) ∈ [0,1]. Near 1 = uniform
         // (pivots are interchangeable), near 0 = skewed (some pivots dominate).
         println!("\n=== Pivot Frequency Entropy ===");
-        println!("  {:>6} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            "n", "seed", "n_pivots", "total", "H_bits", "H_norm", "max_freq");
+        println!(
+            "  {:>6} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "n", "seed", "n_pivots", "total", "H_bits", "H_norm", "max_freq"
+        );
 
         for &nv in &[200u32, 300u32] {
             let nc = ((nv as f64) * 4.267).ceil() as usize;
@@ -1947,25 +2301,34 @@ p cnf 5 10
                 let ir = solve_instrumented(db, nv, 50_000);
                 let freq = pivot_frequency(&ir.profiles);
 
-                if freq.is_empty() { continue; }
+                if freq.is_empty() {
+                    continue;
+                }
 
                 let total: usize = freq.values().sum();
                 let n_pivots = freq.len();
                 let max_f = *freq.values().max().unwrap();
 
                 // Shannon entropy
-                let h: f64 = freq.values()
+                let h: f64 = freq
+                    .values()
                     .map(|&f| {
                         let p = f as f64 / total as f64;
-                        if p > 0.0 { -p * p.log2() } else { 0.0 }
+                        if p > 0.0 {
+                            -p * p.log2()
+                        } else {
+                            0.0
+                        }
                     })
                     .sum();
 
                 let h_max = (n_pivots as f64).log2();
                 let h_norm = if h_max > 0.0 { h / h_max } else { 0.0 };
 
-                println!("  {:>6} {:>6} {:>10} {:>10} {:>10.3} {:>10.4} {:>10}",
-                    nv, seed, n_pivots, total, h, h_norm, max_f);
+                println!(
+                    "  {:>6} {:>6} {:>10} {:>10} {:>10.3} {:>10.4} {:>10}",
+                    nv, seed, n_pivots, total, h, h_norm, max_f
+                );
             }
         }
     }
@@ -2002,18 +2365,50 @@ p cnf 5 10
         }
 
         let configs = [
-            Config { name: "A: baseline",       gradient_interval: 0,  gradient_boost: 0.0, pivot_scale: 0.0 },
-            Config { name: "B: gradient-only",   gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 0.0 },
-            Config { name: "C: pivot-only",      gradient_interval: 0,  gradient_boost: 0.0, pivot_scale: 0.5 },
-            Config { name: "D: combined",        gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 0.5 },
-            Config { name: "E: combined(1.0)",   gradient_interval: 50, gradient_boost: 1.0, pivot_scale: 1.0 },
-            Config { name: "F: grad+pivot(K200)",gradient_interval: 200,gradient_boost: 1.0, pivot_scale: 0.5 },
+            Config {
+                name: "A: baseline",
+                gradient_interval: 0,
+                gradient_boost: 0.0,
+                pivot_scale: 0.0,
+            },
+            Config {
+                name: "B: gradient-only",
+                gradient_interval: 50,
+                gradient_boost: 1.0,
+                pivot_scale: 0.0,
+            },
+            Config {
+                name: "C: pivot-only",
+                gradient_interval: 0,
+                gradient_boost: 0.0,
+                pivot_scale: 0.5,
+            },
+            Config {
+                name: "D: combined",
+                gradient_interval: 50,
+                gradient_boost: 1.0,
+                pivot_scale: 0.5,
+            },
+            Config {
+                name: "E: combined(1.0)",
+                gradient_interval: 50,
+                gradient_boost: 1.0,
+                pivot_scale: 1.0,
+            },
+            Config {
+                name: "F: grad+pivot(K200)",
+                gradient_interval: 200,
+                gradient_boost: 1.0,
+                pivot_scale: 0.5,
+            },
         ];
 
         println!("\n=== Combined Gradient+Pivot A/B Test ===");
         println!("  n={n}, ratio=4.267, budget={budget}, seeds=0..{num_seeds}");
-        println!("  {:<25} {:>10} {:>10} {:>10} {:>10}",
-            "config", "conflicts", "solved", "unknown", "vs_base%");
+        println!(
+            "  {:<25} {:>10} {:>10} {:>10} {:>10}",
+            "config", "conflicts", "solved", "unknown", "vs_base%"
+        );
         println!("  {}", "-".repeat(70));
 
         let mut baseline_conflicts = 0u64;
@@ -2026,9 +2421,12 @@ p cnf 5 10
             for seed in 0..num_seeds {
                 let db = generate_k_sat(n, num_clauses, 3, seed);
                 let (result, _stats) = solve_watched_combined(
-                    db, n,
-                    cfg.gradient_interval, cfg.gradient_boost,
-                    cfg.pivot_scale, budget,
+                    db,
+                    n,
+                    cfg.gradient_interval,
+                    cfg.gradient_boost,
+                    cfg.pivot_scale,
+                    budget,
                 );
 
                 match result {
@@ -2045,10 +2443,14 @@ p cnf 5 10
 
             let vs_base = if baseline_conflicts > 0 {
                 ((total_conflicts as f64 / baseline_conflicts as f64) - 1.0) * 100.0
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
-            println!("  {:<25} {:>10} {:>10} {:>10} {:>+10.1}",
-                cfg.name, total_conflicts, solved, unknown, vs_base);
+            println!(
+                "  {:<25} {:>10} {:>10} {:>10} {:>+10.1}",
+                cfg.name, total_conflicts, solved, unknown, vs_base
+            );
         }
     }
 }

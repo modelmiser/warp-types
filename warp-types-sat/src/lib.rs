@@ -55,18 +55,20 @@ pub mod vsids;
 pub mod watch;
 
 // Core types re-exported at crate root.
+pub use analyze::{
+    clause_reuse_frequency, correlate_centrality_vs_bump_freq, correlate_centrality_vs_vsids,
+    correlate_depth_vs_clause_reuse, correlate_depth_vs_next_bcp, correlate_pivot_vs_gradient,
+    pearson_r, pivot_frequency, spearman_rank_r, working_width_profile, ConflictProfile,
+    Correlation, DagSummary, ProofDag, ResolutionStep,
+};
+pub use bcp::CRef;
 pub use clause::{ClausePool, ClauseToken};
 pub use dimacs::parse_dimacs_str;
 pub use phase::{
     Analyze, Backtrack, CanTransition, Conflict, Decide, Idle, Phase, Propagate, Sat, Unsat,
 };
 pub use session::{with_session, SolverSession};
-pub use analyze::{
-    ConflictProfile, Correlation, DagSummary, ProofDag, ResolutionStep,
-    clause_reuse_frequency, correlate_centrality_vs_bump_freq,
-    correlate_centrality_vs_vsids, correlate_depth_vs_clause_reuse,
-    correlate_depth_vs_next_bcp, correlate_pivot_vs_gradient,
-    pearson_r, pivot_frequency, spearman_rank_r, working_width_profile,
+pub use solver::{
+    solve, solve_instrumented, solve_watched, solve_watched_stats, InstrumentedResult, SolveResult,
+    SolveStats,
 };
-pub use bcp::CRef;
-pub use solver::{solve, solve_watched, solve_watched_stats, solve_instrumented, InstrumentedResult, SolveResult, SolveStats};

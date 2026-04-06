@@ -207,7 +207,14 @@ pub(crate) fn loss(db: &ClauseDb, crefs: &[CRef], x: &[f64], weights: &[f64]) ->
 /// For clause c containing variable v at position j:
 ///   d(loss_c)/d(x_v) = w_c * sign(l_j) * PROD_{i!=j} term(l_i)
 /// where sign = -1 for positive literal, +1 for negative.
-pub(crate) fn gradient(db: &ClauseDb, crefs: &[CRef], x: &[f64], idx: &VarIndex, weights: &[f64], grad: &mut [f64]) {
+pub(crate) fn gradient(
+    db: &ClauseDb,
+    crefs: &[CRef],
+    x: &[f64],
+    idx: &VarIndex,
+    weights: &[f64],
+    grad: &mut [f64],
+) {
     grad.iter_mut().for_each(|g| *g = 0.0);
     for (v, occs) in idx.0.iter().enumerate() {
         for &(ci, pos) in occs {
@@ -755,7 +762,10 @@ mod tests {
 
                 let db = generate_3sat_phase_transition(n, seed);
                 let t = Instant::now();
-                if matches!(hybrid_solve(db, n, &enhanced), crate::solver::SolveResult::Sat(_)) {
+                if matches!(
+                    hybrid_solve(db, n, &enhanced),
+                    crate::solver::SolveResult::Sat(_)
+                ) {
                     hs += 1;
                 }
                 ht += t.elapsed().as_micros();
@@ -775,7 +785,10 @@ mod tests {
                 et / seeds as u128,
                 ht / seeds as u128,
                 ct / seeds as u128,
-                vs, es, hs, cs
+                vs,
+                es,
+                hs,
+                cs
             );
         }
     }
@@ -827,7 +840,11 @@ mod tests {
                 if r.assignment.is_some() {
                     gs += 1;
                 }
-                let best = r.starts.iter().map(|s| s.best_loss).fold(f64::MAX, f64::min);
+                let best = r
+                    .starts
+                    .iter()
+                    .map(|s| s.best_loss)
+                    .fold(f64::MAX, f64::min);
                 loss_sum += best;
 
                 if run_cdcl {
@@ -885,15 +902,20 @@ mod tests {
             let cdcl_sat = matches!(cdcl, solver::SolveResult::Sat(_));
             let tg_sat = matches!(tg, solver::SolveResult::Sat(_));
 
-            assert_eq!(cdcl_sat, tg_sat,
+            assert_eq!(
+                cdcl_sat,
+                tg_sat,
                 "seed {seed}: CDCL={}, TG={}",
-                if cdcl_sat {"SAT"} else {"UNSAT"},
-                if tg_sat {"SAT"} else {"UNSAT"});
+                if cdcl_sat { "SAT" } else { "UNSAT" },
+                if tg_sat { "SAT" } else { "UNSAT" }
+            );
 
             if let solver::SolveResult::Sat(ref assign) = tg {
                 let db3 = generate_3sat_phase_transition(30, seed);
-                assert!(verify(&db3, assign),
-                    "seed {seed}: trail-gradient returned invalid assignment");
+                assert!(
+                    verify(&db3, assign),
+                    "seed {seed}: trail-gradient returned invalid assignment"
+                );
             }
         }
     }

@@ -361,7 +361,8 @@ mod tests {
 
     fn make_test_tile(lits: &[Lit], pool: &mut ClausePool, idx: usize) -> ClauseTile<Propagate> {
         let token = pool.acquire(idx).unwrap();
-        make_clause_tile::<Propagate>(lits, token, idx as CRef).expect("tautological clause in test")
+        make_clause_tile::<Propagate>(lits, token, idx as CRef)
+            .expect("tautological clause in test")
     }
 
     #[test]

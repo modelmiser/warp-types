@@ -304,22 +304,23 @@ pub fn run_bcp_watched(
             // branch for the original if/else (~8% of BCP branch misses) because
             // the two code paths loaded from different clause positions. Bitmask
             // selection eliminates the branch entirely.
-            debug_assert!(c0 == false_lit || c1 == false_lit,
-                "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}");
+            debug_assert!(
+                c0 == false_lit || c1 == false_lit,
+                "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}"
+            );
             let c0_is_false = (c0 == false_lit) as u32;
             let mask = c0_is_false.wrapping_neg(); // 0xFFFF_FFFF or 0
-            // SAFETY: Lit is #[repr(transparent)] over u32; both codes are valid.
-            let partner: Lit = unsafe {
-                std::mem::transmute((c1.code() & mask) | (c0.code() & !mask))
-            };
+                                                   // SAFETY: Lit is #[repr(transparent)] over u32; both codes are valid.
+            let partner: Lit =
+                unsafe { std::mem::transmute((c1.code() & mask) | (c0.code() & !mask)) };
             let false_pos = (1 ^ c0_is_false) as usize;
 
             // ── Partner satisfied → clause satisfied, keep watch ──
             // SAFETY: partner is a watched literal from the DB
             if unsafe { eval_lit_indexed(partner, bt.lit_values) } == Some(true) {
-                unsafe { *dst = WatchEntry::new(
-                    entry.clause_and_flags & !BINARY_FLAG, partner, false,
-                ) };
+                unsafe {
+                    *dst = WatchEntry::new(entry.clause_and_flags & !BINARY_FLAG, partner, false)
+                };
                 dst = unsafe { dst.add(1) };
                 continue;
             }
@@ -344,9 +345,8 @@ pub fn run_bcp_watched(
                 unsafe { db.swap_literal_unchecked(cref, false_pos, k) };
                 // Add watch for the new literal (long clause, not binary)
                 // SAFETY: new_watch.code() < 2*num_vars
-                unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }.push(
-                    WatchEntry::new(cref, partner, false)
-                );
+                unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }
+                    .push(WatchEntry::new(cref, partner, false));
                 // Entry removed from false_lit's list (not copied to dst)
                 continue;
             }
@@ -410,7 +410,10 @@ mod tests {
         let mut w = Watches::new(&db, 3);
         let mut trail = Trail::new(3);
         trail.new_decision(Lit::pos(0));
-        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(
+            bcp_after_decision(&mut db, &mut w, &mut trail),
+            BcpResult::Ok
+        );
         assert_eq!(trail.value(1), Some(true));
         assert_eq!(trail.value(2), Some(true));
     }
@@ -440,7 +443,10 @@ mod tests {
         let mut trail = Trail::new(4);
         trail.new_decision(Lit::pos(0));
         let before = trail.len();
-        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(
+            bcp_after_decision(&mut db, &mut w, &mut trail),
+            BcpResult::Ok
+        );
         assert_eq!(trail.len() - before, 3);
         assert_eq!(trail.value(3), Some(true));
     }
@@ -470,7 +476,10 @@ mod tests {
         let mut w = Watches::new(&db, 3);
         let mut trail = Trail::new(3);
         trail.new_decision(Lit::pos(0));
-        assert_eq!(bcp_after_decision(&mut db, &mut w, &mut trail), BcpResult::Ok);
+        assert_eq!(
+            bcp_after_decision(&mut db, &mut w, &mut trail),
+            BcpResult::Ok
+        );
         // Neither x1 nor x2 should be propagated (clause has 2 unresolved lits).
         assert_eq!(trail.value(1), None);
         assert_eq!(trail.value(2), None);
@@ -478,8 +487,8 @@ mod tests {
 
     #[test]
     fn watched_agrees_with_original_bcp() {
-        use crate::bench::generate_3sat_phase_transition;
         use crate::bcp;
+        use crate::bench::generate_3sat_phase_transition;
 
         for seed in 0..10 {
             let db = generate_3sat_phase_transition(30, seed);

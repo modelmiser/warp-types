@@ -74,8 +74,8 @@ impl GpuContext {
     pub fn new() -> Result<Self, GpuError> {
         let ctx = CudaContext::new(0)?;
         let stream = ctx.default_stream();
-        let kernels = sat_gpu_kernels::Kernels::load(&ctx)
-            .map_err(|e| GpuError::Cuda(e.to_string()))?;
+        let kernels =
+            sat_gpu_kernels::Kernels::load(&ctx).map_err(|e| GpuError::Cuda(e.to_string()))?;
         Ok(GpuContext { stream, kernels })
     }
 
@@ -119,11 +119,7 @@ impl GpuContext {
     /// Uploads variable values, launches kernel, downloads + sums partial results.
     /// The kernel result is identical to `total_loss_simwarp()` — same butterfly
     /// reduce, same operation order, same floating-point result.
-    pub fn total_loss(
-        &self,
-        gpu_data: &GpuClauseData,
-        x: &[f64],
-    ) -> Result<f64, GpuError> {
+    pub fn total_loss(&self, gpu_data: &GpuClauseData, x: &[f64]) -> Result<f64, GpuError> {
         let s = &self.stream;
 
         // Upload current variable values (changes each iteration)
@@ -207,10 +203,7 @@ impl GpuContext {
     ///
     /// Keeps x, grad, and velocity on device across iterations, eliminating
     /// the per-iteration host↔device transfer of grad (download) and x (upload).
-    pub fn alloc_iter_state(
-        &self,
-        x: &[f64],
-    ) -> Result<GpuIterState, GpuError> {
+    pub fn alloc_iter_state(&self, x: &[f64]) -> Result<GpuIterState, GpuError> {
         let s = &self.stream;
         let num_vars = x.len();
         let num_var_batches = ((num_vars + WARP_SIZE as usize - 1) / WARP_SIZE as usize) as u32;

@@ -223,12 +223,7 @@ impl VarIndexSoA {
 /// Sequential over variables, but validates correctness against
 /// `gradient.rs::gradient()` and finite differences. The variable-parallel
 /// GPU version (Axis 1b: each lane = one variable) is future work.
-pub fn gradient_soa(
-    data: &ClauseDataSoA,
-    x: &[f64],
-    var_index: &VarIndexSoA,
-    grad: &mut [f64],
-) {
+pub fn gradient_soa(data: &ClauseDataSoA, x: &[f64], var_index: &VarIndexSoA, grad: &mut [f64]) {
     grad.iter_mut().for_each(|g| *g = 0.0);
     for (v, occs) in var_index.0.iter().enumerate() {
         for &(ci, pos) in occs {
@@ -307,10 +302,7 @@ pub fn verify_simwarp(data: &ClauseDataSoA, assign: &[bool]) -> (bool, usize, us
 ///
 /// Combines `discretize` (threshold at 0.5) with ballot verification.
 /// Returns `(all_satisfied, assignment)`.
-pub fn discretize_and_verify_simwarp(
-    data: &ClauseDataSoA,
-    x: &[f64],
-) -> (bool, Vec<bool>) {
+pub fn discretize_and_verify_simwarp(data: &ClauseDataSoA, x: &[f64]) -> (bool, Vec<bool>) {
     let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
     let (all_sat, _, _) = verify_simwarp(data, &assign);
     (all_sat, assign)
@@ -339,7 +331,11 @@ fn var_confidence(x: &[f64], v: usize) -> f64 {
 /// This CPU version uses a simple sort — the SimWarp version below
 /// validates the bitonic sort encoding.
 pub fn confidence_ranking(x: &[f64]) -> Vec<(usize, f64)> {
-    let mut ranked: Vec<(usize, f64)> = x.iter().enumerate().map(|(v, _)| (v, var_confidence(x, v))).collect();
+    let mut ranked: Vec<(usize, f64)> = x
+        .iter()
+        .enumerate()
+        .map(|(v, _)| (v, var_confidence(x, v)))
+        .collect();
     // Sort descending by confidence. f64 partial_cmp is fine here —
     // confidence values are always in [0, 0.5], no NaN possible.
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -661,15 +657,15 @@ pub fn gradient_search_gpu(
         let mut grad = vec![0.0; n];
         let mut velocity = vec![0.0; n];
         let mut soa = soa_template.clone();
-        let mut gpu_data = ctx.upload_clause_data(&soa)
-            .expect("GPU upload failed");
+        let mut gpu_data = ctx.upload_clause_data(&soa).expect("GPU upload failed");
         let mut lr = config.learning_rate;
         let mut best_loss = f64::MAX;
         let mut found = false;
 
         for iter in 0..config.max_iters {
             // Fused: loss + gradient in one kernel launch (Axis 1 + 1b).
-            let (l, gpu_grad) = ctx.total_loss_and_grad(&gpu_data, &x, n)
+            let (l, gpu_grad) = ctx
+                .total_loss_and_grad(&gpu_data, &x, n)
                 .expect("GPU fused kernel failed");
             grad.copy_from_slice(&gpu_grad);
             result.clause_evals += soa.num_clauses;
@@ -801,9 +797,9 @@ pub fn gradient_search_gpu_resident(
         let mut rng = Rng::new(config.seed.wrapping_add(si as u64));
         let x_init: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
         let mut soa = soa_template.clone();
-        let mut gpu_data = ctx.upload_clause_data(&soa)
-            .expect("GPU upload failed");
-        let mut state = ctx.alloc_iter_state(&x_init)
+        let mut gpu_data = ctx.upload_clause_data(&soa).expect("GPU upload failed");
+        let mut state = ctx
+            .alloc_iter_state(&x_init)
             .expect("GPU iter state alloc failed");
         let mut lr = config.learning_rate;
         let mut best_loss = f64::MAX;
@@ -811,7 +807,8 @@ pub fn gradient_search_gpu_resident(
 
         for iter in 0..config.max_iters {
             // All 3 kernels launch; data stays on GPU.
-            let (l, grad_norm_sq) = ctx.gpu_iteration(&gpu_data, &mut state, lr, config.momentum)
+            let (l, grad_norm_sq) = ctx
+                .gpu_iteration(&gpu_data, &mut state, lr, config.momentum)
                 .expect("GPU iteration failed");
             result.clause_evals += soa.num_clauses;
 
@@ -946,7 +943,11 @@ mod tests {
             let lits = &db.clause(cref).literals;
             for pos in 0..3 {
                 assert_eq!(soa.vars[pos][ci], lits[pos].var(), "clause {ci} pos {pos}");
-                assert_eq!(soa.negs[pos][ci], lits[pos].is_negated(), "clause {ci} pos {pos}");
+                assert_eq!(
+                    soa.negs[pos][ci],
+                    lits[pos].is_negated(),
+                    "clause {ci} pos {pos}"
+                );
             }
         }
     }
@@ -1042,7 +1043,8 @@ mod tests {
             let mut x_minus = x.clone();
             x_plus[v] += eps;
             x_minus[v] -= eps;
-            let numerical = (total_loss_simwarp(&soa, &x_plus) - total_loss_simwarp(&soa, &x_minus))
+            let numerical = (total_loss_simwarp(&soa, &x_plus)
+                - total_loss_simwarp(&soa, &x_minus))
                 / (2.0 * eps);
             assert!(
                 (grad[v] - numerical).abs() < 1e-5,
@@ -1065,7 +1067,10 @@ mod tests {
 
         assert_eq!(soa.padded_len, WARP_SIZE);
         for i in 5..WARP_SIZE {
-            assert_eq!(soa.weights[i], 0.0, "padding clause {i} should have zero weight");
+            assert_eq!(
+                soa.weights[i], 0.0,
+                "padding clause {i} should have zero weight"
+            );
         }
 
         let x = vec![0.3, 0.7, 0.5];
@@ -1099,7 +1104,10 @@ mod tests {
 
         let x = vec![1.0, 0.5, 0.5];
         let loss = total_loss_simwarp(&soa, &x);
-        assert!(loss.abs() < 1e-15, "loss should be ~0 when x0=1.0, got {loss}");
+        assert!(
+            loss.abs() < 1e-15,
+            "loss should be ~0 when x0=1.0, got {loss}"
+        );
     }
 
     #[test]
@@ -1336,9 +1344,15 @@ mod tests {
             // If both found solutions, verify both are valid.
             if let (Some(ref ca), Some(ref ga)) = (&cpu.assignment, &gpu.assignment) {
                 let db3 = generate_3sat_phase_transition(20, seed);
-                assert!(gradient::verify(&db3, ca), "seed {seed}: CPU assignment invalid");
+                assert!(
+                    gradient::verify(&db3, ca),
+                    "seed {seed}: CPU assignment invalid"
+                );
                 let db4 = generate_3sat_phase_transition(20, seed);
-                assert!(gradient::verify(&db4, ga), "seed {seed}: GPU assignment invalid");
+                assert!(
+                    gradient::verify(&db4, ga),
+                    "seed {seed}: GPU assignment invalid"
+                );
             }
 
             // Per-start diagnostics should match.
@@ -1433,10 +1447,16 @@ mod tests {
             let db1 = generate_3sat_phase_transition(50, seed);
             let db2 = generate_3sat_phase_transition(50, seed);
 
-            if gradient::gradient_search(&db1, 50, &config).assignment.is_some() {
+            if gradient::gradient_search(&db1, 50, &config)
+                .assignment
+                .is_some()
+            {
                 cpu_found += 1;
             }
-            if gradient_search_simwarp(&db2, 50, &config).assignment.is_some() {
+            if gradient_search_simwarp(&db2, 50, &config)
+                .assignment
+                .is_some()
+            {
                 gpu_found += 1;
             }
         }
@@ -1535,7 +1555,10 @@ mod tests {
             let db1 = generate_3sat_phase_transition(50, seed);
             let db2 = generate_3sat_phase_transition(50, seed);
 
-            if gradient_search_simwarp(&db1, 50, &config).assignment.is_some() {
+            if gradient_search_simwarp(&db1, 50, &config)
+                .assignment
+                .is_some()
+            {
                 grad_found += 1;
             }
             if matches!(

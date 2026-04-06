@@ -379,7 +379,7 @@ mod tests {
         vsids.bump(4); // 4→1
         vsids.bump(4); // 4→2
         vsids.bump(4); // 4→3
-        // activities: [0.0, 2.0, 0.0, 1.0, 3.0]
+                       // activities: [0.0, 2.0, 0.0, 1.0, 3.0]
 
         let assignments = vec![None, None, None, None, None];
 

@@ -10,8 +10,8 @@ use warp_types_sat::gpu_gradient::{
     gradient_search_gpu, gradient_search_simwarp, gradient_soa, hybrid_solve_gpu,
     hybrid_solve_simwarp, total_loss_simwarp, ClauseDataSoA, VarIndexSoA,
 };
-use warp_types_sat::gradient::GradientConfig;
 use warp_types_sat::gpu_launcher::GpuContext;
+use warp_types_sat::gradient::GradientConfig;
 
 /// Deterministic variable initialization: golden ratio spacing in [0.05, 0.95].
 /// Same as gpu_gradient::tests::init_vars.
@@ -37,12 +37,8 @@ fn gpu_loss_matches_simwarp() {
 
         let simwarp_loss = total_loss_simwarp(&soa, &x);
 
-        let gpu_data = ctx
-            .upload_clause_data(&soa)
-            .expect("upload failed");
-        let gpu_loss = ctx
-            .total_loss(&gpu_data, &x)
-            .expect("kernel launch failed");
+        let gpu_data = ctx.upload_clause_data(&soa).expect("upload failed");
+        let gpu_loss = ctx.total_loss(&gpu_data, &x).expect("kernel launch failed");
 
         assert!(
             (simwarp_loss - gpu_loss).abs() < 1e-10,
@@ -129,13 +125,9 @@ fn gpu_gradient_search_matches_simwarp() {
         );
 
         // If both found SAT, assignments must match
-        if let (Some(ref sw_assign), Some(ref gpu_assign)) =
-            (&simwarp.assignment, &gpu.assignment)
+        if let (Some(ref sw_assign), Some(ref gpu_assign)) = (&simwarp.assignment, &gpu.assignment)
         {
-            assert_eq!(
-                sw_assign, gpu_assign,
-                "seed {seed}: assignments differ"
-            );
+            assert_eq!(sw_assign, gpu_assign, "seed {seed}: assignments differ");
         }
 
         // Per-start loss trajectories must match
@@ -175,10 +167,7 @@ fn gpu_hybrid_solve_matches_simwarp() {
 
         // Same SAT/UNSAT outcome
         match (&sw_result, &gpu_result) {
-            (
-                warp_types_sat::SolveResult::Sat(sw_a),
-                warp_types_sat::SolveResult::Sat(gpu_a),
-            ) => {
+            (warp_types_sat::SolveResult::Sat(sw_a), warp_types_sat::SolveResult::Sat(gpu_a)) => {
                 assert_eq!(sw_a, gpu_a, "seed {seed}: SAT assignments differ");
             }
             (warp_types_sat::SolveResult::Unsat, warp_types_sat::SolveResult::Unsat) => {}

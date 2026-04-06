@@ -293,10 +293,12 @@ pub fn analyze_conflict_with(
         let mut best_pos = 1;
         // SAFETY: all vars in learned come from the clause DB, validated var < num_vars.
         let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
-            .map(|e| e.level).unwrap_or(0);
+            .map(|e| e.level)
+            .unwrap_or(0);
         for i in 2..learned.len() {
             let level = unsafe { trail.entry_for_var_unchecked(learned[i].var()) }
-                .map(|e| e.level).unwrap_or(0);
+                .map(|e| e.level)
+                .unwrap_or(0);
             if level > best_level {
                 best_level = level;
                 best_pos = i;
@@ -479,11 +481,15 @@ pub fn analyze_conflict_instrumented(
 
     if learned.len() >= 3 {
         let mut best_pos = 1;
-        let mut best_level = trail.entry_for_var(learned[1].var())
-            .map(|e| e.level).unwrap_or(0);
+        let mut best_level = trail
+            .entry_for_var(learned[1].var())
+            .map(|e| e.level)
+            .unwrap_or(0);
         for i in 2..learned.len() {
-            let level = trail.entry_for_var(learned[i].var())
-                .map(|e| e.level).unwrap_or(0);
+            let level = trail
+                .entry_for_var(learned[i].var())
+                .map(|e| e.level)
+                .unwrap_or(0);
             if level > best_level {
                 best_level = level;
                 best_pos = i;
@@ -1007,7 +1013,12 @@ pub fn correlate_centrality_vs_vsids(
     }
 
     let r = spearman_rank_r(&xs, &ys);
-    Correlation { r, r_squared: r * r, n: xs.len(), name: "centrality_vs_vsids_rank".into() }
+    Correlation {
+        r,
+        r_squared: r * r,
+        n: xs.len(),
+        name: "centrality_vs_vsids_rank".into(),
+    }
 }
 
 /// Correlation 1: Resolution depth at conflict C vs BCP propagations at C+1.
@@ -1016,12 +1027,28 @@ pub fn correlate_centrality_vs_vsids(
 /// next conflict (i.e., the solver "stalls" after complex conflicts).
 pub fn correlate_depth_vs_next_bcp(profiles: &[ConflictProfile]) -> Correlation {
     if profiles.len() < 2 {
-        return Correlation { r: f64::NAN, r_squared: f64::NAN, n: 0, name: "depth_vs_next_bcp".into() };
+        return Correlation {
+            r: f64::NAN,
+            r_squared: f64::NAN,
+            n: 0,
+            name: "depth_vs_next_bcp".into(),
+        };
     }
-    let xs: Vec<f64> = profiles[..profiles.len() - 1].iter().map(|p| p.resolution_depth as f64).collect();
-    let ys: Vec<f64> = profiles[1..].iter().map(|p| p.bcp_propagations as f64).collect();
+    let xs: Vec<f64> = profiles[..profiles.len() - 1]
+        .iter()
+        .map(|p| p.resolution_depth as f64)
+        .collect();
+    let ys: Vec<f64> = profiles[1..]
+        .iter()
+        .map(|p| p.bcp_propagations as f64)
+        .collect();
     let r = pearson_r(&xs, &ys);
-    Correlation { r, r_squared: r * r, n: xs.len(), name: "depth_vs_next_bcp".into() }
+    Correlation {
+        r,
+        r_squared: r * r,
+        n: xs.len(),
+        name: "depth_vs_next_bcp".into(),
+    }
 }
 
 /// Correlation 2: Resolution depth vs learned clause reuse.
@@ -1052,7 +1079,12 @@ pub fn correlate_depth_vs_clause_reuse(
     }
 
     let r = pearson_r(&xs, &ys);
-    Correlation { r, r_squared: r * r, n: xs.len(), name: "depth_vs_clause_reuse".into() }
+    Correlation {
+        r,
+        r_squared: r * r,
+        n: xs.len(),
+        name: "depth_vs_clause_reuse".into(),
+    }
 }
 
 /// Correlation 3: Variable pivot centrality vs VSIDS bump frequency.
@@ -1109,7 +1141,12 @@ pub fn correlate_centrality_vs_bump_freq(
     }
 
     let r = pearson_r(&xs, &ys);
-    Correlation { r, r_squared: r * r, n: xs.len(), name: "centrality_vs_bump_freq".into() }
+    Correlation {
+        r,
+        r_squared: r * r,
+        n: xs.len(),
+        name: "centrality_vs_bump_freq".into(),
+    }
 }
 
 /// Correlation 4: Pivot frequency vs gradient magnitude.
@@ -1136,9 +1173,13 @@ pub fn correlate_pivot_vs_gradient(
     }
 
     let r = pearson_r(&xs, &ys);
-    Correlation { r, r_squared: r * r, n: xs.len(), name: "pivot_vs_gradient".into() }
+    Correlation {
+        r,
+        r_squared: r * r,
+        n: xs.len(),
+        name: "pivot_vs_gradient".into(),
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1283,7 +1324,10 @@ mod tests {
         // Asserting literal: ¬x4
         assert_eq!(result.learned[0], Lit::neg(4));
         // ¬x2 should be removed (redundant via x1→x0 chain)
-        assert!(!result.learned.contains(&Lit::neg(2)), "¬x2 should be minimized away");
+        assert!(
+            !result.learned.contains(&Lit::neg(2)),
+            "¬x2 should be minimized away"
+        );
         // ¬x0 should remain (it's a decision, not redundant)
         assert!(result.learned.contains(&Lit::neg(0)));
         // Final clause: {¬x4, ¬x0}

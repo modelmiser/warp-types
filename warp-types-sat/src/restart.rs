@@ -70,13 +70,7 @@ mod tests {
     fn luby_sequence_first_15() {
         let expected = [1, 1, 2, 1, 1, 2, 4, 1, 1, 2, 1, 1, 2, 4, 8];
         for (i, &e) in expected.iter().enumerate() {
-            assert_eq!(
-                luby(i as u32 + 1),
-                e,
-                "luby({}) should be {}",
-                i + 1,
-                e
-            );
+            assert_eq!(luby(i as u32 + 1), e, "luby({}) should be {}", i + 1, e);
         }
     }
 
