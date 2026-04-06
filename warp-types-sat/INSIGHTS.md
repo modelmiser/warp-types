@@ -173,4 +173,4 @@ Sweet spot: scale 0.5-1.0. Scale 2.0 overshoots (over-prioritizes pivots, loses 
 
 **Combination with gradient (seed-1×3):** Pivot-only (-32.1%) beats combined gradient+pivot (-28.1%). Gradient-only is +8.3% worse than baseline. The signals interfere: gradient probes overwrite VSIDS saved phases, disrupting the search diversity that correct variable ordering (from pivots) relies on. Pivot bumps baked into production `solve_watched()` at DEFAULT_PIVOT_BUMP_SCALE=0.5.
 
-**Arc summary:** seed-1a started with a falsified hypothesis (trail gradients → CDCL improvement). The instrumentation infrastructure (resolution chains, conflict profiles, proof DAGs) enabled a different discovery: pivot centrality is a strong, unexploited VSIDS signal. From falsification to -32% conflict reduction in the production solver.
+**Arc summary:** Started with a falsified hypothesis (trail gradients → CDCL improvement). The instrumentation infrastructure (resolution chains, conflict profiles, proof DAGs) enabled a different discovery: pivot centrality is a strong, unexploited VSIDS signal. From falsification to -32% conflict reduction in the production solver.

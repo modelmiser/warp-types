@@ -190,7 +190,7 @@ pub(crate) fn solve_cdcl_core(
     solve_cdcl_core_inner(&mut db, num_vars, &mut vsids, &mut SolveStats::default(), 0, 0.0, 0, DEFAULT_PIVOT_BUMP_SCALE)
 }
 
-/// CDCL solver with periodic trail-gradient probing (seed-1a).
+/// CDCL solver with periodic trail-gradient probing.
 ///
 /// Every `probe_interval` conflicts, computes a single gradient at the current
 /// trail position and uses it to set phase hints and optionally boost activities
@@ -289,7 +289,7 @@ fn solve_cdcl_core_inner(
     let reduce_interval: u64 = 2000;
     let mut next_reduce: u64 = reduce_interval;
 
-    // Trail-gradient probe schedule (seed-1a)
+    // Trail-gradient probe schedule
     let mut next_probe: u64 = trail_gradient_interval;
 
     session::with_session(|initial_session| {
@@ -329,7 +329,7 @@ fn solve_cdcl_core_inner(
                 }
             }
 
-            // ── Trail-gradient probe (seed-1a) ──
+            // ── Trail-gradient probe ──
             if trail_gradient_interval > 0 && conflicts >= next_probe {
                 let t = Instant::now();
                 let tg = crate::gradient::gradient_at_trail(db, num_vars, trail.assignments());
@@ -1268,7 +1268,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_1a_kill_signal() {
+    fn trail_gradient_kill_signal() {
         // Kill signal: 100 instances at n=300, ratio=4.26.
         // If trail-gradient doesn't improve median solve time by >10%, it's dead.
         //
@@ -1297,7 +1297,7 @@ p cnf 5 10
             Config { name: "TG ph+bst K=50 b=5", interval: 50, boost: 5.0 },
         ];
 
-        println!("\n=== Seed-1a Kill Signal: n={n}, ratio={ratio}, {num_instances} instances, budget={conflict_budget} conflicts ===");
+        println!("\n=== Trail-Gradient Kill Signal: n={n}, ratio={ratio}, {num_instances} instances, budget={conflict_budget} conflicts ===");
         println!("{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",
             "solver", "p25(us)", "p50(us)", "p75(us)", "SAT", "UNK", "UNSAT", "probe_ns/p");
         println!("{}", "-".repeat(105));
@@ -1966,7 +1966,7 @@ p cnf 5 10
     }
 
     #[test]
-    fn seed_1a_3_combined_ab_test() {
+    fn combined_gradient_pivot_ab_test() {
         // Seed-1 × Seed-3 combination: gradient phase hints + pivot decision bumps.
         //
         // These are orthogonal signals:
@@ -2005,7 +2005,7 @@ p cnf 5 10
             Config { name: "F: grad+pivot(K200)",gradient_interval: 200,gradient_boost: 1.0, pivot_scale: 0.5 },
         ];
 
-        println!("\n=== Seed-1a×3 Combined A/B Test ===");
+        println!("\n=== Combined Gradient+Pivot A/B Test ===");
         println!("  n={n}, ratio=4.267, budget={budget}, seeds=0..{num_seeds}");
         println!("  {:<25} {:>10} {:>10} {:>10} {:>10}",
             "config", "conflicts", "solved", "unknown", "vs_base%");

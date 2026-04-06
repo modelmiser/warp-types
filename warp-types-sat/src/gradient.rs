@@ -396,7 +396,7 @@ pub fn gradient_search(db: &ClauseDb, num_vars: u32, config: &GradientConfig) ->
     result
 }
 
-/// Single-gradient probe at the current CDCL trail position (seed-1a).
+/// Single-gradient probe at the current CDCL trail position.
 ///
 /// Constructs x[] from the trail: assigned vars = 0.0/1.0, unassigned = 0.5.
 /// Computes ONE gradient at this point. Cost: O(m) where m = total literals

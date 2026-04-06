@@ -234,7 +234,7 @@ impl Vsids {
         self.phase[var as usize] = polarity;
     }
 
-    /// Apply trail-gradient signal to unassigned variables (seed-1a).
+    /// Apply trail-gradient signal to unassigned variables.
     ///
     /// For each unassigned variable: set phase to gradient-suggested polarity
     /// and give a small activity bump proportional to gradient magnitude.
