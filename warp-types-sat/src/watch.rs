@@ -227,22 +227,29 @@ pub fn run_bcp_watched(
         let mut i = 0;
         while i < ws.len() {
             let entry = unsafe { *ws.get_unchecked(i) };
-            let cref = entry.clause_ref();
 
-            // SAFETY: cref comes from WatchEntry, set only from valid clause
-            // CRefs during Watches::new() or add_clause().
-            if unsafe { db.is_deleted_unchecked(cref) } {
-                i += 1;
-                continue;
-            }
-
-            // ── Blocker check ──
+            // ── Blocker check FIRST (no clause DB access) ──
+            // This is the hot path: 50-70% of entries are skipped here.
+            // Checking blocker before deleted avoids a random arena access
+            // for the majority of watch entries (MiniSat's approach).
             // SAFETY: blocker literal comes from a clause in the DB.
-            // Store result — reused by the binary fast path below.
             let blocker_val = unsafe { eval_lit_indexed(entry.blocker, bt.lit_values) };
             if blocker_val == Some(true) {
                 unsafe { *ws.get_unchecked_mut(j) = entry };
                 j += 1;
+                i += 1;
+                continue;
+            }
+
+            let cref = entry.clause_ref();
+
+            // ── Deleted check (deferred past blocker) ──
+            // Stale entries for deleted clauses that pass the blocker check
+            // are harmless — cleaned up during the next watch rebuild after
+            // compaction (solver.rs Watches::new rebuild).
+            // SAFETY: cref comes from WatchEntry, set only from valid clause
+            // CRefs during Watches::new() or add_clause().
+            if unsafe { db.is_deleted_unchecked(cref) } {
                 i += 1;
                 continue;
             }

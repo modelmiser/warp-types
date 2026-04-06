@@ -90,3 +90,31 @@ Per-phase instrumentation in `solve_cdcl_core_inner` reveals BCP dominates at 63
 BCP per-propagation cost: 115-274ns vs MiniSat's ~60ns. The 2-4.5x BCP gap is the primary optimization target.
 
 Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache line access per clause visit. MiniSat stores watches inline at c[0]/c[1] and searches from c[2] — no w0/w1 comparison needed. This fundamental cache-line layout difference is a major contributor to the latency gap and points to the next optimization frontier: inline watched literal storage.
+
+## 12. NLL Single-Borrow BCP and Analysis Sub-Profiling
+
+**BCP double-borrow eliminated via NLL.** The long-clause BCP path called `clause_unchecked` twice: once to read c[0]/c[1], then again for the replacement search (starting at c[2]). Rust's Non-Lexical Lifetimes allow a single borrow scope: read c[0], c[1], and search for replacement in one `ClauseRef` lifetime, then release before the mutable `swap_literal_unchecked`. This eliminates redundant `offsets[ci]` + `lengths[ci]` lookups and gives the compiler a longer register-alive window. Result: ~5% ns/prop improvement at 500v.
+
+**Option<bool> niche optimization is already optimal.** Assembly inspection confirmed Rust stores `Option<bool>` as u8 {0=Some(false), 1=Some(true), 2=None}. The proposed u8 sentinel encoding would produce identical codegen. The hot-path blocker check is `movzx ecx, BYTE [rdx+rbp]; test ecx, ecx; cmp ecx, 2; jne skip` — no unwrapping overhead.
+
+**Analysis breakdown at 500v: resolution 60%, minimization 40%.** Adding `resolve_ns` and `minimize_ns` sub-timing reveals the litRedundant DFS (clause minimization) is ~10% of total solve time at 500v, growing faster than resolution as problem size increases (longer implication chains → deeper DFS). Resolution includes the backward trail scan + reason clause iteration.
+
+**Second-watch selection matters.** Placing the highest-level non-asserting literal at c[1] (standard MiniSat technique) ensures the clause is immediately unit after backtracking. Without it, c[1] might be at a level above backtrack_level (unassigned after backtrack), creating an unnecessarily slack clause. This changes search behavior substantially — different learned clauses, different conflict counts. Not just an optimization; it affects solver quality.
+
+## 8. Inline-Header Arena — Co-locating Metadata with Data
+
+**Eliminating parallel arrays for clause metadata yields 15-20% BCP speedup.** The previous design stored clause data across 5 parallel vectors (arena, offsets, lengths, lbd, deleted). Each clause access required two loads from separate cache lines (offsets[i] + lengths[i]) before touching the literal data. The inline-header layout packs `[header|lit0|lit1|...]` contiguously — one header read (adjacent to literals in the same cache line) replaces two distant loads. At 500 variables: ns/prop dropped from 130-165 to 111-130.
+
+**CRef (arena offset) vs sequential index is a fundamental design choice.** Replacing sequential clause indices with arena offsets (CRef = u32) propagates through the entire system: WatchEntry, Reason::Propagation, BcpResult::Conflict, conflict analysis. The hot path benefits (WatchEntry stores CRef directly → no offsets[] indirection), but cold-path code (gradient solver, SoA construction) needs an explicit `crefs: Vec<CRef>` for sequential iteration. The tradeoff: hot path is faster, cold path adds one Vec allocation at init time.
+
+**Header packing: 1 bit deleted + 11 bits LBD + 20 bits length in one u32.** The `#[repr(transparent)]` on Lit enables safe `&[u32]` → `&[Lit]` transmute via `slice::from_raw_parts`, making the mixed-type arena (headers as u32, literals as Lit) work without copies. The 20-bit length limit (1M literals per clause) is more than sufficient — real SAT instances rarely exceed ~100 literals per clause.
+
+## 9. Blocker-Before-Deleted — Hot Path Instruction Elimination
+
+**Moving the blocker check before the deleted check in BCP eliminates a random arena access from 50-70% of watch entries.** The original code checked `is_deleted(cref)` first (requiring an arena load to read the clause header) before checking the blocker literal. But MiniSat checks the blocker FIRST — if the blocker is satisfied, the clause is skipped without any clause DB access.
+
+**Assembly impact at the inner loop (`.LBB112_27`):** Hot path shrank from 13 instructions (2 stack loads + 1 random arena access) to 6 instructions (1 stack load + 1 L1-hitting lit_values access). The compiler also improved the blocker check from two comparisons (`testl` + `cmpl $2`) to a single bit test (`testb $1, %dl`), exploiting that `Some(true) = 1` is the only `Option<bool>` value with bit 0 set.
+
+**Correctness of keeping stale entries:** Deleted clauses whose watch entries pass the blocker check are kept (not compacted out). This is harmless — stale entries are cleaned up during the periodic watch rebuild after clause compaction (`Watches::new` rebuild in solver.rs). This is the standard MiniSat tradeoff.
+
+**Measured: 4-6% ns/prop improvement at 500v, 20-35% at 200v.** The larger improvement at 200v is expected — smaller arenas fit in L1, so the eliminated arena access was the dominant latency. At 500v, the arena is larger and the blocker hit rate lower, reducing the relative benefit.
