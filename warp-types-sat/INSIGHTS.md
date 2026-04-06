@@ -187,3 +187,13 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Result: -2.4% instructions (505→493/prop), cycles flat (-0.5%, noise).** The BCP equivalent gave 25% because BCP's 731-line function had acute i-cache pressure from panic paths. Analysis functions are shorter — the cold panic paths don't compete for hot cache lines. The always-predicted-correct bounds check branches cost ~0 cycles each (unlike data-dependent branches where misprediction matters).
 
 **Retained for instruction budget and future scaling.** 5.5M fewer retired instructions per solve. At larger problem sizes where analysis grows faster than BCP (Insight #11: analysis is 15% at 200v, 29% at 500v), the i-cache benefit will compound.
+
+## 16. VSIDS Warm-Start — 13x Fewer Conflicts From a One-Liner
+
+**`initialize_from_clauses()` was implemented in Vsids but never called from the solver.** Adding the call at solver init gives each variable an initial activity proportional to its clause occurrence count. Variables appearing in more clauses are more constrained — deciding them first avoids wasting the first ~100 decisions on arbitrary variables (the cold-start default decided by variable index, highest first).
+
+**On 500v seed 1: 5190 → 397 conflicts, 473787 → 37664 propagations. Wall: 69ms → 3ms (23x).** This single line dwarfs the cumulative effect of 5 micro-optimization commits (-15% cycles). The lesson: algorithmic decisions (what to compute) dominate implementation decisions (how fast to compute it) by orders of magnitude.
+
+**Per-propagation cost also improved: 493 → 489 insn, 392 → 364 cyc.** Better decisions keep the solver in search regions where BCP encounters more satisfied blockers, shorter replacement searches, and shallower conflicts. Per-prop cost is NOT independent of decision quality — they compound.
+
+**This is the standard MiniSat initialization**, implemented months ago and sitting unused. The function already handled pre-seeded activities correctly (uses `+=` not assignment, rebuilds heap after). Wiring it up required zero API changes.
