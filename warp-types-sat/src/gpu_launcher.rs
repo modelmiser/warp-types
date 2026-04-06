@@ -200,4 +200,139 @@ impl GpuContext {
     pub fn device_name(&self) -> String {
         "GPU".to_string()
     }
+
+    // ── Device-resident iteration state ─────────────────────────────────
+
+    /// Allocate device-resident buffers for the gradient iteration loop.
+    ///
+    /// Keeps x, grad, and velocity on device across iterations, eliminating
+    /// the per-iteration host↔device transfer of grad (download) and x (upload).
+    pub fn alloc_iter_state(
+        &self,
+        x: &[f64],
+    ) -> Result<GpuIterState, GpuError> {
+        let s = &self.stream;
+        let num_vars = x.len();
+        let num_var_batches = ((num_vars + WARP_SIZE as usize - 1) / WARP_SIZE as usize) as u32;
+
+        Ok(GpuIterState {
+            dev_x: s.clone_htod(x)?,
+            dev_grad: s.clone_htod(&vec![0.0f64; num_vars])?,
+            dev_velocity: s.clone_htod(&vec![0.0f64; num_vars])?,
+            grad_norm_output: s.clone_htod(&vec![0.0f64; num_var_batches as usize])?,
+            dev_lr: s.clone_htod(&[0.0f64])?,
+            dev_momentum: s.clone_htod(&[0.0f64])?,
+            num_vars: num_vars as u32,
+            num_var_batches,
+        })
+    }
+
+    /// Run one gradient iteration on GPU: fused loss+grad → variable update → grad norm.
+    ///
+    /// Returns (total_loss, grad_norm_sq). All intermediate data stays on device.
+    /// The only downloads are: loss partial sums (num_batches × 8 bytes) and
+    /// grad norm partial sums (num_var_batches × 8 bytes).
+    pub fn gpu_iteration(
+        &self,
+        gpu_data: &GpuClauseData,
+        state: &mut GpuIterState,
+        lr: f64,
+        momentum: f64,
+    ) -> Result<(f64, f64), GpuError> {
+        let s = &self.stream;
+
+        // Zero grad accumulator for this iteration
+        let zeros = vec![0.0f64; state.num_vars as usize];
+        state.dev_grad = s.clone_htod(&zeros)?;
+
+        // Upload scalar parameters
+        state.dev_lr = s.clone_htod(&[lr])?;
+        state.dev_momentum = s.clone_htod(&[momentum])?;
+
+        // ── Kernel 1: fused loss + gradient ──
+        unsafe {
+            s.launch_builder(&self.kernels.clause_loss_grad_fused)
+                .arg(&gpu_data.vars0)
+                .arg(&gpu_data.vars1)
+                .arg(&gpu_data.vars2)
+                .arg(&gpu_data.negs0)
+                .arg(&gpu_data.negs1)
+                .arg(&gpu_data.negs2)
+                .arg(&gpu_data.weights)
+                .arg(&state.dev_x)
+                .arg(&gpu_data.output)
+                .arg(&state.dev_grad)
+                .arg(&gpu_data.num_clauses)
+                .launch(LaunchConfig {
+                    grid_dim: (gpu_data.num_batches, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        // ── Kernel 2: variable update (reads grad, updates x + velocity) ──
+        unsafe {
+            s.launch_builder(&self.kernels.variable_update)
+                .arg(&state.dev_x)
+                .arg(&state.dev_grad)
+                .arg(&state.dev_velocity)
+                .arg(&state.dev_lr)
+                .arg(&state.dev_momentum)
+                .arg(&state.num_vars)
+                .launch(LaunchConfig {
+                    grid_dim: (state.num_var_batches, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        // ── Kernel 3: gradient norm reduction (reads grad, reduces grad²) ──
+        unsafe {
+            s.launch_builder(&self.kernels.grad_norm_reduce)
+                .arg(&state.dev_grad)
+                .arg(&state.grad_norm_output)
+                .arg(&state.num_vars)
+                .launch(LaunchConfig {
+                    grid_dim: (state.num_var_batches, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        // Download only the small aggregation buffers
+        let loss_partials = s.clone_dtoh(&gpu_data.output)?;
+        let norm_partials = s.clone_dtoh(&state.grad_norm_output)?;
+
+        let total_loss: f64 = loss_partials.iter().sum();
+        let grad_norm_sq: f64 = norm_partials.iter().sum();
+
+        Ok((total_loss, grad_norm_sq))
+    }
+
+    /// Download current x values from device for verification.
+    pub fn download_x(&self, state: &GpuIterState) -> Result<Vec<f64>, GpuError> {
+        Ok(self.stream.clone_dtoh(&state.dev_x)?)
+    }
+
+    /// Re-upload x values to device (e.g., after host-side random init for a new start).
+    pub fn upload_x(&self, state: &mut GpuIterState, x: &[f64]) -> Result<(), GpuError> {
+        state.dev_x = self.stream.clone_htod(x)?;
+        state.dev_velocity = self.stream.clone_htod(&vec![0.0f64; x.len()])?;
+        Ok(())
+    }
+}
+
+/// Device-resident state for the gradient iteration loop.
+///
+/// Holds x, grad, and velocity on GPU across iterations. Created once per
+/// solve attempt, re-uploaded per start (random init).
+pub struct GpuIterState {
+    dev_x: CudaSlice<f64>,
+    dev_grad: CudaSlice<f64>,
+    dev_velocity: CudaSlice<f64>,
+    grad_norm_output: CudaSlice<f64>,
+    dev_lr: CudaSlice<f64>,
+    dev_momentum: CudaSlice<f64>,
+    num_vars: u32,
+    num_var_batches: u32,
 }

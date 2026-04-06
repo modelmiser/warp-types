@@ -745,6 +745,137 @@ pub fn gradient_search_gpu(
     result
 }
 
+/// Device-resident gradient search: all 3 kernels launch per iteration,
+/// data stays on GPU. Only downloads loss partials + grad norm (tiny).
+///
+/// Kernel sequence per iteration:
+///   1. clause_loss_grad_fused  → loss partials + grad accumulation
+///   2. variable_update         → reads grad, updates x + velocity
+///   3. grad_norm_reduce        → reads grad, reduces sum(grad²)
+///
+/// Kernels 2 and 3 both read grad[] — Pattern 5 fusion candidate.
+#[cfg(feature = "gpu")]
+pub fn gradient_search_gpu_resident(
+    db: &ClauseDb,
+    num_vars: u32,
+    config: &crate::gradient::GradientConfig,
+    ctx: &crate::gpu_launcher::GpuContext,
+) -> crate::gradient::GradientResult {
+    use crate::gradient::{GradientResult, Rng, StartOutcome};
+
+    let n = num_vars as usize;
+
+    if db.is_empty() {
+        return GradientResult {
+            assignment: Some(vec![false; n]),
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+    if num_vars == 0 {
+        return GradientResult {
+            assignment: None,
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+
+    let initial_weights = vec![1.0; db.len()];
+    let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
+
+    let mut result = GradientResult {
+        assignment: None,
+        best_continuous: None,
+        starts: Vec::with_capacity(config.num_starts),
+        clause_evals: 0,
+    };
+    let mut global_best_loss = f64::MAX;
+
+    for si in 0..config.num_starts {
+        if result.assignment.is_some() {
+            break;
+        }
+
+        let mut rng = Rng::new(config.seed.wrapping_add(si as u64));
+        let x_init: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
+        let mut soa = soa_template.clone();
+        let mut gpu_data = ctx.upload_clause_data(&soa)
+            .expect("GPU upload failed");
+        let mut state = ctx.alloc_iter_state(&x_init)
+            .expect("GPU iter state alloc failed");
+        let mut lr = config.learning_rate;
+        let mut best_loss = f64::MAX;
+        let mut found = false;
+
+        for iter in 0..config.max_iters {
+            // All 3 kernels launch; data stays on GPU.
+            let (l, grad_norm_sq) = ctx.gpu_iteration(&gpu_data, &mut state, lr, config.momentum)
+                .expect("GPU iteration failed");
+            result.clause_evals += soa.num_clauses;
+
+            if l < best_loss {
+                best_loss = l;
+            }
+
+            // Periodically download x for verification (CPU — Axis 2 ballot not yet on GPU).
+            if l < 1.0 || iter % 10 == 0 {
+                let x_host = ctx.download_x(&state).expect("x download failed");
+                let assign: Vec<bool> = x_host.iter().map(|&v| v >= 0.5).collect();
+                let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+                if all_sat {
+                    result.assignment = Some(assign);
+                    result.starts.push(StartOutcome {
+                        best_loss: l,
+                        iterations: iter + 1,
+                        satisfied: true,
+                    });
+                    found = true;
+                    break;
+                }
+                if config.clause_weights {
+                    update_weights_soa(&mut soa, &assign);
+                    ctx.update_weights(&mut gpu_data, &soa)
+                        .expect("GPU weight re-upload failed");
+                }
+            }
+
+            if grad_norm_sq < 1e-20 {
+                break;
+            }
+
+            lr *= config.lr_decay;
+        }
+
+        if !found {
+            let x_host = ctx.download_x(&state).expect("x download failed");
+            let assign: Vec<bool> = x_host.iter().map(|&v| v >= 0.5).collect();
+            let (all_sat, _, _) = verify_simwarp(&soa, &assign);
+            if all_sat {
+                result.assignment = Some(assign);
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: true,
+                });
+            } else {
+                result.starts.push(StartOutcome {
+                    best_loss,
+                    iterations: config.max_iters,
+                    satisfied: false,
+                });
+            }
+            if best_loss < global_best_loss {
+                global_best_loss = best_loss;
+                result.best_continuous = Some(x_host);
+            }
+        }
+    }
+
+    result
+}
+
 /// Hybrid gradient→CDCL solver with GPU-accelerated gradient phase.
 ///
 /// Same TurboSAT strategy as `hybrid_solve_simwarp`:

@@ -207,3 +207,17 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **f64 on H200 Hopper**: Native FP64 at 1:2 ratio vs FP32 (not the 1:64 ratio of consumer GPUs). Each shuffle-XOR for f64 emits two 32-bit shuffles. The kernel is compute-bound on the multiplies, not the shuffles.
 
 **Design pattern: CPU SimWarp → GPU kernel.** Write and validate the math on CPU using SimWarp (real multi-lane shuffle semantics), then the kernel is a mechanical translation — same operations, same order, same result. The GPU test just confirms f64 bit-identical results between SimWarp and real hardware.
+
+## 18a. Device-Resident Gradient Loop — 3 Kernels, Pattern 5 Fusion Target
+
+Added `variable_update` and `grad_norm_reduce` kernels to keep x, grad, velocity on device across iterations. Eliminates per-iteration host↔device transfer of grad (download) and x (upload). Both new kernels read `grad[]` — this is a Pattern 5 (multi-pass reduction) fusion candidate: fusing them into `variable_update_with_norm` saves one full pass over the grad array.
+
+**Profiling on RTX 4000 Ada (5000 vars):** Original (1 kernel + host xfer) 48μs vs Resident (3 kernels, device-only) 46μs → 1.04x. The two extra kernel launches nearly cancel the transfer savings. This is where kernel-fuse Pattern 5 fusion earns its keep: fusing variable_update + grad_norm_reduce eliminates one launch, tipping the balance.
+
+**AtomicAdd trajectory sensitivity:** Single-iteration variable_update matches CPU to 1e-4. Over 200 iterations, trajectory divergence grows to ~0.1 in best_loss due to atomicAdd ordering differences compounding through a chaotic landscape. SAT-finding rates match (6/10 vs 6/10) — the divergence is in path, not in outcome quality. This is inherent to IEEE 754 non-associativity under concurrent atomic writes.
+
+**H200 prediction:** At 100K+ vars, the fused kernel is memory-bound (AI ~0.3 vs balance 7.0). The variable_update + grad_norm_reduce fusion saves ~1.6MB of duplicate grad[] reads per iteration. kernel-fuse should find and implement this automatically.
+
+## 18. GPU Loss Crossover — 14x at 5000 vars, ~17μs Floor
+
+**Crossover at ~1500 vars (~6400 clauses).** Below that, the ~17μs GPU launch floor (upload `x` + kernel dispatch + download partial sums) dominates. Above 2000 vars, GPU wins decisively: 4.3x at 2K, 14x at 5K. GPU time barely grows (19.9→21.9μs from 2K→5K) while CPU scales linearly (85→306μs). At industrial SAT sizes (100K+ clauses), expect 100x+. The 17μs floor is split roughly: ~8μs cudarc launch overhead, ~5μs `x` upload (num_vars × 8 bytes), ~4μs partial sum download. For the gradient loop (loss called every iteration), this means GPU is worth it only when the per-iteration compute dominates the per-iteration transfer — i.e., large clause counts.

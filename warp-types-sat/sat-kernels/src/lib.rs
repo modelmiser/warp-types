@@ -180,3 +180,97 @@ pub fn clause_loss_grad_fused(
         warp_types::gpu::atomic_add_f64(grad.add(v2 as usize), w * s2 * t0 * t1);
     }
 }
+
+// ============================================================================
+// Kernel 3: Variable update with momentum (device-resident)
+//
+// Each thread updates one variable:
+//   velocity[i] = momentum * velocity[i] + grad[i]
+//   x[i] = clamp(x[i] - lr * velocity[i], 0.0, 1.0)
+//
+// Keeps x, grad, velocity on device — eliminates per-iteration host↔device
+// transfer of grad (download) and x (upload).
+// ============================================================================
+
+/// Per-variable gradient step with momentum, entirely on GPU.
+///
+/// Grid: (ceil(num_vars/32), 1, 1), Block: (32, 1, 1)
+/// Out-of-bounds threads (vi >= num_vars) are no-ops.
+#[warp_kernel]
+pub fn variable_update(
+    x: *mut f64,
+    grad: *const f64,
+    velocity: *mut f64,
+    lr_ptr: *const f64,
+    momentum_ptr: *const f64,
+    num_vars: u32,
+) {
+    let _warp: Warp<All> = Warp::kernel_entry();
+
+    let bid = warp_types::gpu::block_id_x();
+    let tid = warp_types::gpu::thread_id_x();
+    let vi = bid * 32 + tid;
+
+    if vi < num_vars {
+        let lr = *lr_ptr;
+        let momentum = *momentum_ptr;
+        let g = *grad.add(vi as usize);
+        let v_old = *velocity.add(vi as usize);
+        let v_new = momentum * v_old + g;
+        *velocity.add(vi as usize) = v_new;
+
+        let x_old = *x.add(vi as usize);
+        let x_new = x_old - lr * v_new;
+        // Clamp to [0, 1]
+        let x_clamped = if x_new < 0.0 {
+            0.0
+        } else if x_new > 1.0 {
+            1.0
+        } else {
+            x_new
+        };
+        *x.add(vi as usize) = x_clamped;
+    }
+}
+
+// ============================================================================
+// Kernel 4: Gradient norm reduction (butterfly reduce of grad²)
+//
+// Each thread loads grad[vi], squares it, butterfly reduces per warp.
+// Lane 0 of each warp writes the partial sum to output[warp_index].
+// Host sums the partial sums to get grad_norm_sq.
+//
+// This kernel reads grad[] — same data that variable_update reads.
+// kernel-fuse Pattern 5 (multi-pass reduction): fusing these two into
+// variable_update_with_norm eliminates one full pass over grad[].
+// ============================================================================
+
+/// Reduce sum of squared gradients for convergence check.
+///
+/// Grid: (ceil(num_vars/32), 1, 1), Block: (32, 1, 1)
+/// Out-of-bounds threads contribute 0.0 to the reduction.
+#[warp_kernel]
+pub fn grad_norm_reduce(
+    grad: *const f64,
+    output: *mut f64,
+    num_vars: u32,
+) {
+    let warp: Warp<All> = Warp::kernel_entry();
+
+    let bid = warp_types::gpu::block_id_x();
+    let tid = warp_types::gpu::thread_id_x();
+    let vi = bid * 32 + tid;
+
+    let g_sq = if vi < num_vars {
+        let g = *grad.add(vi as usize);
+        g * g
+    } else {
+        0.0
+    };
+
+    let batch_sum = warp.reduce_sum(data::PerLane::new(g_sq));
+
+    if tid == 0 {
+        *output.add(bid as usize) = batch_sum.get();
+    }
+}
