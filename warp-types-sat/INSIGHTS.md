@@ -118,3 +118,11 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Correctness of keeping stale entries:** Deleted clauses whose watch entries pass the blocker check are kept (not compacted out). This is harmless — stale entries are cleaned up during the periodic watch rebuild after clause compaction (`Watches::new` rebuild in solver.rs). This is the standard MiniSat tradeoff.
 
 **Measured: 4-6% ns/prop improvement at 500v, 20-35% at 200v.** The larger improvement at 200v is expected — smaller arenas fit in L1, so the eliminated arena access was the dominant latency. At 500v, the arena is larger and the blocker hit rate lower, reducing the relative benefit.
+
+## 10. Pointer Iteration — Reducing Loop Control Overhead
+
+**Replacing index-based iteration (i/j/ws.len()) with pointer-based (src/dst/ws_end) eliminated redundant loop counter maintenance.** The compiler was maintaining four representations of the loop index simultaneously (i, i+1, a countdown, and a pointer advance) — 8 instructions of loop overhead per watch entry. With pointers, only src/dst/ws_end need tracking — 3 values vs 5+.
+
+**Conflict drain paths use `std::ptr::copy` (memmove) instead of element-by-element loops.** The regions CAN overlap: dst ≤ src but dst + remaining > src when few entries have been removed (j close to i). The initial implementation incorrectly used `copy_nonoverlapping` (UB for overlapping regions) — caught during assembly review.
+
+**Combined with blocker-before-deleted: 8-10% total improvement at 500v, up to 40% at 200v.** P-core equivalent dropped from ~82-94 to ~74-85 ns/prop. Gap from MiniSat narrowed from 1.3-1.5x to 1.2-1.4x.
