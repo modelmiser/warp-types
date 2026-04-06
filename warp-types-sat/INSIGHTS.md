@@ -134,3 +134,17 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **Fix: reserve slot 0 with a placeholder before resolution begins.** `learned.push(Lit::pos(0))` at init, `learned[0] = asserting_lit` after UIP found. O(1) overwrite, literal ordering preserved, search path identical.
 
 **Additional analysis optimizations:** Continue UIP scan from `trail_idx` instead of rescanning the full trail; accumulate `abstract_levels` during resolution (eliminate second pass); unchecked indexing in cold paths. Combined: resolution phase shrank ~10% (13% → 11-12% of total at 500v), 2-5% overall wall time.
+
+## 12. Hardware Counters vs Wall-Clock — Measurement Methodology Matters
+
+**Wall-clock timing on shared systems has ±5-10% noise that can obscure or fabricate optimization results.** Switching to `perf stat` with hardware counters on an isolated e-core revealed that every optimization this session was real, but wall-clock measurements nearly caused us to dismiss the biggest one.
+
+**The pointer iteration change removed 29.2M instructions (10.3%)** — but wall-clock showed it as a borderline ±4% maybe-win. The first clean wall-clock run looked flat; only the second/third happened to be quieter. With hardware counters, 593→532 insn/prop is unambiguous on the first measurement.
+
+**The blocker reorder ADDED 1.7M instructions but saved cycles.** Wall-clock correctly showed improvement, but for the wrong reason — the win was fewer L2 misses from the deferred arena access, not fewer instructions. Hardware counters revealed the actual mechanism.
+
+**IPC dropped from 1.27 to 1.15 as we optimized.** We removed "cheap" instructions (loop overhead, bounds checks, redundant passes) while keeping "expensive" ones (data-dependent loads, unpredictable branches). Lower IPC after optimization is the expected signature of removing computational slack.
+
+**Branch mispredictions are invariant to code structure** (8.26→8.06 misses/prop across all four states). The ~8 misses/prop are inherent to the BCP algorithm's data-dependent blocker checks. At ~15-20 cycle penalty each, misprediction accounts for **28% of total cycles** — the dominant remaining bottleneck. Reducing this requires algorithmic changes (better watch ordering, branch-free evaluation) not micro-optimization.
+
+**Methodology:** `perf stat` with `cpu_atom/instructions/u` on `taskset -c 16`. Instructions are deterministic (±0.0002%). Cycles are ±0.3%. Use `warp-types-sat/src/bin/perf_bench.rs` (500v, seed 1, 5190 conflicts).

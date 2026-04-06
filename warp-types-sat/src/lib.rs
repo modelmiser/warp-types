@@ -36,7 +36,7 @@
 
 pub mod analyze;
 pub mod bcp;
-pub(crate) mod bench;
+pub mod bench;
 pub mod clause;
 pub mod clause_tile;
 pub mod dimacs;
