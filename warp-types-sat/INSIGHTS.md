@@ -163,3 +163,19 @@ Key structural delta vs MiniSat: separate `watched` Vec requires an extra cache 
 **The false_pos branch was a simple conditional select** (`if c0 == false_lit { (c1,0) } else { (c0,1) }`) that LLVM compiled to a `cmpl + jne` with two separate load paths instead of a conditional move. The fix: bitmask selection via `wrapping_neg()` — `Lit` is `#[repr(transparent)]` over u32, so `(c1.code() & mask) | (c0.code() & !mask)` is safe and compiles to 3 ALU ops with zero branches.
 
 **Result: -1.28 branch misses/prop (8.06→6.78), -10% cycles, +11% IPC.** Instruction count unchanged (+0.2%). The cycle savings (~43 cyc/prop) imply a ~34-cycle effective misprediction penalty — higher than Gracemont's nominal ~15-cycle pipeline depth, suggesting mispredictions also evict prefetched watch list and clause data from L1, compounding the cost with downstream cache misses.
+
+**Secondary benefit: partner-satisfied misses collapsed from 9% to 2% of BCP.** The eliminated branch was polluting the TAGE predictor's pattern history for the nearby partner check (Gracemont shares predictor entries for nearby addresses). Branch predictor aliasing is a known microarchitectural effect but rarely this visible — eliminating one branch improved a completely different branch.
+
+**LLVM optimized the bitmask to cmov.** The source uses `wrapping_neg()` + bitwise OR, but LLVM recognized the pattern and emitted `cmove` + `setne` — the optimal x86 encoding. Writing branchless arithmetic was the right hint even though the compiler found a better encoding.
+
+**Remaining BCP branches are algorithmically fundamental.** Post-fix profiling shows: replacement search exit (~28% of BCP, loop exit misprediction), blocker hit/miss (~21%, assignment-dependent), deleted-check skid (~14%, blocker secondary). These can't be made branchless without changing the algorithm itself — each reflects genuine uncertainty about the current assignment state.
+
+## 14. Software Prefetch — Why It Failed at 500 Vars
+
+**Attempted: prefetch next watch entry's clause header during current iteration.** Added `_mm_prefetch(arena[next_cref], T0)` early in the BCP loop to warm clause data into L1 while the blocker/deleted/binary checks execute. Result: +28 insn/prop (5.5%), -0.8% cycles (noise), +0.2 bmiss/prop from the `if src < ws_end` guard branch. **Reverted.**
+
+**Root cause: the arena fits in L2.** Cache misses at 500v are 0.014/propagation — essentially zero. The ~300KB arena fits comfortably in Gracemont's ~2MB L2 cluster. L2→L1 promotion saves ~4 cycles per miss × 0.014 misses = 0.06 cyc/prop, which is negligible vs the 28-instruction overhead.
+
+**The 34-cycle effective misprediction penalty is NOT cache-related.** It's purely speculative execution waste — Gracemont's out-of-order window discards more µops on flush than the nominal 15-stage pipeline would suggest. This means branch-miss cost at 500v is "hard" — there's no latency-hiding trick available; the only remedies are fewer mispredictions (algorithmic) or fewer iterations (search behavior).
+
+**Prefetch would matter at 1000+ vars** where the arena exceeds L2 and clause accesses hit L3 (~30 cycles) or DRAM (100+ cycles). At that scale, the 28-instruction overhead becomes a bargain for hiding 30-100 cycle latencies. File this as a conditional optimization: `#[cfg]`-gated, enabled for large instances.
