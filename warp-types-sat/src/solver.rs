@@ -447,9 +447,31 @@ pub struct InstrumentedResult {
 /// Returns an `InstrumentedResult` containing the solve result, per-conflict
 /// profiles, learned clause CRefs, and final VSIDS activities.
 pub fn solve_instrumented(
+    db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+) -> InstrumentedResult {
+    solve_instrumented_inner(db, num_vars, conflict_limit, 0.0)
+}
+
+/// Instrumented solve with depth-weighted clause deletion.
+///
+/// `depth_weight > 0.0` scores deletion candidates by `LBD + depth_weight * resolution_depth`.
+/// Use `depth_weight = 0.0` for baseline LBD-only deletion.
+pub fn solve_instrumented_depth_weighted(
+    db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+    depth_weight: f64,
+) -> InstrumentedResult {
+    solve_instrumented_inner(db, num_vars, conflict_limit, depth_weight)
+}
+
+fn solve_instrumented_inner(
     mut db: ClauseDb,
     num_vars: u32,
     conflict_limit: u64,
+    depth_weight: f64,
 ) -> InstrumentedResult {
     let mut profiles: Vec<ConflictProfile> = Vec::new();
     let mut learned_crefs: Vec<CRef> = Vec::new();
@@ -505,10 +527,20 @@ pub fn solve_instrumented(
 
                 if conflicts >= next_reduce {
                     let locked = build_locked_set(&trail);
-                    let deleted = db.reduce_learned(&locked);
+                    let deleted = if depth_weight > 0.0 {
+                        db.reduce_learned_weighted(&locked, depth_weight)
+                    } else {
+                        db.reduce_learned(&locked)
+                    };
                     if !deleted.is_empty() {
                         let remap = db.compact();
                         trail.remap_reasons(&remap);
+                        // Remap learned_crefs to new positions
+                        for lc in &mut learned_crefs {
+                            if let Ok(idx) = remap.binary_search_by_key(lc, |&(old, _)| old) {
+                                *lc = remap[idx].1;
+                            }
+                        }
                         watches = watch::Watches::new(&db, num_vars);
                         watches.set_queue_head(trail.len());
                     }
@@ -597,6 +629,9 @@ pub fn solve_instrumented(
                         let lbd = analysis.lbd;
                         let cref = db.add_clause(analysis.learned);
                         db.set_lbd(cref, lbd as u16);
+                        if depth_weight > 0.0 {
+                            db.set_depth(cref, resolution_depth.min(u16::MAX as u32) as u16);
+                        }
                         watches.add_clause(&db, cref);
                         trail.record_propagation(asserting_lit, cref);
                         learned_crefs.push(cref);
@@ -1606,6 +1641,63 @@ p cnf 5 10
             // Strong signal: |r| > 0.3
             // The test passes regardless — this is an observatory, not a gate
             println!("\n  Legend: |r| > 0.3 = strong, |r| > 0.1 = weak, < 0.1 = noise");
+        }
+    }
+
+    #[test]
+    fn seed_3_depth_weighted_deletion_ab_test() {
+        // C2 experiment: does depth-weighted clause deletion reduce conflict count?
+        //
+        // A = baseline LBD-only deletion (depth_weight = 0.0)
+        // B = depth-weighted deletion (depth_weight = α)
+        //
+        // Run on 20 seeds × 200-var phase transition, 50K conflict budget.
+        // Compare mean conflict counts.
+        use crate::bench::generate_k_sat;
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let conflict_budget = 50_000u64;
+        let num_seeds = 20;
+
+        // Test several depth weights
+        let weights = [0.0, 0.1, 0.25, 0.5, 1.0];
+
+        println!("\n=== Seed-3 C2 Experiment: Depth-Weighted Deletion ===");
+        println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
+        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "α", "conflicts", "solved", "unknown", "vs_base%");
+
+        let mut baseline_conflicts = 0u64;
+
+        for &weight in &weights {
+            let mut total_conflicts = 0u64;
+            let mut solved = 0u32;
+            let mut unknown = 0u32;
+
+            for seed in 0..num_seeds {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let ir = solve_instrumented_depth_weighted(db, n, conflict_budget, weight);
+                let n_conflicts = ir.profiles.len() as u64;
+                total_conflicts += n_conflicts;
+                match ir.result {
+                    SolveResult::Sat(_) | SolveResult::Unsat => solved += 1,
+                    SolveResult::Unknown => unknown += 1,
+                }
+            }
+
+            if weight == 0.0 {
+                baseline_conflicts = total_conflicts;
+            }
+
+            let vs_base = if baseline_conflicts > 0 {
+                ((total_conflicts as f64 / baseline_conflicts as f64) - 1.0) * 100.0
+            } else {
+                0.0
+            };
+
+            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                weight, total_conflicts, solved, unknown, vs_base);
         }
     }
 }
