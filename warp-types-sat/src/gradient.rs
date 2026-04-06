@@ -877,10 +877,10 @@ mod tests {
         // GPU parallelism analysis: work per iteration
         println!("\n=== GPU Parallelism Axes ===");
         println!("Each gradient iteration at n vars, ratio 4.267:");
-        for &n in &[100, 1000, 10000] {
+        for &n in &[100_usize, 1000, 10000] {
             let clauses = ((n as f64) * 4.267).ceil() as usize;
-            let warps_clause_eval = (clauses + 31) / 32;
-            let warps_grad_accum = (n + 31) / 32;
+            let warps_clause_eval = clauses.div_ceil(32);
+            let warps_grad_accum = n.div_ceil(32);
             let ops_per_iter = clauses * 3 + n * 13; // ~3 muls/clause + ~13 ops/var for gradient
             println!(
                 "  n={:<6} clauses={:<8} warps(eval)={:<6} warps(grad)={:<6} ops/iter={:<10}",

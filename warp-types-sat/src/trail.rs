@@ -296,6 +296,12 @@ impl<'a> BcpTrail<'a> {
         self.entries.len()
     }
 
+    /// Returns true if the trail has no entries.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Get trail entry at position `idx`.
     #[inline]
     pub fn entry_at(&self, idx: usize) -> &TrailEntry {

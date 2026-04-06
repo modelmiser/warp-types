@@ -299,6 +299,7 @@ pub fn solve_watched_combined(
     (result, stats)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve_cdcl_core_inner(
     db: &mut ClauseDb,
     num_vars: u32,
@@ -447,7 +448,7 @@ fn solve_cdcl_core_inner(
 
                         let t = Instant::now();
                         let analysis =
-                            analyze::analyze_conflict_with(&mut analyze_work, &trail, &db, clause);
+                            analyze::analyze_conflict_with(&mut analyze_work, &trail, db, clause);
                         stats.analyze_ns += t.elapsed().as_nanos() as u64;
                         stats.analyze_resolve_ns += analysis.resolve_ns;
                         stats.analyze_minimize_ns += analysis.minimize_ns;
@@ -1531,11 +1532,7 @@ p cnf 5 10
                 }
                 v[v.len() * p / 100].as_micros()
             };
-            let ns_per_probe = if total_probes > 0 {
-                total_probe_ns / total_probes
-            } else {
-                0
-            };
+            let ns_per_probe = total_probe_ns.checked_div(total_probes).unwrap_or(0);
 
             println!(
                 "{:<25} {:>12} {:>12} {:>12} {:>8} {:>8} {:>8} {:>12}",

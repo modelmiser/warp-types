@@ -87,7 +87,7 @@ impl ClauseScheduler {
                 .expect("clause already acquired — affine discipline violated");
 
             if let Some(tile) =
-                clause_tile::make_clause_tile::<Propagate>(&clause.literals, token, cref)
+                clause_tile::make_clause_tile::<Propagate>(clause.literals, token, cref)
             {
                 lanes_used += tile.tile_size();
                 tiles.push(tile);
@@ -122,7 +122,7 @@ impl ClauseScheduler {
             let clause = db.clause(cref);
             if clause.literals.is_empty() || clause.literals.len() > 32 {
                 self.pending.remove(i);
-                match clause_tile::eval_clause_direct(&clause.literals, trail.assignments()) {
+                match clause_tile::eval_clause_direct(clause.literals, trail.assignments()) {
                     ClauseStatus::Conflict => {
                         round.conflict = Some(cref);
                         return round;

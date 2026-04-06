@@ -150,6 +150,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: CRef) -> 
 ///
 /// `conflict_clause` is the index of the clause that caused the conflict.
 /// Returns the learned clause and backtrack level.
+#[allow(clippy::needless_range_loop)]
 pub fn analyze_conflict_with(
     work: &mut AnalyzeWork,
     trail: &Trail,
@@ -386,6 +387,7 @@ pub fn analyze_conflict_with(
 ///
 /// Same as `analyze_conflict_with` but records each resolution step.
 /// Use for proof DAG mining — adds ~1 Vec::push per resolution step.
+#[allow(clippy::needless_range_loop)]
 pub fn analyze_conflict_instrumented(
     work: &mut AnalyzeWork,
     trail: &Trail,
@@ -859,7 +861,7 @@ impl ProofDag {
     pub fn variable_centrality(profiles: &[ConflictProfile]) -> Vec<(u32, usize)> {
         let freq = pivot_frequency(profiles);
         let mut sorted: Vec<(u32, usize)> = freq.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         sorted
     }
 
@@ -993,6 +995,7 @@ fn fractional_ranks(values: &[f64]) -> Vec<f64> {
 /// by pivot frequency against their ranking by final VSIDS activity score.
 /// This tests whether VSIDS already captures the proof structure's
 /// variable importance, without the tautological proxy.
+#[allow(clippy::needless_range_loop)]
 pub fn correlate_centrality_vs_vsids(
     profiles: &[ConflictProfile],
     vsids_activities: &[f64],
@@ -1094,6 +1097,7 @@ pub fn correlate_depth_vs_clause_reuse(
 /// for VSIDS activity, since VSIDS bumps all learned-clause variables).
 /// Tests whether the solver's activity heuristic already captures the
 /// proof structure's variable importance.
+#[allow(clippy::needless_range_loop)]
 pub fn correlate_centrality_vs_bump_freq(
     profiles: &[ConflictProfile],
     num_vars: u32,
@@ -1154,6 +1158,7 @@ pub fn correlate_centrality_vs_bump_freq(
 /// Bridges seeds #1 and #3. If the loss-landscape gradient magnitude
 /// |∂L/∂x_v| correlates with pivot frequency, then gradient-guided VSIDS
 /// is theoretically grounded, not just empirically useful.
+#[allow(clippy::needless_range_loop)]
 pub fn correlate_pivot_vs_gradient(
     profiles: &[ConflictProfile],
     gradient_magnitudes: &[f64],

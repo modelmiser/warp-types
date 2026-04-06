@@ -94,7 +94,7 @@ impl ClauseDataSoA {
 
         let num_clauses = weights.len();
         // Round up to next multiple of WARP_SIZE (handles num_clauses=0 correctly: 0/32*32=0).
-        let padded_len = (num_clauses + WARP_SIZE - 1) / WARP_SIZE * WARP_SIZE;
+        let padded_len = num_clauses.div_ceil(WARP_SIZE) * WARP_SIZE;
 
         // Pad to warp boundary with zero-weight dummy clauses.
         for _ in num_clauses..padded_len {
