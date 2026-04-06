@@ -451,7 +451,7 @@ pub fn solve_instrumented(
     num_vars: u32,
     conflict_limit: u64,
 ) -> InstrumentedResult {
-    solve_instrumented_inner(db, num_vars, conflict_limit, 0.0)
+    solve_instrumented_inner(db, num_vars, conflict_limit, 0.0, 0.0)
 }
 
 /// Instrumented solve with depth-weighted clause deletion.
@@ -464,7 +464,25 @@ pub fn solve_instrumented_depth_weighted(
     conflict_limit: u64,
     depth_weight: f64,
 ) -> InstrumentedResult {
-    solve_instrumented_inner(db, num_vars, conflict_limit, depth_weight)
+    solve_instrumented_inner(db, num_vars, conflict_limit, depth_weight, 0.0)
+}
+
+/// Instrumented solve with pivot-augmented VSIDS.
+///
+/// During conflict analysis, in addition to the standard learned-clause bumps,
+/// each pivot variable in the resolution chain receives a bump scaled by
+/// `pivot_bump_scale × increment`. This tests whether feeding structural
+/// centrality (pivot frequency) back into VSIDS improves solving.
+///
+/// `pivot_bump_scale = 0.0` is baseline (no pivot bumps).
+/// `pivot_bump_scale = 1.0` gives pivots the same bump as learned-clause vars.
+pub fn solve_instrumented_pivot_augmented(
+    db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+    pivot_bump_scale: f64,
+) -> InstrumentedResult {
+    solve_instrumented_inner(db, num_vars, conflict_limit, 0.0, pivot_bump_scale)
 }
 
 fn solve_instrumented_inner(
@@ -472,6 +490,7 @@ fn solve_instrumented_inner(
     num_vars: u32,
     conflict_limit: u64,
     depth_weight: f64,
+    pivot_bump_scale: f64,
 ) -> InstrumentedResult {
     let mut profiles: Vec<ConflictProfile> = Vec::new();
     let mut learned_crefs: Vec<CRef> = Vec::new();
@@ -606,6 +625,17 @@ fn solve_instrumented_inner(
 
                         for &learned_lit in &analysis.learned {
                             vsids.bump(learned_lit.var());
+                        }
+                        // Pivot-augmented VSIDS: bump pivots from resolution chain.
+                        // Pivots are structurally central (C3: r_s=0.524) but only
+                        // partially captured by learned-clause bumps (26%). This
+                        // feeds the 74% gap back into the decision heuristic.
+                        if pivot_bump_scale > 0.0 {
+                            if let Some(profile) = profiles.last() {
+                                for step in &profile.resolution_chain {
+                                    vsids.bump_scaled(step.pivot_var, pivot_bump_scale);
+                                }
+                            }
                         }
                         vsids.decay();
 
@@ -1699,5 +1729,112 @@ p cnf 5 10
             println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
                 weight, total_conflicts, solved, unknown, vs_base);
         }
+    }
+
+    #[test]
+    fn seed_3_pivot_augmented_vsids_ab_test() {
+        // C3 follow-up: does feeding pivot centrality back into VSIDS
+        // reduce conflict count?
+        //
+        // C3 showed r_s = +0.524 between VSIDS activity and pivot frequency,
+        // meaning VSIDS captures ~26% of pivot centrality. The 74% gap
+        // represents structural information that VSIDS misses.
+        //
+        // Experiment: during conflict analysis, bump pivot variables by
+        // `scale × increment` in addition to the standard learned-clause bumps.
+        //
+        // A = baseline (pivot_bump_scale = 0.0)
+        // B = pivot-augmented (pivot_bump_scale > 0.0)
+        //
+        // 20 seeds × 200-var phase transition, 50K conflict budget.
+        use crate::bench::generate_k_sat;
+
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let conflict_budget = 50_000u64;
+        let num_seeds = 20;
+
+        let scales = [0.0, 0.25, 0.5, 1.0, 2.0];
+
+        println!("\n=== Seed-3 C3 Experiment: Pivot-Augmented VSIDS ===");
+        println!("  n={n}, ratio=4.267, budget={conflict_budget}, seeds=0..{num_seeds}");
+        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%");
+
+        let mut baseline_conflicts = 0u64;
+        let mut baseline_solved = 0u32;
+
+        for &scale in &scales {
+            let mut total_conflicts = 0u64;
+            let mut solved = 0u32;
+            let mut unknown = 0u32;
+
+            for seed in 0..num_seeds {
+                let db = generate_k_sat(n, num_clauses, 3, seed);
+                let ir = solve_instrumented_pivot_augmented(db, n, conflict_budget, scale);
+                let n_conflicts = ir.profiles.len() as u64;
+                total_conflicts += n_conflicts;
+                match ir.result {
+                    SolveResult::Sat(_) | SolveResult::Unsat => solved += 1,
+                    SolveResult::Unknown => unknown += 1,
+                }
+            }
+
+            if scale == 0.0 {
+                baseline_conflicts = total_conflicts;
+                baseline_solved = solved;
+            }
+
+            let vs_base = if baseline_conflicts > 0 {
+                ((total_conflicts as f64 / baseline_conflicts as f64) - 1.0) * 100.0
+            } else {
+                0.0
+            };
+
+            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base);
+        }
+
+        // Also run on 300-var to check scaling behavior
+        let n_large = 300u32;
+        let num_clauses_large = ((n_large as f64) * 4.267).ceil() as usize;
+
+        println!("\n  --- Scaling check: n={n_large} ---");
+        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "scale", "conflicts", "solved", "unknown", "vs_base%");
+
+        let mut baseline_large = 0u64;
+
+        for &scale in &scales {
+            let mut total_conflicts = 0u64;
+            let mut solved = 0u32;
+            let mut unknown = 0u32;
+
+            for seed in 0..num_seeds {
+                let db = generate_k_sat(n_large, num_clauses_large, 3, seed);
+                let ir = solve_instrumented_pivot_augmented(db, n_large, conflict_budget, scale);
+                let n_conflicts = ir.profiles.len() as u64;
+                total_conflicts += n_conflicts;
+                match ir.result {
+                    SolveResult::Sat(_) | SolveResult::Unsat => solved += 1,
+                    SolveResult::Unknown => unknown += 1,
+                }
+            }
+
+            if scale == 0.0 {
+                baseline_large = total_conflicts;
+            }
+
+            let vs_base = if baseline_large > 0 {
+                ((total_conflicts as f64 / baseline_large as f64) - 1.0) * 100.0
+            } else {
+                0.0
+            };
+
+            println!("  {:>8.2} {:>10} {:>10} {:>10} {:>+10.1}",
+                scale, total_conflicts, solved, unknown, vs_base);
+        }
+
+        println!("\n  Baseline 200v: solved {baseline_solved}/{num_seeds}, conflicts {baseline_conflicts}");
     }
 }

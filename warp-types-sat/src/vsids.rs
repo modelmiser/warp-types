@@ -164,7 +164,16 @@ impl Vsids {
 
     /// Bump activity of a variable (call for each var in the learned clause).
     pub fn bump(&mut self, var: u32) {
-        self.activity[var as usize] += self.increment;
+        self.bump_scaled(var, 1.0);
+    }
+
+    /// Bump activity of a variable with a scaling factor on the increment.
+    ///
+    /// `scale = 1.0` is identical to `bump()`. `scale = 0.5` gives half the
+    /// normal bump — useful for pivot-augmented VSIDS where pivots should be
+    /// boosted but less aggressively than learned-clause variables.
+    pub fn bump_scaled(&mut self, var: u32, scale: f64) {
+        self.activity[var as usize] += self.increment * scale;
         // Rescale to prevent floating-point overflow.
         if self.activity[var as usize] > 1e100 {
             for a in &mut self.activity {
