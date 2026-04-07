@@ -638,6 +638,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn enhanced_improves_success_rate() {
         // Enhanced config (momentum + weights) should find >= as many solutions
         // as vanilla on 50-var instances where vanilla struggles.
@@ -729,6 +730,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn bench_gradient_vs_cdcl() {
         println!("\n=== Vanilla vs Enhanced vs Hybrid vs CDCL ===");
         println!(
@@ -805,6 +807,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn scaling_study() {
         // Scaling analysis: gradient vs CDCL across problem sizes.
         // Uses fewer starts (8) for tractability at larger sizes.

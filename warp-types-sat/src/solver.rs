@@ -1037,6 +1037,7 @@ p cnf 3 4
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn watched_scaling_benchmark() {
         // Performance comparison. Run with --release --nocapture.
         use crate::bench::generate_3sat_phase_transition;
@@ -1253,6 +1254,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn per_conflict_cost_scaling() {
         use crate::bench::generate_k_sat;
         use std::time::Instant;
@@ -1331,6 +1333,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn phase_timing_profile() {
         use crate::bench::generate_k_sat;
         use std::time::Instant;
@@ -1423,6 +1426,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn trail_gradient_kill_signal() {
         // Kill signal: 100 instances at n=300, ratio=4.26.
         // If trail-gradient doesn't improve median solve time by >10%, it's dead.
@@ -1549,6 +1553,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn resolution_depth_kill_signal() {
         // Kill signal: if median resolution depth < 3, DAGs are
         // too shallow to mine. Run on 200-var and 300-var instances.
@@ -2046,6 +2051,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn depth_weighted_deletion_ab_test() {
         // C2 experiment: does depth-weighted clause deletion reduce conflict count?
         //
@@ -2107,6 +2113,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn pivot_augmented_vsids_ab_test() {
         // C3 follow-up: does feeding pivot centrality back into VSIDS
         // reduce conflict count?
@@ -2222,6 +2229,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn pivot_scaling_diagnosis() {
         // Diagnose WHY pivot-augmented VSIDS doesn't help at 300v:
         //   (a) Budget ceiling? → re-run with 200K budget
@@ -2331,6 +2339,7 @@ p cnf 5 10
     }
 
     #[test]
+    #[ignore] // benchmark — too slow for CI
     fn combined_gradient_pivot_ab_test() {
         // Combined experiment: gradient phase hints + pivot decision bumps.
         //
