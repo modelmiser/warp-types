@@ -1,1 +1,5 @@
 .kernel-fuse/
+INSIGHTS.md
+DEVLOG.md
+perf.data
+perf.data.old
