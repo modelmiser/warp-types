@@ -1,0 +1,15 @@
+[package]
+name = "esp32-compiler"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal session-typed compiler: 10-keyword Rust-like language → J1-32 stack machine"
+license = "MIT"
+
+# no_std compatible — use alloc for Vec/String, no OS dependencies
+[features]
+default = ["std"]
+std = []
+
+[workspace]
+
+[dependencies]
