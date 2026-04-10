@@ -8,14 +8,16 @@ import WarpTypes.Basic
   - Canonical forms lemmas
   - Progress theorem
   - Preservation theorem (substitution lemma proved via context removal)
-  - Untypability proofs for 5 documented GPU bugs
+  - Untypability proofs for 5 documented GPU bugs (concrete n=32)
+
+  All metatheory is width-generic (parameterized by n) except the bug proofs.
 -/
 
 -- ============================================================================
 -- Substitution
 -- ============================================================================
 
-def subst (e : Expr) (x : String) (v : Expr) : Expr :=
+def subst {n : Nat} (e : Expr n) (x : String) (v : Expr n) : Expr n :=
   match e with
   | .warpVal s => .warpVal s
   | .perLaneVal => .perLaneVal
@@ -33,110 +35,110 @@ def subst (e : Expr) (x : String) (v : Expr) : Expr :=
   | .letPair e n1 n2 body =>
       if n1 == x || n2 == x then .letPair (subst e x v) n1 n2 body
       else .letPair (subst e x v) n1 n2 (subst body x v)
-  | .loopUniform n warpName w body =>
-      if warpName == x then .loopUniform n warpName (subst w x v) body
-      else .loopUniform n warpName (subst w x v) (subst body x v)
+  | .loopUniform k warpName w body =>
+      if warpName == x then .loopUniform k warpName (subst w x v) body
+      else .loopUniform k warpName (subst w x v) (subst body x v)
   | .loopVarying w body => .loopVarying (subst w x v) body
-  | .loopPhased n warpName w uBody vBody =>
-      if warpName == x then .loopPhased n warpName (subst w x v) uBody vBody
-      else .loopPhased n warpName (subst w x v) (subst uBody x v) vBody
-  | .loopConvergent n warpName w body =>
-      if warpName == x then .loopConvergent n warpName (subst w x v) body
-      else .loopConvergent n warpName (subst w x v) (subst body x v)
+  | .loopPhased k warpName w uBody vBody =>
+      if warpName == x then .loopPhased k warpName (subst w x v) uBody vBody
+      else .loopPhased k warpName (subst w x v) (subst uBody x v) vBody
+  | .loopConvergent k warpName w body =>
+      if warpName == x then .loopConvergent k warpName (subst w x v) body
+      else .loopConvergent k warpName (subst w x v) (subst body x v)
 
 -- ============================================================================
--- Small-Step Reduction
+-- Small-Step Reduction — parameterized by width n
 -- ============================================================================
 
-inductive Step : Expr → Expr → Prop
-  | divergeVal (s pred : ActiveSet) :
+inductive Step {n : Nat} : Expr n → Expr n → Prop
+  | divergeVal (s pred : PSet n) :
       Step (.diverge (.warpVal s) pred)
            (.pairVal (.warpVal (s &&& pred)) (.warpVal (s &&& ~~~pred)))
-  | mergeVal (s1 s2 : ActiveSet) :
+  | mergeVal (s1 s2 : PSet n) :
       Step (.merge (.warpVal s1) (.warpVal s2)) (.warpVal (s1 ||| s2))
-  | shuffleVal (s : ActiveSet) :
+  | shuffleVal (s : PSet n) :
       Step (.shuffle (.warpVal s) .perLaneVal) .perLaneVal
-  | letVal (name : String) (v body : Expr) :
+  | letVal (name : String) (v body : Expr n) :
       isValue v = true →
       Step (.letBind name v body) (subst body name v)
-  | fstVal (a b : Expr) :
+  | fstVal (a b : Expr n) :
       isValue a = true → isValue b = true →
       Step (.fst (.pairVal a b)) a
-  | sndVal (a b : Expr) :
+  | sndVal (a b : Expr n) :
       isValue a = true → isValue b = true →
       Step (.snd (.pairVal a b)) b
-  | divergeCong (w w' : Expr) (pred : ActiveSet) :
+  | divergeCong (w w' : Expr n) (pred : PSet n) :
       Step w w' → Step (.diverge w pred) (.diverge w' pred)
-  | mergeLeft (w1 w1' w2 : Expr) :
+  | mergeLeft (w1 w1' w2 : Expr n) :
       Step w1 w1' → Step (.merge w1 w2) (.merge w1' w2)
-  | mergeRight (v1 w2 w2' : Expr) :
+  | mergeRight (v1 w2 w2' : Expr n) :
       isValue v1 = true → Step w2 w2' →
       Step (.merge v1 w2) (.merge v1 w2')
-  | shuffleLeft (w w' data : Expr) :
+  | shuffleLeft (w w' data : Expr n) :
       Step w w' → Step (.shuffle w data) (.shuffle w' data)
-  | shuffleRight (v data data' : Expr) :
+  | shuffleRight (v data data' : Expr n) :
       isValue v = true → Step data data' →
       Step (.shuffle v data) (.shuffle v data')
-  | letCong (name : String) (val val' body : Expr) :
+  | letCong (name : String) (val val' body : Expr n) :
       Step val val' →
       Step (.letBind name val body) (.letBind name val' body)
-  | pairLeftCong (a a' b : Expr) :
+  | pairLeftCong (a a' b : Expr n) :
       Step a a' → Step (.pairVal a b) (.pairVal a' b)
-  | pairRightCong (a b b' : Expr) :
+  | pairRightCong (a b b' : Expr n) :
       isValue a = true → Step b b' →
       Step (.pairVal a b) (.pairVal a b')
-  | fstCong (e e' : Expr) :
+  | fstCong (e e' : Expr n) :
       Step e e' → Step (.fst e) (.fst e')
-  | sndCong (e e' : Expr) :
+  | sndCong (e e' : Expr n) :
       Step e e' → Step (.snd e) (.snd e')
-  | letPairVal (name1 name2 : String) (v1 v2 body : Expr) :
+  | letPairVal (name1 name2 : String) (v1 v2 body : Expr n) :
       isValue v1 = true → isValue v2 = true →
       Step (.letPair (.pairVal v1 v2) name1 name2 body)
            (subst (subst body name1 v1) name2 v2)
-  | letPairCong (e e' : Expr) (name1 name2 : String) (body : Expr) :
+  | letPairCong (e e' : Expr n) (name1 name2 : String) (body : Expr n) :
       Step e e' → Step (.letPair e name1 name2 body) (.letPair e' name1 name2 body)
-  | loopZero (warpName : String) (v body : Expr) :
+  | loopZero (warpName : String) (v body : Expr n) :
       isValue v = true →
       Step (.loopUniform 0 warpName v body) v
-  | loopSucc (warpName : String) (n : Nat) (v body : Expr) :
+  | loopSucc (warpName : String) (k : Nat) (v body : Expr n) :
       isValue v = true →
-      Step (.loopUniform (n + 1) warpName v body)
-           (.loopUniform n warpName (subst body warpName v) body)
-  | loopCong (n : Nat) (warpName : String) (w w' body : Expr) :
+      Step (.loopUniform (k + 1) warpName v body)
+           (.loopUniform k warpName (subst body warpName v) body)
+  | loopCong (k : Nat) (warpName : String) (w w' body : Expr n) :
       Step w w' →
-      Step (.loopUniform n warpName w body) (.loopUniform n warpName w' body)
-  | loopVaryingVal (v body : Expr) :
+      Step (.loopUniform k warpName w body) (.loopUniform k warpName w' body)
+  | loopVaryingVal (v body : Expr n) :
       isValue v = true →
       Step (.loopVarying v body) v
-  | loopVaryingCong (w w' body : Expr) :
+  | loopVaryingCong (w w' body : Expr n) :
       Step w w' →
       Step (.loopVarying w body) (.loopVarying w' body)
-  | loopPhasedZero (warpName : String) (v uBody vBody : Expr) :
+  | loopPhasedZero (warpName : String) (v uBody vBody : Expr n) :
       isValue v = true →
       Step (.loopPhased 0 warpName v uBody vBody) v
-  | loopPhasedSucc (warpName : String) (n : Nat) (v uBody vBody : Expr) :
+  | loopPhasedSucc (warpName : String) (k : Nat) (v uBody vBody : Expr n) :
       isValue v = true →
-      Step (.loopPhased (n + 1) warpName v uBody vBody)
-           (.loopPhased n warpName (subst uBody warpName v) uBody vBody)
-  | loopPhasedCong (n : Nat) (warpName : String) (w w' uBody vBody : Expr) :
+      Step (.loopPhased (k + 1) warpName v uBody vBody)
+           (.loopPhased k warpName (subst uBody warpName v) uBody vBody)
+  | loopPhasedCong (k : Nat) (warpName : String) (w w' uBody vBody : Expr n) :
       Step w w' →
-      Step (.loopPhased n warpName w uBody vBody) (.loopPhased n warpName w' uBody vBody)
-  | loopConvergentZero (warpName : String) (v body : Expr) :
+      Step (.loopPhased k warpName w uBody vBody) (.loopPhased k warpName w' uBody vBody)
+  | loopConvergentZero (warpName : String) (v body : Expr n) :
       isValue v = true →
       Step (.loopConvergent 0 warpName v body) v
-  | loopConvergentSucc (warpName : String) (n : Nat) (v body : Expr) :
+  | loopConvergentSucc (warpName : String) (k : Nat) (v body : Expr n) :
       isValue v = true →
-      Step (.loopConvergent (n + 1) warpName v body)
-           (.loopConvergent n warpName (subst body warpName v) body)
-  | loopConvergentCong (n : Nat) (warpName : String) (w w' body : Expr) :
+      Step (.loopConvergent (k + 1) warpName v body)
+           (.loopConvergent k warpName (subst body warpName v) body)
+  | loopConvergentCong (k : Nat) (warpName : String) (w w' body : Expr n) :
       Step w w' →
-      Step (.loopConvergent n warpName w body) (.loopConvergent n warpName w' body)
+      Step (.loopConvergent k warpName w body) (.loopConvergent k warpName w' body)
 
 -- ============================================================================
 -- Values preserve contexts (values don't consume linear resources)
 -- ============================================================================
 
-theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
+theorem value_preserves_ctx {n : Nat} {ctx ctx' : Ctx n} {v : Expr n} {t : Ty n}
     (ht : HasType ctx v t ctx') (hv : isValue v = true) : ctx = ctx' := by
   match ht with
   | .warpVal _ _ => rfl
@@ -164,7 +166,7 @@ theorem value_preserves_ctx {ctx ctx' : Ctx} {v : Expr} {t : Ty}
 -- Canonical Forms
 -- ============================================================================
 
-theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
+theorem canonical_warp {n : Nat} {e : Expr n} {s : PSet n} {ctx' : Ctx n}
     (ht : HasType [] e (.warp s) ctx') (hv : isValue e = true) :
     e = .warpVal s := by
   match ht with
@@ -180,8 +182,8 @@ theorem canonical_warp {e : Expr} {s : ActiveSet} {ctx' : Ctx}
   | .loopPhased _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
   | .loopConvergent _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
-theorem canonical_perLane {e : Expr} {ctx' : Ctx}
-    (ht : HasType [] e .perLane ctx') (hv : isValue e = true) :
+theorem canonical_perLane {n : Nat} {e : Expr n} {ctx' : Ctx n}
+    (ht : HasType [] e (Ty.perLane : Ty n) ctx') (hv : isValue e = true) :
     e = .perLaneVal := by
   match ht with
   | .perLaneVal _ => rfl
@@ -192,7 +194,7 @@ theorem canonical_perLane {e : Expr} {ctx' : Ctx}
   | .sndE _ _ _ _ _ _ => simp [isValue] at hv
   | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
-theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
+theorem canonical_pair {n : Nat} {e : Expr n} {t1 t2 : Ty n} {ctx' : Ctx n}
     (ht : HasType [] e (.pair t1 t2) ctx') (hv : isValue e = true) :
     ∃ v1 v2, e = .pairVal v1 v2 ∧ isValue v1 = true ∧ isValue v2 = true := by
   match ht with
@@ -210,7 +212,7 @@ theorem canonical_pair {e : Expr} {t1 t2 : Ty} {ctx' : Ctx}
 -- ============================================================================
 
 /-- Progress: A closed well-typed expression is either a value or can step. -/
-theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
+theorem progress {n : Nat} {e : Expr n} {t : Ty n} {ctx' : Ctx n}
     (ht : HasType [] e t ctx') :
     isValue e = true ∨ ∃ e', Step e e' := by
   match ht with
@@ -257,7 +259,7 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
       | .inl hvd =>
         have h1 := canonical_warp hw hv; subst h1
         have h2 := canonical_perLane hd' hvd; subst h2
-        exact .inr ⟨_, Step.shuffleVal ActiveSet.all⟩
+        exact .inr ⟨_, Step.shuffleVal (PSet.all n)⟩
       | .inr ⟨d', hd''⟩ =>
         exact .inr ⟨_, Step.shuffleRight w data d' hv hd''⟩
   | .letBind _ _ _ name val body _ _ hval _ hbody _ =>
@@ -303,33 +305,33 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
     match ihw with
     | .inl hv => exact .inr ⟨_, Step.loopVaryingVal w body hv⟩
     | .inr ⟨w', hw'⟩ => exact .inr ⟨_, Step.loopVaryingCong w w' body hw'⟩
-  | .loopPhased _ _ n warpName w uBody vBody _ hw _ _ _ =>
+  | .loopPhased _ _ k warpName w uBody vBody _ hw _ _ _ =>
     have ihw := progress hw
     match ihw with
     | .inl hv =>
-      match n with
+      match k with
       | 0 => exact .inr ⟨_, Step.loopPhasedZero warpName w uBody vBody hv⟩
-      | n' + 1 => exact .inr ⟨_, Step.loopPhasedSucc warpName n' w uBody vBody hv⟩
+      | k' + 1 => exact .inr ⟨_, Step.loopPhasedSucc warpName k' w uBody vBody hv⟩
     | .inr ⟨w', hw'⟩ =>
-      exact .inr ⟨_, Step.loopPhasedCong n warpName w w' uBody vBody hw'⟩
-  | .loopUniform _ _ n warpName w body _ hw _ _ =>
+      exact .inr ⟨_, Step.loopPhasedCong k warpName w w' uBody vBody hw'⟩
+  | .loopUniform _ _ k warpName w body _ hw _ _ =>
     have ihw := progress hw
     match ihw with
     | .inl hv =>
-      match n with
+      match k with
       | 0 => exact .inr ⟨_, Step.loopZero warpName w body hv⟩
-      | n' + 1 => exact .inr ⟨_, Step.loopSucc warpName n' w body hv⟩
+      | k' + 1 => exact .inr ⟨_, Step.loopSucc warpName k' w body hv⟩
     | .inr ⟨w', hw'⟩ =>
-      exact .inr ⟨_, Step.loopCong n warpName w w' body hw'⟩
-  | .loopConvergent _ _ n warpName w body _ hw _ _ =>
+      exact .inr ⟨_, Step.loopCong k warpName w w' body hw'⟩
+  | .loopConvergent _ _ k warpName w body _ hw _ _ =>
     have ihw := progress hw
     match ihw with
     | .inl hv =>
-      match n with
+      match k with
       | 0 => exact .inr ⟨_, Step.loopConvergentZero warpName w body hv⟩
-      | n' + 1 => exact .inr ⟨_, Step.loopConvergentSucc warpName n' w body hv⟩
+      | k' + 1 => exact .inr ⟨_, Step.loopConvergentSucc warpName k' w body hv⟩
     | .inr ⟨w', hw'⟩ =>
-      exact .inr ⟨_, Step.loopConvergentCong n warpName w w' body hw'⟩
+      exact .inr ⟨_, Step.loopConvergentCong k warpName w w' body hw'⟩
   | .letPairE _ _ _ e _ _ body _ _ _ he _ _ _ hbody _ _ =>
     have ihe := progress he
     match ihe with
@@ -349,7 +351,7 @@ theorem progress {e : Expr} {t : Ty} {ctx' : Ctx}
 -- ============================================================================
 
 /-- Looking up a name in a context from which it was removed yields none. -/
-theorem remove_lookup_self (ctx : Ctx) (name : String) :
+theorem remove_lookup_self {n : Nat} (ctx : Ctx n) (name : String) :
     (ctx.remove name).lookup name = none := by
   induction ctx with
   | nil => rfl
@@ -360,7 +362,7 @@ theorem remove_lookup_self (ctx : Ctx) (name : String) :
     · -- p kept: but p.1 ≠ name, so find? skips it
       simp only [h, List.find?]
       have hne : (p.1 == name) = false := by
-        simp only [bne_iff_ne, ne_eq, beq_iff_eq] at h; simp [beq_iff_eq, h]
+        simp only [bne_iff_ne, ne_eq] at h; simp [h]
       simp only [hne, Option.map, Ctx.lookup, Ctx.remove] at ih ⊢
       exact ih
     · -- p removed (p.1 = name)
@@ -368,7 +370,7 @@ theorem remove_lookup_self (ctx : Ctx) (name : String) :
       exact ih
 
 /-- Looking up a different name is unaffected by remove. -/
-theorem remove_lookup_ne {name name' : String} (hne : name ≠ name') (ctx : Ctx) :
+theorem remove_lookup_ne {n : Nat} {name name' : String} (hne : name ≠ name') (ctx : Ctx n) :
     (ctx.remove name).lookup name' = ctx.lookup name' := by
   induction ctx with
   | nil => rfl
@@ -392,7 +394,7 @@ theorem remove_lookup_ne {name name' : String} (hne : name ≠ name') (ctx : Ctx
         exact ih
 
 /-- Removing from a context where the name is absent is identity. -/
-theorem remove_of_lookup_none {ctx : Ctx} {name : String}
+theorem remove_of_lookup_none {n : Nat} {ctx : Ctx n} {name : String}
     (h : ctx.lookup name = none) : ctx.remove name = ctx := by
   induction ctx with
   | nil => rfl
@@ -403,39 +405,39 @@ theorem remove_of_lookup_none {ctx : Ctx} {name : String}
     · simp only [Bool.not_eq_true] at hq
       simp only [hq] at h
       simp only [Ctx.remove, List.filter]
-      have : (p.1 != name) = true := by simp [bne_iff_ne, ne_eq, beq_iff_eq]; simp [beq_iff_eq] at hq; exact hq
+      have : (p.1 != name) = true := by simp [bne_iff_ne, ne_eq]; simp [beq_iff_eq] at hq; exact hq
       simp only [this]
       congr 1
       exact ih h
 
 /-- Lookup on cons with matching name. -/
-theorem lookup_cons_eq (name : String) (t : Ty) (ctx : Ctx) :
+theorem lookup_cons_eq {n : Nat} (name : String) (t : Ty n) (ctx : Ctx n) :
     Ctx.lookup ((name, t) :: ctx) name = some t := by
-  simp [Ctx.lookup, List.find?, beq_self_eq_true]
+  simp [Ctx.lookup, List.find?]
 
 /-- Lookup on cons with different name. -/
-theorem lookup_cons_ne {name name' : String} (hne : name ≠ name') (t : Ty) (ctx : Ctx) :
+theorem lookup_cons_ne {n : Nat} {name name' : String} (hne : name ≠ name') (t : Ty n) (ctx : Ctx n) :
     Ctx.lookup ((name, t) :: ctx) name' = ctx.lookup name' := by
   simp only [Ctx.lookup, List.find?]
   have : (name == name') = false := by simp [beq_iff_eq, hne]
   simp [this]
 
 /-- Remove on cons with matching name. -/
-theorem remove_cons_eq (name : String) (t : Ty) (ctx : Ctx) :
+theorem remove_cons_eq {n : Nat} (name : String) (t : Ty n) (ctx : Ctx n) :
     Ctx.remove ((name, t) :: ctx) name = Ctx.remove ctx name := by
   simp only [Ctx.remove, List.filter]
   have : ((name, t).1 != name) = false := by simp [bne_iff_ne, ne_eq]
   simp [this]
 
 /-- Remove on cons with different name. -/
-theorem remove_cons_ne {name name' : String} (hne : name ≠ name') (t : Ty) (ctx : Ctx) :
+theorem remove_cons_ne {n : Nat} {name name' : String} (hne : name ≠ name') (t : Ty n) (ctx : Ctx n) :
     Ctx.remove ((name', t) :: ctx) name = (name', t) :: Ctx.remove ctx name := by
   simp only [Ctx.remove, List.filter]
   have : ((name', t).1 != name) = true := by simp [bne_iff_ne, ne_eq]; exact Ne.symm hne
   simp [this]
 
 /-- Remove commutes: order of removal doesn't matter. -/
-theorem remove_comm (ctx : Ctx) (a b : String) :
+theorem remove_comm {n : Nat} (ctx : Ctx n) (a b : String) :
     Ctx.remove (Ctx.remove ctx a) b = Ctx.remove (Ctx.remove ctx b) a := by
   simp only [Ctx.remove, List.filter_filter]
   congr 1; ext p; simp [Bool.and_comm]
@@ -445,7 +447,7 @@ theorem remove_comm (ctx : Ctx) (a b : String) :
 -- ============================================================================
 
 /-- Helper: values produce any-context typing (avoids index constraint). -/
-private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
+private theorem value_any_ctx_aux {n : Nat} {v : Expr n} {t : Ty n} {ctx₁ ctx₂ : Ctx n}
     (hv : isValue v = true)
     (ht : HasType ctx₁ v t ctx₂) :
     ∀ ctx₃, HasType ctx₃ v t ctx₃ := by
@@ -473,7 +475,7 @@ private theorem value_any_ctx_aux {v : Expr} {t : Ty} {ctx₁ ctx₂ : Ctx}
   | .loopConvergent _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
 
 /-- Values can be typed in any context, producing the same context unchanged. -/
-theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
+theorem value_any_ctx {n : Nat} {v : Expr n} {t : Ty n} {ctx₁ : Ctx n}
     (hv : isValue v = true)
     (ht : HasType ctx₁ v t ctx₁) :
     ∀ ctx₂, HasType ctx₂ v t ctx₂ :=
@@ -484,9 +486,9 @@ theorem value_any_ctx {v : Expr} {t : Ty} {ctx₁ : Ctx}
 -- ============================================================================
 
 /-- Any binding in the output context was present (with the same type) in input. -/
-theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
+theorem output_binding_from_input {n : Nat} {ctx ctx' : Ctx n} {e : Expr n} {t : Ty n}
     (ht : HasType ctx e t ctx')
-    {x : String} {tx : Ty}
+    {x : String} {tx : Ty n}
     (hout : ctx'.lookup x = some tx) :
     ctx.lookup x = some tx := by
   induction ht with
@@ -502,23 +504,10 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
   | merge _ _ _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | shuffle _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | letBind ctx₀ ctx_mid ctx_body name' _ _ _ _ _ hfresh₀ _ hcons₀ ih_val ih_body =>
-    -- ctx' = ctx_body, ctx = ctx₀
-    -- hout : ctx_body.lookup x = some tx
-    -- hcons₀ : ctx_body.lookup name' = none
-    -- ih_body : ctx_body.lookup x = some tx → ((name', _) :: ctx_mid).lookup x = some tx
-    -- ih_val : ((name', _) :: ctx_mid).lookup x = some tx → ctx₀.lookup x = some tx
-    -- But ih_body's premise is about the output of body's typing, which IS ctx_body = ctx'
-    -- Actually the IH is already correctly instantiated by `induction`:
-    -- ih_body gives us binding in (name', t1) :: ctx_mid
-    -- ih_val gives us binding in ctx₀
     have h_body := ih_body hout
-    -- h_body : ((name', _) :: ctx_mid).lookup x = some tx
-    -- Need to strip the (name', _) prefix. x ≠ name' because x is in ctx_body but name' isn't
     by_cases hxn : x = name'
-    · -- x = name', but ctx_body.lookup name' = none contradicts hout
-      subst hxn; rw [hcons₀] at hout; exact absurd hout (by simp)
-    · -- x ≠ name', so lookup skips the cons
-      rw [lookup_cons_ne (Ne.symm hxn)] at h_body
+    · subst hxn; rw [hcons₀] at hout; exact absurd hout (by simp)
+    · rw [lookup_cons_ne (Ne.symm hxn)] at h_body
       exact ih_val h_body
   | pairVal _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
   | fstE _ _ _ _ _ _ ih => exact ih hout
@@ -539,11 +528,11 @@ theorem output_binding_from_input {ctx ctx' : Ctx} {e : Expr} {t : Ty}
 -- ============================================================================
 
 /-- Substitution for the var case (extracted to avoid scoping issues). -/
-private theorem subst_typing_var
-    {nm : String} {t_v : Ty} {v : Expr}
+private theorem subst_typing_var {n : Nat}
+    {nm : String} {t_v : Ty n} {v : Expr n}
     (hv : isValue v = true)
     (ht_v : ∀ ctx₂, HasType ctx₂ v t_v ctx₂)
-    {ctx₀ : Ctx} {name' : String} {t' : Ty}
+    {ctx₀ : Ctx n} {name' : String} {t' : Ty n}
     (hlook : ctx₀.lookup name' = some t')
     (hname : ∀ t'', ctx₀.lookup nm = some t'' → t'' = t_v) :
     HasType (ctx₀.remove nm) (subst (.var name') nm v) t'
@@ -572,11 +561,11 @@ private theorem subst_typing_var
     This generalizes over WHERE in the context the binding appears, which is
     essential for the merge/shuffle/pair cases where the binding may have
     been threaded past the first sub-expression. -/
-theorem subst_typing
-    {nm : String} {t_v : Ty} {v : Expr}
+theorem subst_typing {n : Nat}
+    {nm : String} {t_v : Ty n} {v : Expr n}
     (hv : isValue v = true)
     (ht_v : ∀ ctx₂, HasType ctx₂ v t_v ctx₂)
-    {ctx : Ctx} {e : Expr} {t : Ty} {ctx' : Ctx}
+    {ctx : Ctx n} {e : Expr n} {t : Ty n} {ctx' : Ctx n}
     (hte : HasType ctx e t ctx')
     (hname : ∀ t', ctx.lookup nm = some t' → t' = t_v) :
     HasType (ctx.remove nm) (subst e nm v) t (ctx'.remove nm) :=
@@ -749,9 +738,9 @@ theorem subst_typing
 -- ============================================================================
 
 /-- Substitution lemma as needed by preservation's letVal case. -/
-theorem subst_preserves_typing
-    {ctx ctx' ctx'' : Ctx} {name : String} {v : Expr} {t_v : Ty}
-    {e : Expr} {t : Ty}
+theorem subst_preserves_typing {n : Nat}
+    {ctx ctx' ctx'' : Ctx n} {name : String} {v : Expr n} {t_v : Ty n}
+    {e : Expr n} {t : Ty n}
     (hval : HasType ctx v t_v ctx')
     (hfresh : ctx'.lookup name = none)
     (hbody : HasType ((name, t_v) :: ctx') e t ctx'')
@@ -770,7 +759,7 @@ theorem subst_preserves_typing
   exact h
 
 /-- Preservation: if Γ ⊢ e : t ⊣ Γ' and e ⟶ e', then Γ ⊢ e' : t ⊣ Γ'. -/
-theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
+theorem preservation {n : Nat} {e e' : Expr n} {t : Ty n} {ctx ctx' : Ctx n}
     (ht : HasType ctx e t ctx') (hs : Step e e') :
     HasType ctx e' t ctx' := by
   induction hs generalizing t ctx ctx' with
@@ -789,7 +778,7 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
         cases hw2 with
         | warpVal _ _ =>
           have ⟨_, hcov⟩ := hcomp
-          unfold ActiveSet.Covers at hcov
+          unfold PSet.Covers at hcov
           rw [hcov]
           exact HasType.warpVal _ _
   | shuffleVal s =>
@@ -885,13 +874,13 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | loopUniform _ _ _ _ _ _ _ hw _ _ =>
       have := value_preserves_ctx hw hv; subst this; exact hw
-  | loopSucc warpName n v body hv =>
+  | loopSucc warpName k v body hv =>
     cases ht with
     | loopUniform _ _ _ _ _ _ _ hw hfresh hbody =>
       have hctx := value_preserves_ctx hw hv; subst hctx
       have h_subst := subst_preserves_typing hw hfresh hbody hfresh hv
       exact HasType.loopUniform _ _ _ _ _ _ _ h_subst hfresh hbody
-  | loopCong n warpName w w' body _ ih =>
+  | loopCong k warpName w w' body _ ih =>
     cases ht with
     | loopUniform _ _ _ _ _ _ _ hw hfresh hbody =>
       exact HasType.loopUniform _ _ _ _ _ _ _ (ih hw) hfresh hbody
@@ -907,13 +896,13 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | loopPhased _ _ _ _ _ _ _ _ hw _ _ _ =>
       have := value_preserves_ctx hw hv; subst this; exact hw
-  | loopPhasedSucc warpName n v uBody vBody hv =>
+  | loopPhasedSucc warpName k v uBody vBody hv =>
     cases ht with
     | loopPhased _ _ _ _ _ _ _ _ hw hfresh hbody hwf =>
       have hctx := value_preserves_ctx hw hv; subst hctx
       have h_subst := subst_preserves_typing hw hfresh hbody hfresh hv
       exact HasType.loopPhased _ _ _ _ _ _ _ _ h_subst hfresh hbody hwf
-  | loopPhasedCong n warpName w w' uBody vBody _ ih =>
+  | loopPhasedCong k warpName w w' uBody vBody _ ih =>
     cases ht with
     | loopPhased _ _ _ _ _ _ _ _ hw hfresh hbody hwf =>
       exact HasType.loopPhased _ _ _ _ _ _ _ _ (ih hw) hfresh hbody hwf
@@ -921,13 +910,13 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     cases ht with
     | loopConvergent _ _ _ _ _ _ _ hw _ _ =>
       have := value_preserves_ctx hw hv; subst this; exact hw
-  | loopConvergentSucc warpName n v body hv =>
+  | loopConvergentSucc warpName k v body hv =>
     cases ht with
     | loopConvergent _ _ _ _ _ _ _ hw hfresh hbody =>
       have hctx := value_preserves_ctx hw hv; subst hctx
       have h_subst := subst_preserves_typing hw hfresh hbody hfresh hv
       exact HasType.loopConvergent _ _ _ _ _ _ _ h_subst hfresh hbody
-  | loopConvergentCong n warpName w w' body _ ih =>
+  | loopConvergentCong k warpName w w' body _ ih =>
     cases ht with
     | loopConvergent _ _ _ _ _ _ _ hw hfresh hbody =>
       exact HasType.loopConvergent _ _ _ _ _ _ _ (ih hw) hfresh hbody
@@ -941,7 +930,7 @@ theorem preservation {e e' : Expr} {t : Ty} {ctx ctx' : Ctx}
     expression is either a value or can take another step.
     Corollary 4.3 from the paper — follows by induction on `Star Step` from
     progress + preservation. -/
-theorem type_safety {e e' : Expr} {t : Ty} {ctx' : Ctx}
+theorem type_safety {n : Nat} {e e' : Expr n} {t : Ty n} {ctx' : Ctx n}
     (ht : HasType [] e t ctx') (hstar : Star Step e e') :
     (isValue e' = true) ∨ (∃ e'', Step e' e'') := by
   induction hstar with
@@ -949,7 +938,7 @@ theorem type_safety {e e' : Expr} {t : Ty} {ctx' : Ctx}
   | step h1 _ ih => exact ih (preservation ht h1)
 
 -- ============================================================================
--- Untypability: real GPU bugs cannot be typed
+-- Untypability: real GPU bugs cannot be typed (concrete n=32)
 --
 -- Each theorem proves that a specific bug pattern (shuffle on a diverged
 -- warp) has NO typing derivation. All five documented bugs share the same
@@ -958,9 +947,9 @@ theorem type_safety {e e' : Expr} {t : Ty} {ctx' : Ctx}
 -- ============================================================================
 
 /-- The type of fst(diverge(warpVal(all), pred)) is always Warp<all &&& pred>. -/
-private theorem fst_diverge_warpval_type {pred : ActiveSet} {t : Ty} {ctx' : Ctx}
-    (ht : HasType [] (.fst (.diverge (.warpVal ActiveSet.all) pred)) t ctx') :
-    t = .warp (ActiveSet.all &&& pred) := by
+private theorem fst_diverge_warpval_type {pred : ActiveSet} {t : Ty 32} {ctx' : Ctx 32}
+    (ht : HasType [] (.fst (.diverge (.warpVal (PSet.all 32)) pred)) t ctx') :
+    t = .warp (PSet.all 32 &&& pred) := by
   match ht with
   | .fstE _ _ _ _ _ he =>
     match he with
@@ -971,56 +960,56 @@ private theorem fst_diverge_warpval_type {pred : ActiveSet} {t : Ty} {ctx' : Ctx
 /-- Shuffle on a diverged warp is untypable when the predicate ≠ all. -/
 private theorem shuffle_diverged_untypable
     (pred : ActiveSet)
-    (hne : ActiveSet.all &&& pred ≠ ActiveSet.all) :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) pred)) .perLaneVal)
+    (hne : PSet.all 32 &&& pred ≠ PSet.all 32) :
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) pred)) .perLaneVal)
       t ctx' := by
   intro ⟨t, ctx', ht⟩
   -- shuffle requires warp arg to have type Warp<All>
   have ⟨ctx_mid, hw⟩ := shuffle_requires_all ht
   -- But fst(diverge(warpVal(all), pred)) has type Warp<all &&& pred>
   have heq := fst_diverge_warpval_type hw
-  -- heq : Ty.warp ActiveSet.all = Ty.warp (ActiveSet.all &&& pred)
-  -- Extract: ActiveSet.all = ActiveSet.all &&& pred
+  -- heq : Ty.warp (PSet.all 32) = Ty.warp (PSet.all 32 &&& pred)
+  -- Extract: PSet.all 32 = PSet.all 32 &&& pred
   simp only [Ty.warp.injEq] at heq
   exact absurd heq.symm hne
 
 /-- Bug 1 (cuda-samples #398): Shuffle after extracting lane 0.
-    ActiveSet.all &&& 0x1 = 0x1 ≠ ActiveSet.all -/
+    PSet.all 32 &&& 0x1 = 0x1 ≠ PSet.all 32 -/
 theorem bug1_cuda_samples_398 :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) (0x00000001#32))) .perLaneVal)
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x00000001#32))) .perLaneVal)
       t ctx' :=
   shuffle_diverged_untypable (0x00000001#32) (by decide)
 
 /-- Bug 2 (CUB/CCCL #854): Shuffle on 16-lane sub-warp.
-    ActiveSet.all &&& 0xFFFF = 0xFFFF ≠ ActiveSet.all -/
+    PSet.all 32 &&& 0xFFFF = 0xFFFF ≠ PSet.all 32 -/
 theorem bug2_cccl_854 :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) (0x0000FFFF#32))) .perLaneVal)
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x0000FFFF#32))) .perLaneVal)
       t ctx' :=
   shuffle_diverged_untypable (0x0000FFFF#32) (by decide)
 
 /-- Bug 3 (PIConGPU #2514): Ballot (= shuffle) on diverged subset.
-    ActiveSet.all &&& 0xFFFF = 0xFFFF ≠ ActiveSet.all -/
+    PSet.all 32 &&& 0xFFFF = 0xFFFF ≠ PSet.all 32 -/
 theorem bug3_picongpu_2514 :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) (0x0000FFFF#32))) .perLaneVal)
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x0000FFFF#32))) .perLaneVal)
       t ctx' :=
   shuffle_diverged_untypable (0x0000FFFF#32) (by decide)
 
 /-- Bug 4 (LLVM #155682): Shuffle after lane-0 conditional.
-    ActiveSet.all &&& 0x1 = 0x1 ≠ ActiveSet.all -/
+    PSet.all 32 &&& 0x1 = 0x1 ≠ PSet.all 32 -/
 theorem bug4_llvm_155682 :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) (0x00000001#32))) .perLaneVal)
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x00000001#32))) .perLaneVal)
       t ctx' :=
   shuffle_diverged_untypable (0x00000001#32) (by decide)
 
 /-- Bug 5 (demo): Shuffle after even/odd divergence.
-    ActiveSet.all &&& ActiveSet.even = ActiveSet.even ≠ ActiveSet.all -/
+    PSet.all 32 &&& ActiveSet.even = ActiveSet.even ≠ PSet.all 32 -/
 theorem bug5_shuffle_after_diverge :
-    ¬ ∃ t ctx', HasType []
-      (.shuffle (.fst (.diverge (.warpVal ActiveSet.all) ActiveSet.even)) .perLaneVal)
+    ¬ ∃ t ctx', HasType (n := 32) []
+      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) ActiveSet.even)) .perLaneVal)
       t ctx' :=
   shuffle_diverged_untypable ActiveSet.even (by decide)

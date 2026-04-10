@@ -7,17 +7,19 @@ import WarpTypes.Metatheory
   Phase 1 (trivial/medium bitvector): 6 theorems, all passed in ≤3 attempts.
   Phase 2 (dependent types): 3 harder theorems requiring structural induction,
   compositionality, and operational semantics reasoning.
+
+  All bitvector theorems are width-generic (PSet n). Concrete instances stay at n=32.
 -/
 
 -- ============================================================================
--- Phase 1: Bitvector Properties (all passed)
+-- Phase 1: Bitvector Properties (all passed, now width-generic)
 -- ============================================================================
 
-theorem xor_self_cancel (s : ActiveSet) :
-    s ^^^ s = ActiveSet.none := by
-  unfold ActiveSet.none; ext i; simp
+theorem xor_self_cancel {n : Nat} (s : PSet n) :
+    s ^^^ s = PSet.none n := by
+  unfold PSet.none; ext i; simp
 
-theorem xor_involution (s m : ActiveSet) :
+theorem xor_involution {n : Nat} (s m : PSet n) :
     (s ^^^ m) ^^^ m = s := by
   ext i; simp [BitVec.xor_assoc]
 
@@ -41,6 +43,7 @@ theorem xor_is_involution (m : BitVec n) :
 
 -- ============================================================================
 -- Phase 2, Spec 4 (Medium-Hard): Nested complement composition
+-- Now width-generic using PSet n.
 -- ============================================================================
 
 /-- If A and B are complements within S, and C and D are complements
@@ -53,29 +56,29 @@ theorem xor_is_involution (m : BitVec n) :
     This formalizes nested diverge: diverge S by P to get A,B, then
     diverge A by Q to get C,D. The three leaves C,D,B cover S. -/
 
--- Bitvector algebra helpers
-private theorem bv_absorb_l (x y : ActiveSet) : x &&& (x ||| y) = x := by
+-- Bitvector algebra helpers (width-generic)
+private theorem bv_absorb_l {n : Nat} (x y : PSet n) : x &&& (x ||| y) = x := by
   ext i; simp_all
 
-private theorem bv_and_assoc (x y z : ActiveSet) : x &&& y &&& z = x &&& (y &&& z) := by
+private theorem bv_and_assoc {n : Nat} (x y z : PSet n) : x &&& y &&& z = x &&& (y &&& z) := by
   ext i; simp_all; cases x[i] <;> simp
 
-private theorem bv_and_zero (x : ActiveSet) : x &&& (0x0#32) = 0x0#32 := by
-  ext i; simp
+private theorem bv_and_zero {n : Nat} (x : PSet n) : x &&& PSet.none n = PSet.none n := by
+  ext i; simp [PSet.none]
 
-theorem nested_complement_partition
-    {s a b c d : ActiveSet}
-    (hab : ActiveSet.IsComplement a b s)
-    (hcd : ActiveSet.IsComplement c d a) :
+theorem nested_complement_partition {n : Nat}
+    {s a b c d : PSet n}
+    (hab : PSet.IsComplement a b s)
+    (hcd : PSet.IsComplement c d a) :
     -- C, D, B are pairwise disjoint
-    ActiveSet.Disjoint c b ∧
-    ActiveSet.Disjoint d b ∧
+    PSet.Disjoint c b ∧
+    PSet.Disjoint d b ∧
     -- and they cover S
     (c ||| d ||| b = s) := by
   obtain ⟨hab_disj, hab_cov⟩ := hab
   obtain ⟨hcd_disj, hcd_cov⟩ := hcd
-  unfold ActiveSet.Disjoint ActiveSet.Covers at *
-  unfold ActiveSet.none at *
+  unfold PSet.Disjoint PSet.Covers at *
+  unfold PSet.none at *
   -- Key lemma: c ⊆ a (absorption from c ||| d = a)
   -- Absorption: c &&& a = c (since c ||| d = a)
   have hca : c &&& a = c := by rw [← hcd_cov]; exact bv_absorb_l c d
@@ -83,8 +86,8 @@ theorem nested_complement_partition
   · -- C &&& B = 0
     calc c &&& b = (c &&& a) &&& b := by rw [hca]
       _ = c &&& (a &&& b) := bv_and_assoc c a b
-      _ = c &&& (0x0#32) := by rw [hab_disj]
-      _ = 0x0#32 := bv_and_zero c
+      _ = c &&& (0#n) := by rw [hab_disj]
+      _ = 0#n := bv_and_zero c
   · -- D &&& B = 0
     have hda : d &&& a = d := by
       rw [← hcd_cov]
@@ -93,57 +96,58 @@ theorem nested_complement_partition
       rw [BitVec.or_comm] at this; exact this
     calc d &&& b = (d &&& a) &&& b := by rw [hda]
       _ = d &&& (a &&& b) := bv_and_assoc d a b
-      _ = d &&& (0x0#32) := by rw [hab_disj]
-      _ = 0x0#32 := bv_and_zero d
+      _ = d &&& (0#n) := by rw [hab_disj]
+      _ = 0#n := bv_and_zero d
   · -- C ||| D ||| B = S
     rw [hcd_cov, hab_cov]
 
 -- ============================================================================
 -- Phase 2, Spec 5 (Hard): Diverge tree with structural induction
+-- Now width-generic using PSet n.
 -- ============================================================================
 
 /-- A diverge tree represents a sequence of diverge operations starting
     from a root active set. Leaves are un-diverged sub-warps. -/
-inductive DivTree : ActiveSet → Type
-  | leaf (s : ActiveSet) : DivTree s
-  | branch (s : ActiveSet) (pred : ActiveSet)
-      (left : DivTree (s &&& pred))
-      (right : DivTree (s &&& ~~~pred)) : DivTree s
+inductive DivTree (n : Nat) : PSet n → Type
+  | leaf (s : PSet n) : DivTree n s
+  | branch (s : PSet n) (pred : PSet n)
+      (left : DivTree n (s &&& pred))
+      (right : DivTree n (s &&& ~~~pred)) : DivTree n s
 
 /-- Collect all leaf masks from a diverge tree. -/
-def DivTree.leaves : DivTree s → List ActiveSet
+def DivTree.leaves {n : Nat} {s : PSet n} : DivTree n s → List (PSet n)
   | .leaf s => [s]
   | .branch _ _ l r => l.leaves ++ r.leaves
 
 -- Auxiliary: foldl over associative op distributes over init
-private theorem foldl_assoc_init (f : ActiveSet → ActiveSet → ActiveSet)
+private theorem foldl_assoc_init {n : Nat} (f : PSet n → PSet n → PSet n)
     (h_assoc : ∀ a b c, f (f a b) c = f a (f b c))
-    (a b : ActiveSet) (xs : List ActiveSet) :
+    (a b : PSet n) (xs : List (PSet n)) :
     List.foldl f (f a b) xs = f a (List.foldl f b xs) := by
   induction xs generalizing b with
   | nil => rfl
   | cons x xs ih => simp only [List.foldl]; rw [h_assoc a b x]; exact ih (f b x)
 
 -- Auxiliary: foldl over monoid splits across append
-private theorem foldl_or_append (xs ys : List ActiveSet) :
-    List.foldl (· ||| ·) ActiveSet.none (xs ++ ys) =
-    List.foldl (· ||| ·) ActiveSet.none xs ||| List.foldl (· ||| ·) ActiveSet.none ys := by
+private theorem foldl_or_append {n : Nat} (xs ys : List (PSet n)) :
+    List.foldl (· ||| ·) (PSet.none n) (xs ++ ys) =
+    List.foldl (· ||| ·) (PSet.none n) xs ||| List.foldl (· ||| ·) (PSet.none n) ys := by
   rw [List.foldl_append]
-  have h_assoc : ∀ a b c : ActiveSet, (a ||| b) ||| c = a ||| (b ||| c) := by
+  have h_assoc : ∀ a b c : PSet n, (a ||| b) ||| c = a ||| (b ||| c) := by
     intro a b c; ext i; simp [Bool.or_assoc]
-  have h_left_id : ∀ a : ActiveSet, ActiveSet.none ||| a = a := by
-    intro a; ext i; simp [ActiveSet.none]
+  have h_left_id : ∀ a : PSet n, PSet.none n ||| a = a := by
+    intro a; ext i; simp [PSet.none]
   induction ys generalizing xs with
-  | nil => ext i; simp [List.foldl, ActiveSet.none]
+  | nil => ext i; simp [List.foldl, PSet.none]
   | cons y ys ih =>
     simp only [List.foldl]
     rw [foldl_assoc_init _ h_assoc _ y ys, h_left_id y]
 
 /-- The OR of all leaves in a diverge tree equals the root.
     This is the partition property: no lanes are lost or created. -/
-theorem DivTree.leaves_cover_root : (t : DivTree s) →
-    t.leaves.foldl (· ||| ·) ActiveSet.none = s
-  | .leaf s => by simp [leaves, List.foldl, ActiveSet.none]
+theorem DivTree.leaves_cover_root {n : Nat} {s : PSet n} : (t : DivTree n s) →
+    t.leaves.foldl (· ||| ·) (PSet.none n) = s
+  | .leaf s => by simp [leaves, List.foldl, PSet.none]
   | .branch s pred l r => by
     simp only [leaves]
     rw [foldl_or_append]
@@ -152,6 +156,7 @@ theorem DivTree.leaves_cover_root : (t : DivTree s) →
 
 -- ============================================================================
 -- Phase 2, Spec 6 (Very Hard): Operational correspondence
+-- Now width-generic: works for any n.
 -- ============================================================================
 
 /-- The term `merge (fst (diverge (warpVal s) p)) (snd (diverge (warpVal s) p))`
@@ -160,7 +165,7 @@ theorem DivTree.leaves_cover_root : (t : DivTree s) →
     This connects the bitvector partition theorem to the operational semantics:
     diverge produces a pair, fst/snd extract the halves, merge recombines.
     The result is the original warp — verified by the Lean kernel. -/
-theorem diverge_merge_reduces_to_identity (s pred : ActiveSet) :
+theorem diverge_merge_reduces_to_identity {n : Nat} (s pred : PSet n) :
     Star Step
       (.merge
         (.fst (.diverge (.warpVal s) pred))
@@ -198,6 +203,6 @@ theorem diverge_merge_reduces_to_identity (s pred : ActiveSet) :
   -- Now goal: Star Step (warpVal ((s &&& pred) ||| (s &&& ~~~pred))) (warpVal s)
   -- Need: (s &&& pred) ||| (s &&& ~~~pred) = s
   have hcov := (diverge_partition s pred).2
-  unfold ActiveSet.Covers at hcov
+  unfold PSet.Covers at hcov
   rw [hcov]
   exact Star.refl
