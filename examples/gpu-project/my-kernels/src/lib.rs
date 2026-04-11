@@ -192,3 +192,29 @@ pub fn bitonic_sort_i32(data: *mut i32) {
 
     *data.add(tid as usize) = val;
 }
+
+// ============================================================================
+// Kernel 5: ballot — verifies the setp/selp workaround for the missing
+// `pred` register class. Each lane votes (tid < 16); expected mask 0x0000FFFF.
+//
+// This is the runtime-verification kernel for the 2026-03-29 unblock commit
+// (b6b737622). The workaround declares `.reg .pred %p_vote` inside a PTX
+// scope block and crosses the Rust↔PTX boundary as `reg32` only — see
+// `src/gpu.rs::ballot_sync` for the PTX template.
+// ============================================================================
+
+#[warp_kernel]
+pub fn ballot_lower_half(out: *mut u32) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+
+    let predicate = tid < 16;
+    let result = warp.ballot(data::PerLane::new(predicate));
+    let mask = result.mask_u32().get();
+
+    // Every lane writes the (uniform) mask. Host checks lane[0] for the
+    // expected bitmask AND that all 32 lanes wrote the same value, in case
+    // the workaround accidentally returns per-lane noise instead of a
+    // warp-uniform result.
+    *out.add(tid as usize) = mask;
+}

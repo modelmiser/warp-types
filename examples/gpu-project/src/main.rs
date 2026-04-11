@@ -149,6 +149,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // === Test 5: ballot_lower_half — verifies setp/selp workaround ===
+    // The 2026-03-29 unblock commit (b6b737622) routes ballot through PTX
+    // inline asm using .reg .pred inside a scope block, crossing the
+    // Rust↔PTX boundary as reg32 only. This kernel exercises that path.
+    println!("=== Test 5: ballot_lower_half (setp/selp workaround) ===");
+    {
+        let dev_out = stream.memcpy_stod(&[0u32; WARP_SIZE])?;
+
+        unsafe {
+            stream
+                .launch_builder(&k.ballot_lower_half)
+                .arg(&dev_out)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let result = stream.memcpy_dtov(&dev_out)?;
+        let expected: u32 = 0x0000_FFFF; // lanes 0..16 voted true
+        let lane0_correct = result[0] == expected;
+        let warp_uniform = result.iter().all(|&v| v == result[0]);
+        println!("  Predicate: tid < 16");
+        println!("  Expected:  0x{:08X} (lanes 0..16 = 1, lanes 16..32 = 0)", expected);
+        println!("  lane[0]:   0x{:08X}", result[0]);
+        println!("  uniform:   {} (all 32 lanes wrote the same value)", warp_uniform);
+        println!("  Result:    {}",
+            if lane0_correct && warp_uniform { "PASS" } else { "FAIL" });
+        if !lane0_correct || !warp_uniform {
+            println!("  Full:      {:08X?}", result.iter().map(|v| *v).collect::<Vec<_>>());
+        }
+    }
+    println!();
+
     println!("All kernels compiled from cargo, type-checked at build time,");
     println!("and executed on real GPU hardware with correct results.");
 
