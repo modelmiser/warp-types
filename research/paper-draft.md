@@ -1,6 +1,6 @@
 # One Gate, Four Domains: Complemented Typestate from GPU Warps to Tree All-Reduce
 
-**Working draft.** Sections §1, §2, §5, and §6 are drafted. §3 (mechanization spine), §4 (domain instances), §7 (related work), §8 (conclusion), and the abstract are TK pending venue and page-budget decisions — see the TK list at the end of this file.
+**Working draft.** Sections §1, §2, §3, §5, and §6 are drafted. §4 (domain instances), §7 (related work), §8 (conclusion), and the abstract are TK pending venue and page-budget decisions — see the TK list at the end of this file.
 
 ---
 
@@ -29,7 +29,7 @@ Figure 1 summarises the four witnesses.
 
 All four rows use `PSet.IsComplement s1 s2 parent` at the merge site and `PSet.all n` at the extract site. Rows differ in (i) which `PSet n`-indexed type family carries the participant set (the `.group` family for GPU, CSP, and Fence; the new `.reduced` family introduced by Reduce); and (ii) whether the extract gate returns a barrier (Fence) or a data payload (the other three). The same two gates govern every row.
 
-The rest of the paper is organised as follows. §2 fixes notation and recalls the background on complemented participant sets, linear typestate, and the relevant concurrency models. §3 «TK §3» describes the generic mechanization spine — `Generic.lean` for the domain-independent layer and `Core.lean` for the family-parametric layer. §4 «TK §4» instantiates the spine for each of the four domains and states the per-domain soundness theorem. §5 gives the Core.lean factoring in detail, with the rule shapes and the type-family dispatchers. §6 evaluates the cost of the factoring — the caller-side discharge boilerplate, the line-count change, and the amortization argument for scaling to additional domains. §7 «TK §7» surveys related work. §8 «TK §8» concludes.
+The rest of the paper is organised as follows. §2 fixes notation and recalls the background on complemented participant sets, linear typestate, and the relevant concurrency models. §3 describes the generic mechanization spine — `Generic.lean` for the domain-independent layer and `Core.lean` for the family-parametric layer. §4 «TK §4» instantiates the spine for each of the four domains and states the per-domain soundness theorem. §5 gives the Core.lean factoring in detail, with the rule shapes and the type-family dispatchers. §6 evaluates the cost of the factoring — the caller-side discharge boilerplate, the line-count change, and the amortization argument for scaling to additional domains. §7 «TK §7» surveys related work. §8 «TK §8» concludes.
 
 ---
 
@@ -81,7 +81,68 @@ The Fence instance models a single bulk write buffer at byte granularity. `group
 
 ## 3. The Mechanization Spine
 
-«TK §3»  The generic core is factored into two files: `Generic.lean`, which proves domain-independent lemmas about `PSet n`, `IsComplement`, and divergence trees at `∀ n : ℕ`; and `Core.lean`, which adds the family-parametric typing judgment `CoreHasType` over the union expression language of the domain instances that share the factoring. The Core file is the subject of §5. This section is TK — the spine needs to be described systematically before the per-domain instances in §4 can be stated, and the spine description is scoped out of the Phase C draft.
+Two of the seven production Lean files in the `WarpTypes` namespace carry the domain-independent content that §1 advertises. `Generic.lean` proves bitwise-algebraic lemmas about `PSet n` at ∀ `n : ℕ`, without naming any expression language or typing judgment. `Core.lean` adds the family-parametric typing judgment `CoreHasType` over a combined expression language that is the union of the Fence-specific and Reduce-specific constructors. The remaining five files — `Basic.lean`, `Csp.lean`, `Fence.lean`, `Reduce.lean`, and `Metatheory.lean` — are either per-domain instances or instance-specific metatheory, and §4 «TK §4» describes them one at a time. This section describes the generic spine and the three asymmetries that a reader of §1 would otherwise have to reconstruct from file-name conventions alone.
+
+The asymmetries are load-bearing and are named here so the per-domain descriptions in §4 do not have to apologise for them.
+
+*First,* `Basic.lean` (the GPU instance) imports `Generic.lean` directly and does **not** go through `Core.lean`. Its mechanization pre-dates the factoring, and §6's caller-side cost analysis shows that a retrofit would purchase no structural saving — GPU's per-domain theorems share no rule bodies with Fence or Reduce, so no monomorphic rule in `Basic.lean` corresponds to an instance of a parametric rule in `Core.lean`. The retrofit is still possible; it is out of scope for *this paper*, not ruled out forever.
+
+*Second,* `Csp.lean` also imports `Generic.lean` directly, for a different reason. Its typing judgment `CspHasType` is indexed by a `Topology n` witness that adds a physical-adjacency side condition to `send` and `recv`. The topology parameter is orthogonal to the complement-gate factoring, and an open-decision entry in the repository's `TODO.md` tracks whether a port onto an extended `Core.lean` is worth doing. A probe in `CspCoreExperiment.lean` has mechanically de-risked the port; the remaining question is prioritisation, not feasibility.
+
+*Third,* the reduction metatheory — substitution, progress, preservation, and type safety — is stated and proved only over `Basic.lean`, not over any of Fence, Reduce, or Csp. §3.3 below justifies this coverage gap rather than hiding it.
+
+<a id="fig-6"></a>
+
+**Figure 6.** *The `WarpTypes` file graph.* Two files (`Generic.lean` and `Core.lean`) make up the generic spine; four are domain instances and one carries the reduction metatheory. The rightmost column pins the concrete width each file commits to; `—` means the file is parametric in `n`.
+
+| File | Imports | Role | Width |
+|------|---------|------|------:|
+| `Generic.lean` | (none) | Width-parametric bitwise algebra | — |
+| `Core.lean` | `Generic` | Family-parametric typing spine | — |
+| `Basic.lean` | `Generic` | GPU domain instance (pre-Core) | n = 32 |
+| `Csp.lean` | `Generic` | CSP mesh instance with topology parameter | n = 6 |
+| `Fence.lean` | `Core` | Partial-write fence instance over the spine | n = 8 |
+| `Reduce.lean` | `Core` | Tree all-reduce instance over the spine | n = 4 |
+| `Metatheory.lean` | `Basic` | Substitution, progress, preservation, type safety, bug witnesses | n = 32 |
+
+### 3.1 `Generic.lean`: the width-parametric layer
+
+`Generic.lean` is sixty-two lines of Lean 4. It defines `PSet n := BitVec n` as an abbreviation, the four operators `all`, `none`, `Disjoint`, and `Covers`, the two predicates `IsComplement` and `IsComplementAll`, and two theorems at ∀ `n : ℕ`: `diverge_partition_generic`, which asserts that the pair `(s &&& pred, s &&& ~~~pred)` is disjoint and covers `s`; and `complement_symmetric_generic`, which asserts that `IsComplementAll` is symmetric. There is no expression language, no typing judgment, no context type, and no binding-name machinery in the file. Every domain file that needs a diverge-partition theorem re-exports the generic lemma under a domain-specific name: `Basic.lean`'s `diverge_partition`, `Fence.lean`'s `fence_diverge_partition`, `Reduce.lean`'s `reduce_diverge_partition`, `Csp.lean`'s `csp_diverge_partition`, and `Core.lean`'s `core_diverge_partition` are all one-line wrappers over `diverge_partition_generic`. A single generic theorem covers five call sites.
+
+`Generic.lean`'s md5 is an explicit load-bearing invariant of the framework. `Core.lean`'s headnote records it as a postcondition: *"Generic.lean is the only dependency. Its md5 must remain unchanged."* A hash change would signal that the family-parametric layer had leaked domain-specific content into the generic layer — exactly the regression the factoring exists to prevent. The invariant is the narrowest possible statement of "domain-independent": the generic layer cannot grow to accommodate a domain without changing this hash, and no file in the current artifact changes it.
+
+### 3.2 `Core.lean`: the family-parametric layer
+
+`Core.lean` is 276 lines and imports only `Generic.lean`. It introduces four declarations that §5 describes in detail: `CoreTy n` (five constructors), `CoreExpr n` (sixteen constructors, including two merge-shaped and two extract-shaped), `TyTag` (two constructors, `deriving DecidableEq`), and the `CoreHasType` inductive with fourteen typing-rule constructors. Twelve of the fourteen typing rules are monomorphic — the value and variable rules, the partition rule `diverge`, the let-binding and pair suite, and the two domain-specific monomorphic rules `write` (Fence) and `leafReduce` (Reduce). The remaining two are the family-parametric `mergeFamily` and `finalizeFamily`, whose double-witness shape §5.4 and §5.5 dissect.
+
+The expression language deserves one structural note here rather than in §5. `CoreExpr n` is the *union* of the Fence and Reduce expression constructors; it contains `write`, `merge`, and `fence` (from the Fence source) alongside `leafReduce`, `combineRed`, and `finalize` (from the Reduce source), and the parametric rules dispatch over the union via the `TyTag` enum. The alternative — each domain defining its own expression inductive and coercing into `Core` — does not elaborate: Lean 4 inductives are closed, and a family-parametric rule that mentions `(expr : CoreExpr n)` as a pattern variable needs a single inductive on which to state the pattern. The closed-inductive constraint is what forces the combined expression language into `Core.lean` rather than leaving it distributed across the two domain files. §5 describes the rule shapes and §6 quantifies the caller-side cost this shape imposes on downstream inversion proofs.
+
+The family-parametric rules carry their safety side conditions *inline* as premises, not as stand-alone theorems. `mergeFamily` takes `PSet.IsComplement s1 s2 parent` as a typing-rule premise, and `finalizeFamily` takes `CoreHasType ctx e (tagToTy tag (PSet.all n)) ctx'` as a typing-rule premise — so any well-typed use has already discharged the safety cost at elaboration time. `Core.lean` contains no theorem named `merge_requires_complement` or `finalize_requires_all`; the per-domain files state analogous theorems after specialising the tag and the width, and §4 shows the resulting shapes.
+
+### 3.3 Theorem placement across the layers
+
+The generic-versus-domain split in the file graph has a counterpart at the theorem level. Figure 7 tallies which theorem classes live at which layer, which are stated parametrically in `n`, and which carry untypability proofs for a real-world bug class.
+
+<a id="fig-7"></a>
+
+**Figure 7.** *Theorem placement by layer.* "Width" is the `n` each theorem commits to; "∀ n?" is whether the theorem is stated parametrically; "Bug witness?" is whether the layer carries an untypability proof of a real-world bug class.
+
+| Theorem class | Lives in | Width | ∀ n? | Bug witness? |
+|---|---|---|:---:|:---:|
+| Bitwise algebra (disjoint / cover / symmetry) | `Generic.lean` | abstract | ✓ | |
+| Diverge partition (generic) | `Generic.lean` | abstract | ✓ | |
+| Diverge partition (domain re-export) | per-domain files | abstract¹ | ✓ | |
+| `*_requires_all` extract-gate inversion | per-domain files | concrete | | |
+| Concrete complement instances (e.g. `nibble_complement`) | per-domain files | concrete | | |
+| Per-domain untypability witnesses | per-domain files | concrete | | ✓ |
+| Substitution, progress, preservation, type safety | `Metatheory.lean` | n = 32 | | ✓ |
+| CVE-class real-world bug witnesses | `Metatheory.lean` | n = 32 | | ✓ |
+
+¹ *`Fence`, `Reduce`, and `Csp` each state their own `diverge_partition` as a one-line re-export of the `Generic` theorem, and the re-export's conclusion is stated at ∀ `n` even though the file as a whole pins a concrete width at the domain type-alias level.*
+
+The two rows that pin `n = 32` in Figure 7 are `Metatheory.lean`. This is the load-bearing asymmetry §1 did not state. `Metatheory.lean` is 1019 lines and carries the full reduction-preservation chain for `Basic`: `value_preserves_ctx`, the canonical-forms lemmas `canonical_warp`, `canonical_perLane`, and `canonical_pair`, `progress`, the context-manipulation lemmas (`remove_lookup_self`, `remove_cons_ne`, `remove_comm`, and the rest), `subst_typing`, `subst_preserves_typing`, `preservation`, `type_safety`, and five bug-class untypability witnesses named after the real-world bugs they model: `bug1_cuda_samples_398`, `bug2_cccl_854`, `bug3_picongpu_2514`, `bug4_llvm_155682`, and `bug5_shuffle_after_diverge`. None of the other three domains carry a comparable metatheory file. Fence, Reduce, and Csp each state inversion theorems at their concrete widths and each state at least one untypability witness for a domain-specific bug class, but neither progress nor preservation is mechanized for them.
+
+The coverage asymmetry is deliberate. The substitution-through-reduction chain costs on the order of the thousand lines `Metatheory.lean` spends on GPU alone, and reproducing it three times would dominate the artifact with no new structural finding — the paper's contribution is the factoring of the *typing rules*, not the factoring of the reduction metatheory. A reader of §1 might assume that "four mechanized witnesses" entails four parallel metatheory chains; Figure 7 says it does not. What §1 claims — and what the §4 «TK §4» per-domain subsections will state precisely — is that four domains instantiate the same two gates and each carries a safety inversion theorem and at least one untypability witness at its own concrete width. The full metatheory chain is the cost of demonstrating the structural point once, on one domain, and §8 «TK §8» marks the per-domain progress and preservation extension as future work.
 
 ---
 
@@ -95,7 +156,7 @@ The Fence instance models a single bulk write buffer at byte granularity. `group
 
 Level 2c (Fence) and Level 2d (Reduce) arrive at very nearly the same typing judgment. Fence's `merge` rule combines two `.group` handles into one; Reduce's `combineRed` rule combines two `.reduced` handles into one. Apart from the type-family constructor (`.group` vs `.reduced`) and the expression-constructor name (`merge` vs `combineRed`), the two rules are byte-identical. Fence's `fence_requires_all` inversion is line-for-line identical to Reduce's `finalize_requires_all` under the same substitution. The same duplication pattern holds between the value-side and the extract-side: Fence's `fence` returns `.unit`, Reduce's `finalize` returns `.data`, and the remaining structure is the same.
 
-This section factors both duplications into a single generic judgment, `CoreHasType`, whose parametric rules `mergeFamily` and `finalizeFamily` subsume the four domain-specific rules. The factoring lives in `lean/WarpTypes/Core.lean` and was introduced as Experiment D of the project.[^commits] Fence and Reduce are ported onto it; Csp is not (its topology parameter is orthogonal to the factoring — see §3 «TK §3») and GPU is not (its mechanization pre-dates the generic core). The four-row table of Figure 1 is satisfied by the *domain theorems*, not by the rule shapes — a rule that is monomorphic in one domain can be an instance of a parametric rule in another, and the four domains still share the same gates.
+This section factors both duplications into a single generic judgment, `CoreHasType`, whose parametric rules `mergeFamily` and `finalizeFamily` subsume the four domain-specific rules. The factoring lives in `lean/WarpTypes/Core.lean` and was introduced as Experiment D of the project.[^commits] Fence and Reduce are ported onto it; Csp is not (its topology parameter is orthogonal to the factoring — see §3) and GPU is not (its mechanization pre-dates the generic core). The four-row table of Figure 1 is satisfied by the *domain theorems*, not by the rule shapes — a rule that is monomorphic in one domain can be an instance of a parametric rule in another, and the four domains still share the same gates.
 
 [^commits]: The Core.lean factoring and the two port commits are `bfbb4d272` → `1802039df` in the `warp-types` repository. No further commit hashes appear inline; the per-file lemma locations are sufficient for reviewer reproducibility.
 
@@ -291,7 +352,6 @@ The practical consequence for a framework author contemplating a family-parametr
 
 The draft defers the following items to later phases. Each is flagged inline with `«TK §N»` at the point of first mention.
 
-- `«TK §3»` — the mechanization spine. Requires laying out the relationship between `Generic.lean`, `Basic.lean`, `Csp.lean`, `Fence.lean`, `Reduce.lean`, and `Core.lean` systematically. Out of scope for Phase C.
 - `«TK §4»` — the four domain instances. Each needs a subsection with rule bodies, per-domain theorems, and at least one untypability witness for a real bug class. Out of scope for Phase C.
 - `«TK §7»` — related work. Venue-sensitive; deferred until venue is chosen.
 - `«TK §8»` — conclusion. Depends on §3, §4, and §7 being stable.
