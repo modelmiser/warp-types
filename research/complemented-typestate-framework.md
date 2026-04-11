@@ -70,6 +70,31 @@ New typing rules:
 
 Parameterized by `Topology n` (adjacency predicate for the mesh).
 
+**Status (2026-04-06):** Shipped as `lean/WarpTypes/Csp.lean` — 376 lines, 13 theorems, 0 sorry, 0 axioms.
+
+### Level 2c: Fence / Partial-Write Domain (added 2026-04-11)
+
+Extends core with `write`, `fence`. No topology, no payload direction.
+
+- `PSet n` reinterpreted as a write mask over an n-byte buffer (bit `i` = byte `i` has been written).
+- `group s` is now "linear permission to write the bytes in `s`".
+- **write** threads the group handle unchanged, consuming a data payload.
+- **fence** requires `group (PSet.all n)` — same gate as `collective` and `shuffle`.
+
+**Status:** Shipped as `lean/WarpTypes/Fence.lean` — 271 lines, 0 sorry, 0 axioms. Commit `c405c3f08`. Concrete instance uses `ByteBuf := PSet 8`. Experiment B documented in DEVLOG.
+
+### Level 2d: Tree All-Reduce Domain (added 2026-04-11)
+
+Extends core with `leafReduce`, `combineRed`, `finalize`, **and a new type constructor** `reduced (s : PSet n)` added to the Level 1 type family.
+
+- `leafReduce : group s → reduced s` — turn a group handle into an accumulator at the same participant set.
+- `combineRed : reduced s1 → reduced s2 → reduced parent` (requires `IsComplement s1 s2 parent`) — **structural twin of `merge`**, acting on the new `.reduced` family.
+- `finalize : reduced (PSet.all n) → data` — gate on the full-group accumulator; extract a data value.
+
+**Status:** Shipped as `lean/WarpTypes/Reduce.lean` — 302 lines, 0 sorry, 0 axioms. Commit `67eeda474`. Concrete instance uses `Col := PSet 4` with halves split via `halfway_complement`. Experiment C documented in DEVLOG.
+
+**Significance:** Level 2d is the first domain that required extending the Level 1 type family (adding `reduced`). This extension is **conservative over the core**: all 9 core typing rules copy-renamed from `Fence.lean` unchanged, no existing theorems perturbed, `Generic.lean` md5 verified unchanged before and after. See §9-retrospective for the implication: "type-family extension is safe; rule extension is not."
+
 ### Level 3: Protocol State (THE RESEARCH QUESTION)
 
 **Option A (conservative extension):** Protocol compliance is a SEPARATE judgment that composes with Level 2b typing. Both must pass. Core unchanged.
@@ -198,6 +223,8 @@ Take `WarpTypes/Basic.lean`, replace `ActiveSet` with `PSet n`. See which theore
 
 Moore's GA144 is an accidentally well-typed CSP system. 144 cores, synchronous blocking channels, no shared memory. Moore avoids deadlocks by holding all 144 programs in his head simultaneously. Session types formalize what Moore does informally. The GA144 proves the communication model is right. The compiler proves it doesn't require Chuck Moore.
 
+### 9.1 The "one trait, three domains" claim (2026-04-09 draft — preserved as prediction)
+
 The `ComplementOf` trait is the deepest reusable piece:
 - GPU: `Even ⊥ Odd` (lanes reconverge)
 - CSP: `Has3D ⊥ Flat` (protocol branches cover all cases)
@@ -205,7 +232,74 @@ The `ComplementOf` trait is the deepest reusable piece:
 
 Same trait, same proof obligation, three domains.
 
+### 9.2 Retrospective (2026-04-11 — four mechanized witnesses)
+
+The §9.1 claim was forward-looking when written. As of 2026-04-11 it has four mechanized witnesses in Lean 4, two of which were written in a single session on 2026-04-11 (Experiments B and C below). The claim as stated was partially right and partially wrong in instructive ways.
+
+**What the witnesses say:**
+
+| Level | File | Lines | Type family used | Gate location | Result type |
+|-------|------|-------|------------------|---------------|-------------|
+| 2a GPU | `Basic.lean` + `Metatheory.lean` | — | `.group` (alias `ActiveSet := PSet 32`) | `shuffle` requires `.group (PSet.all 32)` | `data` (broadcast value) |
+| 2b CSP | `Csp.lean` | 376 | `.group` (alias `TileSet := PSet 6`) | `collective` requires `.group (PSet.all 6)` | `data` (broadcast value) |
+| 2c Fence | `Fence.lean` | 271 | `.group` (alias `ByteBuf := PSet 8`) | `fence` requires `.group (PSet.all 8)` | `unit` (barrier) |
+| 2d Reduce | `Reduce.lean` | 302 | **`.reduced`** (new constructor, `Col := PSet 4`) | `finalize` requires `.reduced (PSet.all 4)` | `data` (accumulator value) |
+
+All four use `PSet.IsComplement s1 s2 parent` as the merge-time gate and `PSet.all n` as the extract-time gate. The §9.1 claim is **correct** at the level of "same gate, multiple domains." But it understated the finding in two directions:
+
+**(a) The gate is orthogonal to *two* axes, not one.** §9.1 implicitly assumed the gate transferred across domains that shared the `.group` type family. Level 2d broke that assumption: `.reduced` is a new type family, and the `PSet.all n` gate transferred to it without modification. The gate is orthogonal to (i) *barrier-vs-extract* (unit return vs data return) AND (ii) *which `PSet n`-indexed type family carries the participant-set index*. Either axis alone is interesting; both together is a stronger statement.
+
+**(b) The gate transfer has a quantitative refactor cost.** Each new domain currently pays ~85 lines of core-rule duplication to get the transfer. Csp.lean vs Fence.lean share ~87 lines of structural duplication in the core typing rules; Fence.lean vs Reduce.lean adds another ~85 lines. The three-domain total is ~170 lines of duplication that a higher-order refactor could eliminate.
+
+**The refactor target that became visible at four witnesses:**
+
+The `combineRed` rule in `Reduce.lean` is byte-identical to the `merge` rule in `Fence.lean` modulo `.group → .reduced`:
+
+```
+| merge      : ... ctx e1 (.group   s1) ... → ... ctx' e2 (.group   s2) ... → IsComplement s1 s2 p → ... (.group   p) ...
+| combineRed : ... ctx e1 (.reduced s1) ... → ... ctx' e2 (.reduced s2) ... → IsComplement s1 s2 p → ... (.reduced p) ...
+```
+
+Similarly, `finalize_requires_all` is line-for-line identical to `fence_requires_all` modulo the same substitution. The refactor target is **not** "factor N lines into a `Core.lean`" — it is:
+
+> Factor a *family of rules* parameterized by a `PSet n`-indexed type constructor `T : PSet n → CoreTy n` and a gate predicate. The same parametric rule covers `merge`/`combineRed` and a future `mergeStream`/whatever. The same parametric inversion-theorem covers `fence_requires_all`/`finalize_requires_all`.
+
+This is a higher-order refactor, not a line-count refactor. Its shape is:
+
+```
+-- sketch
+| mergeFamily (T : PSet n → CoreTy n) (mkExpr : CoreExpr n → CoreExpr n → CoreExpr n) ... :
+    CoreHasType ctx e1 (T s1) ctx' →
+    CoreHasType ctx' e2 (T s2) ctx'' →
+    PSet.IsComplement s1 s2 parent →
+    CoreHasType ctx (mkExpr e1 e2) (T parent) ctx''
+```
+
+Whether Lean 4's inductive type system admits this directly (vs needing a typeclass, enum tag, or reflective representation) is an open question. It was not visible until four witnesses with two distinct type families were on the table. Two rows / one type family is ambiguous; three rows / one type family is still ambiguous (you can't tell "accidentally parametric in operand" from "parametric in type family"); four rows / two type families is enough signal.
+
+**Conservativity of Level 1 type-family extension.** A second-order finding from Experiment C: adding `reduced (s : PSet n)` as a new constructor to the Level 1 `ReduceTy` inductive broke zero existing theorems. `reduce_diverge_partition` still delegates to `diverge_partition_generic` unchanged; all 9 core typing rules copy-renamed from `Fence.lean` without modification; the context / lookup / remove infrastructure needed no changes because it is polymorphic in the type family by construction (`List (String × ReduceTy n)`).
+
+This splits "conservative extension" into two sub-categories:
+- **Type-family extension** (adding a new `PSet n`-indexed constructor) — **safe**. No existing theorem is perturbed.
+- **Rule extension** (adding a new typing rule whose conclusion uses an existing constructor) — **not safe** in general. Must re-check existing theorems' case analyses.
+
+§9.1 did not state this distinction. It is now named.
+
+**What §9.1 got wrong — the GPU entry.** The original table said "GPU: `Even ⊥ Odd` (lanes reconverge)" as if the GPU domain's `ComplementOf` witness were in the same shape as the others. The witnesses in `Basic.lean` / `Metatheory.lean` predate Generic.lean's width-parametric refactor and hard-code `BitVec 32`. The `Basic.lean` theorems *do* apply to `PSet 32` as a specialization, but the file has not been ported to use `Generic.lean`'s `diverge_partition_generic` or `complement_symmetric_generic`. A clean four-row picture would port `Basic.lean` to match `Csp.lean` / `Fence.lean` / `Reduce.lean`'s structure. This is a known gap, not a bug.
+
+**Paper-title implications.** The §10 title options both assumed two domains (GPU + CSP). With four mechanized witnesses and a higher-order refactor target, a more accurate title is:
+
+> "Complemented Typestate: A Refactor-Ready Framework for Participant-Set-Gated Operations Across GPU, CSP, Memory-Barrier, and All-Reduce Domains"
+
+Verbose but accurate. A punchier version:
+
+> "One Gate, Four Domains: Complemented Typestate from GPU Warps to Tree All-Reduce"
+
+The mechanized claim is no longer "the framework generalizes" — it is "the framework generalizes AND here is the concrete higher-order refactor the generalization exposes."
+
 ## 10. Potential Paper Titles
+
+> **Note (2026-04-11):** Both titles below are the 2026-04-09 draft. Option A has since been confirmed (Protocol.lean, commit lineage 2026-04-10) and the framework has been extended to four domains (see §9.2). Current preferred title is in §9.2 near the bottom.
 
 **If Option A (composition) holds:**
 "Complemented Typestate: A Unified Framework for SIMT Divergence Safety and CSP Protocol Compliance"
@@ -215,10 +309,26 @@ Same trait, same proof obligation, three domains.
 
 ---
 
+## 11. Experimental Record
+
+Experiments are numbered; each is a discrete, falsifiable test with a pre-registered hypothesis and a concrete success criterion. Entries below were added 2026-04-11 after the experiments landed.
+
+| # | Name | Date | Commit | File | Lines | Outcome |
+|---|------|------|--------|------|-------|---------|
+| 1 | The homomorphism, formally | 2026-04-06 | (Csp.lean + Protocol.lean sequence) | `Csp.lean`, `Protocol.lean` | 376 + 834 | Level 2b CSP + Level 3 Protocol shipped; Option A confirmed; branching-diverge orthogonality proved; `protocolTrace` structural characterization; `follows_protocol_rfl` tactic |
+| B | Third domain (fence / partial-write) | 2026-04-11 | `c405c3f08` | `Fence.lean` | 271 | F3-mild: 9/9 core rules + 11/11 core expression constructors transferred verbatim modulo copy-rename. ~87 lines structural duplication with Csp.lean. `Generic.lean` untouched. Strong form of "gate is orthogonal to op shape" observed |
+| C | Fourth domain (tree all-reduce) + new type family | 2026-04-11 | `67eeda474` | `Reduce.lean` | 302 | Stronger than predicted F3: gate transferred across two orthogonal axes (barrier-vs-extract AND `.group`-vs-`.reduced` family). Higher-order refactor target exposed (see §9.2). Type-family extension shown conservative over core. ~170 lines total duplication across three domains |
+| 2 | ESP32 compiler on-target | 2026-04-11 (unblocked) | — | `research/esp32-compiler/` | — | Paused (research track only) |
+| 3 | Real protocol on real hardware | — | — | — | — | Depends on J1 RTL timeline |
+
+The four experiments do not yet include a Level 2a GPU port of `Basic.lean` to use `Generic.lean`'s width-parametric theorems — that would make the GPU row structurally match the other three and is a known gap (noted in §9.2).
+
+---
+
 ## References
 
 - warp-types crate: `github.com/modelmiser/warp-types` (MIT, v0.3.1)
-- Lean 4 metatheory: `warp-types/lean/WarpTypes/`
+- Lean 4 metatheory: `warp-types/lean/WarpTypes/` — `Generic.lean` (Level 0-1), `Basic.lean` (Level 2a GPU), `Csp.lean` (Level 2b), `Fence.lean` (Level 2c, commit `c405c3f08`), `Reduce.lean` (Level 2d, commit `67eeda474`), `Protocol.lean` (Level 3)
 - crossbar_protocol.rs: `warp-types/src/research/crossbar_protocol.rs`
 - warp-core SYSTEM.md: `github/warp-core/docs/SYSTEM.md` (rev 3.0)
 - warp-core GRID_TOPOLOGY.md: `github/warp-core/docs/GRID_TOPOLOGY.md` (rev 0.3)
