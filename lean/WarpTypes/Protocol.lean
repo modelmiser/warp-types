@@ -375,3 +375,208 @@ theorem wrong_topology_violates_typing :
       (.send (.groupVal TileSet.all) .dataVal ⟨0, by omega⟩ ⟨5, by omega⟩)
       t ctx' :=
   j1_send_opposite_corners_untypable  -- reuse existing theorem
+
+-- ============================================================================
+-- Experiment 3b: Branching Protocol (Level 3 stress test)
+--
+-- PingPong is flat — it never exercises `diverge`. The Option A claim that
+-- "protocol branching and participant-set divergence are orthogonal" has
+-- therefore not been stressed on a case where diverge and protocol state
+-- actually couple.
+--
+-- This experiment couples them: we split All → leftCol + rightCol via
+-- `diverge`, bind both sub-groups with `letPair`, then use the two handles
+-- to perform four sends — two in the left column, two in the right column.
+--
+-- If both `CspHasType` and `FollowsProtocol` hold simultaneously on the
+-- same program with a single flat protocol role, Option A survives the
+-- stress test: `FollowsProtocol` genuinely does not care which sub-group
+-- is doing which action, only the sequence of `self`/`dst` endpoints.
+-- ============================================================================
+
+/-- Branching protocol role: four sends in source order.
+    Left column: 0→2 then 2→4. Right column: 1→3 then 3→5.
+    All four happen in one execution — diverge doesn't gate them away. -/
+def branchingCore : ProtoRole 6 :=
+  [ ProtoAction.send ⟨0, by omega⟩ ⟨2, by omega⟩,   -- leftCol  step 1
+    ProtoAction.send ⟨2, by omega⟩ ⟨4, by omega⟩,   -- leftCol  step 2
+    ProtoAction.send ⟨1, by omega⟩ ⟨3, by omega⟩,   -- rightCol step 1
+    ProtoAction.send ⟨3, by omega⟩ ⟨5, by omega⟩ ]  -- rightCol step 2
+
+/-- The branching program:
+
+      let g  = groupVal All in
+      let (gL, gR) = diverge g leftCol in          -- gL : leftCol, gR : rightCol
+      let gL2 = send gL  dataVal 0→2 in            -- consumes Send 0→2
+      let gL3 = send gL2 dataVal 2→4 in            -- consumes Send 2→4
+      let gR2 = send gR  dataVal 1→3 in            -- consumes Send 1→3
+      let gR3 = send gR2 dataVal 3→5 in            -- consumes Send 3→5
+      (gL3, gR3)
+
+    Both sub-groups coexist (no control-flow branch). The four sends are
+    sequenced by the expression tree — source order IS protocol order. -/
+def branchingProg : CspExpr 6 :=
+  .letBind "g" (.groupVal TileSet.all)
+    (.letPair
+      (.diverge (.var "g") TileSet.leftCol)
+      "gL" "gR"
+      (.letBind "gL2"
+        (.send (.var "gL") .dataVal ⟨0, by omega⟩ ⟨2, by omega⟩)
+        (.letBind "gL3"
+          (.send (.var "gL2") .dataVal ⟨2, by omega⟩ ⟨4, by omega⟩)
+          (.letBind "gR2"
+            (.send (.var "gR") .dataVal ⟨1, by omega⟩ ⟨3, by omega⟩)
+            (.letBind "gR3"
+              (.send (.var "gR2") .dataVal ⟨3, by omega⟩ ⟨5, by omega⟩)
+              (.pairVal (.var "gL3") (.var "gR3")))))))
+
+-- ============================================================================
+-- CspHasType: branchingProg is well-typed on j1Grid
+-- ============================================================================
+
+/-- The branching program type-checks on the J1 grid.
+
+    Every send edge (0→2, 2→4, 1→3, 3→5) is a real vertical link in the
+    2×3 grid, and every destination lives inside the sub-group doing the
+    send, so linearity, adjacency, and active-destination all hold. -/
+theorem branchingProg_typed :
+    CspHasType j1Grid ([] : CspCtx 6) branchingProg
+      (.pair (.group (TileSet.all &&& TileSet.leftCol))
+             (.group (TileSet.all &&& ~~~TileSet.leftCol))) [] := by
+  unfold branchingProg
+  -- let g = groupVal All
+  apply CspHasType.letBind (t1 := .group TileSet.all)
+  · exact CspHasType.groupVal _ _
+  · rfl
+  · -- ctx: [("g", group All)]
+    -- letPair (diverge (var g) leftCol) "gL" "gR" body
+    apply CspHasType.letPairE
+      (t1 := .group (TileSet.all &&& TileSet.leftCol))
+      (t2 := .group (TileSet.all &&& ~~~TileSet.leftCol))
+    · -- diverge (var g) leftCol
+      apply CspHasType.diverge (s := TileSet.all)
+      exact CspHasType.var _ _ _ rfl
+    · decide   -- "gL" ≠ "gR"
+    · rfl      -- lookup "gL" in [] = none
+    · rfl      -- lookup "gR" in [] = none
+    · -- body ctx: [("gR", group (All & ~leftCol)), ("gL", group (All & leftCol))]
+      -- let gL2 = send (var gL) dataVal 0 2
+      apply CspHasType.letBind (t1 := .group (TileSet.all &&& TileSet.leftCol))
+      · apply CspHasType.send (s := TileSet.all &&& TileSet.leftCol)
+        · exact CspHasType.var _ _ _ rfl
+        · decide   -- bit 2 of (All & leftCol) is true
+        · decide   -- adj 0 2 on j1Grid
+        · exact CspHasType.dataVal _
+      · rfl
+      · -- ctx: [("gL2", group leftCol'), ("gR", group rightCol')]
+        -- let gL3 = send (var gL2) dataVal 2 4
+        apply CspHasType.letBind (t1 := .group (TileSet.all &&& TileSet.leftCol))
+        · apply CspHasType.send (s := TileSet.all &&& TileSet.leftCol)
+          · exact CspHasType.var _ _ _ rfl
+          · decide   -- bit 4
+          · decide   -- adj 2 4
+          · exact CspHasType.dataVal _
+        · rfl
+        · -- ctx: [("gL3", group leftCol'), ("gR", group rightCol')]
+          -- let gR2 = send (var gR) dataVal 1 3
+          apply CspHasType.letBind
+            (t1 := .group (TileSet.all &&& ~~~TileSet.leftCol))
+          · apply CspHasType.send (s := TileSet.all &&& ~~~TileSet.leftCol)
+            · exact CspHasType.var _ _ _ rfl
+            · decide   -- bit 3
+            · decide   -- adj 1 3
+            · exact CspHasType.dataVal _
+          · rfl
+          · -- ctx: [("gR2", group rightCol'), ("gL3", group leftCol')]
+            -- let gR3 = send (var gR2) dataVal 3 5
+            apply CspHasType.letBind
+              (t1 := .group (TileSet.all &&& ~~~TileSet.leftCol))
+            · apply CspHasType.send (s := TileSet.all &&& ~~~TileSet.leftCol)
+              · exact CspHasType.var _ _ _ rfl
+              · decide   -- bit 5
+              · decide   -- adj 3 5
+              · exact CspHasType.dataVal _
+            · rfl
+            · -- ctx: [("gR3", group rightCol'), ("gL3", group leftCol')]
+              -- pairVal (var gL3) (var gR3)
+              apply CspHasType.pairVal
+              · exact CspHasType.var _ _ _ rfl
+              · exact CspHasType.var _ _ _ rfl
+            · rfl
+          · rfl
+        · rfl
+      · rfl
+    · rfl
+    · rfl
+  · rfl
+
+-- ============================================================================
+-- FollowsProtocol: branchingProg follows branchingCore
+-- ============================================================================
+
+/-- The branching program consumes `branchingCore` exactly.
+
+    Key threading: `diverge` forwards the protocol through `var g` unchanged
+    (no consumption); `letPair` sequences e-then-body; each inner `send`
+    consumes the head of the remaining list. The four sub-groups are
+    invisible to `FollowsProtocol` — only the `(self, dst)` pairs matter. -/
+theorem branchingProg_follows_protocol :
+    FollowsProtocol branchingCore branchingProg [] := by
+  unfold branchingProg branchingCore
+  apply FollowsProtocol.letBind
+  · exact FollowsProtocol.groupVal _ _
+  · apply FollowsProtocol.letPairE
+    · -- diverge (var g) leftCol: threads protocol through var g (no consume)
+      apply FollowsProtocol.diverge
+      exact FollowsProtocol.var _ _
+    · -- body: four sends consuming the role head-by-head
+      apply FollowsProtocol.letBind
+      · apply FollowsProtocol.send
+        · exact FollowsProtocol.var _ _
+        · exact FollowsProtocol.dataVal _
+        · rfl   -- head = Send 0→2
+      · apply FollowsProtocol.letBind
+        · apply FollowsProtocol.send
+          · exact FollowsProtocol.var _ _
+          · exact FollowsProtocol.dataVal _
+          · rfl -- head = Send 2→4
+        · apply FollowsProtocol.letBind
+          · apply FollowsProtocol.send
+            · exact FollowsProtocol.var _ _
+            · exact FollowsProtocol.dataVal _
+            · rfl -- head = Send 1→3
+          · apply FollowsProtocol.letBind
+            · apply FollowsProtocol.send
+              · exact FollowsProtocol.var _ _
+              · exact FollowsProtocol.dataVal _
+              · rfl -- head = Send 3→5
+            · apply FollowsProtocol.pairVal
+              · exact FollowsProtocol.var _ _
+              · exact FollowsProtocol.var _ _
+
+-- ============================================================================
+-- Composition Existence (strengthened): Option A survives the branching stress test
+-- ============================================================================
+
+/-- Option A survives when diverge and protocol state are coupled.
+
+    `branchingProg` uses `diverge` + `letPair` to split `All` into
+    `leftCol` + `rightCol`, then uses each sub-group handle for a
+    distinct send sub-sequence. Yet both judgments still compose:
+
+      • `CspHasType` checks WHO/WHERE — sub-group membership + mesh adjacency.
+      • `FollowsProtocol` checks WHEN — the flat sequence of `(self, dst)`
+        endpoints in source order.
+
+    Because `CspExpr` has no conditional control flow, `diverge` does NOT
+    produce alternative execution paths — it produces two sub-group handles
+    that BOTH coexist in the one execution. The protocol is therefore a
+    single flat list: the concatenation of all send/recv actions in source
+    order. This is the precise sense in which "diverge is orthogonal to
+    protocol state" — and Option A composes even when the program exercises
+    diverge nontrivially. -/
+theorem option_a_branching_composition :
+    ∃ (t : CspTy 6) (ctx' : CspCtx 6),
+      CspHasType j1Grid [] branchingProg t ctx' ∧
+      FollowsProtocol branchingCore branchingProg [] :=
+  ⟨_, _, branchingProg_typed, branchingProg_follows_protocol⟩
