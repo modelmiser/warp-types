@@ -142,8 +142,26 @@ enumerated.
 - ✓ Phase A (toolchain + host access) — complete
 - ✓ Phase C code (Cargo.toml, build.rs, main.rs, config) — complete
 - ✓ `cargo build --release` succeeds
-- ⏸ Phase B (passthrough bitstream + factory flash backup) — pending
-- ⏸ Phase C flash + verify UART output — pending user confirmation
+- ⚠ Phase B — **BLOCKED**: the passthru bitstream from
+  `ulx3s-bin/fpga/passthru/passthru-v20-85f/ulx3s_85f_passthru.bit`
+  does not route the FT231X UART to the ESP32's UART0 — a raw `cat
+  /dev/ttyUSB0` at 115200 captures zero bytes over 2 seconds, and
+  `esptool` sync fails with `Invalid head of packet (0x08)` in every
+  reset/baud combination tried. Probably the `_serial2` RTL variant,
+  not the `_wifi` variant needed for `esptool`. See DEVLOG.md
+  "2026-04-10 — esp32-blinky Phase B BLOCKED" for the full diagnostic
+  trail and handoff prompt, and INSIGHTS.md #N+38 for the passthru
+  variant taxonomy.
+- ⏸ Phase C flash + verify UART output — blocked on Phase B
+
+### Recommended path to unblock
+
+Compile `ulx3s_v20_passthru_wifi.vhd` from emard/ulx3s-passthru source
+against `constraints/ulx3s_v20.lpf` using ghdl + yosys + nextpnr-ecp5
++ project-trellis. Or: use a different ESP32-WROOM-32 dev board with
+native USB-UART for the on-target measurement baseline; Experiment 2
+doesn't strictly require ULX3S FPGA adjacency (only Experiment 3
+does, for the SPI→FPGA roundtrip).
 
 ## Next (Experiment 2 proper)
 
