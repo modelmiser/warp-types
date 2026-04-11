@@ -946,10 +946,13 @@ theorem type_safety {n : Nat} {e e' : Expr n} {t : Ty n} {ctx' : Ctx n}
 -- sub-warp obtained via diverge.
 -- ============================================================================
 
-/-- The type of fst(diverge(warpVal(all), pred)) is always Warp<all &&& pred>. -/
-private theorem fst_diverge_warpval_type {pred : ActiveSet} {t : Ty 32} {ctx' : Ctx 32}
-    (ht : HasType [] (.fst (.diverge (.warpVal (PSet.all 32)) pred)) t ctx') :
-    t = .warp (PSet.all 32 &&& pred) := by
+/-- The type of fst(diverge(warpVal(s), pred)) is always Warp<s &&& pred>.
+    Width-parametric — mirrors Csp.csp_fst_diverge_groupval_type, free in both
+    the width `n` and the starting set `s`. -/
+private theorem fst_diverge_warpval_type {n : Nat} {s pred : PSet n}
+    {t : Ty n} {ctx' : Ctx n}
+    (ht : HasType [] (.fst (.diverge (.warpVal s) pred)) t ctx') :
+    t = .warp (s &&& pred) := by
   match ht with
   | .fstE _ _ _ _ _ he =>
     match he with
@@ -957,20 +960,21 @@ private theorem fst_diverge_warpval_type {pred : ActiveSet} {t : Ty 32} {ctx' : 
       match hwv with
       | .warpVal _ _ => rfl
 
-/-- Shuffle on a diverged warp is untypable when the predicate ≠ all. -/
-private theorem shuffle_diverged_untypable
-    (pred : ActiveSet)
-    (hne : PSet.all 32 &&& pred ≠ PSet.all 32) :
-    ¬ ∃ t ctx', HasType (n := 32) []
-      (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) pred)) .perLaneVal)
+/-- Shuffle on a diverged warp is untypable when the diverged sub-set ≠ all.
+    Width-parametric — mirrors Csp.collective_after_diverge_untypable. -/
+private theorem shuffle_diverged_untypable {n : Nat}
+    (s pred : PSet n)
+    (hne : s &&& pred ≠ PSet.all n) :
+    ¬ ∃ t ctx', HasType (n := n) []
+      (.shuffle (.fst (.diverge (.warpVal s) pred)) .perLaneVal)
       t ctx' := by
   intro ⟨t, ctx', ht⟩
   -- shuffle requires warp arg to have type Warp<All>
-  have ⟨ctx_mid, hw⟩ := shuffle_requires_all ht
-  -- But fst(diverge(warpVal(all), pred)) has type Warp<all &&& pred>
+  have ⟨_, hw⟩ := shuffle_requires_all ht
+  -- But fst(diverge(warpVal(s), pred)) has type Warp<s &&& pred>
   have heq := fst_diverge_warpval_type hw
-  -- heq : Ty.warp (PSet.all 32) = Ty.warp (PSet.all 32 &&& pred)
-  -- Extract: PSet.all 32 = PSet.all 32 &&& pred
+  -- heq : Ty.warp (PSet.all n) = Ty.warp (s &&& pred)
+  -- Extract: PSet.all n = s &&& pred
   simp only [Ty.warp.injEq] at heq
   exact absurd heq.symm hne
 
@@ -980,7 +984,7 @@ theorem bug1_cuda_samples_398 :
     ¬ ∃ t ctx', HasType (n := 32) []
       (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x00000001#32))) .perLaneVal)
       t ctx' :=
-  shuffle_diverged_untypable (0x00000001#32) (by decide)
+  shuffle_diverged_untypable (PSet.all 32) (0x00000001#32) (by decide)
 
 /-- Bug 2 (CUB/CCCL #854): Shuffle on 16-lane sub-warp.
     PSet.all 32 &&& 0xFFFF = 0xFFFF ≠ PSet.all 32 -/
@@ -988,7 +992,7 @@ theorem bug2_cccl_854 :
     ¬ ∃ t ctx', HasType (n := 32) []
       (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x0000FFFF#32))) .perLaneVal)
       t ctx' :=
-  shuffle_diverged_untypable (0x0000FFFF#32) (by decide)
+  shuffle_diverged_untypable (PSet.all 32) (0x0000FFFF#32) (by decide)
 
 /-- Bug 3 (PIConGPU #2514): Ballot (= shuffle) on diverged subset.
     PSet.all 32 &&& 0xFFFF = 0xFFFF ≠ PSet.all 32 -/
@@ -996,7 +1000,7 @@ theorem bug3_picongpu_2514 :
     ¬ ∃ t ctx', HasType (n := 32) []
       (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x0000FFFF#32))) .perLaneVal)
       t ctx' :=
-  shuffle_diverged_untypable (0x0000FFFF#32) (by decide)
+  shuffle_diverged_untypable (PSet.all 32) (0x0000FFFF#32) (by decide)
 
 /-- Bug 4 (LLVM #155682): Shuffle after lane-0 conditional.
     PSet.all 32 &&& 0x1 = 0x1 ≠ PSet.all 32 -/
@@ -1004,7 +1008,7 @@ theorem bug4_llvm_155682 :
     ¬ ∃ t ctx', HasType (n := 32) []
       (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) (0x00000001#32))) .perLaneVal)
       t ctx' :=
-  shuffle_diverged_untypable (0x00000001#32) (by decide)
+  shuffle_diverged_untypable (PSet.all 32) (0x00000001#32) (by decide)
 
 /-- Bug 5 (demo): Shuffle after even/odd divergence.
     PSet.all 32 &&& ActiveSet.even = ActiveSet.even ≠ PSet.all 32 -/
@@ -1012,4 +1016,4 @@ theorem bug5_shuffle_after_diverge :
     ¬ ∃ t ctx', HasType (n := 32) []
       (.shuffle (.fst (.diverge (.warpVal (PSet.all 32)) ActiveSet.even)) .perLaneVal)
       t ctx' :=
-  shuffle_diverged_untypable ActiveSet.even (by decide)
+  shuffle_diverged_untypable (PSet.all 32) ActiveSet.even (by decide)
