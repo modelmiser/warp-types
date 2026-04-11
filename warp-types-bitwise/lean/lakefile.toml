@@ -1,0 +1,6 @@
+name = "WarpTypesBitwise"
+version = "0.1.0"
+defaultTargets = ["WarpTypesBitwise"]
+
+[[lean_lib]]
+name = "WarpTypesBitwise"
