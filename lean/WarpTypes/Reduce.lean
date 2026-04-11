@@ -1,4 +1,5 @@
 import WarpTypes.Core
+import WarpTypes.CoreMetatheory
 
 /-
   Tree All-Reduce Domain Extension (Level 2d — experiment C, post-port)
@@ -194,3 +195,28 @@ theorem finalize_tree_reduce_typable :
       (CoreHasType.groupVal [] Col.lowHalf)
   · exact CoreHasType.leafReduce [] [] _ Col.highHalf
       (CoreHasType.groupVal [] Col.highHalf)
+
+-- ============================================================================
+-- Metatheory corollaries at Col width (n = 4)
+-- ============================================================================
+-- Thin specialisations of `CoreMetatheory` theorems at `n = 4`. As with
+-- Fence's corollaries, each theorem is a one-liner over the Core version —
+-- no Reduce-specific proof content.
+
+/-- Progress for Reduce at Col width. -/
+theorem reduce_progress {e : CoreExpr 4} {t : CoreTy 4} {ctx' : CoreCtx 4}
+    (ht : CoreHasType [] e t ctx') :
+    CoreMetatheory.isValue e = true ∨ ∃ e', CoreMetatheory.Step e e' :=
+  CoreMetatheory.progress_closed ht
+
+/-- Preservation for Reduce at Col width. -/
+theorem reduce_preservation {e e' : CoreExpr 4} {t : CoreTy 4} {ctx ctx' : CoreCtx 4}
+    (ht : CoreHasType ctx e t ctx') (hs : CoreMetatheory.Step e e') :
+    CoreHasType ctx e' t ctx' :=
+  CoreMetatheory.preservation ht hs
+
+/-- Multi-step type safety for Reduce at Col width. -/
+theorem reduce_type_safety {e e' : CoreExpr 4} {t : CoreTy 4} {ctx' : CoreCtx 4}
+    (ht : CoreHasType [] e t ctx') (hstar : CoreMetatheory.Star CoreMetatheory.Step e e') :
+    CoreMetatheory.isValue e' = true ∨ ∃ e'', CoreMetatheory.Step e' e'' :=
+  CoreMetatheory.type_safety ht hstar

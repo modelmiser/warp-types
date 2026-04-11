@@ -1339,4 +1339,24 @@ theorem preservation {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx ctx' : Co
     | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
       cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
 
+-- ============================================================================
+-- Reflexive-transitive closure and multi-step type safety
+-- ============================================================================
+
+/-- Reflexive-transitive closure of a binary relation. Scoped under
+    `CoreMetatheory` to avoid collision with `Basic.Star`. -/
+inductive Star (R : α → α → Prop) : α → α → Prop
+  | refl : Star R a a
+  | step : R a b → Star R b c → Star R a c
+
+/-- Multi-step type safety: a closed well-typed term that reduces in zero or
+    more steps never reaches a stuck non-value state. Follows by induction
+    on `Star Step` from `progress_closed` + `preservation`. -/
+theorem type_safety {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e t ctx') (hstar : Star Step e e') :
+    (isValue e' = true) ∨ (∃ e'', Step e' e'') := by
+  induction hstar with
+  | refl => exact progress_closed ht
+  | step h1 _ ih => exact ih (preservation ht h1)
+
 end CoreMetatheory

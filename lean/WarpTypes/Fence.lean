@@ -1,4 +1,5 @@
 import WarpTypes.Core
+import WarpTypes.CoreMetatheory
 
 /-
   Fence / Partial-Write Domain Extension (Level 2c — experiment B, post-port)
@@ -207,3 +208,31 @@ theorem fence_after_full_write_typable :
   · exact CoreHasType.write [] [] [] _ _ ByteBuf.highNibble
       (CoreHasType.groupVal [] ByteBuf.highNibble)
       (CoreHasType.dataVal [])
+
+-- ============================================================================
+-- Metatheory corollaries at ByteBuf width (n = 8)
+-- ============================================================================
+-- Thin specialisations of `CoreMetatheory` theorems at `n = 8`. They demonstrate
+-- that the factored metatheory in `CoreMetatheory.lean` covers the Fence domain
+-- at the same depth as Basic.lean's `Metatheory.lean` covers GPU. Each theorem
+-- is a one-liner over the Core version — no Fence-specific proof content.
+
+/-- Progress for Fence at ByteBuf width: every closed well-typed Fence
+    expression is either a value or can take a step. -/
+theorem fence_progress {e : CoreExpr 8} {t : CoreTy 8} {ctx' : CoreCtx 8}
+    (ht : CoreHasType [] e t ctx') :
+    CoreMetatheory.isValue e = true ∨ ∃ e', CoreMetatheory.Step e e' :=
+  CoreMetatheory.progress_closed ht
+
+/-- Preservation for Fence at ByteBuf width: stepping a well-typed Fence
+    expression yields a term of the same type at the same context pair. -/
+theorem fence_preservation {e e' : CoreExpr 8} {t : CoreTy 8} {ctx ctx' : CoreCtx 8}
+    (ht : CoreHasType ctx e t ctx') (hs : CoreMetatheory.Step e e') :
+    CoreHasType ctx e' t ctx' :=
+  CoreMetatheory.preservation ht hs
+
+/-- Multi-step type safety for Fence at ByteBuf width. -/
+theorem fence_type_safety {e e' : CoreExpr 8} {t : CoreTy 8} {ctx' : CoreCtx 8}
+    (ht : CoreHasType [] e t ctx') (hstar : CoreMetatheory.Star CoreMetatheory.Step e e') :
+    CoreMetatheory.isValue e' = true ∨ ∃ e'', CoreMetatheory.Step e' e'' :=
+  CoreMetatheory.type_safety ht hstar
