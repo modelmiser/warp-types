@@ -580,3 +580,204 @@ theorem option_a_branching_composition :
       CspHasType j1Grid [] branchingProg t ctx' ∧
       FollowsProtocol branchingCore branchingProg [] :=
   ⟨_, _, branchingProg_typed, branchingProg_follows_protocol⟩
+
+-- ============================================================================
+-- Protocol Trace: structural characterization of FollowsProtocol
+--
+-- The lemma hinted at by Experiment 3b: FollowsProtocol is EXACTLY
+-- "leading prefix of the depth-first action trace of the expression."
+-- Once this is proved, every future per-program protocol witness collapses
+-- to a single `rfl` — and the "diverge is protocol-invisible" insight
+-- becomes a one-line corollary instead of a case analysis.
+-- ============================================================================
+
+/-- The protocol trace of an expression: the flat depth-first left-to-right
+    sequence of `send` / `recv` actions.
+
+    Every non-protocol constructor (`groupVal`, `dataVal`, `unitVal`, `var`,
+    `diverge`, `merge`, `letBind`, `pairVal`, `fst`, `snd`, `letPair`,
+    `collective`) is structurally transparent — it contributes only the
+    concatenation of its sub-expressions' traces. Only `send` and `recv`
+    emit an action.
+
+    Note that `diverge g pred` ignores `pred` entirely: the participant-set
+    predicate lives in a different lattice from the protocol, and this
+    function is the structural witness of that orthogonality. -/
+def protocolTrace {n : Nat} : CspExpr n → List (ProtoAction n)
+  | .groupVal _           => []
+  | .dataVal              => []
+  | .unitVal              => []
+  | .var _                => []
+  | .diverge g _          => protocolTrace g
+  | .merge g1 g2          => protocolTrace g1 ++ protocolTrace g2
+  | .letBind _ val body   => protocolTrace val ++ protocolTrace body
+  | .pairVal a b          => protocolTrace a ++ protocolTrace b
+  | .fst e                => protocolTrace e
+  | .snd e                => protocolTrace e
+  | .letPair e _ _ body   => protocolTrace e ++ protocolTrace body
+  | .send g payload self dst =>
+      protocolTrace g ++ protocolTrace payload ++ [ProtoAction.send self dst]
+  | .recv g self src =>
+      protocolTrace g ++ [ProtoAction.recv self src]
+  | .collective g payload => protocolTrace g ++ protocolTrace payload
+
+/-- Forward direction: any `FollowsProtocol` derivation consumes exactly
+    `protocolTrace e` from the head of its input protocol.
+
+    Proof by induction on the derivation. Each non-protocol constructor
+    simply composes IHs. The `send`/`recv` cases rewrite the explicit
+    equality (`proto_p = ProtoAction.send self dst :: rest`) into the
+    concatenation shape. -/
+theorem followsProtocol_to_trace {n : Nat} {e : CspExpr n}
+    {proto proto' : ProtoRole n} :
+    FollowsProtocol proto e proto' → proto = protocolTrace e ++ proto' := by
+  intro h
+  induction h with
+  | groupVal _ _ => simp [protocolTrace]
+  | dataVal _ => simp [protocolTrace]
+  | unitVal _ => simp [protocolTrace]
+  | var _ _ => simp [protocolTrace]
+  | diverge _ ih => simpa [protocolTrace] using ih
+  | merge _ _ ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      rw [ih1, ih2]
+  | letBind _ _ ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      rw [ih1, ih2]
+  | pairVal _ _ ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      rw [ih1, ih2]
+  | fstE _ ih => simpa [protocolTrace] using ih
+  | sndE _ ih => simpa [protocolTrace] using ih
+  | letPairE _ _ ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      rw [ih1, ih2]
+  | send _ _ heq ihg ihp =>
+      subst heq
+      simp [protocolTrace, List.append_assoc]
+      rw [ihg, ihp]
+  | recv _ heq ih =>
+      subst heq
+      simp [protocolTrace, List.append_assoc]
+      rw [ih]
+  | collective _ _ ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      rw [ih1, ih2]
+
+/-- Backward direction: any leading prefix equal to `protocolTrace e`
+    admits a `FollowsProtocol` derivation.
+
+    Stated as the substitution form `FollowsProtocol (protocolTrace e ++ r) e r`
+    so that the induction carries a universally quantified leftover `r`.
+    Proof by structural induction on `e`, generalizing `proto'`. -/
+theorem trace_to_followsProtocol {n : Nat} (e : CspExpr n)
+    (proto' : ProtoRole n) :
+    FollowsProtocol (protocolTrace e ++ proto') e proto' := by
+  induction e generalizing proto' with
+  | groupVal s =>
+      simp [protocolTrace]; exact FollowsProtocol.groupVal _ _
+  | dataVal =>
+      simp [protocolTrace]; exact FollowsProtocol.dataVal _
+  | unitVal =>
+      simp [protocolTrace]; exact FollowsProtocol.unitVal _
+  | var name =>
+      simp [protocolTrace]; exact FollowsProtocol.var _ _
+  | diverge g pred ih =>
+      simp [protocolTrace]
+      exact FollowsProtocol.diverge (ih proto')
+  | merge g1 g2 ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.merge
+        (ih1 (protocolTrace g2 ++ proto')) (ih2 proto')
+  | letBind name val body ihval ihbody =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.letBind
+        (ihval (protocolTrace body ++ proto')) (ihbody proto')
+  | pairVal a b iha ihb =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.pairVal
+        (iha (protocolTrace b ++ proto')) (ihb proto')
+  | fst e ih =>
+      simp [protocolTrace]
+      exact FollowsProtocol.fstE (ih proto')
+  | snd e ih =>
+      simp [protocolTrace]
+      exact FollowsProtocol.sndE (ih proto')
+  | letPair e name1 name2 body ihe ihbody =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.letPairE
+        (ihe (protocolTrace body ++ proto')) (ihbody proto')
+  | send g payload self dst ihg ihp =>
+      simp [protocolTrace, List.append_assoc]
+      -- Goal shape:
+      -- FollowsProtocol (tr g ++ tr p ++ Send self dst :: proto')
+      --                 (.send g payload self dst) proto'
+      exact FollowsProtocol.send
+        (ihg (protocolTrace payload ++ ProtoAction.send self dst :: proto'))
+        (ihp (ProtoAction.send self dst :: proto'))
+        rfl
+  | recv g self src ihg =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.recv
+        (ihg (ProtoAction.recv self src :: proto'))
+        rfl
+  | collective g payload ih1 ih2 =>
+      simp [protocolTrace, List.append_assoc]
+      exact FollowsProtocol.collective
+        (ih1 (protocolTrace payload ++ proto')) (ih2 proto')
+
+/-- The structural characterization theorem. `FollowsProtocol` is exactly
+    "leading prefix equal to `protocolTrace`". -/
+theorem followsProtocol_iff_trace {n : Nat} (e : CspExpr n)
+    (proto proto' : ProtoRole n) :
+    FollowsProtocol proto e proto' ↔ proto = protocolTrace e ++ proto' := by
+  constructor
+  · exact followsProtocol_to_trace
+  · intro h; subst h; exact trace_to_followsProtocol e proto'
+
+/-- Self-trace corollary: every expression trivially follows its own trace
+    with empty leftover. Combined with `rfl` on the trace computation, this
+    decides any `FollowsProtocol` goal whose role matches the program's trace. -/
+theorem followsProtocol_self {n : Nat} (e : CspExpr n) :
+    FollowsProtocol (protocolTrace e) e [] := by
+  have h := trace_to_followsProtocol e []
+  simpa using h
+
+-- ============================================================================
+-- Computational witness: the branching program case falls out by reflexivity
+--
+-- This is the payoff of the structural lemma — the whole 30-line tactic proof
+-- of `branchingProg_follows_protocol` collapses to a trace computation plus
+-- `followsProtocol_self`.
+-- ============================================================================
+
+/-- `branchingCore` is literally the computed trace of `branchingProg`. -/
+theorem branchingCore_eq_trace :
+    branchingCore = protocolTrace branchingProg := by
+  unfold branchingCore branchingProg protocolTrace
+  rfl
+
+/-- `FollowsProtocol` on the branching program, proved by computation
+    rather than by a 30-line case walk. Compare with
+    `branchingProg_follows_protocol` above. -/
+theorem branchingProg_follows_protocol' :
+    FollowsProtocol branchingCore branchingProg [] := by
+  rw [branchingCore_eq_trace]
+  exact followsProtocol_self branchingProg
+
+-- ============================================================================
+-- Diverge-is-protocol-invisible, stated as a theorem
+-- ============================================================================
+
+/-- **The structural statement of Option A.** The participant-set predicate
+    in `diverge` is invisible to the protocol trace. This is the single
+    line that captures why `FollowsProtocol` and `CspHasType` compose: the
+    protocol layer cannot observe which sub-group is doing what, only the
+    depth-first order of `send`/`recv` endpoints.
+
+    For two programs that differ only in their `diverge` predicates, the
+    protocol trace — and therefore `FollowsProtocol` — is identical. -/
+theorem diverge_pred_is_protocol_invisible {n : Nat}
+    (g : CspExpr n) (pred1 pred2 : PSet n) :
+    protocolTrace (.diverge g pred1) = protocolTrace (.diverge g pred2) := by
+  rfl
