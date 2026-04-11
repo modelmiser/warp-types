@@ -1,31 +1,36 @@
-import WarpTypes.Generic
+import WarpTypes.Core
 
 /-
-  Fence / Partial-Write Domain Extension (Level 2c — experiment B)
+  Fence / Partial-Write Domain Extension (Level 2c — experiment B, post-port)
 
-  Third instance of the complemented typestate framework, testing the §9 claim
-  from research/complemented-typestate-framework.md:
+  Ported 2026-04-11 onto `WarpTypes.Core`. This file formerly defined
+  FenceTy / FenceExpr / FenceCtx / FenceHasType as a self-contained inductive
+  stack (271 lines). Post-port, it is a thin domain view over `CoreHasType`:
+  concrete instance (ByteBuf = PSet 8), the four theorem stack (diverge
+  partition delegate, `fence_requires_all` inversion, negative partial-write
+  instance, positive full-write instance), and two helpers.
 
-    "the same mechanism that covers GPU divergence (Level 2a) and CSP
-     protocol compliance (Level 2b) also covers fence/partial-write safety"
+  The ~87 lines of core typing rules previously duplicated between this file
+  and Csp.lean / Reduce.lean now live in Core.lean as monomorphic + parametric
+  rules. Fence's `merge` and `fence` are subsumed by `CoreHasType.mergeFamily`
+  and `CoreHasType.finalizeFamily` respectively, both at tag `.group`.
 
-  Domain interpretation:
-  - PSet n    : write mask over an n-byte buffer (bit i = byte i has been written)
-  - group s   : linear permission to write exactly the bytes in s
-  - diverge   : split a write region into disjoint sub-regions
-  - merge     : combine sub-region permissions (requires IsComplement)
-  - write     : perform a bulk write on a permission (threads handle unchanged)
-  - fence     : barrier; requires full-buffer permission (same gate as collective)
+  Inversion proofs that previously used a single-case `cases` on the concrete
+  rule now case on the parametric rule and discriminate by tag, closing dead
+  branches (the `.reduced` tag and the cross-rule `mergeFamily` branch) via
+  constructor-clash contradiction. This is the standard probe-3b pattern.
 
-  No topology. No receive. Writes are permission-typed, not location-typed.
-
-  EXPERIMENT: verify that the 9 core typing rules transfer unchanged from
-  Csp.lean via copy-rename, and that IsComplement is the right merge-gate
-  and PSet.all is the right fence-gate for the partial-write domain.
+  Domain interpretation (unchanged):
+  - PSet n   : write mask over an n-byte buffer (bit i ↔ byte i)
+  - .group s : linear permission to write exactly bytes in s
+  - diverge  : split a permission by predicate
+  - merge    : combine complementary sub-permissions (THE gate)
+  - write    : bulk write payload under permission; threads permission
+  - fence    : barrier; requires full-buffer permission (gate on `.group (PSet.all n)`)
 -/
 
 -- ============================================================================
--- ByteBuf: PSet 8 instantiation (one 8-byte word — concrete, small, testable)
+-- ByteBuf: PSet 8 instantiation
 -- ============================================================================
 
 /-- An 8-bit write mask: one bit per byte of a word-sized buffer. -/
@@ -40,9 +45,9 @@ def highNibble : ByteBuf := 0xF0#8  -- bytes 4-7
 
 end ByteBuf
 
-/-- Low and high nibbles are complements within All.
-    Structural analog of leftCol_rightCol_complement (CSP) and
-    even_odd_complement (GPU). -/
+/-- Low and high nibbles are complements within All. Structural analog of
+    `leftCol_rightCol_complement` (CSP), `even_odd_complement` (GPU), and
+    `halfway_complement` (Reduce). -/
 theorem nibble_complement :
     PSet.IsComplementAll ByteBuf.lowNibble ByteBuf.highNibble := by
   unfold PSet.IsComplementAll PSet.IsComplement
@@ -51,160 +56,75 @@ theorem nibble_complement :
   constructor <;> decide
 
 -- ============================================================================
--- Fence Types (Level 2c)
+-- Theorem: fence diverge partition (delegates to Core, which delegates to Generic)
 -- ============================================================================
 
-inductive FenceTy (n : Nat)
-  | group (s : PSet n)   -- write permission for exactly these bytes
-  | data                  -- payload to write
-  | unit                  -- fence barrier result
-  | pair (a b : FenceTy n)
-
--- ============================================================================
--- Fence Expressions (Level 1 core + Level 2c extensions)
--- ============================================================================
-
-inductive FenceExpr (n : Nat)
-  -- Core (Level 1 — copy-rename from CspExpr)
-  | groupVal (s : PSet n)
-  | dataVal
-  | unitVal
-  | var (name : String)
-  | diverge (g : FenceExpr n) (pred : PSet n)
-  | merge (g1 g2 : FenceExpr n)
-  | letBind (name : String) (val body : FenceExpr n)
-  | pairVal (a b : FenceExpr n)
-  | fst (e : FenceExpr n)
-  | snd (e : FenceExpr n)
-  | letPair (e : FenceExpr n) (name1 name2 : String) (body : FenceExpr n)
-  -- Level 2c: fence-specific
-  | write (g payload : FenceExpr n)
-  | fence (g : FenceExpr n)
-
--- ============================================================================
--- Fence Context (linear)
--- ============================================================================
-
-def FenceCtx (n : Nat) := List (String × FenceTy n)
-
-namespace FenceCtx
-
-def lookup {n : Nat} (ctx : FenceCtx n) (name : String) : Option (FenceTy n) :=
-  ctx.find? (fun p => p.1 == name) |>.map Prod.snd
-
-def remove {n : Nat} (ctx : FenceCtx n) (name : String) : FenceCtx n :=
-  ctx.filter (fun p => p.1 != name)
-
-end FenceCtx
-
--- ============================================================================
--- Fence Typing Rules (no topology parameter)
--- ============================================================================
-
-/-- Linear typing judgement for the fence domain: Γ ⊢ e : τ ⊣ Γ' -/
-inductive FenceHasType {n : Nat} :
-    FenceCtx n → FenceExpr n → FenceTy n → FenceCtx n → Prop
-
-  -- ── Core rules (Level 1 — copy-rename from CspHasType, no topology) ──
-
-  | groupVal (ctx : FenceCtx n) (s : PSet n) :
-      FenceHasType ctx (.groupVal s) (.group s) ctx
-  | dataVal (ctx : FenceCtx n) :
-      FenceHasType ctx .dataVal .data ctx
-  | unitVal (ctx : FenceCtx n) :
-      FenceHasType ctx .unitVal .unit ctx
-  | var (ctx : FenceCtx n) (name : String) (t : FenceTy n) :
-      ctx.lookup name = some t →
-      FenceHasType ctx (.var name) t (ctx.remove name)
-  | diverge (ctx ctx' : FenceCtx n) (g : FenceExpr n) (s pred : PSet n) :
-      FenceHasType ctx g (.group s) ctx' →
-      FenceHasType ctx (.diverge g pred)
-        (.pair (.group (s &&& pred)) (.group (s &&& ~~~pred))) ctx'
-  | merge (ctx ctx' ctx'' : FenceCtx n) (g1 g2 : FenceExpr n)
-      (s1 s2 parent : PSet n) :
-      FenceHasType ctx g1 (.group s1) ctx' →
-      FenceHasType ctx' g2 (.group s2) ctx'' →
-      PSet.IsComplement s1 s2 parent →          -- THE gate (same as GPU, same as CSP)
-      FenceHasType ctx (.merge g1 g2) (.group parent) ctx''
-  | letBind (ctx ctx' ctx'' : FenceCtx n) (name : String)
-      (val body : FenceExpr n) (t1 t2 : FenceTy n) :
-      FenceHasType ctx val t1 ctx' →
-      ctx'.lookup name = none →
-      FenceHasType ((name, t1) :: ctx') body t2 ctx'' →
-      ctx''.lookup name = none →
-      FenceHasType ctx (.letBind name val body) t2 ctx''
-  | pairVal (ctx ctx' ctx'' : FenceCtx n) (a b : FenceExpr n) (t1 t2 : FenceTy n) :
-      FenceHasType ctx a t1 ctx' →
-      FenceHasType ctx' b t2 ctx'' →
-      FenceHasType ctx (.pairVal a b) (.pair t1 t2) ctx''
-  | fstE (ctx ctx' : FenceCtx n) (e : FenceExpr n) (t1 t2 : FenceTy n) :
-      FenceHasType ctx e (.pair t1 t2) ctx' →
-      FenceHasType ctx (.fst e) t1 ctx'
-  | sndE (ctx ctx' : FenceCtx n) (e : FenceExpr n) (t1 t2 : FenceTy n) :
-      FenceHasType ctx e (.pair t1 t2) ctx' →
-      FenceHasType ctx (.snd e) t2 ctx'
-  | letPairE (ctx ctx' ctx'' : FenceCtx n) (e : FenceExpr n) (name1 name2 : String)
-      (body : FenceExpr n) (t1 t2 t : FenceTy n) :
-      FenceHasType ctx e (.pair t1 t2) ctx' →
-      name1 ≠ name2 →
-      ctx'.lookup name1 = none →
-      ctx'.lookup name2 = none →
-      FenceHasType ((name2, t2) :: (name1, t1) :: ctx') body t ctx'' →
-      ctx''.lookup name1 = none →
-      ctx''.lookup name2 = none →
-      FenceHasType ctx (.letPair e name1 name2 body) t ctx''
-
-  -- ── Fence-specific rules (Level 2c) ──
-
-  /-- Write: perform a bulk write on a permission handle. Consumes payload,
-      threads the group handle unchanged. No topology. No activeness check
-      on the permission — any bytes in `s` are writable by definition
-      (the permission *is* the write authorization). -/
-  | write (ctx ctx' ctx'' : FenceCtx n) (g payload : FenceExpr n) (s : PSet n) :
-      FenceHasType ctx g (.group s) ctx' →
-      FenceHasType ctx' payload .data ctx'' →
-      FenceHasType ctx (.write g payload) (.group s) ctx''
-
-  /-- Fence: barrier requiring full-buffer permission. Consumes the group,
-      returns unit. Structurally identical gate to CspHasType.collective —
-      both require `group (PSet.all n)`. -/
-  | fence (ctx ctx' : FenceCtx n) (g : FenceExpr n) :
-      FenceHasType ctx g (.group (PSet.all n)) ctx' →
-      FenceHasType ctx (.fence g) .unit ctx'
-
--- ============================================================================
--- Theorem: fence diverge partition (delegates to generic — unchanged)
--- ============================================================================
-
-/-- The diverge partition theorem transfers to the fence domain unchanged.
-    Third instance of the homomorphism (GPU, CSP, Fence all share it). -/
+/-- Third instance of the diverge partition homomorphism. -/
 theorem fence_diverge_partition {n : Nat} (s pred : PSet n) :
     PSet.Disjoint (s &&& pred) (s &&& ~~~pred) ∧
     PSet.Covers (s &&& pred) (s &&& ~~~pred) s :=
-  diverge_partition_generic s pred
+  core_diverge_partition s pred
 
 -- ============================================================================
--- Theorem: fence requires all bytes written (parallel to shuffle/collective)
+-- Theorem: fence_requires_all — inversion of finalizeFamily at tag .group
 -- ============================================================================
 
-/-- Fence typing requires the group to contain ALL bytes.
-    Structurally identical to csp_collective_requires_all and the GPU
-    shuffle_requires_all. -/
+/-- `fence` requires the group to contain ALL bytes.
+
+    Proof structure (probe 3b, double-witness variant):
+    `cases` generates a branch for every `CoreHasType` constructor whose
+    conclusion can unify with `CoreHasType ctx (.fence g) .unit ctx'`. The
+    monomorphic constructors are all eliminated by constructor clash at the
+    unifier level. The two parametric rules (`mergeFamily`, `finalizeFamily`)
+    survive `cases` because their conclusion `expr` and `ty` are free pattern
+    variables. Inside each surviving branch, case on `tag` and discharge:
+    - `finalizeFamily .group`: live branch — extract the premise `hg`.
+    - `finalizeFamily .reduced`: dead — `tagToFinalExpr .reduced e' = .finalize e'`
+      clashes with `.fence g`.
+    - `mergeFamily .group`: dead — `tagToMergeExpr .group e1 e2 = .merge e1 e2`
+      clashes with `.fence g`.
+    - `mergeFamily .reduced`: dead — `.combineRed e1 e2` clashes with `.fence g`. -/
 theorem fence_requires_all {n : Nat}
-    {ctx ctx' : FenceCtx n} {g : FenceExpr n} :
-    FenceHasType ctx (.fence g) .unit ctx' →
-    FenceHasType ctx g (.group (PSet.all n)) ctx' := by
+    {ctx ctx' : CoreCtx n} {g : CoreExpr n} :
+    CoreHasType ctx (.fence g) .unit ctx' →
+    CoreHasType ctx g (.group (PSet.all n)) ctx' := by
   intro h
   cases h with
-  | fence _ _ _ hg => exact hg
+  | finalizeFamily tag _ _ e' expr resultTy hExpr hTy hg =>
+    cases tag with
+    | group =>
+      simp only [tagToFinalExpr] at hExpr
+      simp only [tagToTy] at hg
+      injection hExpr with hExpr'
+      subst hExpr'
+      exact hg
+    | reduced =>
+      simp only [tagToFinalExpr] at hExpr
+      cases hExpr
+  | mergeFamily tag _ _ _ _ _ expr _ _ _ _ hExpr _ _ _ _ =>
+    cases tag with
+    | group =>
+      simp only [tagToMergeExpr] at hExpr
+      cases hExpr
+    | reduced =>
+      simp only [tagToMergeExpr] at hExpr
+      cases hExpr
 
 -- ============================================================================
 -- Helper: fst of diverge on groupVal produces the masked sub-group
 -- ============================================================================
 
+/-- Walks a nested expression `fst (diverge (groupVal s) pred)` through the
+    `fstE`, `diverge`, and `groupVal` rules. Each `cases` level now has to
+    explicitly discharge `mergeFamily` and `finalizeFamily` branches — they
+    survive `cases` (their `expr` is a free pattern variable that unifies
+    with any concrete expression), even though `tagToMergeExpr tag _ _` and
+    `tagToFinalExpr tag _` constructor-clash against `.fst`, `.diverge`,
+    and `.groupVal` at every tag. The discharge is always the same
+    one-liner: `cases tag; simp only [dispatcher] at hExpr; cases hExpr`. -/
 private theorem fence_fst_diverge_groupval_type {n : Nat}
-    {s pred : PSet n} {t : FenceTy n} {ctx' : FenceCtx n}
-    (ht : FenceHasType [] (.fst (.diverge (.groupVal s) pred)) t ctx') :
+    {s pred : PSet n} {t : CoreTy n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] (.fst (.diverge (.groupVal s) pred)) t ctx') :
     t = .group (s &&& pred) := by
   cases ht with
   | fstE _ _ _ _ _ he =>
@@ -212,6 +132,18 @@ private theorem fence_fst_diverge_groupval_type {n : Nat}
     | diverge _ _ _ _ _ hg =>
       cases hg with
       | groupVal _ _ => rfl
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+    cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+  | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+    cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
 
 -- ============================================================================
 -- NEGATIVE instance: fence after partial write is untypable
@@ -219,25 +151,26 @@ private theorem fence_fst_diverge_groupval_type {n : Nat}
 
 /-- Fencing after writing only a proper sub-region of the buffer is untypable.
 
-    Fence-domain analog of `collective_after_diverge_untypable` (CSP)
-    and `shuffle_diverged_untypable` (GPU bugs 1-5).
-    Same mechanism, same proof structure, third domain. -/
+    Fence-domain analog of `collective_after_diverge_untypable` (CSP) and
+    `shuffle_diverged_untypable` (GPU). Proof body unchanged from pre-port:
+    `fence_requires_all` has the same statement, and the helper `fence_fst_
+    diverge_groupval_type` is unchanged. -/
 theorem fence_after_partial_write_untypable {n : Nat}
     (s pred : PSet n)
     (hne : s &&& pred ≠ PSet.all n) :
-    ¬ ∃ ctx', FenceHasType []
+    ¬ ∃ ctx', CoreHasType []
       (.fence (.fst (.diverge (.groupVal s) pred)))
       .unit ctx' := by
   intro ⟨ctx', ht⟩
   have hg := fence_requires_all ht
   have heq := fence_fst_diverge_groupval_type hg
-  simp only [FenceTy.group.injEq] at heq
+  simp only [CoreTy.group.injEq] at heq
   exact absurd heq.symm hne
 
-/-- Concrete ByteBuf instance: fencing after writing only the low nibble
-    is untypable. Parallel to j1_collective_after_column_split. -/
+/-- Concrete ByteBuf instance: fencing after writing only the low nibble is
+    untypable. Parallel to `j1_collective_after_column_split`. -/
 theorem bytebuf_fence_after_low_nibble_only :
-    ¬ ∃ ctx', FenceHasType []
+    ¬ ∃ ctx', CoreHasType []
       (.fence
         (.fst (.diverge (.groupVal ByteBuf.all) ByteBuf.lowNibble)))
       .unit ctx' :=
@@ -248,24 +181,29 @@ theorem bytebuf_fence_after_low_nibble_only :
 -- ============================================================================
 
 /-- Writing the low nibble, writing the high nibble, merging the permissions
-    via IsComplement, and fencing is well-typed. This exercises the full
-    write/merge/fence round-trip and validates that IsComplement is the
-    right merge-gate for the fence domain. -/
+    via `IsComplement`, and fencing is well-typed. Validates that
+    `mergeFamily` at tag `.group` and `finalizeFamily` at tag `.group`
+    compose correctly. -/
 theorem fence_after_full_write_typable :
-    ∃ ctx', FenceHasType ([] : FenceCtx 8)
+    ∃ ctx', CoreHasType ([] : CoreCtx 8)
       (.fence
         (.merge
           (.write (.groupVal ByteBuf.lowNibble) .dataVal)
           (.write (.groupVal ByteBuf.highNibble) .dataVal)))
       .unit ctx' := by
   refine ⟨[], ?_⟩
-  apply FenceHasType.fence
-  exact FenceHasType.merge [] [] [] _ _
-    ByteBuf.lowNibble ByteBuf.highNibble (PSet.all 8)
-    (FenceHasType.write [] [] [] _ _ ByteBuf.lowNibble
-      (FenceHasType.groupVal [] ByteBuf.lowNibble)
-      (FenceHasType.dataVal []))
-    (FenceHasType.write [] [] [] _ _ ByteBuf.highNibble
-      (FenceHasType.groupVal [] ByteBuf.highNibble)
-      (FenceHasType.dataVal []))
-    nibble_complement
+  refine CoreHasType.finalizeFamily (n := 8) .group [] []
+    (.merge (.write (.groupVal ByteBuf.lowNibble) .dataVal)
+            (.write (.groupVal ByteBuf.highNibble) .dataVal))
+    _ _ rfl rfl ?_
+  refine CoreHasType.mergeFamily (n := 8) .group [] [] []
+    (.write (.groupVal ByteBuf.lowNibble) .dataVal)
+    (.write (.groupVal ByteBuf.highNibble) .dataVal)
+    _ ByteBuf.lowNibble ByteBuf.highNibble (PSet.all 8) _ rfl rfl
+    ?_ ?_ nibble_complement
+  · exact CoreHasType.write [] [] [] _ _ ByteBuf.lowNibble
+      (CoreHasType.groupVal [] ByteBuf.lowNibble)
+      (CoreHasType.dataVal [])
+  · exact CoreHasType.write [] [] [] _ _ ByteBuf.highNibble
+      (CoreHasType.groupVal [] ByteBuf.highNibble)
+      (CoreHasType.dataVal [])
