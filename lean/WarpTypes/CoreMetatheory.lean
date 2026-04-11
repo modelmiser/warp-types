@@ -266,4 +266,182 @@ inductive Step {n : Nat} : CoreExpr n → CoreExpr n → Prop
   | finalizeCong (r r' : CoreExpr n) :
       Step r r' → Step (.finalize r) (.finalize r')
 
+-- ============================================================================
+-- Canonical forms
+-- ============================================================================
+-- A closed value at each `CoreTy` constructor has a predictable syntactic
+-- shape. The `canonical_reduced` case is the interesting one: under the
+-- option-(a) design (INSIGHTS §N+50) it forces
+-- `e = .leafReduce (.groupVal s)`, not a dedicated `.reducedVal` constructor.
+
+/-- A closed value at type `.group s` is syntactically `.groupVal s`. -/
+theorem canonical_group {n : Nat} {e : CoreExpr n} {s : PSet n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e (.group s) ctx') (hv : isValue e = true) :
+    e = .groupVal s := by
+  match ht with
+  | .groupVal _ _ => rfl
+  | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy _ _ _ =>
+    cases tag
+    case group =>
+      simp [tagToMergeExpr] at hExpr
+      subst hExpr
+      simp [isValue] at hv
+    case reduced => simp [tagToTy] at hTy
+  | .finalizeFamily tag _ _ _ _ _ hExpr hTy _ =>
+    cases tag <;> simp [tagToFinalTy] at hTy
+
+/-- A closed value at type `.data` is syntactically `.dataVal`. -/
+theorem canonical_data {n : Nat} {e : CoreExpr n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e .data ctx') (hv : isValue e = true) :
+    e = .dataVal := by
+  match ht with
+  | .dataVal _ => rfl
+  | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ _ hTy _ _ _ =>
+    cases tag <;> simp [tagToTy] at hTy
+  | .finalizeFamily tag _ _ _ _ _ hExpr hTy _ =>
+    cases tag
+    case group => simp [tagToFinalTy] at hTy
+    case reduced =>
+      simp [tagToFinalExpr] at hExpr
+      subst hExpr
+      simp [isValue] at hv
+
+/-- A closed value at type `.unit` is syntactically `.unitVal`. -/
+theorem canonical_unit {n : Nat} {e : CoreExpr n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e .unit ctx') (hv : isValue e = true) :
+    e = .unitVal := by
+  match ht with
+  | .unitVal _ => rfl
+  | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ _ hTy _ _ _ =>
+    cases tag <;> simp [tagToTy] at hTy
+  | .finalizeFamily tag _ _ _ _ _ hExpr hTy _ =>
+    cases tag
+    case group =>
+      simp [tagToFinalExpr] at hExpr
+      subst hExpr
+      simp [isValue] at hv
+    case reduced => simp [tagToFinalTy] at hTy
+
+/-- A closed value at type `.pair t1 t2` is syntactically `.pairVal v1 v2`
+    where both components are themselves values. -/
+theorem canonical_pair {n : Nat} {e : CoreExpr n} {t1 t2 : CoreTy n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e (.pair t1 t2) ctx') (hv : isValue e = true) :
+    ∃ v1 v2, e = .pairVal v1 v2 ∧ isValue v1 = true ∧ isValue v2 = true := by
+  match ht with
+  | .pairVal _ _ _ a b _ _ _ _ =>
+    simp [isValue] at hv; exact ⟨a, b, rfl, hv.1, hv.2⟩
+  | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ _ hTy _ _ _ =>
+    cases tag <;> simp [tagToTy] at hTy
+  | .finalizeFamily tag _ _ _ _ _ _ hTy _ =>
+    cases tag <;> simp [tagToFinalTy] at hTy
+
+/-- A closed value at type `.reduced s` is syntactically `.leafReduce (.groupVal s)`
+    — the canonical form dictated by the option-(a) design. This is the
+    validation moment for INSIGHTS §N+50: if this proof forces a dedicated
+    `.reducedVal` constructor, the design must be retracted. It does not. -/
+theorem canonical_reduced {n : Nat} {e : CoreExpr n} {s : PSet n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e (.reduced s) ctx') (hv : isValue e = true) :
+    e = .leafReduce (.groupVal s) := by
+  match ht with
+  | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .leafReduce _ _ g _ hg =>
+    -- isValue (.leafReduce g) forces g = .groupVal _; then hg's typing forces
+    -- the groupVal's PSet index to equal s.
+    match hg with
+    | .groupVal _ _ => rfl
+    | .var _ _ _ hlook => simp [CoreCtx.lookup, List.find?] at hlook
+    | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+    | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+    | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;>
+        (simp [tagToMergeExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+    | .finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;>
+        (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy _ _ _ =>
+    cases tag
+    case group => simp [tagToTy] at hTy
+    case reduced =>
+      simp [tagToMergeExpr] at hExpr
+      subst hExpr
+      simp [isValue] at hv
+  | .finalizeFamily tag _ _ _ _ _ _ hTy _ =>
+    cases tag <;> simp [tagToFinalTy] at hTy
+
+-- ============================================================================
+-- Values preserve contexts (values consume no linear resources)
+-- ============================================================================
+
+/-- If a well-typed expression is syntactically a value, its input and output
+    contexts coincide — values consume no linear resources. -/
+theorem value_preserves_ctx {n : Nat} {ctx ctx' : CoreCtx n} {v : CoreExpr n} {t : CoreTy n}
+    (ht : CoreHasType ctx v t ctx') (hv : isValue v = true) : ctx = ctx' := by
+  match ht with
+  | .groupVal _ _ => rfl
+  | .dataVal _ => rfl
+  | .unitVal _ => rfl
+  | .pairVal _ ctx_mid _ a b _ _ ha hb =>
+    simp [isValue] at hv
+    have h1 := value_preserves_ctx ha hv.1
+    have h2 := value_preserves_ctx hb hv.2
+    subst h1; subst h2; rfl
+  | .var _ _ _ _ => simp [isValue] at hv
+  | .diverge _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .leafReduce _ _ g _ hg =>
+    -- .leafReduce (.groupVal s) is a value; inner typing gives ctx = ctx via groupVal's rule.
+    -- For every other shape of g, `isValue (.leafReduce g) = false` so hv contradicts.
+    match hg with
+    | .groupVal _ _ => rfl
+    | .var _ _ _ _ => simp [isValue] at hv
+    | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+    | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+    | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;>
+        (simp [tagToMergeExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+    | .finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;>
+        (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+    cases tag <;>
+      (simp [tagToMergeExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+  | .finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+    cases tag <;>
+      (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+
 end CoreMetatheory
