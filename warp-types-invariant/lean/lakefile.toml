@@ -1,0 +1,6 @@
+name = "WarpTypesInvariant"
+version = "0.1.0"
+defaultTargets = ["WarpTypesInvariant"]
+
+[[lean_lib]]
+name = "WarpTypesInvariant"
