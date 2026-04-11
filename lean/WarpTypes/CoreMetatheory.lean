@@ -173,4 +173,97 @@ theorem remove_comm {n : Nat} (ctx : CoreCtx n) (a b : String) :
   simp only [CoreCtx.remove, List.filter_filter]
   congr 1; ext p; simp [Bool.and_comm]
 
+-- ============================================================================
+-- Small-Step Reduction
+-- ============================================================================
+
+/-- Small-step reduction on `CoreExpr`.
+
+    Design note — canonical reduced value. `.reduced s` has no dedicated
+    value constructor; its canonical value form is `.leafReduce (.groupVal s)`.
+    The `combineRedVal` rule below therefore reduces
+    `combineRed (.leafReduce (.groupVal s1)) (.leafReduce (.groupVal s2))`
+    to `.leafReduce (.groupVal (s1 ||| s2))`, walking through the underlying
+    group spines. This makes `IsComplement`'s `Covers` clause load-bearing
+    in `preservation` rather than only at typing-rule construction time —
+    the gate is used operationally, not just as a typing side condition.
+    (See INSIGHTS §N+50.)
+
+    The family-parametric typing rules `mergeFamily` and `finalizeFamily`
+    are *not* mirrored by a single parametric Step rule. Instead, the four
+    concrete reduction rules (`mergeVal`, `combineRedVal`, `fenceVal`,
+    `finalizeVal`) each live as monomorphic Step constructors. `preservation`
+    does the tag-dispatch manually. Attempting a single parametric
+    `mergeFamilyVal` rule would hit the same stuck-dispatch problem
+    Experiment D probe 3a documented for typing — better to keep Step
+    first-order and pay the discharge cost in one place (preservation)
+    rather than sprinkle it across the Step inductive as well. -/
+inductive Step {n : Nat} : CoreExpr n → CoreExpr n → Prop
+  -- ── Value-producing reductions ──
+  | divergeVal (s pred : PSet n) :
+      Step (.diverge (.groupVal s) pred)
+           (.pairVal (.groupVal (s &&& pred)) (.groupVal (s &&& ~~~pred)))
+  | mergeVal (s1 s2 : PSet n) :
+      Step (.merge (.groupVal s1) (.groupVal s2)) (.groupVal (s1 ||| s2))
+  | combineRedVal (s1 s2 : PSet n) :
+      Step (.combineRed (.leafReduce (.groupVal s1)) (.leafReduce (.groupVal s2)))
+           (.leafReduce (.groupVal (s1 ||| s2)))
+  | writeVal (s : PSet n) :
+      Step (.write (.groupVal s) .dataVal) (.groupVal s)
+  | fenceVal (s : PSet n) :
+      Step (.fence (.groupVal s)) .unitVal
+  | finalizeVal (s : PSet n) :
+      Step (.finalize (.leafReduce (.groupVal s))) .dataVal
+  | letVal (name : String) (v body : CoreExpr n) :
+      isValue v = true →
+      Step (.letBind name v body) (subst body name v)
+  | fstVal (a b : CoreExpr n) :
+      isValue a = true → isValue b = true →
+      Step (.fst (.pairVal a b)) a
+  | sndVal (a b : CoreExpr n) :
+      isValue a = true → isValue b = true →
+      Step (.snd (.pairVal a b)) b
+  | letPairVal (name1 name2 : String) (v1 v2 body : CoreExpr n) :
+      isValue v1 = true → isValue v2 = true →
+      Step (.letPair (.pairVal v1 v2) name1 name2 body)
+           (subst (subst body name1 v1) name2 v2)
+  -- ── Congruence rules ──
+  | divergeCong (g g' : CoreExpr n) (pred : PSet n) :
+      Step g g' → Step (.diverge g pred) (.diverge g' pred)
+  | mergeLeft (g1 g1' g2 : CoreExpr n) :
+      Step g1 g1' → Step (.merge g1 g2) (.merge g1' g2)
+  | mergeRight (v1 g2 g2' : CoreExpr n) :
+      isValue v1 = true → Step g2 g2' →
+      Step (.merge v1 g2) (.merge v1 g2')
+  | combineRedLeft (r1 r1' r2 : CoreExpr n) :
+      Step r1 r1' → Step (.combineRed r1 r2) (.combineRed r1' r2)
+  | combineRedRight (v1 r2 r2' : CoreExpr n) :
+      isValue v1 = true → Step r2 r2' →
+      Step (.combineRed v1 r2) (.combineRed v1 r2')
+  | letCong (name : String) (val val' body : CoreExpr n) :
+      Step val val' →
+      Step (.letBind name val body) (.letBind name val' body)
+  | pairLeftCong (a a' b : CoreExpr n) :
+      Step a a' → Step (.pairVal a b) (.pairVal a' b)
+  | pairRightCong (a b b' : CoreExpr n) :
+      isValue a = true → Step b b' →
+      Step (.pairVal a b) (.pairVal a b')
+  | fstCong (e e' : CoreExpr n) :
+      Step e e' → Step (.fst e) (.fst e')
+  | sndCong (e e' : CoreExpr n) :
+      Step e e' → Step (.snd e) (.snd e')
+  | letPairCong (e e' : CoreExpr n) (name1 name2 : String) (body : CoreExpr n) :
+      Step e e' → Step (.letPair e name1 name2 body) (.letPair e' name1 name2 body)
+  | writeLeft (g g' payload : CoreExpr n) :
+      Step g g' → Step (.write g payload) (.write g' payload)
+  | writeRight (v payload payload' : CoreExpr n) :
+      isValue v = true → Step payload payload' →
+      Step (.write v payload) (.write v payload')
+  | leafReduceCong (g g' : CoreExpr n) :
+      Step g g' → Step (.leafReduce g) (.leafReduce g')
+  | fenceCong (g g' : CoreExpr n) :
+      Step g g' → Step (.fence g) (.fence g')
+  | finalizeCong (r r' : CoreExpr n) :
+      Step r r' → Step (.finalize r) (.finalize r')
+
 end CoreMetatheory
