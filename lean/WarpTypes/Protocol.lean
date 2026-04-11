@@ -781,3 +781,54 @@ theorem diverge_pred_is_protocol_invisible {n : Nat}
     (g : CspExpr n) (pred1 pred2 : PSet n) :
     protocolTrace (.diverge g pred1) = protocolTrace (.diverge g pred2) := by
   rfl
+
+-- ============================================================================
+-- Decision procedure: `FollowsProtocol` by reflexivity of the trace
+-- ============================================================================
+
+/-- Packaged decision procedure: given a `FollowsProtocol` goal whose input
+    role definitionally unfolds to `protocolTrace e ++ proto'`, close it
+    with a single application. This is the "follow the computed trace"
+    pattern made reusable.
+
+    Usage:
+
+        theorem my_prog_follows : FollowsProtocol my_role my_prog [] :=
+          followsProtocol_rfl rfl
+
+    The `rfl` argument asks Lean to definitionally unify the input role
+    with the computed trace. When the program is a concrete tree of
+    structural constructors and `send`/`recv`, this reduces in constant
+    human effort regardless of program size. -/
+theorem followsProtocol_rfl {n : Nat} {e : CspExpr n}
+    {proto proto' : ProtoRole n}
+    (h : proto = protocolTrace e ++ proto') :
+    FollowsProtocol proto e proto' := by
+  subst h
+  exact trace_to_followsProtocol e proto'
+
+/-- Tactic form: `follows_protocol_rfl` closes any `FollowsProtocol` goal
+    whose role equals the computed `protocolTrace` of its program
+    (modulo the leftover protocol being `[]`). Delegates to
+    `followsProtocol_rfl rfl`. -/
+macro "follows_protocol_rfl" : tactic =>
+  `(tactic| exact followsProtocol_rfl rfl)
+
+-- ============================================================================
+-- Demo: PingPong and branching cases both collapse to one-liners
+-- ============================================================================
+
+/-- PingPong core 0: now a one-liner via the decision procedure.
+    Compare with `pingPongProg0_follows_protocol` above (17 lines). -/
+example : FollowsProtocol pingPongCore0 pingPongProg0 [] := by
+  follows_protocol_rfl
+
+/-- PingPong core 1: also a one-liner. -/
+example : FollowsProtocol pingPongCore1 pingPongProg1 [] := by
+  follows_protocol_rfl
+
+/-- Branching program: one-liner. Compare with the 30-line
+    `branchingProg_follows_protocol` above, and with the two-line
+    `branchingProg_follows_protocol'` via the iff lemma. -/
+example : FollowsProtocol branchingCore branchingProg [] := by
+  follows_protocol_rfl
