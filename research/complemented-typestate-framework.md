@@ -297,6 +297,58 @@ Verbose but accurate. A punchier version:
 
 The mechanized claim is no longer "the framework generalizes" — it is "the framework generalizes AND here is the concrete higher-order refactor the generalization exposes."
 
+### 9.3 Retrospective on Experiment D (2026-04-11 — refactor executed)
+
+The higher-order refactor target from §9.2 was executed the same day it was identified. Outcome: **the `Core.lean` refactor is mechanized, all four pre-existing domain theorems in Fence.lean and Reduce.lean are preserved, and the framework now has a single place to prove generic lemmas about the family-parametric rules.** Commits `bfbb4d272` (Core.lean), `563ba05a0` (Fence.lean port), `489486af2` (Reduce.lean port), `1802039df` (root module).
+
+**Rule shape — what worked.** The `mergeFamily` and `finalizeFamily` rules use a **double equality witness** pattern that generalizes probe 3b. Probe 3b validated a single-witness shape for the expression side (one `heq : expr = tagToFinalExpr tag e`), but its toy `finalizeTagged` rule returned a concrete `.finalTy` — not a dispatched type. The real port had to abstract *both* the expression AND the output type:
+
+    | mergeFamily (tag : TyTag) (ctx ctx' ctx'' : CoreCtx n)
+        (e1 e2 expr : CoreExpr n) (s1 s2 parent : PSet n) (ty : CoreTy n)
+        (hExpr : expr = tagToMergeExpr tag e1 e2)
+        (hTy : ty = tagToTy tag parent) :
+        CoreHasType ctx e1 (tagToTy tag s1) ctx' →
+        CoreHasType ctx' e2 (tagToTy tag s2) ctx'' →
+        PSet.IsComplement s1 s2 parent →
+        CoreHasType ctx expr ty ctx''
+
+Without the second witness `hTy`, any `cases` on a hypothesis of concrete shape `CoreHasType ctx e .unit ctx'` fails dependent elimination on the `mergeFamily` branch: the unifier has to solve `.unit =?= tagToTy tag parent`, which is stuck on the tag exactly the same way probe 3a's pattern-match version was stuck on `mkFinal`. The double-witness pattern moves both stuck dispatches into equality hypotheses, preserving full parametricity in the rule's other arguments.
+
+This shape is a new finding. Probe 3b only exercised the single-witness case. The double-witness variant should be the default for any future family-parametric rule whose output type is also dispatched.
+
+**Structural cost — what wasn't in the plan.** The refactor port revealed a second-order cost that neither probe 3b nor the §9.2 sketch anticipated: **every nested `cases` in the existing domain theorems now pays a boilerplate dead-branch discharge for the parametric rules, at every nesting level, even at levels whose hypothesis shape trivially clashes against the parametric rule's dispatched expression constructor.**
+
+Example: Fence's `fence_fst_diverge_groupval_type` helper walks `.fst (.diverge (.groupVal s) pred)` through three levels of nested `cases`. Pre-port it was 4 lines. Post-port it is 22 lines, because at each `cases` level, Lean cannot constructor-clash-eliminate the `mergeFamily` or `finalizeFamily` branches — those rules have `expr` as a free pattern variable, and the cases-site unifier does not unfold `@[reducible]` dispatchers to detect that `tagToMergeExpr tag _ _` would reduce to a clashing constructor. The two layers of Lean 4 elaboration (cases-site vs post-cases rewriting; see INSIGHTS §N+40) manifest again here, now on the *caller* side of the parametric rule rather than its own inversion.
+
+The required discharge is mechanical and identical at every site:
+
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+
+The port of Fence.lean and Reduce.lean carries 14 such discharges in total (Reduce's `reduce_leaf_fst_diverge_type` walks four nested levels, accounting for 8 of the 14). See INSIGHTS §N+41 for the full elaboration of why the cases-site unifier fails to eliminate these branches and the implication for scaling the refactor to more domains.
+
+This cost is new to §9.2. The §9.2 plan treated the refactor as a line-count win (~170 duplicated lines → ~170 in Core.lean). Actual outcome is a *structural* win, not a line-count win:
+
+| File | Pre-port | Post-port | Δ |
+|------|----------|-----------|---|
+| Core.lean (new) | — | 276 | +276 |
+| Fence.lean | 271 | 209 | −62 |
+| Reduce.lean | 302 | 196 | −106 |
+| **Total** | **573** | **681** | **+108** |
+
+The line count went *up* because the cost of the dead-branch discharges in helpers+inversion theorems more than offsets the savings from removing the duplicated core rules. But the ~170 lines of structural duplication are now in one place: adding a fifth domain that shares the gate costs one `TyTag` constructor + four dispatcher clauses + ~100 lines of domain-specific examples — not re-copying ~300 lines of core rules. The refactor pays for itself at N ≥ 5 domains by a rough factor of (lines-saved-per-domain / dead-branch-cost-per-helper); at N = 2 domains the refactor is roughly break-even.
+
+**The §9.2 open question, resolved:** "Whether Lean 4's inductive type system admits direct parameterization over a `PSet n`-indexed type family" — **answered positively**, with the caveat that the admitting rule shape is the double-equality-witness pattern, not the naïve "pass the constructor as a function parameter" shape (probe 2 rejected) or the "dispatch via `@[reducible]` function" shape alone (probe 3a rejected). The full trajectory is now: probe 2 identified the obstruction; probe 3a ruled out the cheapest workaround; probe 3b validated the working rule shape for a single stuck dispatch; the §9.3 port validated the double-witness extension and quantified the caller-side structural cost.
+
+**What Experiment D did not settle.** Three things remain open:
+1. A reflective or typeclass-based encoding that eliminates the caller-side boilerplate discharges might exist. The Experiment D trajectory intentionally took the cheapest working path (explicit equality witnesses); a more elaborate encoding could, in principle, let Lean's cases-site unifier see through the dispatcher. Worth revisiting only if a fifth or sixth domain makes the boilerplate cost intolerable.
+2. The Level 2a GPU port onto `Generic.lean`'s width-parametric theorems (the known gap from §9.2) is *not* helped by `Core.lean` — `Basic.lean` has its own `BitVec 32` hard-coding and would need its own structural refactor before it could plug into Core's `CoreHasType`. This remains a separate known gap.
+3. `Csp.lean` was NOT ported onto Core.lean in this commit sequence. Csp has topology (the `TopoRel` parameter) and a different expression-language shape (send/recv channels vs write/fence bulk operations). Unifying Csp into Core.lean would require either widening Core to carry a `TopoRel` parameter everywhere or splitting Core into topology-aware and topology-free variants. Scoped out of Experiment D; tracked as a possible Experiment E.
+
+**Paper-writing implication.** The paper's §9-analog should distinguish **the theoretical claim** ("complemented typestate is one gate, four domains, unified under a higher-order factoring") from **the engineering cost** ("the unification has a caller-side boilerplate tax that scales linearly with existing-theorem-cases-depth × family-rule-count"). Both are findings. The first is the framework claim; the second is the honest report on the mechanization.
+
 ## 10. Potential Paper Titles
 
 > **Note (2026-04-11):** Both titles below are the 2026-04-09 draft. Option A has since been confirmed (Protocol.lean, commit lineage 2026-04-10) and the framework has been extended to four domains (see §9.2). Current preferred title is in §9.2 near the bottom.
@@ -318,17 +370,19 @@ Experiments are numbered; each is a discrete, falsifiable test with a pre-regist
 | 1 | The homomorphism, formally | 2026-04-06 | (Csp.lean + Protocol.lean sequence) | `Csp.lean`, `Protocol.lean` | 376 + 834 | Level 2b CSP + Level 3 Protocol shipped; Option A confirmed; branching-diverge orthogonality proved; `protocolTrace` structural characterization; `follows_protocol_rfl` tactic |
 | B | Third domain (fence / partial-write) | 2026-04-11 | `c405c3f08` | `Fence.lean` | 271 | F3-mild: 9/9 core rules + 11/11 core expression constructors transferred verbatim modulo copy-rename. ~87 lines structural duplication with Csp.lean. `Generic.lean` untouched. Strong form of "gate is orthogonal to op shape" observed |
 | C | Fourth domain (tree all-reduce) + new type family | 2026-04-11 | `67eeda474` | `Reduce.lean` | 302 | Stronger than predicted F3: gate transferred across two orthogonal axes (barrier-vs-extract AND `.group`-vs-`.reduced` family). Higher-order refactor target exposed (see §9.2). Type-family extension shown conservative over core. ~170 lines total duplication across three domains |
+| D probe | Higher-order factoring feasibility | 2026-04-11 | `9240e6c19` | `CoreExperiment.lean` | 330 | Three-probe trajectory. Probe 1 (construction with function-valued parameters): works. Probe 2 (inversion with function-valued parameters): fails — higher-order pattern unification at cases-site. Probe 3a (inversion with `@[reducible]` dispatcher): fails — cases-site unifier does not unfold `@[reducible]`. Probe 3b (inversion with explicit equality witness): works. Shape de-risked for port |
+| D port | Higher-order factoring executed | 2026-04-11 | `bfbb4d272`–`1802039df` | `Core.lean` + Fence/Reduce ports | 276 + 209 + 196 | Core.lean introduced, both domains ported. `mergeFamily` and `finalizeFamily` use **double** equality witnesses (expr AND output type) — new finding beyond probe 3b's single-witness variant. All 8 pre-existing theorems preserved, `Generic.lean` md5 unchanged, `lake build WarpTypes` green. Structural cost: nested-cases helpers require explicit dead-branch discharges for parametric rules at every level; net line count went from 573 → 681 (+108), not down. Refactor win is structural not numerical (see §9.3). INSIGHTS §N+41 documents the caller-side cost |
 | 2 | ESP32 compiler on-target | 2026-04-11 (unblocked) | — | `research/esp32-compiler/` | — | Paused (research track only) |
 | 3 | Real protocol on real hardware | — | — | — | — | Depends on J1 RTL timeline |
 
-The four experiments do not yet include a Level 2a GPU port of `Basic.lean` to use `Generic.lean`'s width-parametric theorems — that would make the GPU row structurally match the other three and is a known gap (noted in §9.2).
+The experiments do not yet include a Level 2a GPU port of `Basic.lean` to use `Generic.lean`'s width-parametric theorems — that would make the GPU row structurally match the other three and is a known gap (noted in §9.2). Nor does `Csp.lean` plug into `Core.lean` yet; its topology parameter (`TopoRel`) and send/recv channel expressions would require either widening Core or a separate topology-aware Core variant — tracked as a possible Experiment E.
 
 ---
 
 ## References
 
 - warp-types crate: `github.com/modelmiser/warp-types` (MIT, v0.3.1)
-- Lean 4 metatheory: `warp-types/lean/WarpTypes/` — `Generic.lean` (Level 0-1), `Basic.lean` (Level 2a GPU), `Csp.lean` (Level 2b), `Fence.lean` (Level 2c, commit `c405c3f08`), `Reduce.lean` (Level 2d, commit `67eeda474`), `Protocol.lean` (Level 3)
+- Lean 4 metatheory: `warp-types/lean/WarpTypes/` — `Generic.lean` (Level 0-1, frozen md5 `7f125b5f5f26122cc9e97c39522a4d03`), `Basic.lean` (Level 2a GPU), `Csp.lean` (Level 2b), `Core.lean` (higher-order factoring for Level 2c+2d, commit `bfbb4d272`), `Fence.lean` (Level 2c, port commit `563ba05a0`), `Reduce.lean` (Level 2d, port commit `489486af2`), `Protocol.lean` (Level 3), `CoreExperiment.lean` (Experiment D feasibility probe, commit `9240e6c19`)
 - crossbar_protocol.rs: `warp-types/src/research/crossbar_protocol.rs`
 - warp-core SYSTEM.md: `github/warp-core/docs/SYSTEM.md` (rev 3.0)
 - warp-core GRID_TOPOLOGY.md: `github/warp-core/docs/GRID_TOPOLOGY.md` (rev 0.3)
