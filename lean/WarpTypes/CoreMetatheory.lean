@@ -726,24 +726,27 @@ theorem subst_typing {n : Nat}
 -- Substitution preserves typing — convenience wrapper over subst_typing
 -- ============================================================================
 
-/-- The common-case wrapper: substituting a closed value for a freshly-bound
-    name in a body preserves typing, without having to explicitly manage
-    `value_any_ctx` or the `hname` quantifier. -/
+/-- Substitution lemma as needed by preservation's letVal case.
+    Takes the value's typing at a general (ctx, ctx') pair: value_preserves_ctx
+    forces ctx' = ctx internally, then subst_typing fires. -/
 theorem subst_preserves_typing {n : Nat}
-    {ctx ctx' : CoreCtx n} {name : String} {v body : CoreExpr n} {t_v t : CoreTy n}
-    (hval : CoreHasType [] v t_v [])
-    (hfresh : ctx.lookup name = none)
-    (hbody : CoreHasType ((name, t_v) :: ctx) body t ctx')
-    (hconsumed : ctx'.lookup name = none)
+    {ctx ctx' ctx'' : CoreCtx n} {name : String} {v : CoreExpr n} {t_v : CoreTy n}
+    {body : CoreExpr n} {t : CoreTy n}
+    (hval : CoreHasType ctx v t_v ctx')
+    (hfresh : ctx'.lookup name = none)
+    (hbody : CoreHasType ((name, t_v) :: ctx') body t ctx'')
+    (hconsumed : ctx''.lookup name = none)
     (hv : isValue v = true) :
-    CoreHasType ctx (subst body name v) t ctx' := by
-  have ht_v : ∀ ctx₂, CoreHasType ctx₂ v t_v ctx₂ := value_any_ctx hv hval
-  have hname : ∀ t', CoreCtx.lookup ((name, t_v) :: ctx) name = some t' → t' = t_v := by
-    intro t' hl
-    simp [CoreCtx.lookup, List.find?] at hl
-    exact hl.symm
-  have h := subst_typing hv ht_v hbody hname
-  rw [remove_cons_eq, remove_of_lookup_none hfresh, remove_of_lookup_none hconsumed] at h
+    CoreHasType ctx (subst body name v) t ctx'' := by
+  have hctx_eq := value_preserves_ctx hval hv
+  subst hctx_eq
+  have ht_v := value_any_ctx hv hval
+  have hname_top : ∀ t', CoreCtx.lookup ((name, t_v) :: ctx) name = some t' → t' = t_v := by
+    intro t' h; simp [CoreCtx.lookup, List.find?] at h; exact h.symm
+  have h := subst_typing hv ht_v hbody hname_top
+  rw [remove_cons_eq] at h
+  rw [remove_of_lookup_none hfresh] at h
+  rw [remove_of_lookup_none hconsumed] at h
   exact h
 
 -- ============================================================================
@@ -907,5 +910,433 @@ theorem progress_closed {n : Nat} {e : CoreExpr n} {t : CoreTy n} {ctx' : CoreCt
     (ht : CoreHasType [] e t ctx') :
     isValue e = true ∨ ∃ e', Step e e' :=
   progress ht rfl
+
+-- ============================================================================
+-- Preservation: if Γ ⊢ e : t ⊣ Γ' and e ⟶ e', then Γ ⊢ e' : t ⊣ Γ'
+-- ============================================================================
+
+/-- Preservation theorem for `CoreHasType`. Stepping a well-typed term
+    yields a term of the same type at the same context pair.
+
+    The structure of the proof mirrors `Metatheory.lean`'s `preservation`:
+    induction on `hs` with contexts generalised, and inner `cases ht`
+    per Step constructor to extract the typing structure.
+
+    Every outer `cases ht` whose Step target is a concrete expression
+    (e.g. `divergeVal` targets `.diverge (.groupVal s) pred`) produces
+    mergeFamily and finalizeFamily dead branches alongside the real
+    match. These are discharged by the pattern:
+        `cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr`
+    which case-splits the tag, unfolds the dispatcher, and constructor-
+    clashes `hExpr` against the concrete expression shape.
+
+    The parametric Step cases (`mergeVal`, `combineRedVal`, `fenceVal`,
+    `finalizeVal`) are where the gate does metatheoretic work: the
+    `mergeVal` / `combineRedVal` cases unpack `IsComplement`'s `Covers`
+    clause to conclude `s1 ||| s2 = parent`, and the fence / finalize
+    cases use `canonical_group` / `canonical_reduced` to force the
+    `PSet.all n` gate from the typing rule. -/
+theorem preservation {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx ctx' : CoreCtx n}
+    (ht : CoreHasType ctx e t ctx') (hs : Step e e') :
+    CoreHasType ctx e' t ctx' := by
+  induction hs generalizing t ctx ctx' with
+  -- ── Value-producing reductions ──
+  | divergeVal s pred =>
+    cases ht with
+    | diverge _ _ _ _ _ hg =>
+      cases hg with
+      | groupVal _ _ =>
+        exact CoreHasType.pairVal _ _ _ _ _ _ _
+          (CoreHasType.groupVal _ _) (CoreHasType.groupVal _ _)
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | mergeVal s1 s2 =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ parent _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        cases hw1 with
+        | groupVal _ _ =>
+          cases hw2 with
+          | groupVal _ _ =>
+            have ⟨_, hcov⟩ := hcomp
+            unfold PSet.Covers at hcov
+            rw [hcov]
+            exact CoreHasType.groupVal _ _
+          | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+            cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+          | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+            cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+        | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+          cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+        | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+          cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | combineRedVal s1 s2 =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ parent _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        -- hw1 : CoreHasType ctx (.leafReduce (.groupVal s1)) (.reduced s1) ctx_mid
+        -- hw2 : CoreHasType ctx_mid (.leafReduce (.groupVal s2)) (.reduced s2) ctx'
+        cases hw1 with
+        | leafReduce _ _ _ _ hg1 =>
+          cases hg1 with
+          | groupVal _ _ =>
+            cases hw2 with
+            | leafReduce _ _ _ _ hg2 =>
+              cases hg2 with
+              | groupVal _ _ =>
+                have ⟨_, hcov⟩ := hcomp
+                unfold PSet.Covers at hcov
+                rw [hcov]
+                exact CoreHasType.leafReduce _ _ _ _ (CoreHasType.groupVal _ _)
+              | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+                cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+              | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+                cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+            | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+              cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+            | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+              cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+          | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+            cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+          | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+            cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+        | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+          cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+        | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+          cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | writeVal s =>
+    cases ht with
+    | write _ _ _ _ _ _ hg hpayload =>
+      cases hg with
+      | groupVal _ _ =>
+        cases hpayload with
+        | dataVal _ => exact CoreHasType.groupVal _ _
+        | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+          cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+        | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+          cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | fenceVal s =>
+    cases ht with
+    | finalizeFamily tag _ _ _ _ _ hExpr hTy hg =>
+      cases tag with
+      | group =>
+        simp only [tagToFinalExpr] at hExpr
+        simp only [tagToFinalTy] at hTy
+        injection hExpr with he
+        subst he; subst hTy
+        -- Now hg : CoreHasType ctx (.groupVal s) (.group (PSet.all n)) ctx'
+        cases hg with
+        | groupVal _ _ => exact CoreHasType.unitVal _
+        | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+          cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+        | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+          cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+      | reduced =>
+        simp only [tagToFinalExpr] at hExpr
+        cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+  | finalizeVal s =>
+    cases ht with
+    | finalizeFamily tag _ _ _ _ _ hExpr hTy hr =>
+      cases tag with
+      | group =>
+        simp only [tagToFinalExpr] at hExpr
+        cases hExpr
+      | reduced =>
+        simp only [tagToFinalExpr] at hExpr
+        simp only [tagToFinalTy] at hTy
+        injection hExpr with he
+        subst he; subst hTy
+        -- Now hr : CoreHasType ctx (.leafReduce (.groupVal s)) (.reduced (PSet.all n)) ctx'
+        cases hr with
+        | leafReduce _ _ _ _ hg =>
+          cases hg with
+          | groupVal _ _ => exact CoreHasType.dataVal _
+          | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+            cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+          | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+            cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+        | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+          cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+        | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+          cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+  | letVal name v body hv =>
+    cases ht with
+    | letBind _ _ _ _ _ _ _ _ hval hfresh hbody hconsumed =>
+      exact subst_preserves_typing hval hfresh hbody hconsumed hv
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | fstVal a b hva hvb =>
+    cases ht with
+    | fstE _ _ _ _ _ he =>
+      cases he with
+      | pairVal _ ctx_mid _ _ _ _ _ ha hb =>
+        have := value_preserves_ctx hb hvb
+        subst this
+        exact ha
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | sndVal a b hva hvb =>
+    cases ht with
+    | sndE _ _ _ _ _ he =>
+      cases he with
+      | pairVal _ ctx_mid _ _ _ _ _ ha hb =>
+        have := value_preserves_ctx ha hva
+        subst this
+        exact hb
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | letPairVal name1 name2 v1 v2 body hv1 hv2 =>
+    cases ht with
+    | letPairE _ _ _ _ _ _ _ t1 t2 _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 =>
+      cases he with
+      | pairVal _ ctx_a _ _ _ _ _ ha hb =>
+        have hctx_a := value_preserves_ctx ha hv1; subst hctx_a
+        have hctx_mid := value_preserves_ctx hb hv2; subst hctx_mid
+        have ht_v1 := value_any_ctx hv1 ha
+        have hname_top : ∀ t', CoreCtx.lookup ((name2, t2) :: (name1, t1) :: ctx) name1 = some t' → t' = t1 := by
+          intro t' h
+          rw [lookup_cons_ne (Ne.symm hdist)] at h
+          simp [lookup_cons_eq] at h
+          exact h.symm
+        have h1 := subst_typing hv1 ht_v1 hbody hname_top
+        rw [remove_cons_ne hdist, remove_cons_eq,
+            remove_of_lookup_none hfresh1] at h1
+        rw [remove_of_lookup_none hcons1] at h1
+        exact subst_preserves_typing hb hfresh2 h1 hcons2 hv2
+      | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+        cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+      | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+        cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  -- ── Congruence cases ──
+  | divergeCong g g' pred _ ih =>
+    cases ht with
+    | diverge _ _ _ s _ hw =>
+      exact CoreHasType.diverge _ _ _ _ _ (ih hw)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | mergeLeft g1 g1' g2 _ ih =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        exact CoreHasType.mergeFamily .group _ _ _ _ _ _ _ _ _ _ rfl rfl
+          (ih hw1) hw2 hcomp
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | mergeRight v1 g2 g2' _ _ ih =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        exact CoreHasType.mergeFamily .group _ _ _ _ _ _ _ _ _ _ rfl rfl
+          hw1 (ih hw2) hcomp
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | combineRedLeft r1 r1' r2 _ ih =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        exact CoreHasType.mergeFamily .reduced _ _ _ _ _ _ _ _ _ _ rfl rfl
+          (ih hw1) hw2 hcomp
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | combineRedRight v1 r2 r2' _ _ ih =>
+    cases ht with
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr hTy hw1 hw2 hcomp =>
+      cases tag with
+      | group =>
+        simp only [tagToMergeExpr] at hExpr
+        cases hExpr
+      | reduced =>
+        simp only [tagToMergeExpr] at hExpr
+        simp only [tagToTy] at hTy
+        injection hExpr with he1 he2
+        subst he1; subst he2; subst hTy
+        exact CoreHasType.mergeFamily .reduced _ _ _ _ _ _ _ _ _ _ rfl rfl
+          hw1 (ih hw2) hcomp
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | letCong name val val' body _ ih =>
+    cases ht with
+    | letBind _ _ _ _ _ _ _ _ hval hfresh hbody hconsumed =>
+      exact CoreHasType.letBind _ _ _ _ _ _ _ _ (ih hval) hfresh hbody hconsumed
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | pairLeftCong a a' b _ ih =>
+    cases ht with
+    | pairVal _ _ _ _ _ _ _ ha hb =>
+      exact CoreHasType.pairVal _ _ _ _ _ _ _ (ih ha) hb
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | pairRightCong a b b' _ _ ih =>
+    cases ht with
+    | pairVal _ _ _ _ _ _ _ ha hb =>
+      exact CoreHasType.pairVal _ _ _ _ _ _ _ ha (ih hb)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | fstCong e e' _ ih =>
+    cases ht with
+    | fstE _ _ _ _ _ he =>
+      exact CoreHasType.fstE _ _ _ _ _ (ih he)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | sndCong e e' _ ih =>
+    cases ht with
+    | sndE _ _ _ _ _ he =>
+      exact CoreHasType.sndE _ _ _ _ _ (ih he)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | letPairCong e e' name1 name2 body _ ih =>
+    cases ht with
+    | letPairE _ _ _ _ _ _ _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 =>
+      exact CoreHasType.letPairE _ _ _ _ _ _ _ _ _ _ (ih he) hdist hfresh1 hfresh2 hbody hcons1 hcons2
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | writeLeft g g' payload _ ih =>
+    cases ht with
+    | write _ _ _ _ _ _ hg hpayload =>
+      exact CoreHasType.write _ _ _ _ _ _ (ih hg) hpayload
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | writeRight v payload payload' _ _ ih =>
+    cases ht with
+    | write _ _ _ _ _ _ hg hpayload =>
+      exact CoreHasType.write _ _ _ _ _ _ hg (ih hpayload)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | leafReduceCong g g' _ ih =>
+    cases ht with
+    | leafReduce _ _ _ _ hg =>
+      exact CoreHasType.leafReduce _ _ _ _ (ih hg)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+    | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
+  | fenceCong g g' _ ih =>
+    cases ht with
+    | finalizeFamily tag _ _ _ _ _ hExpr hTy hg =>
+      cases tag with
+      | group =>
+        simp only [tagToFinalExpr] at hExpr
+        simp only [tagToFinalTy] at hTy
+        injection hExpr with he
+        subst he; subst hTy
+        exact CoreHasType.finalizeFamily .group _ _ _ _ _ rfl rfl (ih hg)
+      | reduced =>
+        simp only [tagToFinalExpr] at hExpr
+        cases hExpr
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
+  | finalizeCong r r' _ ih =>
+    cases ht with
+    | finalizeFamily tag _ _ _ _ _ hExpr hTy hr =>
+      cases tag with
+      | group =>
+        simp only [tagToFinalExpr] at hExpr
+        cases hExpr
+      | reduced =>
+        simp only [tagToFinalExpr] at hExpr
+        simp only [tagToFinalTy] at hTy
+        injection hExpr with he
+        subst he; subst hTy
+        exact CoreHasType.finalizeFamily .reduced _ _ _ _ _ rfl rfl (ih hr)
+    | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
 
 end CoreMetatheory
