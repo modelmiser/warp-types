@@ -1,0 +1,19 @@
+[build]
+target = "xtensa-esp32-none-elf"
+# Don't let xtensa-esp-elf-gcc drag in its own crt* startup files —
+# xtensa-lx-rt provides the vector table and entry point, and the two
+# fight each other if both try to define _start.
+rustflags = ["-C", "link-arg=-nostartfiles"]
+
+[target.xtensa-esp32-none-elf]
+runner = "espflash flash --monitor"
+
+[env]
+ESP_LOG = "info"
+
+# The esp rustup fork ships rustc + rust-src, but no precompiled rust-std
+# for xtensa-esp32-none-elf — core and alloc are built from source on
+# demand via build-std. This is expected for current esp-hal 1.0+.
+[unstable]
+build-std = ["core", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

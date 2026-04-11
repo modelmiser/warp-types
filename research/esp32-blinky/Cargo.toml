@@ -1,0 +1,27 @@
+[package]
+name = "esp32-blinky"
+version = "0.1.0"
+edition = "2021"
+description = "ESP32-WROOM bringup for warp-types research-note §6 Experiment 2 — minimal UART-only hello on ULX3S v3.0.8 (85F)"
+license = "MIT"
+publish = false
+
+# Standalone mini-workspace — keeps the esp rustup fork out of the top-level
+# warp-types workspace, same pattern as research/esp32-compiler/.
+[workspace]
+
+[dependencies]
+esp-backtrace = { version = "0.18", features = ["esp32", "panic-handler", "println"] }
+esp-hal = { version = "1.0", features = ["esp32", "unstable"] }
+esp-println = { version = "0.16", features = ["esp32"] }
+esp-bootloader-esp-idf = { version = "0.4", features = ["esp32"] }
+# esp-hal 1.0 no longer bundles a critical-section impl — binary crates
+# must provide one explicitly.
+critical-section = "1.2"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = true
