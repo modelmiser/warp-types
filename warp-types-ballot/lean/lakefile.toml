@@ -1,0 +1,6 @@
+name = "WarpTypesBallot"
+version = "0.1.0"
+defaultTargets = ["WarpTypesBallot"]
+
+[[lean_lib]]
+name = "WarpTypesBallot"

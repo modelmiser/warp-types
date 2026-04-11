@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "warp-types-builder", "warp-types-macros", "warp-types-kernel", "warp-types-sat", "warp-types-bitwise", "warp-types-invariant", "warp-types-overflow", "warp-types-divtree"]
+members = [".", "warp-types-builder", "warp-types-macros", "warp-types-kernel", "warp-types-sat", "warp-types-bitwise", "warp-types-invariant", "warp-types-overflow", "warp-types-divtree", "warp-types-ballot"]
 exclude = ["examples/gpu-project"]
 
 [package]
