@@ -444,4 +444,282 @@ theorem value_preserves_ctx {n : Nat} {ctx ctx' : CoreCtx n} {v : CoreExpr n} {t
     cases tag <;>
       (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
 
+-- ============================================================================
+-- subst commutes with the tag dispatchers
+-- ============================================================================
+-- These two lemmas let every parametric-rule case of `subst_typing`,
+-- `progress`, and `preservation` rewrite through `tagToMergeExpr` and
+-- `tagToFinalExpr` without per-tag repetition.
+
+theorem subst_tagToMergeExpr {n : Nat} (tag : TyTag) (e1 e2 : CoreExpr n)
+    (nm : String) (v : CoreExpr n) :
+    subst (tagToMergeExpr tag e1 e2) nm v
+      = tagToMergeExpr tag (subst e1 nm v) (subst e2 nm v) := by
+  cases tag <;> rfl
+
+theorem subst_tagToFinalExpr {n : Nat} (tag : TyTag) (e : CoreExpr n)
+    (nm : String) (v : CoreExpr n) :
+    subst (tagToFinalExpr tag e) nm v = tagToFinalExpr tag (subst e nm v) := by
+  cases tag <;> rfl
+
+-- ============================================================================
+-- Output context bindings come from input context
+-- ============================================================================
+
+/-- Any binding in the output context was present (with the same type) in input. -/
+theorem output_binding_from_input {n : Nat} {ctx ctx' : CoreCtx n}
+    {e : CoreExpr n} {t : CoreTy n}
+    (ht : CoreHasType ctx e t ctx')
+    {x : String} {tx : CoreTy n}
+    (hout : ctx'.lookup x = some tx) :
+    ctx.lookup x = some tx := by
+  induction ht with
+  | groupVal _ _ => exact hout
+  | dataVal _ => exact hout
+  | unitVal _ => exact hout
+  | var ctx₀ name₀ t₀ hlook =>
+    by_cases hxn : x = name₀
+    · subst hxn; rw [remove_lookup_self] at hout; exact absurd hout (by simp)
+    · rwa [remove_lookup_ne (Ne.symm hxn)] at hout
+  | diverge _ _ _ _ _ _ ih => exact ih hout
+  | letBind ctx₀ ctx_mid ctx_body name' _ _ _ _ _ hfresh₀ _ hcons₀ ih_val ih_body =>
+    have h_body := ih_body hout
+    by_cases hxn : x = name'
+    · subst hxn; rw [hcons₀] at hout; exact absurd hout (by simp)
+    · rw [lookup_cons_ne (Ne.symm hxn)] at h_body
+      exact ih_val h_body
+  | pairVal _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | fstE _ _ _ _ _ _ ih => exact ih hout
+  | sndE _ _ _ _ _ _ ih => exact ih hout
+  | letPairE ctx₀ ctx_mid ctx_body _ n1 n2 _ _ _ _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 ih_e ih_body =>
+    have h_body := ih_body hout
+    have hxn1 : x ≠ n1 := by intro h; subst h; rw [hcons1] at hout; simp at hout
+    have hxn2 : x ≠ n2 := by intro h; subst h; rw [hcons2] at hout; simp at hout
+    rw [lookup_cons_ne (Ne.symm hxn2), lookup_cons_ne (Ne.symm hxn1)] at h_body
+    exact ih_e h_body
+  | write _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | leafReduce _ _ _ _ _ ih => exact ih hout
+  | mergeFamily _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih1 ih2 => exact ih1 (ih2 hout)
+  | finalizeFamily _ _ _ _ _ _ _ _ _ ih => exact ih hout
+
+-- ============================================================================
+-- Values can be typed in any context
+-- ============================================================================
+
+/-- Helper for `value_any_ctx` — values produce an any-context typing.
+    Needed separately because the direct version hits a dependent-index
+    constraint when the inner value's types are dispatched. -/
+private theorem value_any_ctx_aux {n : Nat} {v : CoreExpr n} {t : CoreTy n}
+    {ctx₁ ctx₂ : CoreCtx n}
+    (hv : isValue v = true)
+    (ht : CoreHasType ctx₁ v t ctx₂) :
+    ∀ ctx₃, CoreHasType ctx₃ v t ctx₃ := by
+  match ht with
+  | .groupVal _ s => intro ctx₃; exact CoreHasType.groupVal ctx₃ s
+  | .dataVal _ => intro ctx₃; exact CoreHasType.dataVal ctx₃
+  | .unitVal _ => intro ctx₃; exact CoreHasType.unitVal ctx₃
+  | .pairVal _ _ _ a b _ _ ha hb =>
+    simp [isValue] at hv
+    have iha := value_any_ctx_aux hv.1 ha
+    have ihb := value_any_ctx_aux hv.2 hb
+    intro ctx₃
+    exact CoreHasType.pairVal ctx₃ ctx₃ ctx₃ a b _ _ (iha ctx₃) (ihb ctx₃)
+  | .var _ _ _ _ => simp [isValue] at hv
+  | .diverge _ _ _ _ _ _ => simp [isValue] at hv
+  | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+  | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+  | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+  | .leafReduce _ _ g _ hg =>
+    -- .leafReduce (.groupVal s) is a value; the inner groupVal types at any context.
+    match hg with
+    | .groupVal _ s =>
+      intro ctx₃
+      exact CoreHasType.leafReduce ctx₃ ctx₃ _ s (CoreHasType.groupVal ctx₃ s)
+    | .var _ _ _ _ => simp [isValue] at hv
+    | .letBind _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .fstE _ _ _ _ _ _ => simp [isValue] at hv
+    | .sndE _ _ _ _ _ _ => simp [isValue] at hv
+    | .letPairE _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .write _ _ _ _ _ _ _ _ => simp [isValue] at hv
+    | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+      cases tag <;>
+        (simp [tagToMergeExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+    | .finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+      cases tag <;>
+        (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+  | .mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+    cases tag <;>
+      (simp [tagToMergeExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+  | .finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+    cases tag <;>
+      (simp [tagToFinalExpr] at hExpr; subst hExpr; simp [isValue] at hv)
+
+/-- Values can be typed in any context, producing the same context unchanged. -/
+theorem value_any_ctx {n : Nat} {v : CoreExpr n} {t : CoreTy n} {ctx₁ : CoreCtx n}
+    (hv : isValue v = true)
+    (ht : CoreHasType ctx₁ v t ctx₁) :
+    ∀ ctx₂, CoreHasType ctx₂ v t ctx₂ :=
+  value_any_ctx_aux hv ht
+
+-- ============================================================================
+-- Substitution preserves typing — the long-pole generalised lemma
+-- ============================================================================
+
+/-- The var case of `subst_typing`, extracted so the main function can pattern-
+    match on non-var cases without nesting this branch. -/
+private theorem subst_typing_var {n : Nat}
+    {nm : String} {t_v : CoreTy n} {v : CoreExpr n}
+    (hv : isValue v = true)
+    (ht_v : ∀ ctx₂, CoreHasType ctx₂ v t_v ctx₂)
+    {ctx₀ : CoreCtx n} {name' : String} {t' : CoreTy n}
+    (hlook : ctx₀.lookup name' = some t')
+    (hname : ∀ t'', ctx₀.lookup nm = some t'' → t'' = t_v) :
+    CoreHasType (ctx₀.remove nm) (subst (.var name') nm v) t'
+            (CoreCtx.remove (ctx₀.remove name') nm) := by
+  simp only [subst]
+  by_cases hxn : name' = nm
+  · -- name' = nm: substitute with v
+    have hbeq : (name' == nm) = true := by simp [beq_iff_eq, hxn]
+    simp only [hbeq]
+    have hlook_nm : ctx₀.lookup nm = some t' := hxn ▸ hlook
+    have : t' = t_v := hname t' hlook_nm; subst this
+    rw [hxn, remove_of_lookup_none (remove_lookup_self ctx₀ nm)]
+    exact ht_v _
+  · -- name' ≠ nm: no substitution, just adjust contexts
+    have hbeq : (name' == nm) = false := by simp [beq_iff_eq, hxn]
+    simp only [hbeq]
+    have hlook' : (ctx₀.remove nm).lookup name' = some t' := by
+      rw [remove_lookup_ne (Ne.symm hxn)]; exact hlook
+    have hgoal := CoreHasType.var (ctx₀.remove nm) name' t' hlook'
+    rw [remove_comm] at hgoal
+    exact hgoal
+
+/-- Core substitution theorem: substituting a value for a name removes that
+    name's binding from both input and output contexts.
+
+    Generalises over where in the context the binding appears, which is
+    essential for the pair/merge/combineRed/write cases where the binding may
+    have been threaded past the first sub-expression. -/
+theorem subst_typing {n : Nat}
+    {nm : String} {t_v : CoreTy n} {v : CoreExpr n}
+    (hv : isValue v = true)
+    (ht_v : ∀ ctx₂, CoreHasType ctx₂ v t_v ctx₂)
+    {ctx : CoreCtx n} {e : CoreExpr n} {t : CoreTy n} {ctx' : CoreCtx n}
+    (hte : CoreHasType ctx e t ctx')
+    (hname : ∀ t', ctx.lookup nm = some t' → t' = t_v) :
+    CoreHasType (ctx.remove nm) (subst e nm v) t (ctx'.remove nm) :=
+  match hte with
+  | .groupVal _ s => by simp [subst]; exact CoreHasType.groupVal _ s
+  | .dataVal _ => by simp [subst]; exact CoreHasType.dataVal _
+  | .unitVal _ => by simp [subst]; exact CoreHasType.unitVal _
+  | .var _ _ _ hlook => subst_typing_var hv ht_v hlook hname
+  | .diverge _ _ _ _ _ hg => by
+    simp [subst]
+    exact CoreHasType.diverge _ _ _ _ _ (subst_typing hv ht_v hg hname)
+  | .letBind _ ctx_mid ctx_body name' _ _ t1 _ hval hfresh hbody hconsumed => by
+    simp only [subst]
+    by_cases hxn : name' = nm
+    · -- name' = nm: body NOT substituted (shadowing)
+      simp [show (name' == nm) = true from by simp [beq_iff_eq, hxn]]
+      have hfresh_nm : ctx_mid.lookup nm = none := hxn ▸ hfresh
+      have hconsumed_nm : ctx_body.lookup nm = none := hxn ▸ hconsumed
+      have hval' := subst_typing hv ht_v hval hname
+      rw [remove_of_lookup_none hfresh_nm] at hval'
+      rw [remove_of_lookup_none hconsumed_nm]
+      exact CoreHasType.letBind _ _ _ _ _ _ _ _ hval' hfresh hbody hconsumed
+    · -- name' ≠ nm: both val and body substituted
+      simp [show (name' == nm) = false from by simp [beq_iff_eq, hxn]]
+      have hval' := subst_typing hv ht_v hval hname
+      have hfresh' : (ctx_mid.remove nm).lookup name' = none := by
+        rw [remove_lookup_ne (Ne.symm hxn)]; exact hfresh
+      have hname_body : ∀ t', CoreCtx.lookup ((name', t1) :: ctx_mid) nm = some t' → t' = t_v := by
+        intro t' hl
+        have : CoreCtx.lookup ctx_mid nm = some t' := by
+          rwa [lookup_cons_ne hxn] at hl
+        exact hname t' (output_binding_from_input hval this)
+      have hbody' := subst_typing hv ht_v hbody hname_body
+      rw [remove_cons_ne (Ne.symm hxn)] at hbody'
+      have hconsumed' : (ctx_body.remove nm).lookup name' = none := by
+        rw [remove_lookup_ne (Ne.symm hxn)]; exact hconsumed
+      exact CoreHasType.letBind _ _ _ _ _ _ _ _ hval' hfresh' hbody' hconsumed'
+  | .pairVal _ ctx_mid _ _ _ _ _ ha hb => by
+    simp [subst]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input ha hl)
+    exact CoreHasType.pairVal _ _ _ _ _ _ _
+      (subst_typing hv ht_v ha hname) (subst_typing hv ht_v hb hname_mid)
+  | .fstE _ _ _ _ _ he => by
+    simp [subst]; exact CoreHasType.fstE _ _ _ _ _ (subst_typing hv ht_v he hname)
+  | .sndE _ _ _ _ _ he => by
+    simp [subst]; exact CoreHasType.sndE _ _ _ _ _ (subst_typing hv ht_v he hname)
+  | .write _ ctx_mid _ _ _ _ hg hpayload => by
+    simp [subst]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input hg hl)
+    exact CoreHasType.write _ _ _ _ _ _
+      (subst_typing hv ht_v hg hname) (subst_typing hv ht_v hpayload hname_mid)
+  | .leafReduce _ _ _ _ hg => by
+    simp [subst]
+    exact CoreHasType.leafReduce _ _ _ _ (subst_typing hv ht_v hg hname)
+  | .mergeFamily tag _ ctx_mid _ _ _ _ _ _ _ _ hExpr hTy hw1 hw2 hcomp => by
+    subst hExpr
+    subst hTy
+    rw [subst_tagToMergeExpr]
+    have hname_mid : ∀ t', ctx_mid.lookup nm = some t' → t' = t_v := by
+      intro t' hl; exact hname t' (output_binding_from_input hw1 hl)
+    exact CoreHasType.mergeFamily tag _ _ _ _ _ _ _ _ _ _ rfl rfl
+      (subst_typing hv ht_v hw1 hname)
+      (subst_typing hv ht_v hw2 hname_mid)
+      hcomp
+  | .finalizeFamily tag _ _ _ _ _ hExpr hTy hw => by
+    subst hExpr
+    subst hTy
+    rw [subst_tagToFinalExpr]
+    exact CoreHasType.finalizeFamily tag _ _ _ _ _ rfl rfl
+      (subst_typing hv ht_v hw hname)
+  | .letPairE _ ctx_mid ctx_body _ n1 n2 _ t1 t2 _ he hdist hfresh1 hfresh2 hbody hcons1 hcons2 => by
+    simp only [subst]
+    by_cases hxn1 : n1 = nm
+    · -- n1 = nm: body NOT substituted (shadowing by n1)
+      have hor : (n1 == nm || n2 == nm) = true := by simp [beq_iff_eq, hxn1]
+      simp only [hor]
+      have hfresh_nm1 : ctx_mid.lookup nm = none := hxn1 ▸ hfresh1
+      have hcons_nm1 : ctx_body.lookup nm = none := hxn1 ▸ hcons1
+      have he' := subst_typing hv ht_v he hname
+      rw [remove_of_lookup_none hfresh_nm1] at he'
+      rw [remove_of_lookup_none hcons_nm1]
+      exact CoreHasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1 hfresh2 hbody hcons1 hcons2
+    · by_cases hxn2 : n2 = nm
+      · -- n2 = nm: body NOT substituted (shadowing by n2)
+        have hor : (n1 == nm || n2 == nm) = true := by simp [beq_iff_eq, hxn2]
+        simp only [hor]
+        have hfresh_nm2 : ctx_mid.lookup nm = none := hxn2 ▸ hfresh2
+        have hcons_nm2 : ctx_body.lookup nm = none := hxn2 ▸ hcons2
+        have he' := subst_typing hv ht_v he hname
+        rw [remove_of_lookup_none hfresh_nm2] at he'
+        rw [remove_of_lookup_none hcons_nm2]
+        exact CoreHasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1 hfresh2 hbody hcons1 hcons2
+      · -- Neither n1 nor n2 = nm: both e and body substituted
+        have hor : (n1 == nm || n2 == nm) = false := by
+          simp [beq_iff_eq, hxn1, hxn2]
+        simp only [hor]
+        have he' := subst_typing hv ht_v he hname
+        have hfresh1' : (ctx_mid.remove nm).lookup n1 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn1)]; exact hfresh1
+        have hfresh2' : (ctx_mid.remove nm).lookup n2 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn2)]; exact hfresh2
+        have hname_body : ∀ t', CoreCtx.lookup ((n2, t2) :: (n1, t1) :: ctx_mid) nm = some t' → t' = t_v := by
+          intro t' hl
+          rw [lookup_cons_ne hxn2, lookup_cons_ne hxn1] at hl
+          exact hname t' (output_binding_from_input he hl)
+        have hbody' := subst_typing hv ht_v hbody hname_body
+        rw [remove_cons_ne (Ne.symm hxn2), remove_cons_ne (Ne.symm hxn1)] at hbody'
+        have hcons1' : (ctx_body.remove nm).lookup n1 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn1)]; exact hcons1
+        have hcons2' : (ctx_body.remove nm).lookup n2 = none := by
+          rw [remove_lookup_ne (Ne.symm hxn2)]; exact hcons2
+        exact CoreHasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1' hfresh2' hbody' hcons1' hcons2'
+
 end CoreMetatheory
