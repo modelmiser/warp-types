@@ -72,7 +72,10 @@ tick 2
   22325    1228  195380  218933   35735
 ```
 
-Flash image after `espflash save-image`: 77,888 bytes (1.89% of 4 MB).
+Flash image after `espflash save-image`: 77,888 bytes (0.47% of 16 MB).
+Factory flash is actually 16 MB on this board (manufacturer `0xa1`,
+device `0x4018`) — not 4 MB as originally assumed. Factory backup
+therefore needs `esptool read_flash 0 0x1000000`, not `0x400000`.
 
 ## Gotchas (load-bearing; removing any of these breaks the build or link)
 
@@ -140,28 +143,52 @@ enumerated.
 ## Status
 
 - ✓ Phase A (toolchain + host access) — complete
+- ✓ Phase B (passthru bitstream + esptool sync) — **UNBLOCKED 2026-04-11**
 - ✓ Phase C code (Cargo.toml, build.rs, main.rs, config) — complete
 - ✓ `cargo build --release` succeeds
-- ⚠ Phase B — **BLOCKED**: the passthru bitstream from
-  `ulx3s-bin/fpga/passthru/passthru-v20-85f/ulx3s_85f_passthru.bit`
-  does not route the FT231X UART to the ESP32's UART0 — a raw `cat
-  /dev/ttyUSB0` at 115200 captures zero bytes over 2 seconds, and
-  `esptool` sync fails with `Invalid head of packet (0x08)` in every
-  reset/baud combination tried. Probably the `_serial2` RTL variant,
-  not the `_wifi` variant needed for `esptool`. See DEVLOG.md
-  "2026-04-10 — esp32-blinky Phase B BLOCKED" for the full diagnostic
-  trail and handoff prompt, and INSIGHTS.md #N+38 for the passthru
-  variant taxonomy.
-- ⏸ Phase C flash + verify UART output — blocked on Phase B
+- ⏸ Phase C flash + verify UART output — pending factory flash backup
+  + `cargo run --release`
 
-### Recommended path to unblock
+### Phase B resolution
 
-Compile `ulx3s_v20_passthru_wifi.vhd` from emard/ulx3s-passthru source
-against `constraints/ulx3s_v20.lpf` using ghdl + yosys + nextpnr-ecp5
-+ project-trellis. Or: use a different ESP32-WROOM-32 dev board with
-native USB-UART for the on-target measurement baseline; Experiment 2
-doesn't strictly require ULX3S FPGA adjacency (only Experiment 3
-does, for the SPI→FPGA roundtrip).
+The working bitstream is built from `emard/ulx3s-passthru`
+`rtl/ulx3s_v20_passthru_wifi.vhd` with three modifications:
+
+1. Strip `use work.f32c_pack.all;` (vestigial, unused)
+2. Strip `library ecp5u; use ecp5u.components.all;` (vestigial, unused)
+3. Pass `-fsynopsys -fexplicit` to `ghdl` (for `std_logic_unsigned` +
+   overloaded `=` operator resolution)
+
+Build recipe (oss-cad-suite must be sourced):
+
+```sh
+yosys -m ghdl -p "ghdl -fsynopsys -fexplicit ulx3s_v20_passthru_wifi.vhd \
+                       -e ulx3s_passthru_wifi; \
+                  synth_ecp5 -top ulx3s_passthru_wifi -json passthru.json"
+nextpnr-ecp5 --85k --package CABGA381 --lpf-allow-unconstrained \
+  --json passthru.json --lpf ulx3s_v20.lpf --textcfg passthru.config
+ecppack --compress passthru.config passthru.bit
+openFPGALoader --board ulx3s passthru.bit
+```
+
+Output: ~281 KB bitstream, 52 cells total (13 CCU2C + 5 LUT4 + 34
+TRELLIS_FF), clean timing margin, 2 benign unconstrained-IO warnings
+for unused `wifi_gpio2` and `ftdi_ndsr`.
+
+**Critical gotcha that blocked the previous session:** the ulx3s-bin
+prebuilt 85F passthru bitstreams (both Nov 2018 and Feb 2019 builds)
+produce *identical* `Invalid head of packet (0x08)` failure mode. So
+does a freshly built one. The bitstream was never the bug. **The real
+blocker was ESP32 persistent state** — the ESP32 had been running some
+firmware that didn't respond to soft reset (DTR/RTS → EN toggle). Only
+a physical USB cable unplug-and-replug (which hard-power-cycles the
+board) cleared it. After replug, esptool syncs on the 6th SYNC attempt
+(first 5 timeout while the boot ROM is warming up) and flash_id
+completes cleanly.
+
+**If you see `Invalid head of packet (0x08)` on ESP32 bringup:**
+always try a physical USB replug first, before investigating
+bitstream variants. Soft reset does not clear stuck firmware.
 
 ## Next (Experiment 2 proper)
 
