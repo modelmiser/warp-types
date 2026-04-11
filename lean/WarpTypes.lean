@@ -6,5 +6,6 @@ import WarpTypes.Metatheory
 import WarpTypes.SolExperiment
 import WarpTypes.Csp
 import WarpTypes.Protocol
+import WarpTypes.Core
 import WarpTypes.Fence
 import WarpTypes.Reduce
