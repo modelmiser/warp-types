@@ -1,6 +1,10 @@
 name = "WarpTypesBallot"
-version = "0.1.0"
+version = "0.2.0"
 defaultTargets = ["WarpTypesBallot"]
+
+[[require]]
+name = "WarpTypesBitwise"
+path = "../../warp-types-bitwise/lean"
 
 [[lean_lib]]
 name = "WarpTypesBallot"

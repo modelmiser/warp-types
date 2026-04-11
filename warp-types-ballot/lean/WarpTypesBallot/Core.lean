@@ -1,3 +1,5 @@
+import WarpTypesBitwise.CUDA
+
 /-!
 # WarpTypesBallot.Core
 
@@ -36,62 +38,43 @@ Mathlib-free and Sol-free. Uses only Lean 4.28 core's `BitVec` /
 rewriting pattern from `warp-types-bitwise` (pattern 3 from
 `feedback_lean4_bv_proofs.md`).
 
-## Duplication note
+## Dependency posture
 
-Three of these theorems (`ballot_split`, `all_sync_split`,
-`any_sync_monotone`) are structurally identical to lemmas already in
-`warp-types-bitwise`'s `WarpTypesBitwise.CUDA` module. Likewise, the
-two private fold-lift helpers (`foldl_or_lift`, `foldl_and_lift`) are
-byte-identical to bitwise's private helpers. v0.1.0 duplicates them
-here per the sibling-plan's "each crate standalone" rule; a family-wide
-refactor scheduled after ballot lands will hoist the shared helpers
-into a common module so divtree, ballot, and bitwise all import from
-the same source.
+v0.2.0 imports `warp-types-bitwise` via Lake path dependency. The
+three theorems shared with `WarpTypesBitwise.CUDA` (`ballot_split`,
+`all_sync_split`, `any_sync_monotone`) are re-exported under the
+`WarpTypesBallot` namespace via `export` so consumers can continue
+to refer to `WarpTypesBallot.ballot_split` etc. without breakage.
+The two private fold-lift helpers (`foldl_or_lift`, `foldl_and_lift`)
+that were inlined in v0.1.0 are deleted — bitwise's now-public
+versions cover them. The four ballot-specific boundary-case theorems
+(`ballot_nil`, `ballot_singleton`, `all_sync_nil`,
+`all_sync_singleton`) stay local — they complete the API surface
+that bitwise's CUDA module doesn't enumerate.
 -/
 
 namespace WarpTypesBallot
+
+-- =========================================================================
+-- 1. Re-exports from WarpTypesBitwise.CUDA
+-- =========================================================================
+-- Three theorems (`ballot_split`, `all_sync_split`, `any_sync_monotone`)
+-- have byte-identical canonical versions in `warp-types-bitwise`. The
+-- `export` declaration makes them resolvable as
+-- `WarpTypesBallot.ballot_split` etc. so any consumer that imports
+-- WarpTypesBallot can continue to use the names without qualifying
+-- them — the redirection is invisible. The previously-private
+-- `foldl_or_lift` / `foldl_and_lift` helpers are now provided by
+-- bitwise (also public as of bitwise v0.2.0) and used internally by
+-- the re-exported theorems.
+
+export WarpTypesBitwise (ballot_split all_sync_split any_sync_monotone)
 
 section
 variable {n : Nat}
 
 -- =========================================================================
--- 1. Private fold-lift helpers
--- =========================================================================
--- Byte-identical to warp-types-bitwise.foldl_{or,and}_lift.
--- Tracked for post-ballot family-wide refactor.
-
-/-- Accumulator-lift for OR-fold: folding into an arbitrary accumulator
-    equals folding into zero, then OR-ing the accumulator. -/
-private theorem foldl_or_lift (xs : List (BitVec n)) (acc : BitVec n) :
-    List.foldl (· ||| ·) acc xs = acc ||| List.foldl (· ||| ·) 0 xs := by
-  induction xs generalizing acc with
-  | nil =>
-    simp only [List.foldl_nil]
-    ext i hi
-    simp
-  | cons b bs ih =>
-    simp only [List.foldl_cons]
-    rw [ih (acc ||| b), ih (0 ||| b)]
-    ext i hi
-    simp [BitVec.getElem_or, Bool.or_assoc]
-
-/-- Accumulator-lift for AND-fold: folding into an arbitrary accumulator
-    equals folding into `allOnes`, then AND-ing the accumulator. -/
-private theorem foldl_and_lift (xs : List (BitVec n)) (acc : BitVec n) :
-    List.foldl (· &&& ·) acc xs = acc &&& List.foldl (· &&& ·) (BitVec.allOnes n) xs := by
-  induction xs generalizing acc with
-  | nil =>
-    simp only [List.foldl_nil]
-    ext i hi
-    simp
-  | cons b bs ih =>
-    simp only [List.foldl_cons]
-    rw [ih (acc &&& b), ih (BitVec.allOnes n &&& b)]
-    ext i hi
-    simp [BitVec.getElem_and, Bool.and_assoc]
-
--- =========================================================================
--- 2. Ballot (OR-fold)
+-- 2. Ballot-specific boundary cases (OR-fold)
 -- =========================================================================
 
 /-- An empty ballot is zero: no lanes, no bits set. -/
@@ -104,17 +87,8 @@ theorem ballot_singleton (x : BitVec n) :
   show 0 ||| x = x
   exact BitVec.zero_or
 
-/-- `__ballot_sync` composes over list concatenation: the OR-fold of an
-    appended list equals the OR of its halves. Structurally identical
-    to `WarpTypesBitwise.ballot_split`. -/
-theorem ballot_split (left_lanes right_lanes : List (BitVec n)) :
-    List.foldl (· ||| ·) 0 (left_lanes ++ right_lanes) =
-    List.foldl (· ||| ·) 0 left_lanes |||
-    List.foldl (· ||| ·) 0 right_lanes := by
-  rw [List.foldl_append, foldl_or_lift right_lanes (List.foldl (· ||| ·) 0 left_lanes)]
-
 -- =========================================================================
--- 3. All-sync (AND-fold starting from allOnes)
+-- 3. All-sync boundary cases (AND-fold starting from allOnes)
 -- =========================================================================
 
 /-- An empty all-sync is `allOnes`: vacuously, all zero lanes satisfy
@@ -129,37 +103,6 @@ theorem all_sync_singleton (x : BitVec n) :
     List.foldl (· &&& ·) (BitVec.allOnes n) [x] = x := by
   show BitVec.allOnes n &&& x = x
   exact BitVec.allOnes_and
-
-/-- `__all_sync` composes over list concatenation: the AND-fold starting
-    from `allOnes` over an appended list equals the AND of its halves.
-    Structurally identical to `WarpTypesBitwise.all_sync_split`. -/
-theorem all_sync_split (left_lanes right_lanes : List (BitVec n)) :
-    List.foldl (· &&& ·) (BitVec.allOnes n) (left_lanes ++ right_lanes) =
-    List.foldl (· &&& ·) (BitVec.allOnes n) left_lanes &&&
-    List.foldl (· &&& ·) (BitVec.allOnes n) right_lanes := by
-  rw [List.foldl_append,
-      foldl_and_lift right_lanes (List.foldl (· &&& ·) (BitVec.allOnes n) left_lanes)]
-
--- =========================================================================
--- 4. Any-sync (monotone existence)
--- =========================================================================
-
-/-- `__any_sync` is monotone: if the OR of two masks is non-zero, at
-    least one of them is non-zero. Structurally identical to
-    `WarpTypesBitwise.any_sync_monotone`; Sol's original version used
-    `push_neg` (Mathlib), this version uses the core `by_cases` +
-    explicit rewriting pattern. -/
-theorem any_sync_monotone {a b : BitVec n}
-    (h : a ||| b ≠ 0#n) : a ≠ 0#n ∨ b ≠ 0#n := by
-  by_cases ha : a = 0#n
-  · right
-    intro hb
-    apply h
-    rw [ha, hb]
-    ext i hi
-    simp [BitVec.getElem_zero]
-  · left
-    exact ha
 
 end
 
