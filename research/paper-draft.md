@@ -135,15 +135,15 @@ The generic-versus-domain split in the file graph has a counterpart at the theor
 | `*_requires_all` extract-gate inversion | per-domain files | concrete | | |
 | Concrete complement instances (e.g. `nibble_complement`) | per-domain files | concrete | | |
 | Per-domain untypability witnesses | per-domain files | concrete | | ✓ |
-| Substitution, progress, preservation, type safety (GPU) | `Metatheory.lean` | n = 32³ | ✓ | ✓ |
-| Substitution, progress, preservation, type safety (Fence / Reduce) | `CoreMetatheory.lean` | abstract² | ✓ | |
+| Substitution, progress, preservation, type safety (GPU) | `Metatheory.lean` | n = 32² | ✓ | ✓ |
+| Substitution, progress, preservation, type safety (Fence / Reduce) | `CoreMetatheory.lean` | abstract³ | ✓ | |
 | CVE-class real-world bug witnesses (GPU) | `Metatheory.lean` | n = 32 | | ✓ |
 
 ¹ *`Fence`, `Reduce`, and `Csp` each state their own `diverge_partition` as a one-line re-export of the `Generic` theorem, and the re-export's conclusion is stated at ∀ `n` even though the file as a whole pins a concrete width at the domain type-alias level.*
 
-² *`CoreMetatheory.lean` proves `progress`, `preservation`, and `type_safety` parametrically in the participant-set width `n`, and Fence and Reduce obtain the corresponding theorems at their concrete widths (`n = 8` and `n = 4` respectively) via one-line specialisations `fence_progress := CoreMetatheory.progress_closed`, `fence_preservation := CoreMetatheory.preservation`, `fence_type_safety := CoreMetatheory.type_safety`, and the same three for Reduce.*
+² *`Metatheory.lean` imports `Basic.lean`, which pins `n = 32` at the file level via `ActiveSet := PSet 32`, but the bodies of `progress`, `preservation`, and `type_safety` are stated parametrically in `{n : Nat}`. The concrete width is only load-bearing for the bug-witness row below, which exercises `n = 32`-specific NVIDIA warp semantics.*
 
-³ *`Metatheory.lean` imports `Basic.lean`, which pins `n = 32` at the file level via `ActiveSet := PSet 32`, but the bodies of `progress`, `preservation`, and `type_safety` are stated parametrically in `{n : Nat}`. The concrete width is only load-bearing for the bug-witness row below, which exercises `n = 32`-specific NVIDIA warp semantics.*
+³ *`CoreMetatheory.lean` proves `progress`, `preservation`, and `type_safety` parametrically in the participant-set width `n`, and Fence and Reduce obtain the corresponding theorems at their concrete widths (`n = 8` and `n = 4` respectively) via one-line specialisations `fence_progress := CoreMetatheory.progress_closed`, `fence_preservation := CoreMetatheory.preservation`, `fence_type_safety := CoreMetatheory.type_safety`, and the same three for Reduce.*
 
 Three rows pin concrete widths in Figure 7. Two of them are `Metatheory.lean` — the GPU-specific reduction-preservation chain for `Basic.lean`, 1019 lines, with `value_preserves_ctx`, canonical-forms lemmas `canonical_warp`, `canonical_perLane`, and `canonical_pair`, `progress`, the context-manipulation lemmas (`remove_lookup_self`, `remove_cons_ne`, `remove_comm`, and the rest), `subst_typing`, `subst_preserves_typing`, `preservation`, `type_safety`, and five bug-class untypability witnesses named after the real-world bugs they model: `bug1_cuda_samples_398`, `bug2_cccl_854`, `bug3_picongpu_2514`, `bug4_llvm_155682`, and `bug5_shuffle_after_diverge`. Their width fix to `n = 32` is load-bearing only for the bug witnesses, which exercise concrete NVIDIA warp semantics; the underlying progress and preservation proofs are width-parametric in their body. The third concrete row — Csp's per-domain inversion and bug witnesses — is unchanged from the original per-domain concrete-width pattern.
 
