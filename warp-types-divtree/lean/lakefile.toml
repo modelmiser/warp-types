@@ -1,0 +1,6 @@
+name = "WarpTypesDivtree"
+version = "0.1.0"
+defaultTargets = ["WarpTypesDivtree"]
+
+[[lean_lib]]
+name = "WarpTypesDivtree"
