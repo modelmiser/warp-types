@@ -30,7 +30,7 @@ Plus the public surface:
 ## What this is not
 
 - Not a decision procedure. The theorems are closed by `ext` + `simp` + manual induction over `WellFormed`. There is no runtime SAT or SMT.
-- Not a substitute for `warp-types-bitwise`. The diverge tree uses five private helper lemmas (`and_complement_cover`, `foldl_or_singleton`, `foldl_or_lift`, `foldl_or_append`, `subset_of_subset_and`, `cross_disjoint`) that overlap with bitwise's lemma set. A future family-wide refactor will eliminate this duplication via a Lake path dependency; v0.1.0 keeps each sibling crate standalone per the sibling-plan discipline.
+- Not a substitute for `warp-types-bitwise`. As of v0.2.0 the divtree crate imports `WarpTypesBitwise.CUDA` via Lake path dependency for the shared `foldl_or_lift` helper and the `ballot_split` fold-append theorem. The remaining divtree-local helpers (`and_complement_cover`, `foldl_or_singleton`, `subset_of_subset_and`, `cross_disjoint`) are predicate-split and complement-disjointness shapes with no analog in bitwise — they stay local because promoting them would invent demand the family doesn't have today.
 - Not a hardware model. `DivTree` captures the *algebraic shape* of nested divergence. The mapping to a specific RTL divergence stack (warp-core's `DivState`, etc.) is a separate step that lives in each RTL variant's verification crate, not here.
 
 ## Using from a Lean project
@@ -79,11 +79,11 @@ cd lean
 lake build
 ```
 
-Requires Lean 4.28.0 (pinned via `lean-toolchain`). No Mathlib dependency; uses only Lean core's `BitVec` / `List` APIs and `ext` + `simp` proofs of the underlying bitwise identities.
+Requires Lean 4.28.0 (pinned via `lean-toolchain`). No Mathlib dependency; uses only Lean core's `BitVec` / `List` APIs and `ext` + `simp` proofs of the underlying bitwise identities, plus a Lake path dependency on the sibling crate `warp-types-bitwise`.
 
 ## Relationship to the warp-types workspace
 
-`warp-types-divtree` is a Cargo workspace member of the root `warp-types` crate at version 0.1.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family (`warp-types-sat`, `warp-types-bitwise`, `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, and forthcoming `warp-types-ballot`).
+`warp-types-divtree` is a Cargo workspace member of the root `warp-types` crate at version 0.2.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family (`warp-types-sat`, `warp-types-bitwise`, `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, `warp-types-ballot`).
 
 ## License
 

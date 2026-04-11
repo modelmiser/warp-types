@@ -22,7 +22,7 @@ All seven are width-parametric in `n : Nat`. Specialize at `n = 32` for NVIDIA w
 
 ## What this is not
 
-- Not a substitute for `warp-types-bitwise`. Three of the seven theorems (`ballot_split`, `all_sync_split`, `any_sync_monotone`) are structurally identical to lemmas already in `warp-types-bitwise`'s `CUDA.lean` module. The v0.1.0 release duplicates them per the sibling-plan's "each crate standalone" discipline; a family-wide refactor scheduled after all five Source B siblings land will hoist the shared helpers into a common module that divtree, ballot, and bitwise all import from.
+- Not a substitute for `warp-types-bitwise`. Three of the seven theorems (`ballot_split`, `all_sync_split`, `any_sync_monotone`) are structurally identical to lemmas in `warp-types-bitwise`'s `CUDA.lean` module. As of v0.2.0 the ballot crate imports `WarpTypesBitwise.CUDA` via Lake path dependency and re-exports those three theorems under the `WarpTypesBallot` namespace via `export WarpTypesBitwise (...)`. Consumers see no API change — `WarpTypesBallot.ballot_split` still resolves — but the implementation lives only once, in bitwise. The four ballot-specific boundary cases (`ballot_nil`, `ballot_singleton`, `all_sync_nil`, `all_sync_singleton`) stay local because they have no analog in bitwise.
 - Not a decision procedure. The theorems are closed by `ext` + `simp` + list induction for the compositional ones, and by `by_cases` + explicit rewriting (pattern 3 from `feedback_lean4_bv_proofs.md`) for `any_sync_monotone`. No Mathlib `push_neg` or `tauto`.
 - Not a simulation model. `ballot_split` (and its cousins) capture the *algebraic shape* of warp-vote composition — specifically that results compose over disjoint subsets of the warp. The mapping from CUDA's actual `__ballot_sync(mask, pred)` lane-by-lane evaluation to this fold representation is part of a consumer's modeling layer, not part of this crate.
 
@@ -88,13 +88,13 @@ cd lean
 lake build
 ```
 
-Requires Lean 4.28.0 (pinned via `lean-toolchain`). No Mathlib dependency; uses only Lean core's `BitVec` / `List` APIs, `BitVec.allOnes_and`, `BitVec.zero_or`, and `ext` + `simp` proofs.
+Requires Lean 4.28.0 (pinned via `lean-toolchain`). No Mathlib dependency; uses only Lean core's `BitVec` / `List` APIs, `BitVec.allOnes_and`, `BitVec.zero_or`, and `ext` + `simp` proofs, plus a Lake path dependency on the sibling crate `warp-types-bitwise`.
 
 ## Relationship to the warp-types workspace
 
-`warp-types-ballot` is a Cargo workspace member of the root `warp-types` crate at version 0.1.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family.
+`warp-types-ballot` is a Cargo workspace member of the root `warp-types` crate at version 0.2.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family.
 
-**As of 2026-04-11, ballot completes the Source B sibling family**: `warp-types-bitwise`, `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, `warp-types-ballot`. The next planned workflow step is a family-wide refactor pass to eliminate helper duplication between these five crates and then a Sol migration pass (post-paper-submission).
+**As of 2026-04-11, ballot completes the Source B sibling family**: `warp-types-bitwise`, `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, `warp-types-ballot`. The post-ballot family-wide refactor pass landed the same day (commits `90f7c6455`, `068f5d770`, `bba180d14`), eliminating ~130 LOC of helper duplication via Lake path dependencies on `warp-types-bitwise`. The next planned workflow step is the Sol migration pass (post-paper-submission).
 
 ## License
 

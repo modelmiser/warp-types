@@ -24,7 +24,7 @@ Fourteen lemmas across three shapes:
 
 ### About the fold lemmas
 
-`ballot_split`, `all_sync_split`, and `any_sync_monotone` are fold-algebra theorems (list homomorphisms over the bitvector OR/AND monoids). They are included in this crate because they arose in the same Sol obligation bin, but they may relocate to a separate `warp-types-ballot` crate when that sibling is built. If you use these three, expect a future re-import path.
+`ballot_split`, `all_sync_split`, and `any_sync_monotone` are fold-algebra theorems (list homomorphisms over the bitvector OR/AND monoids). As of v0.2.0 they are the canonical home of these theorems for the entire sibling family — `warp-types-ballot` re-exports them via `export WarpTypesBitwise (...)`, and `warp-types-divtree` calls `WarpTypesBitwise.ballot_split` directly from its `leaves_cover_root` proof. The two underlying private fold-lift helpers (`foldl_or_lift`, `foldl_and_lift`) were promoted to public in the same v0.2.0 hoist so siblings can reuse them.
 
 ## Using from a Lean project
 
@@ -65,7 +65,7 @@ Requires Lean 4.28.0 (pinned via `lean-toolchain`). No Mathlib dependency; uses 
 
 ## Relationship to the warp-types workspace
 
-`warp-types-bitwise` is a Cargo workspace member of the root `warp-types` crate at version 0.1.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family (`warp-types-sat`, `warp-types-bitwise`, and forthcoming `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, `warp-types-ballot`).
+`warp-types-bitwise` is a Cargo workspace member of the root `warp-types` crate at version 0.2.0. The Rust `lib.rs` is a minimal marker; the actual library is the Lean project in `lean/`. This layout keeps versioning and release cadence consistent across the warp-types sibling crate family (`warp-types-sat`, `warp-types-bitwise`, `warp-types-invariant`, `warp-types-overflow`, `warp-types-divtree`, `warp-types-ballot`). Of these, `warp-types-divtree` and `warp-types-ballot` depend on bitwise via Lake path dependency as of their v0.2.0 releases.
 
 ## License
 
