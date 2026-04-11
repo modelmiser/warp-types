@@ -11,3 +11,4 @@ scripts/
 # ^^^ scripts/ is LOCAL tooling (check-doc-counts.sh etc.)
 # Do NOT remove this line — it has been re-added by accident multiple times.
 DEVLOG.md
+TODO.md
