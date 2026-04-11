@@ -1,3 +1,5 @@
+import WarpTypesBitwise.CUDA
+
 /-!
 # WarpTypesDivtree.Core
 
@@ -27,14 +29,13 @@ divergence:
 
 Mathlib-free and Sol-free. Uses only Lean 4.28 core's `BitVec` /
 `List` APIs plus `ext` + `simp` proofs of the underlying bitwise
-identities. Sol's original proof imported `Sol.ListAlgebra` for
-`sol_bv_foldl_or_singleton` and `sol_bv_foldl_or_zero_append`, and
-`Sol.Auto` for `sol_bv_hyp_decide`; this crate inlines the needed
-helper lemmas as `private theorem`s with direct `ext` + `simp`
-proofs. The fold-append lemma is structurally identical to
-`warp-types-bitwise`'s `ballot_split` — the two may be unified via a
-Lake dependency in a future pass, but v0.1.0 keeps each sibling
-crate standalone per the sibling-plan discipline.
+identities, plus a Lake path dependency on `warp-types-bitwise` for
+the shared `foldl_or_lift` helper and the `ballot_split` fold-append
+theorem (hoisted in v0.2.0 — v0.1.0 inlined these as private
+theorems). The remaining helpers (`and_complement_cover`,
+`subset_of_subset_and`, `cross_disjoint`, `foldl_or_singleton`) are
+divtree-specific shapes about predicate splits and complement
+disjointness that have no analog in bitwise; they stay local.
 -/
 
 namespace WarpTypesDivtree
@@ -43,11 +44,14 @@ section
 variable {n : Nat}
 
 -- =========================================================================
--- 1. Private bitwise helper lemmas
+-- 1. Divtree-local bitwise helper lemmas
 -- =========================================================================
--- These correspond to Sol's `sol_bv_*` tactics and `Sol.ListAlgebra`
--- helpers. Inlined locally so this crate has no Sol / bitwise-sibling
--- dependency.
+-- These correspond to Sol's `sol_bv_*` tactics for predicate-split and
+-- complement-disjointness shapes. They have no analog in
+-- `warp-types-bitwise`, so they stay local to divtree. The fold-lift
+-- and fold-append helpers were hoisted to `warp-types-bitwise` in
+-- v0.2.0 (`foldl_or_lift` and `ballot_split`); see the leaves_cover_root
+-- proof below for the call sites.
 
 /-- `(m &&& p) ||| (m &&& ~~~p) = m` — a mask equals its predicate-split
     halves OR'd together. The key algebraic fact behind the diverge
@@ -64,31 +68,6 @@ private theorem foldl_or_singleton (x : BitVec n) :
     List.foldl (· ||| ·) 0 [x] = x := by
   show 0 ||| x = x
   exact BitVec.zero_or
-
-/-- Accumulator-lift for OR-fold: folding into an arbitrary accumulator
-    equals folding into zero, then OR-ing the accumulator. Private
-    helper for `foldl_or_append`. Structurally identical to
-    `warp-types-bitwise`'s private `foldl_or_lift`. -/
-private theorem foldl_or_lift (xs : List (BitVec n)) (acc : BitVec n) :
-    List.foldl (· ||| ·) acc xs = acc ||| List.foldl (· ||| ·) 0 xs := by
-  induction xs generalizing acc with
-  | nil =>
-    simp only [List.foldl_nil]
-    ext i hi
-    simp
-  | cons b bs ih =>
-    simp only [List.foldl_cons]
-    rw [ih (acc ||| b), ih (0 ||| b)]
-    ext i hi
-    simp [BitVec.getElem_or, Bool.or_assoc]
-
-/-- OR-fold distributes over list append: `foldl (|||) 0 (xs ++ ys) =
-    foldl (|||) 0 xs ||| foldl (|||) 0 ys`. Same content as
-    `warp-types-bitwise.ballot_split`. -/
-private theorem foldl_or_append (xs ys : List (BitVec n)) :
-    List.foldl (· ||| ·) 0 (xs ++ ys) =
-    List.foldl (· ||| ·) 0 xs ||| List.foldl (· ||| ·) 0 ys := by
-  rw [List.foldl_append, foldl_or_lift ys (List.foldl (· ||| ·) 0 xs)]
 
 /-- If `m` is contained in `mask &&& pred`, then `m` is contained in
     `mask`. Per-bit: if every `true` bit of `m` is in both `mask` and
@@ -193,7 +172,7 @@ theorem leaves_cover_root {t : DivTree n} (hwf : WellFormed t) :
   | leaf mask => exact foldl_or_singleton mask
   | node hleft hright _wfl _wfr ihl ihr =>
     simp only [leaves, root]
-    rw [foldl_or_append, ihl, ihr, hleft, hright]
+    rw [WarpTypesBitwise.ballot_split, ihl, ihr, hleft, hright]
     exact and_complement_cover _ _
 
 /-- A tree with `k` internal nodes has `k + 1` leaves. Size invariant

@@ -1,6 +1,10 @@
 name = "WarpTypesDivtree"
-version = "0.1.0"
+version = "0.2.0"
 defaultTargets = ["WarpTypesDivtree"]
+
+[[require]]
+name = "WarpTypesBitwise"
+path = "../../warp-types-bitwise/lean"
 
 [[lean_lib]]
 name = "WarpTypesDivtree"
