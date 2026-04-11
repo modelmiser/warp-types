@@ -722,4 +722,190 @@ theorem subst_typing {n : Nat}
           rw [remove_lookup_ne (Ne.symm hxn2)]; exact hcons2
         exact CoreHasType.letPairE _ _ _ _ _ _ _ _ _ _ he' hdist hfresh1' hfresh2' hbody' hcons1' hcons2'
 
+-- ============================================================================
+-- Substitution preserves typing — convenience wrapper over subst_typing
+-- ============================================================================
+
+/-- The common-case wrapper: substituting a closed value for a freshly-bound
+    name in a body preserves typing, without having to explicitly manage
+    `value_any_ctx` or the `hname` quantifier. -/
+theorem subst_preserves_typing {n : Nat}
+    {ctx ctx' : CoreCtx n} {name : String} {v body : CoreExpr n} {t_v t : CoreTy n}
+    (hval : CoreHasType [] v t_v [])
+    (hfresh : ctx.lookup name = none)
+    (hbody : CoreHasType ((name, t_v) :: ctx) body t ctx')
+    (hconsumed : ctx'.lookup name = none)
+    (hv : isValue v = true) :
+    CoreHasType ctx (subst body name v) t ctx' := by
+  have ht_v : ∀ ctx₂, CoreHasType ctx₂ v t_v ctx₂ := value_any_ctx hv hval
+  have hname : ∀ t', CoreCtx.lookup ((name, t_v) :: ctx) name = some t' → t' = t_v := by
+    intro t' hl
+    simp [CoreCtx.lookup, List.find?] at hl
+    exact hl.symm
+  have h := subst_typing hv ht_v hbody hname
+  rw [remove_cons_eq, remove_of_lookup_none hfresh, remove_of_lookup_none hconsumed] at h
+  exact h
+
+-- ============================================================================
+-- Progress: a closed well-typed expression is either a value or can step
+-- ============================================================================
+
+/-- Progress theorem for `CoreHasType`. Every closed well-typed term either
+    is already a value or can take a small step under `Step`.
+
+    The `mergeFamily` and `finalizeFamily` cases use the double-witness
+    substitution idiom (`subst hExpr; subst hTy`) to expose the parametric
+    dispatchers in the goal, then `cases tag` to select the concrete Step
+    constructor. Under option (a) (`.leafReduce (.groupVal s)` as the
+    canonical value of `.reduced s`), the `.reduced`-tag branch of
+    `mergeFamily` / `finalizeFamily` invokes `canonical_reduced` to force
+    the shape — the gate's `Covers` clause will become load-bearing in
+    `preservation`, not here. -/
+theorem progress {n : Nat} {ctx e_ctx' : CoreCtx n} {e : CoreExpr n} {t : CoreTy n}
+    (ht : CoreHasType ctx e t e_ctx') (hempty : ctx = []) :
+    isValue e = true ∨ ∃ e', Step e e' := by
+  induction ht with
+  | groupVal _ _ => left; rfl
+  | dataVal _ => left; rfl
+  | unitVal _ => left; rfl
+  | var _ _ _ hlook =>
+    subst hempty; simp [CoreCtx.lookup, List.find?] at hlook
+  | diverge _ _ g s pred hg ih =>
+    have ih_g := ih hempty
+    match ih_g with
+    | .inl hv =>
+      subst hempty
+      have := canonical_group hg hv; subst this
+      exact .inr ⟨_, Step.divergeVal s pred⟩
+    | .inr ⟨g', hg'⟩ =>
+      exact .inr ⟨_, Step.divergeCong g g' pred hg'⟩
+  | letBind _ _ _ name val body _ _ hval _ _ _ ih_val _ =>
+    have ih := ih_val hempty
+    match ih with
+    | .inl hv => exact .inr ⟨_, Step.letVal name val body hv⟩
+    | .inr ⟨val', hval'⟩ =>
+      exact .inr ⟨_, Step.letCong name val val' body hval'⟩
+  | pairVal _ ctx_mid _ a b _ _ ha hb iha ihb =>
+    have iha' := iha hempty
+    match iha' with
+    | .inr ⟨a', ha'⟩ =>
+      exact .inr ⟨_, Step.pairLeftCong a a' b ha'⟩
+    | .inl hva =>
+      subst hempty
+      have hctx := value_preserves_ctx ha hva
+      have ihb' := ihb hctx.symm
+      match ihb' with
+      | .inl hvb =>
+        left; simp [isValue]; exact ⟨hva, hvb⟩
+      | .inr ⟨b', hb''⟩ =>
+        exact .inr ⟨_, Step.pairRightCong a b b' hva hb''⟩
+  | fstE _ _ e _ _ he ih =>
+    have ih_e := ih hempty
+    match ih_e with
+    | .inl hv =>
+      subst hempty
+      have ⟨v1, v2, heq, hv1, hv2⟩ := canonical_pair he hv
+      subst heq
+      exact .inr ⟨v1, Step.fstVal v1 v2 hv1 hv2⟩
+    | .inr ⟨e', he'⟩ =>
+      exact .inr ⟨_, Step.fstCong e e' he'⟩
+  | sndE _ _ e _ _ he ih =>
+    have ih_e := ih hempty
+    match ih_e with
+    | .inl hv =>
+      subst hempty
+      have ⟨v1, v2, heq, hv1, hv2⟩ := canonical_pair he hv
+      subst heq
+      exact .inr ⟨v2, Step.sndVal v1 v2 hv1 hv2⟩
+    | .inr ⟨e', he'⟩ =>
+      exact .inr ⟨_, Step.sndCong e e' he'⟩
+  | letPairE _ _ _ e _ _ body _ _ _ he _ _ _ _ _ _ ih_e _ =>
+    have ih := ih_e hempty
+    match ih with
+    | .inl hv =>
+      subst hempty
+      have ⟨v1, v2, heq, hv1, hv2⟩ := canonical_pair he hv
+      subst heq
+      exact .inr ⟨_, Step.letPairVal _ _ v1 v2 body hv1 hv2⟩
+    | .inr ⟨e', he'⟩ =>
+      exact .inr ⟨_, Step.letPairCong e e' _ _ body he'⟩
+  | write _ ctx_mid _ g payload s hg hpayload ih_g ih_p =>
+    have ihg := ih_g hempty
+    match ihg with
+    | .inr ⟨g', hg'⟩ =>
+      exact .inr ⟨_, Step.writeLeft g g' payload hg'⟩
+    | .inl hvg =>
+      subst hempty
+      have hctx := value_preserves_ctx hg hvg
+      have ihp := ih_p hctx.symm
+      match ihp with
+      | .inl hvp =>
+        have h1 := canonical_group hg hvg; subst h1
+        have hpayload' := hctx.symm ▸ hpayload
+        have h2 := canonical_data hpayload' hvp; subst h2
+        exact .inr ⟨_, Step.writeVal s⟩
+      | .inr ⟨p', hp'⟩ =>
+        exact .inr ⟨_, Step.writeRight g payload p' hvg hp'⟩
+  | leafReduce _ _ g s hg ih =>
+    have ih_g := ih hempty
+    match ih_g with
+    | .inl hvg =>
+      subst hempty
+      have := canonical_group hg hvg; subst this
+      left; simp [isValue]
+    | .inr ⟨g', hg'⟩ =>
+      exact .inr ⟨_, Step.leafReduceCong g g' hg'⟩
+  | mergeFamily tag _ ctx_mid _ e1 e2 _ s1 s2 _ _ hExpr hTy hw1 hw2 _ ih1 ih2 =>
+    have ih1' := ih1 hempty
+    match ih1' with
+    | .inr ⟨e1', he1'⟩ =>
+      rw [hExpr]
+      cases tag
+      · exact .inr ⟨_, Step.mergeLeft e1 e1' e2 he1'⟩
+      · exact .inr ⟨_, Step.combineRedLeft e1 e1' e2 he1'⟩
+    | .inl hv1 =>
+      subst hempty
+      have hctx := value_preserves_ctx hw1 hv1
+      have ih2' := ih2 hctx.symm
+      match ih2' with
+      | .inr ⟨e2', he2'⟩ =>
+        rw [hExpr]
+        cases tag
+        · exact .inr ⟨_, Step.mergeRight e1 e2 e2' hv1 he2'⟩
+        · exact .inr ⟨_, Step.combineRedRight e1 e2 e2' hv1 he2'⟩
+      | .inl hv2 =>
+        rw [hExpr]
+        cases tag
+        · have h1 := canonical_group hw1 hv1; subst h1
+          have hw2' : CoreHasType [] e2 (.group s2) _ := hctx ▸ hw2
+          have h2 := canonical_group hw2' hv2; subst h2
+          exact .inr ⟨_, Step.mergeVal s1 s2⟩
+        · have h1 := canonical_reduced hw1 hv1; subst h1
+          have hw2' : CoreHasType [] e2 (.reduced s2) _ := hctx ▸ hw2
+          have h2 := canonical_reduced hw2' hv2; subst h2
+          exact .inr ⟨_, Step.combineRedVal s1 s2⟩
+  | finalizeFamily tag _ _ e _ _ hExpr hTy hw ih =>
+    have ih' := ih hempty
+    match ih' with
+    | .inr ⟨e', he'⟩ =>
+      rw [hExpr]
+      cases tag
+      · exact .inr ⟨_, Step.fenceCong e e' he'⟩
+      · exact .inr ⟨_, Step.finalizeCong e e' he'⟩
+    | .inl hv =>
+      rw [hExpr]
+      cases tag
+      · subst hempty
+        have := canonical_group hw hv; subst this
+        exact .inr ⟨_, Step.fenceVal (PSet.all n)⟩
+      · subst hempty
+        have := canonical_reduced hw hv; subst this
+        exact .inr ⟨_, Step.finalizeVal (PSet.all n)⟩
+
+/-- Progress at the empty input context — the usual form. -/
+theorem progress_closed {n : Nat} {e : CoreExpr n} {t : CoreTy n} {ctx' : CoreCtx n}
+    (ht : CoreHasType [] e t ctx') :
+    isValue e = true ∨ ∃ e', Step e e' :=
+  progress ht rfl
+
 end CoreMetatheory
