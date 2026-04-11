@@ -18,10 +18,14 @@ section
 variable {n : Nat}
 
 -- ============================================================================
--- Fold-lift helpers (private, used by ballot_split and all_sync_split)
+-- Fold-lift helpers (public so sibling crates can depend on them)
 -- ============================================================================
+-- These were private in v0.1.0 (used only by ballot_split and all_sync_split
+-- below). They were promoted to public in v0.2.0 so warp-types-divtree and
+-- warp-types-ballot can import them via Lake path dependency rather than
+-- copy-pasting their bodies. The bodies themselves are unchanged.
 
-private theorem foldl_or_lift (xs : List (BitVec n)) (acc : BitVec n) :
+theorem foldl_or_lift (xs : List (BitVec n)) (acc : BitVec n) :
     List.foldl (· ||| ·) acc xs = acc ||| List.foldl (· ||| ·) 0 xs := by
   induction xs generalizing acc with
   | nil =>
@@ -34,7 +38,7 @@ private theorem foldl_or_lift (xs : List (BitVec n)) (acc : BitVec n) :
     ext i hi
     simp [BitVec.getElem_or, Bool.or_assoc]
 
-private theorem foldl_and_lift (xs : List (BitVec n)) (acc : BitVec n) :
+theorem foldl_and_lift (xs : List (BitVec n)) (acc : BitVec n) :
     List.foldl (· &&& ·) acc xs = acc &&& List.foldl (· &&& ·) (BitVec.allOnes n) xs := by
   induction xs generalizing acc with
   | nil =>

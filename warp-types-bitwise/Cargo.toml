@@ -1,6 +1,6 @@
 [package]
 name = "warp-types-bitwise"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Chad Aldreda"]
 description = "Bitvector tautology and mask-algebra lemmas for warp-types verification (Lean 4 library)"
