@@ -1,0 +1,624 @@
+%%% paper.tex — Complemented Typestate (POPL submission)
+%%% Generated from paper-draft.md, 2026-04-12.
+
+\documentclass[sigplan,screen,anonymous]{acmart}
+
+%% Packages
+\usepackage{amsmath,amssymb}
+\usepackage{listings}
+\usepackage{booktabs}
+
+%% Listings setup for Lean 4
+\lstdefinelanguage{Lean}{
+  morekeywords={def,theorem,lemma,inductive,structure,where,match,with,
+    let,in,if,then,else,do,return,import,open,namespace,end,
+    variable,instance,class,extends,deriving,abbrev,
+    cases,simp,rfl,rw,unfold,have,show,by,at,only,
+    Type,Prop,Nat,Bool,true,false},
+  sensitive=true,
+  morecomment=[l]{--},
+  morecomment=[n]{/-}{-/},
+  morestring=[b]",
+  literate={→}{$\to$}1 {←}{$\leftarrow$}1 {⊢}{$\vdash$}1
+           {⊣}{$\dashv$}1 {∀}{$\forall$}1 {∃}{$\exists$}1
+           {ℕ}{$\mathbb{N}$}1 {≠}{$\neq$}1 {≤}{$\leq$}1
+           {≥}{$\geq$}1 {∧}{$\land$}1 {∨}{$\lor$}1
+           {¬}{$\lnot$}1 {⟨}{$\langle$}1 {⟩}{$\rangle$}1
+           {:=}{$\coloneqq$}2,
+}
+\lstset{
+  language=Lean,
+  basicstyle=\small\ttfamily,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape,
+  columns=flexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+  xleftmargin=2em,
+  framexleftmargin=1.5em,
+  aboveskip=0.8em,
+  belowskip=0.8em,
+  numbers=none,
+  showstringspaces=false,
+  escapeinside={(*@}{@*)},
+}
+
+%% Convenience macros
+\newcommand{\PSet}{\texttt{PSet}}
+\newcommand{\IsComplement}{\texttt{IsComplement}}
+\newcommand{\IsComplementAll}{\texttt{IsComplementAll}}
+\newcommand{\CoreHasType}{\texttt{CoreHasType}}
+\newcommand{\TyTag}{\texttt{TyTag}}
+
+%% Bibliography style
+\bibliographystyle{ACM-Reference-Format}
+
+%% ============================================================
+%% Metadata
+%% ============================================================
+
+\title{One Gate, Four Domains: Complemented Typestate from GPU Warps to Tree All-Reduce}
+
+%% Anonymous submission — author block suppressed by [anonymous] option.
+%% \author{...}
+%% \affiliation{...}
+
+\begin{abstract}
+A type system for parallel computation has to answer one question: which operations are safe at which participant sets? This paper presents \emph{complemented typestate}, a generic framework whose safety is purchased at merge by requiring that two operand participant sets --- bitvectors over lanes, tiles, bytes, or leaves --- are complementary with respect to a parent set. The framework is stated once in Lean~4 as two family-parametric typing rules, \texttt{mergeFamily} and \texttt{finalizeFamily}, and instantiated at four domains: GPU warp divergence (32~lanes), CSP mesh collectives (6~tiles with topology), partial-write fencing (8~bytes), and tree all-reduce (4~leaves). The mechanization is zero-\texttt{sorry}, zero user-declared \texttt{axiom},\footnote{Lean~4's kernel includes foundational axioms (\texttt{propext}, \texttt{Quot}, and \texttt{Classical.choice}); ``zero user-declared axiom'' means the framework does not extend this foundation.} carries five CVE-class bug witnesses at the GPU instance, untypability witnesses at all four instances, and full reduction metatheory (progress and preservation, yielding type safety) for three of the four. The factoring adds 108~lines net but makes adding a fifth domain cost one tag constructor and four dispatcher clauses rather than a fresh copy of the typing judgment. We evaluate the caller-side discharge cost of family-parametric rules in Lean~4's \texttt{cases} tactic and give scaling thresholds for when a custom discharge tactic becomes necessary.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+  <concept>
+    <concept_id>10003752.10003790.10003795</concept_id>
+    <concept_desc>Theory of computation~Program verification</concept_desc>
+    <concept_significance>500</concept_significance>
+  </concept>
+  <concept>
+    <concept_id>10003752.10003790.10011740</concept_id>
+    <concept_desc>Theory of computation~Type theory</concept_desc>
+    <concept_significance>500</concept_significance>
+  </concept>
+  <concept>
+    <concept_id>10010520.10010553.10010554</concept_id>
+    <concept_desc>Computer systems organization~Single instruction, multiple data</concept_desc>
+    <concept_significance>300</concept_significance>
+  </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Theory of computation~Program verification}
+\ccsdesc[500]{Theory of computation~Type theory}
+\ccsdesc[300]{Computer systems organization~Single instruction, multiple data}
+
+\keywords{type systems, typestate, linear types, GPU verification, session types, Lean~4}
+
+\maketitle
+
+%% ============================================================
+%% 1. Introduction
+%% ============================================================
+
+\section{Introduction}\label{sec:introduction}
+
+A type system for parallel computation has to answer one question well: which operations are safe at which participant sets? A warp-wide shuffle is safe only when every lane of the warp is active. A CSP broadcast is safe only when every tile in the receiver set is ready to receive. A memory fence commits only when every byte of the buffer has been written. A tree all-reduce produces a correct result only when every leaf has contributed to the accumulator. The four operations live in four different computational models --- SIMT, MIMD/CSP, relaxed shared memory, divide-and-conquer reduction --- and they have historically been analysed by three different type-system traditions (session types for CSP, typestate for resource tracking, warp-correctness type systems for GPU), with partial-write fencing having no prior type-system treatment. This paper argues that all four share a single structural gate, that the gate can be stated once in a generic core language, and that a single Lean~4 inductive typing judgment subsumes the four domain-specific judgments without losing theorem coverage at any domain.
+
+The gate is complement-at-merge. Each domain carries a participant set --- a bitvector over the lanes, tiles, bytes, or leaves that own an operation --- and each domain has some notion of \emph{partitioning} the set into two disjoint sub-sets. Partitioning is cheap: a group splits into its ``true on predicate'' and ``false on predicate'' halves, and linearity ensures that both halves are held by distinct sub-computations. Merging is where safety is purchased: a rule requires that the two operand sets are complementary with respect to some parent set, and only then does the rule produce a handle on the parent. The unsafe case --- attempting an all-participants operation on a merged result that covers less than the full parent set --- becomes untypable. The same structural gate \texttt{PSet.IsComplement s1 s2 parent} governs the merge, and a second gate \texttt{PSet.all n} governs the extract, in every one of the four domains.
+
+The two gates are orthogonal to two further axes: the extract gate can return a barrier (Fence) or a value (Reduce), and the merge gate can act on different type families indexed by participant set --- permissions (\texttt{.group}) or accumulators (\texttt{.reduced}). Stating the gates once, parametric in both axes, is the technical contribution. Two \emph{family-parametric} typing rules --- rules parameterized over the choice of $\PSet\;n$-indexed type-family constructor --- called \texttt{mergeFamily} and \texttt{finalizeFamily} are factored into a generic core file \texttt{Core.lean} and instantiated per domain via type-family tags, \texttt{@[reducible]} dispatchers, and a double equality witness on both the expression form and the conclusion type.
+
+\paragraph{Contributions.}
+\textbf{(1)}~A generic core language for complemented typestate (\texttt{Core.lean}, 276~lines) whose two family-parametric rules subsume the merge and extract rules of Fence and Reduce, while the same complement gate governs all four domains at the \texttt{Generic.lean} level.
+\textbf{(2)}~A zero-\texttt{sorry}, zero-user-declared-\texttt{axiom} Lean~4 mechanization, verified by \texttt{lake build WarpTypes}.
+\textbf{(3)}~A structural extensibility win: adding a fifth domain costs one tag constructor and four dispatcher clauses, not a fresh typing judgment --- though the refactor adds 108~lines net~(\S\ref{sec:evaluation}).
+\textbf{(4)}~An elaboration-layer finding: family-parametric rules in Lean~4 require a \emph{double} equality witness (one on the expression, one on the output type), and the caller-side discharge cost is linear in the product of nested-cases depth and parametric-rule count~(\S\ref{sec:evaluation}).
+
+Figure~\ref{fig:witnesses} summarises the four witnesses.
+
+\begin{table*}[t]
+\caption{The four mechanized witnesses of complemented typestate, as of the artifact for this paper.}
+\label{fig:witnesses}
+\small
+\begin{tabular}{@{}lllllll@{}}
+\toprule
+Level & Source file & Lines & Type family used & Merge gate & Extract gate & Return type \\
+\midrule
+GPU divergence & \texttt{Basic.lean} + \texttt{Metatheory.lean} & --- & \texttt{.warp} (\texttt{ActiveSet := PSet 32})\textsuperscript{1} & \IsComplement{} & \texttt{shuffle} requires \texttt{.warp (PSet.all 32)} & \texttt{perLane} (broadcast value)\textsuperscript{2} \\
+CSP collective & \texttt{Csp.lean} & 376 & \texttt{.group} (\texttt{TileSet := PSet 6}) & \IsComplement{} & \texttt{collective} requires \texttt{.group (PSet.all 6)} & \texttt{data} (broadcast value) \\
+Partial-write fence & \texttt{Fence.lean} & 238 & \texttt{.group} (\texttt{ByteBuf := PSet 8}) & \IsComplement{} & \texttt{fence} requires \texttt{.group (PSet.all 8)} & \texttt{unit} (barrier) \\
+Tree all-reduce & \texttt{Reduce.lean} & 222 & \texttt{.reduced} (\texttt{Col := PSet 4}) & \IsComplement{} & \texttt{finalize} requires \texttt{.reduced (PSet.all 4)} & \texttt{data} (accumulator value) \\
+\bottomrule
+\end{tabular}
+
+\medskip
+\noindent\textsuperscript{1} \textit{\texttt{Basic.lean} pre-dates \texttt{Core.lean} and uses its own \texttt{Ty} inductive with \texttt{.warp} in the role that \texttt{.group} plays in the other three domains.}\\
+\noindent\textsuperscript{2} \textit{\texttt{Basic.lean}'s shuffle returns \texttt{.perLane} (per-lane data); the other three domains' extract returns \texttt{.data} or \texttt{.unit}.}
+\end{table*}
+
+All four rows use \texttt{PSet.IsComplement s1 s2 parent} at the merge site and \texttt{PSet.all n} at the extract site. Rows differ in (i)~which $\PSet\;n$-indexed type family carries the participant set (\texttt{.warp} for the GPU instance, \texttt{.group} for CSP and Fence, \texttt{.reduced} for Reduce); and (ii)~whether the extract gate returns a barrier (Fence) or a data payload (the other three). The same two gates govern every row.
+
+The rest of the paper is organised as follows. \S\ref{sec:background} fixes notation and recalls the background on complemented participant sets, linear typestate, and the relevant concurrency models. \S\ref{sec:spine} describes the generic mechanization spine --- \texttt{Generic.lean} for the domain-independent layer and \texttt{Core.lean} for the family-parametric layer. \S\ref{sec:domains} instantiates the spine for each of the four domains and states the per-domain soundness theorem. \S\ref{sec:core} gives the \texttt{Core.lean} factoring in detail, with the rule shapes and the type-family dispatchers. \S\ref{sec:evaluation} evaluates the cost of the factoring --- the caller-side discharge boilerplate, the line-count change, and the amortization argument for scaling to additional domains. \S\ref{sec:related} surveys related work. \S\ref{sec:conclusion} concludes.
+
+%% ============================================================
+%% 2. Background
+%% ============================================================
+
+\section{Background}\label{sec:background}
+
+The paper assumes familiarity with dependent type theory at the level of Lean~4 or Coq, and with linear type systems in the sense of Girard's linear logic~\cite{girard:tcs:1987} as presented in Wadler's \emph{Linear Types Can Change the World}~\cite{wadler:ifip:1990}. This section fixes notation and names the three concepts that support the generic framework: complemented participant sets, linear typestate, and the gate terminology.
+
+\subsection{Complemented participant sets}\label{sec:complemented-participant-sets}
+
+Fix a width $n : \mathbb{N}$. A \emph{participant set} is a bitvector of width~$n$, written $\PSet\;n := \mathit{BitVec}\;n$. Each bit position corresponds to one participant in some parallel collective: a lane of a warp, a tile of a mesh, a byte of a buffer, a leaf of a reduction tree. Bit~$i$ set means ``participant~$i$ is in the set.'' Participant sets form a bounded distributive lattice under $\mathbin{\&\&\&}$ (bitwise and, meet) and $\mathbin{|||}$ (bitwise or, join), with $\texttt{PSet.all}\;n$ as the top element (all participants present) and $0$ as the bottom element.
+
+Two participant sets $s_1, s_2 : \PSet\;n$ are \emph{complementary with respect to a parent} $\mathit{parent} : \PSet\;n$ when they are disjoint at the bit level and their join equals the parent: $s_1 \mathbin{\&\&\&} s_2 = 0 \;\land\; s_1 \mathbin{|||} s_2 = \mathit{parent}$. This relation is stated in Lean as \texttt{PSet.IsComplement s1 s2 parent}. It is symmetric by commutativity of AND and OR ($\IsComplement\;s_1\;s_2\;p \iff \IsComplement\;s_2\;s_1\;p$); the mechanization proves symmetry for the special case \IsComplementAll{} (\texttt{complement\_symmetric\_generic}), while the general three-argument case follows from the same bitwise identities but is not independently mechanized. \IsComplement{} has a canonical introduction form: given a parent~$s$ and a predicate $\mathit{pred} : \PSet\;n$, the pair $(s \mathbin{\&\&\&} \mathit{pred},\; s \mathbin{\&\&\&} {\mathord{\sim\!\sim\!\sim}\mathit{pred}})$ is complementary with respect to~$s$. This is the \emph{diverge partition}, and it is the only way a well-typed program partitions a participant set.
+
+The width~$n$ is a parameter of the framework. The generic layer \texttt{Generic.lean} proves two theorems at $\forall\,n : \mathbb{N}$: the diverge partition's disjointness-and-cover property (\texttt{diverge\_partition\_generic}) and complement symmetry for the full participant set (\texttt{complement\_symmetric\_generic}). The domain instances each pin a concrete width: $n = 32$ for a lane per bit of a GPU warp, $n = 6$ for a tile per bit of a six-tile mesh, $n = 8$ for a byte per bit of an eight-byte buffer, $n = 4$ for a leaf per bit of a four-leaf reduction. The parameterization is load-bearing for the generic framework but invisible to the per-domain user.
+
+\subsection{Linear typestate}\label{sec:linear-typestate}
+
+The typing judgment takes the form $\Gamma \vdash e : \tau \dashv \Gamma'$, in which $\Gamma$ and~$\Gamma'$ are linear contexts (ordered lists of name-to-type bindings) and $\Gamma'$ records how~$\Gamma$ was consumed by evaluating~$e$. The judgment is \emph{linear}: a binding in~$\Gamma$ must be consumed exactly once to produce~$\Gamma'$, and \texttt{let}-introduction imposes a freshness side condition (\texttt{ctx'.lookup name = none}) so that a name introduced by a binder does not shadow an existing binding. The framework does not use exchange freely --- \texttt{letPair} imposes $\mathit{name}_1 \neq \mathit{name}_2$ explicitly --- because mechanized linearity on \texttt{List} needs the ordering to be stable at cases-time.
+
+Types are \emph{typestate-indexed}: a participant set is a type index, not a runtime value. The type \texttt{.group\;s} means ``a linear permission handle on the participant set~$s$,'' and the type \texttt{.reduced\;s} (introduced in~\S\ref{sec:core}) means ``a linear accumulator on the participant set~$s$.'' The~$s$ is a proof-level index; it is not erased in the judgment but is erased at the hardware level, because the hardware is controlled by the participant set as a static mask, not by a runtime value. The rule that partitions a group,
+\[
+  \texttt{diverge} : \texttt{.group}\;s \vdash \texttt{.pair}\;(\texttt{.group}\;(s \mathbin{\&\&\&} \mathit{pred}))\;(\texttt{.group}\;(s \mathbin{\&\&\&} {\mathord{\sim\!\sim\!\sim}\mathit{pred}}))
+\]
+produces \emph{two} linear handles whose indices are computed from the input index and a user-supplied partition predicate. Linearity ensures that the two sub-handles live in distinct sub-computations (they cannot both be held by the same continuation). The complement relation at the type level mirrors the partition at the bit level: $(s \mathbin{\&\&\&} \mathit{pred})$ and $(s \mathbin{\&\&\&} {\mathord{\sim\!\sim\!\sim}\mathit{pred}})$ witness $\texttt{PSet.IsComplement}\;\_\;\_\;s$.
+
+\subsection{Gates}\label{sec:gates}
+
+A \emph{gate} in this paper is a side condition on a typing rule that requires a specific structural fact about the participant-set index of an operand or a conclusion. The paper uses two gates:
+
+\begin{itemize}
+  \item The \textbf{merge gate}, \texttt{PSet.IsComplement s1 s2 parent}, is a premise of any rule that combines two sub-handles on disjoint sub-sets into one handle on the parent. It is the safety-purchase point: without it, a sub-handle could escape its sub-set, and an all-participants operation applied to the escaped handle would silently access participants that had never been merged in.
+
+  \item The \textbf{extract gate}, \texttt{s = PSet.all n}, is a premise of any rule that produces a value from a handle at the full participant set. It is the reconvergence point: the handle must cover every participant, not just a sub-set of them. Divergence trees whose leaves do not cover the root are rejected by this gate on any attempt to extract a final result.
+\end{itemize}
+
+Both gates live at the \emph{rule} level; they are not implemented as runtime checks. A well-typed program passes the gates at compile time by construction, and an unsafe program fails to type-check --- typically with an error citing either an unsatisfied \IsComplement{} premise or an unsatisfied \texttt{PSet.all n} premise on the conclusion.
+
+\subsection{SIMT divergence}\label{sec:simt-divergence}
+
+A \emph{warp} is a group of SIMT lanes that execute together. A \emph{divergence} is a runtime control-flow construct under which different lanes take different branches of a conditional; lanes that do not take the current branch are masked off. A \emph{shuffle} is a warp-wide value-passing operation that requires every lane of the warp to be active; calling it inside a divergent branch is undefined behaviour on real GPUs and is a known real-world bug class (CVE-2018-6243 and related). The typestate framework represents the warp as a $\texttt{group}\;s$ with $s : \PSet\;32$, represents a divergence as a \texttt{diverge} rule application that partitions~$s$, and gates \texttt{shuffle} on $s = \texttt{PSet.all}\;32$. A shuffle inside a diverged sub-warp is untypable because the sub-warp's participant-set index is a strict sub-set of $\texttt{PSet.all}\;32$ and the extract gate is unsatisfied.
+
+\subsection{CSP protocol compliance}\label{sec:csp-protocol-compliance}
+
+A \emph{channel} in the sense of Hoare's CSP is a typed, synchronous point-to-point rendezvous between two parallel processes. A \emph{collective} over a process set is a synchronous operation that requires every process in the set to participate. In mesh hardware with static topology (the running example is a $2\times3$ grid of Forth cores with 7~bidirectional links and three-hop diameter), a collective is gated on a participant set that covers the entire mesh. The typestate framework represents the mesh as a $\texttt{group}\;s$ with $s : \PSet\;6$, represents protocol branching as a \texttt{diverge} rule application (the participant set does not actually shrink --- every core is always running --- but protocol-level case splits are modelled as set partitions for the purposes of the proof), and gates \texttt{collective} on $s = \texttt{PSet.all}\;6$. The framework is parameterised by a topology witness that constrains \texttt{send} and \texttt{recv} rules to physically adjacent tiles; the topology witness composes with but does not replace the complement gates.
+
+\subsection{Memory fences and tree reductions}\label{sec:memory-fences-and-tree-reductions}
+
+The Fence instance models a single bulk write buffer at byte granularity. $\texttt{group}\;s : \PSet\;8$ represents ``linear permission to write the bytes in~$s$,'' \texttt{write} threads the permission through a payload, and \texttt{fence} at $\texttt{PSet.all}\;8$ extracts a \texttt{.unit} barrier --- every byte has been written before the barrier commits. The Reduce instance models a tree-structured all-reduce over four leaves. It introduces a new type-family constructor \texttt{.reduced\;s} $: \PSet\;4$ that represents ``an accumulator covering the participants~$s$,'' with $\texttt{leafReduce} : \texttt{.group}\;s \to \texttt{.reduced}\;s$ as the cross-family coercion, $\texttt{combineRed} : \texttt{.reduced}\;s_1 \to \texttt{.reduced}\;s_2 \to \texttt{.reduced}\;\mathit{parent}$ as the reduction-side merge (requiring $\IsComplement\;s_1\;s_2\;\mathit{parent}$), and $\texttt{finalize} : \texttt{.reduced}\;(\texttt{PSet.all}\;4) \to \texttt{.data}$ as the extract. The Reduce instance is the only one of the four that introduces a new type-family constructor at the Level~1 generic layer --- CSP and Fence use the \texttt{.group} family (GPU uses the structurally analogous \texttt{.warp} family in its standalone \texttt{Basic.lean}), which is load-bearing for the~\S\ref{sec:core} argument about family extension.
+
+%% ============================================================
+%% 3. The Mechanization Spine
+%% ============================================================
+
+\section{The Mechanization Spine}\label{sec:spine}
+
+Three of the nine production Lean files in the \texttt{WarpTypes} namespace carry the domain-independent content that~\S\ref{sec:introduction} advertises. \texttt{Generic.lean} proves bitwise-algebraic lemmas about $\PSet\;n$ at $\forall\,n : \mathbb{N}$, without naming any expression language or typing judgment. \texttt{Core.lean} adds the family-parametric typing judgment \CoreHasType{} over a combined expression language that is the union of the Fence-specific and Reduce-specific constructors. \texttt{CoreMetatheory.lean} proves the reduction-preservation chain (substitution, progress, preservation, type safety) over \CoreHasType{}, from which Fence and Reduce inherit their metatheory corollaries. The remaining six files --- \texttt{Basic.lean}, \texttt{Csp.lean}, \texttt{Protocol.lean}, \texttt{Fence.lean}, \texttt{Reduce.lean}, and \texttt{Metatheory.lean} --- are either per-domain instances or instance-specific metatheory, and~\S\ref{sec:domains} describes them one at a time (except \texttt{Protocol.lean}, which extends the CSP instance with protocol-compliance proofs and is out of scope for this paper). This section describes the generic spine and the three asymmetries that a reader of~\S\ref{sec:introduction} would otherwise have to reconstruct from file-name conventions alone.
+
+The asymmetries are load-bearing and are named here so the per-domain descriptions in~\S\ref{sec:domains} do not have to apologise for them.
+
+\emph{First,} \texttt{Basic.lean} (the GPU instance) imports \texttt{Generic.lean} directly and does \textbf{not} go through \texttt{Core.lean}. Its mechanization pre-dates the factoring, and~\S\ref{sec:evaluation}'s caller-side cost analysis shows that a retrofit would purchase no structural saving --- GPU's per-domain theorems share no rule bodies with Fence or Reduce, so no monomorphic rule in \texttt{Basic.lean} corresponds to an instance of a parametric rule in \texttt{Core.lean}. The retrofit is still possible; it is out of scope for \emph{this paper}, not ruled out forever.
+
+\emph{Second,} \texttt{Csp.lean} also imports \texttt{Generic.lean} directly, for a different reason. Its typing judgment \texttt{CspHasType} is indexed by a \texttt{Topology n} witness that adds a physical-adjacency side condition to \texttt{send} and \texttt{recv}. The topology parameter is orthogonal to the complement-gate factoring, and an open-decision entry in the repository's \texttt{TODO.md} tracks whether a port onto an extended \texttt{Core.lean} is worth doing. A probe in \texttt{CspCoreExperiment.lean} has mechanically de-risked the port; the remaining question is prioritisation, not feasibility.
+
+\emph{Third,} the reduction metatheory --- substitution, progress, preservation, and type safety --- is stated and proved only over \texttt{Basic.lean}, not over any of Fence, Reduce, or Csp. \S\ref{sec:theorem-placement} below justifies this coverage gap rather than hiding it.
+
+\begin{table*}[t]
+\caption{The \texttt{WarpTypes} file graph. Three files (\texttt{Generic.lean}, \texttt{Core.lean}, and \texttt{CoreMetatheory.lean}) make up the generic spine; five are domain instances, one carries the GPU-specific reduction metatheory and bug witnesses, and \texttt{Protocol.lean} extends CSP with protocol-compliance proofs (out of scope for this paper). The rightmost column pins the concrete width each file commits to; ``---'' means the file is parametric in~$n$.}
+\label{fig:file-graph}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+File & Imports & Role & Width \\
+\midrule
+\texttt{Generic.lean} & \texttt{Std.Tactic.BVDecide} & Width-parametric bitwise algebra & --- \\
+\texttt{Core.lean} & \texttt{Generic} & Family-parametric typing spine & --- \\
+\texttt{CoreMetatheory.lean} & \texttt{Core} & Progress, preservation, type safety over \CoreHasType{} & --- \\
+\texttt{Basic.lean} & \texttt{Generic} & GPU domain instance (pre-Core) & $n = 32$ \\
+\texttt{Csp.lean} & \texttt{Generic} & CSP mesh instance with topology parameter & $n = 6$ \\
+\texttt{Fence.lean} & \texttt{Core}, \texttt{CoreMetatheory} & Partial-write fence instance + metatheory corollaries & $n = 8$ \\
+\texttt{Reduce.lean} & \texttt{Core}, \texttt{CoreMetatheory} & Tree all-reduce instance + metatheory corollaries & $n = 4$ \\
+\texttt{Protocol.lean} & \texttt{Csp} & CSP protocol-compliance proofs (out of scope) & $n = 6$ \\
+\texttt{Metatheory.lean} & \texttt{Basic} & GPU-specific substitution, progress, preservation, type safety, bug witnesses & $n = 32$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{\texttt{Generic.lean}: the width-parametric layer}\label{sec:generic-lean}
+
+\texttt{Generic.lean} is sixty-two lines of Lean~4. It defines $\PSet\;n := \mathit{BitVec}\;n$ as an abbreviation, the four operators \texttt{all}, \texttt{none}, \texttt{Disjoint}, and \texttt{Covers}, the two predicates \IsComplement{} and \IsComplementAll{}, and two theorems at $\forall\,n : \mathbb{N}$: \texttt{diverge\_partition\_generic}, which asserts that the pair $(s \mathbin{\&\&\&} \mathit{pred},\; s \mathbin{\&\&\&} {\mathord{\sim\!\sim\!\sim}\mathit{pred}})$ is disjoint and covers~$s$; and \texttt{complement\_symmetric\_generic}, which asserts that \IsComplementAll{} is symmetric. There is no expression language, no typing judgment, no context type, and no binding-name machinery in the file. Every domain file that needs a diverge-partition theorem re-exports the generic lemma under a domain-specific name: \texttt{Basic.lean}'s \texttt{diverge\_partition}, \texttt{Fence.lean}'s \texttt{fence\_diverge\_partition}, \texttt{Reduce.lean}'s \texttt{reduce\_diverge\_partition}, \texttt{Csp.lean}'s \texttt{csp\_diverge\_partition}, and \texttt{Core.lean}'s \texttt{core\_diverge\_partition} are all one-line wrappers over \texttt{diverge\_partition\_generic}. A single generic theorem covers five call sites.
+
+\texttt{Generic.lean}'s md5 is an explicit load-bearing invariant of the framework. \texttt{Core.lean}'s headnote records it as a postcondition: \emph{``Generic.lean is the only dependency. Its md5 must remain unchanged.''} A hash change would signal that the family-parametric layer had leaked domain-specific content into the generic layer --- exactly the regression the factoring exists to prevent. The invariant is the narrowest possible statement of ``domain-independent'': the generic layer cannot grow to accommodate a domain without changing this hash, and no file in the current artifact changes it.
+
+\subsection{\texttt{Core.lean}: the family-parametric layer}\label{sec:core-lean}
+
+\texttt{Core.lean} is 276~lines and imports only \texttt{Generic.lean}. It introduces four declarations that~\S\ref{sec:core} describes in detail: \texttt{CoreTy n} (five constructors), \texttt{CoreExpr n} (sixteen constructors, including two merge-shaped and two extract-shaped), \TyTag{} (two constructors, \texttt{deriving DecidableEq}), and the \CoreHasType{} inductive with fourteen typing-rule constructors. Twelve of the fourteen typing rules are monomorphic --- the value and variable rules, the partition rule \texttt{diverge}, the let-binding and pair suite, and the two domain-specific monomorphic rules \texttt{write} (Fence) and \texttt{leafReduce} (Reduce). The remaining two are the family-parametric \texttt{mergeFamily} and \texttt{finalizeFamily}, whose double-witness shape~\S\ref{sec:mergefamily} and~\S\ref{sec:finalizefamily} dissect.
+
+The expression language deserves one structural note here rather than in~\S\ref{sec:core}. \texttt{CoreExpr n} is the \emph{union} of the Fence and Reduce expression constructors; it contains \texttt{write}, \texttt{merge}, and \texttt{fence} (from the Fence source) alongside \texttt{leafReduce}, \texttt{combineRed}, and \texttt{finalize} (from the Reduce source), and the parametric rules dispatch over the union via the \TyTag{} enum. The alternative --- each domain defining its own expression inductive and coercing into \texttt{Core} --- does not elaborate: Lean~4 inductives are closed, and a family-parametric rule that mentions \texttt{(expr : CoreExpr n)} as a pattern variable needs a single inductive on which to state the pattern. The closed-inductive constraint is what forces the combined expression language into \texttt{Core.lean} rather than leaving it distributed across the two domain files. \S\ref{sec:core} describes the rule shapes and~\S\ref{sec:evaluation} quantifies the caller-side cost this shape imposes on downstream inversion proofs.
+
+The family-parametric rules carry their safety side conditions \emph{inline} as premises, not as stand-alone theorems. \texttt{mergeFamily} takes $\texttt{PSet.IsComplement}\;s_1\;s_2\;\mathit{parent}$ as a typing-rule premise, and \texttt{finalizeFamily} takes $\CoreHasType\;\mathit{ctx}\;e\;(\texttt{tagToTy}\;\mathit{tag}\;(\texttt{PSet.all}\;n))\;\mathit{ctx'}$ as a typing-rule premise --- so any well-typed use has already discharged the safety cost at elaboration time. \texttt{Core.lean} contains no theorem named \texttt{merge\_requires\_complement} or \texttt{finalize\_requires\_all}; the per-domain files state analogous theorems after specialising the tag and the width, and~\S\ref{sec:domains} shows the resulting shapes.
+
+\subsection{Theorem placement across the layers}\label{sec:theorem-placement}
+
+The metatheory follows the standard Wright--Felleisen~\cite{wright:ic:1994} approach: progress and preservation are proved independently, and type safety is their standard corollary (induction over multi-step reduction). The generic-versus-domain split in the file graph has a counterpart at the theorem level. Table~\ref{fig:theorem-placement} tallies which theorem classes live at which layer, which are stated parametrically in~$n$, and which carry untypability proofs for a real-world bug class.
+
+\begin{table*}[t]
+\caption{Theorem placement by layer. ``Width'' is the~$n$ each theorem commits to; ``$\forall\,n$?'' is whether the theorem is stated parametrically; ``Bug witness?'' is whether the layer carries an untypability proof of a real-world bug class.}
+\label{fig:theorem-placement}
+\small
+\begin{tabular}{@{}lllcc@{}}
+\toprule
+Theorem class & Lives in & Width & $\forall\,n$? & Bug witness? \\
+\midrule
+Bitwise algebra (disjoint / cover / symmetry) & \texttt{Generic.lean} & abstract & \checkmark & \\
+Diverge partition (generic) & \texttt{Generic.lean} & abstract & \checkmark & \\
+Diverge partition (domain re-export) & per-domain files & abstract\textsuperscript{1} & \checkmark & \\
+\texttt{*\_requires\_all} extract-gate inversion & per-domain files & concrete & & \\
+Concrete complement instances (e.g.\ \texttt{nibble\_complement}) & per-domain files & concrete & & \\
+Per-domain untypability witnesses & per-domain files & concrete & & \checkmark \\
+Substitution, progress, preservation, type safety (GPU) & \texttt{Metatheory.lean} & $n = 32$\textsuperscript{2} & \checkmark & \checkmark \\
+Substitution, progress, preservation, type safety (Fence / Reduce) & \texttt{CoreMetatheory.lean} & abstract\textsuperscript{3} & \checkmark & \\
+CVE-class real-world bug witnesses (GPU) & \texttt{Metatheory.lean} & $n = 32$ & & \checkmark \\
+\bottomrule
+\end{tabular}
+
+\medskip
+\noindent\textsuperscript{1} \textit{\texttt{Fence}, \texttt{Reduce}, and \texttt{Csp} each state their own \texttt{diverge\_partition} as a one-line re-export of the \texttt{Generic} theorem, and the re-export's conclusion is stated at $\forall\,n$ even though the file as a whole pins a concrete width at the domain type-alias level.}\\
+\noindent\textsuperscript{2} \textit{\texttt{Metatheory.lean} imports \texttt{Basic.lean}, which pins $n = 32$ at the file level via \texttt{ActiveSet := PSet 32}, but the bodies of \texttt{progress}, \texttt{preservation}, and \texttt{type\_safety} are stated parametrically in \texttt{\{n : Nat\}}. The concrete width is only load-bearing for the bug-witness row below, which exercises $n = 32$-specific NVIDIA warp semantics.}\\
+\noindent\textsuperscript{3} \textit{\texttt{CoreMetatheory.lean} proves \texttt{progress}, \texttt{preservation}, and \texttt{type\_safety} parametrically in the participant-set width~$n$, and Fence and Reduce obtain the corresponding theorems at their concrete widths ($n = 8$ and $n = 4$ respectively) via one-line specialisations \texttt{fence\_progress := CoreMetatheory.progress\_closed}, \texttt{fence\_preservation := CoreMetatheory.preservation}, \texttt{fence\_type\_safety := CoreMetatheory.type\_safety}, and the same three for Reduce.}
+\end{table*}
+
+Three rows pin concrete widths in Table~\ref{fig:theorem-placement}. Two of them are \texttt{Metatheory.lean} --- the GPU-specific reduction-preservation chain for \texttt{Basic.lean}, 1019~lines, with \texttt{value\_preserves\_ctx}, canonical-forms lemmas \texttt{canonical\_warp}, \texttt{canonical\_perLane}, and \texttt{canonical\_pair}, \texttt{progress}, the context-manipulation lemmas (\texttt{remove\_lookup\_self}, \texttt{remove\_cons\_ne}, \texttt{remove\_comm}, and the rest), \texttt{subst\_typing}, \texttt{subst\_preserves\_typing}, \texttt{preservation}, \texttt{type\_safety}, and five bug-class untypability witnesses named after the real-world bugs they model: \texttt{bug1\_cuda\_samples\_398}, \texttt{bug2\_cccl\_854}, \texttt{bug3\_picongpu\_2514}, \texttt{bug4\_llvm\_155682}, and \texttt{bug5\_shuffle\_after\_diverge}. Their width fix to $n = 32$ is load-bearing only for the bug witnesses, which exercise concrete NVIDIA warp semantics; the underlying progress and preservation proofs are width-parametric in their body. The third concrete row --- Csp's per-domain inversion and bug witnesses --- is unchanged from the original per-domain concrete-width pattern.
+
+The remaining row is new in this work. \texttt{CoreMetatheory.lean} mechanizes the full reduction-preservation chain --- \texttt{isValue}, \texttt{subst}, \texttt{Step}, the context-infrastructure lemmas, canonical forms, \texttt{value\_preserves\_ctx}, \texttt{subst\_typing}, \texttt{subst\_preserves\_typing}, \texttt{progress} (with a \texttt{progress\_closed} wrapper for the empty-context form), \texttt{preservation}, and \texttt{type\_safety} --- over \CoreHasType{}, the family-parametric typing judgment from \texttt{Core.lean}. Fence and Reduce inherit all three corollaries (\texttt{\_progress}, \texttt{\_preservation}, \texttt{\_type\_safety}) via one-line specialisations at their concrete widths. No per-domain proof content: the corollaries are one-line \texttt{theorem} term aliases whose bodies are \texttt{CoreMetatheory.progress\_closed}, \texttt{CoreMetatheory.preservation}, and \texttt{CoreMetatheory.type\_safety} applied at the domain-fixed width (\texttt{ByteBuf = PSet 8} for Fence, \texttt{Col = PSet 4} for Reduce). The factoring's second-order benefit is now visible at the theorem level: the ${\sim}1000$~lines of reduction-preservation infrastructure that \texttt{Metatheory.lean} spends on GPU alone is replaced, for Fence and Reduce, by ${\sim}1300$~lines of shared proof in \texttt{CoreMetatheory.lean} plus six one-liner corollaries across the two domain files.
+
+The uniform depth of coverage is new. Before this factoring the paper had to either reproduce the reduction metatheory for each of Fence, Reduce, and Csp (tripling the proof cost) or honestly disclose the asymmetry (only GPU has progress / preservation). The family-parametric \CoreHasType{} judgment makes a third option available: prove reduction metatheory once over the generic core and inherit it at every domain instance that ports onto \texttt{Core.lean}. Fence and Reduce port; Csp does not (its topology parameter is orthogonal to the complement-gate factoring, as~\S\ref{sec:spine} discusses), and Csp therefore retains its per-domain inversion-only depth. GPU, pre-dating the factoring, keeps its full standalone \texttt{Metatheory.lean} and the five CVE-class bug witnesses that exercise $n = 32$-specific NVIDIA warp semantics.
+
+A future revision of~\S\ref{sec:core} and~\S\ref{sec:evaluation} will quote the preservation proofs for \texttt{mergeFamily} and \texttt{combineRedVal} specifically as instances of the gate doing metatheoretic work. \texttt{combineRedVal}'s preservation case unpacks \texttt{PSet.IsComplement}'s \texttt{Covers} clause (the conjunct saying $s_1 \mathbin{|||} s_2 = \mathit{parent}$) via \texttt{have \ensuremath{\langle}\_,\,hcov\ensuremath{\rangle} := hcomp; unfold PSet.Covers at hcov; rw [hcov]}, and uses that equality to rebuild the reduced form's type. The \texttt{Covers} conjunct is not only a typing precondition --- it is the computational fact that the reduction step relies on. This is a subtle but load-bearing statement: the gate's two conjuncts each do their own kind of work --- disjointness prevents double-writes at typing time, covering prevents partial-writes at reduction time. The dual-conjunct pattern was first established in \texttt{Metatheory.lean}'s GPU \texttt{mergeVal} preservation case, which uses the same three-tactic sequence; \texttt{CoreMetatheory.lean} inherits the pattern at the family-parametric layer and extends it uniformly to both \texttt{mergeFamily} and \texttt{combineRedVal}. The design choice that makes this visible is the canonical-form decision for \texttt{.reduced\;s}: under the option-(a) scheme that the project's mechanization adopts, the canonical value is \texttt{.leafReduce (.groupVal s)}, not a dedicated \texttt{.reducedVal\;s} constructor, and the resulting reduction rule for \texttt{combineRed} has to walk through its arguments' underlying \texttt{.groupVal} spines and OR their participant sets --- exposing the \texttt{Covers} residual at the operational-semantics level. \S\ref{sec:conservative-extension} describes the design decision in detail; the current subsection records that the decision earned its keep in \texttt{CoreMetatheory.lean}'s preservation proof.
+
+The remaining asymmetry is real but narrower than the pre-factoring version. Csp does not port onto \texttt{Core.lean} because of its topology parameter (see~\S\ref{sec:core-lean} and the \texttt{CspCoreExperiment.lean} E-probe result), and it therefore carries no reduction metatheory of its own. GPU carries its full standalone \texttt{Metatheory.lean}, pre-dating the factoring; retrofitting \texttt{Basic.lean} onto \texttt{Core.lean} is a structurally possible but out-of-scope task that~\S\ref{sec:conclusion} marks as future work. The two asymmetries are no longer the headline disclosure of this subsection --- they are edges of an otherwise uniform coverage table where three of the four domains have full-depth reduction metatheory (GPU directly via \texttt{Metatheory.lean}, Fence and Reduce via \texttt{CoreMetatheory.lean} specialisation).
+
+%% ============================================================
+%% 4. Domain Instances
+%% ============================================================
+
+\section{Domain Instances}\label{sec:domains}
+
+Each of the four domain instances specialises the generic framework with (i)~a concrete participant-set width~$n$, (ii)~a set of domain-specific expression constructors and typing rules, and (iii)~a set of domain theorems --- including the untypability of at least one real-world bug class. This section presents the instances in the order they appear in Table~\ref{fig:witnesses} (GPU, CSP, Fence, Reduce), with each subsection following the same structure: domain model, type-system instantiation, per-domain theorems, and at least one untypability witness for a real or representative bug class.
+
+\subsection{GPU divergence (\texttt{Basic.lean} + \texttt{Metatheory.lean})}\label{sec:gpu-divergence}
+
+The GPU instance is the origin of the framework and the most fully developed domain. \texttt{ActiveSet := PSet 32} pins one bit per lane of an NVIDIA warp. The expression language (\texttt{Expr n}) has 16~constructors: value forms for warps, per-lane data, and unit; a linear variable; \texttt{diverge}, \texttt{merge}, and \texttt{shuffle} as the three warp-collective operations; \texttt{let}, pair introduction and both projections; \texttt{letPair} for linear pair elimination; and four loop forms (\texttt{loopUniform}, \texttt{loopVarying}, \texttt{loopPhased}, \texttt{loopConvergent}) that track the warp handle through iterative control flow. The typing judgment \texttt{HasType} carries 16~rules (one per expression form), of which \texttt{diverge}, \texttt{merge}, and \texttt{shuffle} are the three that exercise the gates:
+
+\begin{itemize}
+  \item \texttt{diverge} takes a warp handle of type \texttt{.warp\;s} and a predicate $\mathit{pred} : \PSet\;n$, and produces a pair $(\texttt{.warp}\;(s \mathbin{\&\&\&} \mathit{pred}),\; \texttt{.warp}\;(s \mathbin{\&\&\&} {\mathord{\sim\!\sim\!\sim}\mathit{pred}}))$. No complement gate here --- every partition is valid.
+  \item \texttt{merge} takes two warp handles of types \texttt{.warp\;$s_1$} and \texttt{.warp\;$s_2$}, requires $\texttt{PSet.IsComplement}\;s_1\;s_2\;\mathit{parent}$, and produces $\texttt{.warp}\;\mathit{parent}$. This is the merge gate.
+  \item \texttt{shuffle} takes a warp handle of type $\texttt{.warp}\;(\texttt{PSet.all}\;n)$ and per-lane data, and produces per-lane data. This is the extract gate --- it requires the full participant set.
+\end{itemize}
+
+The four loop rules handle the interaction between loops and warp handles, which is where the framework's linear discipline meets control flow. \texttt{loopUniform} threads a warp handle of type \texttt{.warp\;s} through a body that must return the same type --- the warp handle enters and exits the loop at the same participant set. \texttt{loopVarying} is the degenerate case: the body is certified \texttt{warpFree} (a syntactic predicate that rejects all warp operations), so the warp handle passes through untouched. \texttt{loopPhased} composes both: a uniform phase followed by a varying phase. \texttt{loopConvergent} is the same as \texttt{loopUniform} --- the name signals the programmer's intent that the loop converges, but the typing rule makes no convergence guarantee; it only ensures that the warp handle is not misused during iteration.
+
+\texttt{Basic.lean} imports \texttt{Generic.lean} directly (not \texttt{Core.lean}; see~\S\ref{sec:spine}) and states three per-domain theorems that re-export generic lemmas at \texttt{ActiveSet} width: \texttt{diverge\_partition} (the disjointness-and-cover property of the predicate split), \texttt{complement\_symmetric} (symmetry of \IsComplementAll{}), and \texttt{shuffle\_requires\_all} (an inversion theorem that extracts the $\texttt{PSet.all}\;n$ premise from any well-typed \texttt{shuffle} expression). Three concrete complement instances at $n = 32$ exercise the theorems against specific NVIDIA lane patterns: \texttt{even\_odd\_complement}, \texttt{lowHalf\_highHalf\_complement}, and a nested instance \texttt{evenLow\_evenHigh\_complement\_within\_even} that demonstrates diverging the even lanes further into even-low and even-high. A fifth theorem, \texttt{all\_lanes\_active}, proves that every bit of $\texttt{PSet.all}\;32$ is set --- the $\mathit{Fin}\;32$-indexed version of the top element.
+
+\texttt{Metatheory.lean} (1019~lines) provides the full reduction-preservation chain for the GPU instance: capture-avoiding substitution, small-step reduction (\texttt{Step}), canonical forms (\texttt{canonical\_warp}, \texttt{canonical\_perLane}, \texttt{canonical\_pair}), context-manipulation lemmas, \texttt{progress}, \texttt{preservation}, and \texttt{type\_safety}. The metatheory is stated parametrically in \texttt{\{n : Nat\}} in the proof bodies but imports \texttt{Basic.lean} at $n = 32$ for the bug witnesses.
+
+Five untypability theorems model real GPU bugs at $n = 32$:
+
+\begin{itemize}
+  \item \texttt{bug1\_cuda\_samples\_398}: shuffle after extracting lane~0 from a diverged warp ($\texttt{PSet.all}\;32 \mathbin{\&\&\&} \texttt{0x1} = \texttt{0x1} \neq \texttt{PSet.all}\;32$). Models NVIDIA cuda-samples issue \#398.
+  \item \texttt{bug2\_cccl\_854}: shuffle on a 16-lane sub-warp ($\texttt{PSet.all}\;32 \mathbin{\&\&\&} \texttt{0xFFFF} = \texttt{0xFFFF} \neq \texttt{PSet.all}\;32$). Models the CUB/CCCL issue \#854 pattern.
+  \item \texttt{bug3\_picongpu\_2514}: ballot (modeled as shuffle) on a diverged subset. Models the PIConGPU plasma physics simulation issue \#2514, where undefined behavior persisted undetected for months on pre-Volta hardware.
+  \item \texttt{bug4\_llvm\_155682}: shuffle after a lane-0 conditional. Models the LLVM issue \#155682 pattern.
+  \item \texttt{bug5\_shuffle\_after\_diverge}: shuffle after even/odd divergence ($\texttt{PSet.all}\;32 \mathbin{\&\&\&} \texttt{ActiveSet.even} \neq \texttt{PSet.all}\;32$). A synthetic instance that exercises the even-lane pattern.
+\end{itemize}
+
+All five are one-line applications of \texttt{shuffle\_diverged\_untypable}, which is itself a composition of \texttt{shuffle\_requires\_all} with a helper that walks the nested expression through \texttt{fst}, \texttt{diverge}, and \texttt{groupVal} --- the same helper pattern that~\S\ref{sec:evaluation} identifies as the source of the caller-side discharge cost.
+
+\subsection{CSP collective (\texttt{Csp.lean})}\label{sec:csp-collective}
+
+The CSP instance demonstrates that the same complement gate governs protocol compliance on a multi-core mesh. \texttt{TileSet := PSet 6} pins one bit per core on a $2\times3$ grid of J1 Forth processors. The expression language (\texttt{CspExpr n}) extends the core with three domain-specific constructors: \texttt{send} (point-to-point message to an adjacent, active participant), \texttt{recv} (point-to-point receive from an adjacent, active participant), and \texttt{collective} (all-to-all operation requiring the full participant set).
+
+The typing judgment \texttt{CspHasType} is indexed by a \texttt{Topology n} witness --- a structure carrying a symmetric, irreflexive adjacency predicate $\mathit{adj} : \mathit{Fin}\;n \to \mathit{Fin}\;n \to \mathit{Bool}$. The topology parameter is orthogonal to the complement-gate factoring (see~\S\ref{sec:spine}) and constrains \texttt{send} and \texttt{recv} with two additional premises each: the destination (or source) must be \emph{active} in the current participant set (\texttt{s.getLsbD dst.val = true}) and must be \emph{adjacent} in the topology (\texttt{topo.adj self dst = true}). The \texttt{collective} rule carries the same extract gate as GPU's \texttt{shuffle}: it requires $\texttt{.group}\;(\texttt{PSet.all}\;n)$.
+
+The concrete topology instance is \texttt{j1Grid : Topology 6}, a $2\times3$ grid with 7~bidirectional links and 3-hop diameter, modeling the physical layout of 6 Super-J1 cores. Two concrete complement instances --- \texttt{leftCol\_rightCol\_complement} (left column vs.\ right column) and \texttt{topRow\_bottomRow\_complement\_within} (top row vs.\ bottom row within their union) --- exercise the same \IsComplement{} / \IsComplementAll{} predicates as the GPU domain.
+
+The per-domain theorem stack for CSP includes four inversion and soundness theorems, two concrete untypability witnesses, and one positive typability instance:
+
+\begin{itemize}
+  \item \texttt{csp\_diverge\_partition}: re-export of the generic diverge partition lemma.
+  \item \texttt{csp\_collective\_requires\_all}: inversion theorem extracting the $\texttt{PSet.all}\;n$ premise from any well-typed \texttt{collective} expression. Structurally identical to \texttt{shuffle\_requires\_all}.
+  \item \texttt{csp\_send\_requires\_adjacent}: inversion theorem extracting the topology adjacency premise from any well-typed \texttt{send}.
+  \item \texttt{csp\_send\_requires\_active}: inversion theorem extracting the participant-set activity premise from any well-typed \texttt{send}.
+  \item \texttt{collective\_after\_diverge\_untypable}: the CSP analog of \texttt{shuffle\_diverged\_untypable} --- collective on a diverged sub-group is untypable when the sub-group does not cover all participants. Same proof structure as the GPU version.
+  \item \texttt{j1\_send\_opposite\_corners\_untypable} and \texttt{j1\_send\_diagonal\_untypable}: concrete untypability witnesses at $n = 6$ on the J1 grid. Sending from core~0 to core~5 (opposite corners, 3~hops) and from core~0 to core~3 (diagonal, 2~hops) are both untypable because neither pair is adjacent.
+\end{itemize}
+
+A positive instance, \texttt{j1\_send\_adjacent\_typable}, demonstrates that sending from core~0 to the adjacent core~1 \emph{is} well-typed. The presence of both positive and negative instances for the topology constraint --- in addition to the positive and negative instances for the complement gate --- is what makes the CSP domain more than a rename of the GPU domain: the topology parameter adds an orthogonal axis of safety that the generic framework does not subsume but composes cleanly with.
+
+\subsection{Partial-write fence (\texttt{Fence.lean})}\label{sec:partial-write-fence}
+
+The Fence instance models a single bulk-write buffer at byte granularity. \texttt{ByteBuf := PSet 8} pins one bit per byte of a word-sized buffer. The domain interpretation is: \texttt{.group\;s} is a linear permission to write exactly the bytes in~$s$; \texttt{diverge} splits a permission by predicate; \texttt{merge} recombines complementary sub-permissions (the merge gate); \texttt{write} threads a permission through a payload (consuming and returning the same \texttt{.group\;s}); and \texttt{fence} is a barrier that requires the full-buffer permission $\texttt{.group}\;(\texttt{PSet.all}\;8)$.
+
+Fence is one of the two domains ported onto the generic \texttt{Core.lean} spine~(\S\ref{sec:core}). Post-port, \texttt{Fence.lean} is a thin domain view: the typing rules are inherited from \CoreHasType{}, with \texttt{merge} subsumed by \texttt{mergeFamily} at tag \texttt{.group} and \texttt{fence} subsumed by \texttt{finalizeFamily} at tag \texttt{.group}. The \texttt{write} rule is a monomorphic constructor in \CoreHasType{} that does not participate in the parametric factoring --- it threads the permission handle linearly but does not exercise either gate.
+
+Four per-domain theorems:
+
+\begin{itemize}
+  \item \texttt{fence\_diverge\_partition}: re-export of the generic diverge partition via \texttt{core\_diverge\_partition}.
+  \item \texttt{fence\_requires\_all}: inversion theorem extracting the $\texttt{PSet.all}\;n$ premise from any well-typed \texttt{fence} expression. This is the first theorem that exercises the~\S\ref{sec:core} double-witness inversion pattern: the proof cases on \CoreHasType{}, encounters the two surviving parametric branches (\texttt{mergeFamily} and \texttt{finalizeFamily}), cases on \texttt{tag}, and closes the dead branches by constructor-clash contradiction.
+  \item \texttt{fence\_after\_partial\_write\_untypable}: fencing after writing only a proper sub-region of the buffer is untypable. Same proof shape as the GPU and CSP untypability witnesses.
+  \item \texttt{fence\_after\_full\_write\_typable}: writing the low nibble, writing the high nibble, merging the permissions via \texttt{nibble\_complement : PSet.IsComplementAll ByteBuf.lowNibble ByteBuf.highNibble}, and fencing is well-typed. This positive instance exercises both \texttt{mergeFamily} and \texttt{finalizeFamily} at tag \texttt{.group} in a single derivation.
+\end{itemize}
+
+Three metatheory corollaries --- \texttt{fence\_progress}, \texttt{fence\_preservation}, \texttt{fence\_type\_safety} --- are one-line specialisations of the corresponding \texttt{CoreMetatheory} theorems at $n = 8$. They are the payoff of the~\S\ref{sec:theorem-placement} factoring: Fence inherits full-depth reduction metatheory without any Fence-specific proof content.
+
+\subsection{Tree all-reduce (\texttt{Reduce.lean})}\label{sec:tree-all-reduce}
+
+The Reduce instance models a tree-structured all-reduce over four participants. \texttt{Col := PSet 4} is the smallest halving width with a non-trivial intermediate step. Reduce introduces a new type-family constructor \texttt{.reduced\;s} --- the accumulator type --- alongside the \texttt{.group\;s} constructor shared by CSP and Fence (and the structurally analogous \texttt{.warp\;s} in the GPU instance). The \texttt{leafReduce} rule is a cross-family coercion: it takes a \texttt{.group\;s} handle and produces a \texttt{.reduced\;s} accumulator. The \texttt{combineRed} rule is subsumed by \texttt{mergeFamily} at tag \texttt{.reduced}: it takes two accumulators of types $\texttt{.reduced}\;s_1$ and $\texttt{.reduced}\;s_2$, requires $\texttt{PSet.IsComplement}\;s_1\;s_2\;\mathit{parent}$, and produces $\texttt{.reduced}\;\mathit{parent}$. The \texttt{finalize} rule is subsumed by \texttt{finalizeFamily} at tag \texttt{.reduced}: it requires $\texttt{.reduced}\;(\texttt{PSet.all}\;n)$ and produces \texttt{.data}.
+
+The \texttt{.reduced} type family is the architectural contribution of the Reduce instance~(\S\ref{sec:conservative-extension}). It is the only constructor that extends the \texttt{CoreTy} inductive beyond the four constructors shared by the other Core-based domains (\texttt{.group}, \texttt{.data}, \texttt{.unit}, \texttt{.pair}). The extension is a \emph{type-family} extension in the~\S\ref{sec:conservative-extension} taxonomy --- cheap, requiring only a \TyTag{} constructor and four dispatcher clauses --- not a \emph{rule} extension, which would require re-verification of existing inversion theorems.
+
+Four per-domain theorems, mirroring Fence's:
+
+\begin{itemize}
+  \item \texttt{reduce\_diverge\_partition}: re-export of the generic diverge partition.
+  \item \texttt{finalize\_requires\_all}: inversion theorem extracting the $\texttt{PSet.all}\;n$ premise from any well-typed \texttt{finalize} expression. Mirror of \texttt{fence\_requires\_all} at tag \texttt{.reduced} --- the live branch is now \texttt{.reduced} and the dead branch is \texttt{.group}, with the constructor-clash contradiction running in the opposite direction.
+  \item \texttt{finalize\_after\_partial\_reduce\_untypable}: finalizing after a leaf reduction on a proper sub-group is untypable.
+  \item \texttt{finalize\_tree\_reduce\_typable}: leaf-reducing the low half, leaf-reducing the high half, combining via \texttt{halfway\_complement : PSet.IsComplementAll Col.lowHalf Col.highHalf}, and finalizing is well-typed. This positive instance exercises \texttt{mergeFamily} and \texttt{finalizeFamily} at tag \texttt{.reduced}, completing the four-row table of Table~\ref{fig:witnesses}.
+\end{itemize}
+
+Three metatheory corollaries --- \texttt{reduce\_progress}, \texttt{reduce\_preservation}, \texttt{reduce\_type\_safety} --- are one-line specialisations of \texttt{CoreMetatheory} at $n = 4$, paralleling Fence's corollaries.
+
+%% ============================================================
+%% 5. The Generic Core: Core.lean
+%% ============================================================
+
+\section{The Generic Core: \texttt{Core.lean}}\label{sec:core}
+
+Level~2c (Fence) and Level~2d (Reduce) arrive at very nearly the same typing judgment. Fence's \texttt{merge} rule combines two \texttt{.group} handles into one; Reduce's \texttt{combineRed} rule combines two \texttt{.reduced} handles into one. Apart from the type-family constructor (\texttt{.group} vs.\ \texttt{.reduced}) and the expression-constructor name (\texttt{merge} vs.\ \texttt{combineRed}), the two rules are byte-identical. Fence's \texttt{fence\_requires\_all} inversion is line-for-line identical to Reduce's \texttt{finalize\_requires\_all} under the same substitution. The same duplication pattern holds between the value-side and the extract-side: Fence's \texttt{fence} returns \texttt{.unit}, Reduce's \texttt{finalize} returns \texttt{.data}, and the remaining structure is the same.
+
+This section factors both duplications into a single generic judgment, \CoreHasType{}, whose parametric rules \texttt{mergeFamily} and \texttt{finalizeFamily} subsume the four domain-specific rules. The factoring lives in \texttt{lean/WarpTypes/Core.lean} and was introduced as Experiment~D of the project.\footnote{The \texttt{Core.lean} factoring and the two port commits are \texttt{bfbb4d272}~$\to$~\texttt{1802039df} in the \texttt{warp-types} repository. No further commit hashes appear inline; the per-file lemma locations are sufficient for reviewer reproducibility.} Fence and Reduce are ported onto it; Csp is not (its topology parameter is orthogonal to the factoring --- see~\S\ref{sec:spine}) and GPU is not (its mechanization pre-dates the generic core). The four-row table of Table~\ref{fig:witnesses} is satisfied by the \emph{domain theorems}, not by the rule shapes --- a rule that is monomorphic in one domain can be an instance of a parametric rule in another, and the four domains still share the same gates.
+
+\subsection{Starting point: the duplication}\label{sec:starting-point}
+
+The Level~2c and Level~2d files share nine typing rules (value, variable, diverge, letBind, pairVal, fstE, sndE, letPairE, letBind-body-scope) that differ only by a type-family rename. They share a tenth and eleventh rule --- the merge and the extract --- that also differ only by a type-family rename, plus a constructor rename on the expression side. The total shared structural material is roughly 170~lines of Lean~4 across the two files. The merge rule and the extract rule are the two load-bearing duplications: every other shared rule is syntactic, but these two carry the complement gate and the participant-set extraction gate respectively, and the duplication would repeat once per domain at any larger scale unless it is factored.
+
+\subsection{The family-parametric target}\label{sec:family-parametric-target}
+
+The target rule has the informal shape
+
+\begin{lstlisting}
+mergeFamily (F : PSet n → Ty n) (mkMerge : Expr n → Expr n → Expr n) :
+    HasType ctx e1 (F s1) ctx'  →
+    HasType ctx' e2 (F s2) ctx''  →
+    IsComplement s1 s2 parent  →
+    HasType ctx (mkMerge e1 e2) (F parent) ctx''
+\end{lstlisting}
+
+for any $\PSet\;n$-indexed type constructor~$F$ and any binary expression constructor \texttt{mkMerge}. The rule is parametric in both arguments, and instantiating it at \texttt{(.group, .merge)} recovers the Fence merge while instantiating it at \texttt{(.reduced, .combineRed)} recovers the Reduce merge. A naive encoding that takes~$F$ and \texttt{mkMerge} as function-valued parameters of the inductive does not elaborate: the higher-order pattern unification the \texttt{cases} tactic attempts at the inversion site is stuck on the function-valued parameter, and the unification cannot be discharged by any elaborator hint. An encoding that replaces the functions with a first-order \TyTag{} enum and \texttt{@[reducible]} dispatcher definitions does elaborate at construction time but not at inversion time. The working encoding uses the tag-plus-dispatcher pattern \emph{with an explicit equality witness} on every dispatched field of the conclusion, which removes the stuck unification from the \texttt{cases}-site unifier and defers it to the post-cases rewriting layer where \texttt{simp only [dispatcher]} can reduce it eagerly.
+
+\subsection{Tag and dispatchers}\label{sec:tag-and-dispatchers}
+
+The tag is a first-order enum (no function-valued fields, no indices):
+
+\begin{lstlisting}
+inductive TyTag
+  | group
+  | reduced
+  deriving DecidableEq
+\end{lstlisting}
+
+Four dispatcher definitions map the tag to its type-family constructor, its merge-expression constructor, its extract-expression constructor, and its extract result type. All four are \texttt{@[reducible]} so that \texttt{simp} can unfold them at any use site without an explicit lemma:
+
+\begin{figure}[t]
+\begin{lstlisting}
+@[reducible]
+def tagToTy {n : Nat} : TyTag → PSet n → CoreTy n
+  | .group,   s => .group s
+  | .reduced, s => .reduced s
+
+@[reducible]
+def tagToMergeExpr {n : Nat} : TyTag → CoreExpr n → CoreExpr n → CoreExpr n
+  | .group,   e1, e2 => .merge e1 e2
+  | .reduced, e1, e2 => .combineRed e1 e2
+
+@[reducible]
+def tagToFinalExpr {n : Nat} : TyTag → CoreExpr n → CoreExpr n
+  | .group,   e => .fence e
+  | .reduced, e => .finalize e
+
+@[reducible]
+def tagToFinalTy {n : Nat} : TyTag → CoreTy n
+  | .group   => .unit
+  | .reduced => .data
+\end{lstlisting}
+\caption{Tag dispatchers. Four \texttt{@[reducible]} pattern-matching definitions are the family-selection machinery of the core. Adding a third type family means adding one constructor to \TyTag{}, one clause to each of the four dispatchers, and one constructor to \texttt{CoreTy} --- no new rules are needed in the typing judgment.}
+\label{fig:dispatchers}
+\end{figure}
+
+The \texttt{tagToFinalTy} dispatcher captures the one asymmetry across the four-witness table: Fence's extract is a barrier (\texttt{.unit}), Reduce's extract is an extracted value (\texttt{.data}), and the merge gate is agnostic to the distinction. A generic \texttt{finalize} rule that ignored the asymmetry would either commit to one of the two return types (and fail to subsume the other) or erase the return type entirely (and lose type-directed elaboration downstream). The dispatcher resolves the asymmetry at compile time; callers see no residual complexity.
+
+\subsection{The \texttt{mergeFamily} rule}\label{sec:mergefamily}
+
+The parametric merge rule is the central technical artefact of the factoring. It takes the tag, the context triple, the three expressions involved (two operands and the conclusion), the three participant sets (two operands and the parent), the conclusion type, and a \emph{pair} of equality witnesses:
+
+\begin{figure}[t]
+\begin{lstlisting}
+| mergeFamily (tag : TyTag)
+    (ctx ctx' ctx'' : CoreCtx n) (e1 e2 expr : CoreExpr n)
+    (s1 s2 parent : PSet n) (ty : CoreTy n)
+    (hExpr : expr = tagToMergeExpr tag e1 e2)
+    (hTy : ty = tagToTy tag parent) :
+    CoreHasType ctx e1 (tagToTy tag s1) ctx' →
+    CoreHasType ctx' e2 (tagToTy tag s2) ctx'' →
+    PSet.IsComplement s1 s2 parent →
+    CoreHasType ctx expr ty ctx''
+\end{lstlisting}
+\caption{The \texttt{mergeFamily} rule. The two equality witnesses \texttt{hExpr} and \texttt{hTy} abstract the stuck dispatches on the expression form and the conclusion type. At construction time, callers pass \texttt{rfl} for both. At inversion time, \texttt{cases} unifies trivially on the abstract \texttt{expr} and \texttt{ty} variables, and \texttt{cases tag} combined with \texttt{simp only [tagToMergeExpr, tagToTy]} reduces the witnesses so the live branches close and the dead branches contradict.}
+\label{fig:mergefamily}
+\end{figure}
+
+The conclusion is $\CoreHasType\;\mathit{ctx}\;\mathit{expr}\;\mathit{ty}\;\mathit{ctx''}$, with \texttt{expr} and \texttt{ty} as abstract variables. The witnesses pin them to the dispatched forms \texttt{tagToMergeExpr tag e1 e2} and \texttt{tagToTy tag parent}. Without the witnesses the conclusion would be $\CoreHasType\;\mathit{ctx}\;(\texttt{tagToMergeExpr}\;\mathit{tag}\;e_1\;e_2)\;(\texttt{tagToTy}\;\mathit{tag}\;\mathit{parent})\;\mathit{ctx''}$, and \texttt{cases} on a hypothesis of shape $\CoreHasType\;\mathit{ctx}\;(\texttt{.merge}\;\_\;\_)\;(\texttt{.group}\;\_)\;\mathit{ctx''}$ would have to unify the concrete LHS against the dispatcher call on the RHS. The Lean~4 \texttt{cases}-site unifier is a single-shot higher-order unifier that does not unfold \texttt{@[reducible]} definitions during elimination; the dispatcher is opaque at that step, and the elimination fails. The witness variant moves the stuck term out of the conclusion and into a first-order hypothesis, which \texttt{cases} can process in the ordinary way.
+
+\subsection{The \texttt{finalizeFamily} rule}\label{sec:finalizefamily}
+
+The parametric extract rule follows the same shape, but now with witnesses on the expression form and the \emph{result type} --- because \texttt{tagToFinalTy} is also a dispatched function, not a concrete constructor:
+
+\begin{figure}[t]
+\begin{lstlisting}
+| finalizeFamily (tag : TyTag)
+    (ctx ctx' : CoreCtx n) (e expr : CoreExpr n) (resultTy : CoreTy n)
+    (hExpr : expr = tagToFinalExpr tag e)
+    (hTy : resultTy = tagToFinalTy tag) :
+    CoreHasType ctx e (tagToTy tag (PSet.all n)) ctx' →
+    CoreHasType ctx expr resultTy ctx'
+\end{lstlisting}
+\caption{The \texttt{finalizeFamily} rule. The \texttt{hTy} witness on the result type is where this rule diverges from the single-witness pattern documented for simpler parametric rules. Because \texttt{tagToFinalTy tag} is stuck at cases-site unification in the same way \texttt{tagToMergeExpr tag \_ \_} is, the result type needs its own abstraction-and-witness pair, not just the expression.}
+\label{fig:finalizefamily}
+\end{figure}
+
+The extract gate $\texttt{PSet.all}\;n$ lives on the premise, not the conclusion: the rule demands that the handle-side judgment be about a full participant set, and it returns whatever \texttt{tagToFinalTy tag} dispatches to. Fence instantiates the rule at $\mathit{tag} = \texttt{.group}$, in which case $\texttt{tagToFinalExpr}\;\texttt{.group}\;e$ reduces to \texttt{.fence\;e} and $\texttt{tagToFinalTy}\;\texttt{.group}$ reduces to \texttt{.unit}. Reduce instantiates it at $\mathit{tag} = \texttt{.reduced}$, in which case the same two dispatchers reduce to \texttt{.finalize\;e} and \texttt{.data}.
+
+\subsection{Double witnesses: why both dispatches need abstraction}\label{sec:double-witnesses}
+
+A simpler version of the same pattern --- used for rules whose conclusion type is concrete --- carries a single equality witness on the expression form only. A generic \texttt{finalizeTagged} rule with a concrete output \texttt{.finalTy}, for example, needs only one abstract variable; the rule body reduces to \texttt{cases h; cases tag; simp only [tagToFinalExpr] at heq; injection heq; subst}, and the conclusion type does not participate in the \texttt{cases}-site obligation because it is already a constructor.
+
+The real \texttt{finalizeFamily} rule returns \texttt{resultTy}, not a concrete constructor, because the fence/reduce return-type asymmetry forces the result type through \texttt{tagToFinalTy}. If the result type is left stuck in the conclusion, \texttt{cases} on a hypothesis of shape $\CoreHasType\;\mathit{ctx}\;(\texttt{.fence}\;e)\;\texttt{.unit}\;\mathit{ctx'}$ hits the dispatcher on the right-hand side and fails the same way the expression-side version fails --- the stuck dispatch appears at the cases-site whether it is in an expression position or a type position. Pinning the result type to an abstract variable and pairing it with a witness $\texttt{hTy} : \mathit{resultTy} = \texttt{tagToFinalTy}\;\mathit{tag}$ lets \texttt{cases} defer the dispatch to the post-cases rewriting layer, where \texttt{cases tag} makes the tag concrete and \texttt{simp only [tagToFinalTy] at hTy} reduces the witness. The same pattern applies to \texttt{mergeFamily}, whose conclusion type is $\texttt{tagToTy}\;\mathit{tag}\;\mathit{parent}$.
+
+A rule of this shape is called \emph{double-witnessed} in this paper: it has one witness per dispatched field of the conclusion. The double-witnessed shape is strictly more general than the single-witnessed shape --- a rule with a concrete output is just a double-witnessed rule whose \texttt{hTy} witness happens to be a \texttt{rfl} on a constructor --- but the single-witnessed shape is worth documenting separately because it avoids some caller-side complexity in the cases where it applies. For any future family-parametric rule whose output type is also dispatched, the double-witnessed shape is the default.
+
+\subsection{Conservative extension, split}\label{sec:conservative-extension}
+
+The \texttt{Core.lean} factoring suggests a distinction between two kinds of ``conservative extension'' that a generic framework might admit. The first is \emph{type-family extension}: adding a new $\PSet\;n$-indexed constructor to the core type inductive, without modifying any existing typing rules. Reduce's \texttt{.reduced} constructor is this kind of extension --- it was added without perturbing any existing Fence theorem, without touching the \texttt{Generic.lean} file at all, and without requiring re-verification of any existing rule. The second is \emph{rule extension}: adding a new typing rule whose conclusion uses an existing type-family constructor. Rule extension is \emph{not} safe in general --- existing inversion theorems that case-analyse on the judgment have to cover the new rule, and the coverage is not automatic.
+
+The framework admits type-family extension cheaply and rule extension expensively. A fifth or sixth domain that is \emph{another} \texttt{.group}-based or \texttt{.reduced}-based instance costs a single \TyTag{} constructor, a single clause per dispatcher, and one additional \texttt{cases tag} branch in every existing discharge block (the 14~blocks identified in~\S\ref{sec:evaluation} would each gain one clause, but the clause closes trivially by the same constructor-clash pattern). A fifth or sixth domain that introduces a structurally novel rule shape --- say, a three-operand merge, or a rule whose side condition is not a complement witness --- costs re-verification of every existing domain theorem that case-analyses on the generic judgment. The asymmetry is not a mechanization artefact; it is a load-bearing property of \texttt{cases}-based inversion in Lean~4, and~\S\ref{sec:evaluation} quantifies it.
+
+\subsection{Post-refactor domain views}\label{sec:post-refactor}
+
+\texttt{Fence.lean} and \texttt{Reduce.lean} are ported onto \CoreHasType{} after the factoring lands. Each port keeps its concrete participant-set width (\texttt{ByteBuf = PSet 8} for Fence, \texttt{Col = PSet 4} for Reduce), its concrete complement witness (\texttt{nibble\_complement} for Fence, \texttt{halfway\_complement} for Reduce), and its per-domain theorem stack (diverge partition, inversion, negative instance, positive instance). The theorem statements are unchanged; the proofs gain the dead-branch discharge pattern documented in~\S\ref{sec:evaluation} for every nested \texttt{cases} level that walks through a concrete expression shape. No theorem in the post-port file is weaker than its pre-port counterpart; the test suite \texttt{lake build WarpTypes} is green on the four-port sequence. \texttt{Generic.lean} is untouched throughout: its md5 is invariant, and its proofs do not depend on any \texttt{Core.lean} or per-domain file.
+
+%% ============================================================
+%% 6. Evaluation
+%% ============================================================
+
+\section{Evaluation: The Caller-Side Cost of Family-Parametric Rules}\label{sec:evaluation}
+
+The~\S\ref{sec:core} refactor delivers the structural property its design aimed for --- two parametric rules subsume the six monomorphic rules that Fence and Reduce carried between them --- but the line-count consequence is counter-intuitive: the net line count across Fence, Reduce, and the new Core file is \emph{larger} after the factoring than before it. This section explains where the extra lines come from, quantifies the cost, and gives an amortization argument for when the factoring pays for itself at a fifth or sixth domain.
+
+\subsection{Where the extra lines come from}\label{sec:extra-lines}
+
+The factoring removes the duplicated rule bodies from \texttt{Fence.lean} and \texttt{Reduce.lean}, yielding the expected line-count savings on the port side. At the same time, every nested \texttt{cases} walk in the existing \texttt{Fence.lean} and \texttt{Reduce.lean} inversion theorems has to discharge the \texttt{mergeFamily} and \texttt{finalizeFamily} branches manually, at every nesting level, even at levels whose hypothesis shape trivially constructor-clashes against the parametric rule's dispatched expression.
+
+The failure mode is the elaboration-layer finding from~\S\ref{sec:mergefamily} applied to the caller side. Consider Fence's \texttt{fence\_fst\_diverge\_groupval\_type} helper, which walks \texttt{.fst (.diverge (.groupVal s) pred)} through three levels of nested \texttt{cases}. Before the factoring, Lean~4 auto-eliminates every non-\texttt{fst} rule at the outer \texttt{cases} site via constructor clash on the expression constructor. After the factoring, two parametric rules remain: \texttt{mergeFamily} and \texttt{finalizeFamily}. Their conclusions have the shape $\CoreHasType\;\mathit{ctx}\;\mathit{expr}\;\mathit{ty}\;\mathit{ctx''}$ with \texttt{expr} as a free pattern variable. When \texttt{cases} is applied to a hypothesis of shape $\CoreHasType\;[]\;(\texttt{.fst}\;(\texttt{.diverge}\;(\texttt{.groupVal}\;s)\;\mathit{pred}))\;t\;\mathit{ctx'}$, the cases-site unifier trivially solves $\mathit{expr} := \texttt{.fst}\;(\texttt{.diverge}\;(\texttt{.groupVal}\;s)\;\mathit{pred})$ --- the parametric rule's conclusion matches \emph{any} expression, because the dispatched form is hidden behind the \texttt{hExpr} witness. Both parametric branches survive the elimination even though the dispatched expressions (\texttt{tagToMergeExpr tag \_ \_} and \texttt{tagToFinalExpr tag \_}) would reduce to constructors that constructor-clash against \texttt{.fst}.
+
+The discharge pattern is mechanical and identical at every site:
+
+\begin{lstlisting}
+| mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
+  cases tag <;> (*@$\cdot$@*) simp only [tagToMergeExpr] at hExpr; cases hExpr
+| finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
+  cases tag <;> (*@$\cdot$@*) simp only [tagToFinalExpr] at hExpr; cases hExpr
+\end{lstlisting}
+
+Inside the \texttt{cases tag <;>} block, the dispatcher reduces to a concrete constructor (\texttt{.merge \_ \_} or \texttt{.combineRed \_ \_} in the merge case; \texttt{.fence \_} or \texttt{.finalize \_} in the extract case), and the equality witness \texttt{hExpr} is now of the form $\texttt{.fst}\;(\texttt{.diverge}\;\_\;\_) = \texttt{.merge}\;\_\;\_$ (or similar). This is a constructor clash, and \texttt{cases hExpr} closes the branch. The pattern is three lines in Lean~4 syntax, and \texttt{Fence.lean} and \texttt{Reduce.lean} collectively carry fourteen copies of it: three nested levels in \texttt{fence\_fst\_diverge\_groupval\_type} times two parametric rules, four nested levels in \texttt{reduce\_leaf\_fst\_diverge\_type} times two parametric rules, plus a handful of cross-rule discharges in the inversion theorems. The three-line block is mechanical but it is not free: the pre-port Fence helper was four lines, and the post-port version is twenty-two lines.
+
+\subsection{Line count, honestly}\label{sec:line-count}
+
+Table~\ref{fig:line-count} tallies the pre-port and post-port line counts across the three files that the factoring touches.
+
+\begin{table}[t]
+\caption{Line count before and after the \texttt{Core.lean} factoring. The net change is +108~lines --- the factoring makes the total corpus larger, not smaller. The structural saving is real but it does not show up in a line count, because the caller-side discharge pattern consumes more lines than the removed rule duplications freed. \emph{Note:} Pre-port and Post-port reflect the state at the port commit. The Phase~6 metatheory extension~(\S\ref{sec:theorem-placement}) subsequently added corollary specialisations and supporting imports to each domain file, bringing current line counts to 238 (\texttt{Fence.lean}) and 222 (\texttt{Reduce.lean}); the structural conclusion of this figure is unchanged.}
+\label{fig:line-count}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+File & Pre-port & Post-port & $\Delta$ & $\Delta$ rationale \\
+\midrule
+\texttt{Core.lean} (new) & --- & 276 & +276 & 14 constructors, 4 dispatchers, 12 monomorphic rules, 2 parametric rules \\
+\texttt{Fence.lean} & 271 & 209 & $-62$ & 6 rule bodies removed; 14 lines of discharge added across 4 helpers \\
+\texttt{Reduce.lean} & 302 & 196 & $-106$ & 7 rule bodies removed; 26 lines of discharge added across 5 helpers \\
+\midrule
+\textbf{Total} & \textbf{573} & \textbf{681} & \textbf{+108} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The refactor is structural, not numerical}\label{sec:structural-not-numerical}
+
+A line count is a poor measurement of the refactor's value. The structural property the factoring delivers is that adding a fifth domain which reuses the core's complement gates costs one \TyTag{} constructor, four dispatcher clauses, and a domain-specific example set --- not a fresh copy of nine monomorphic rules, a fresh merge rule, and a fresh extract rule. The pre-factor cost of a fifth domain is roughly 170~lines of copied-and-renamed typing rules; the post-factor cost is roughly 15~lines of dispatchers plus whatever the domain's own examples demand. A rough amortization: the factoring breaks even at two domains (Fence and Reduce each save ${\sim}85$~lines of rule copies, and the new Core file costs ${\sim}170$~lines, net near zero) ignoring the discharge pattern, and costs +108~lines with the discharge pattern accounted for. The factoring pays for itself at $N \geq 5$ domains on a lines-saved-per-discharge-cost basis; it pays for itself at $N \geq 3$ domains if the only metric is ``number of places a bug in the merge rule can hide,'' because after the factoring there is exactly one such place for any number of domains that reuse the core.
+
+\subsection{Why \texttt{@[reducible]} does not help}\label{sec:reducible-does-not-help}
+
+The natural first fix for the caller-side discharge cost is to make the dispatchers \texttt{@[reducible]} and hope that the \texttt{cases}-site unifier reduces the dispatcher to a concrete constructor automatically. It does not. Lean~4's \texttt{cases} tactic runs a single-shot higher-order-pattern unifier at the elimination site, and that unifier does not unfold \texttt{@[reducible]} definitions while solving its obligations. The \texttt{@[reducible]} attribute affects the \emph{post-cases} rewriting layer, where \texttt{simp}, \texttt{injection}, \texttt{subst}, and friends do unfold reducible definitions eagerly --- and that layer is exactly the one the discharge pattern uses (\texttt{simp only [tagToMergeExpr] at hExpr; cases hExpr}). The two elaboration layers are distinct; \texttt{cases}-site unification is the stricter one, and the pattern has to be written in the form that the stricter layer accepts.
+
+An alternative fix would be a reflective or typeclass-based encoding of the parametric rules that eliminates the free expression variable in the conclusion. Such an encoding might, in principle, let the cases-site unifier see through the dispatcher to detect constructor clash automatically. The encoding is out of scope for this paper --- it would require re-stating the typing judgment in a different shape, and the explicit-witness pattern has the advantage of being minimal and transparent to the reader. The discharge cost is what it is, and~\S\ref{sec:scaling} gives its scaling behaviour.
+
+\subsection{Scaling to more domains}\label{sec:scaling}
+
+The discharge cost is linear in the product of nested-cases depth and parametric-rule count. Call the number of parametric rules~$M$ and the total nesting depth across all existing inversion theorems and helpers~$D$. Adding the~$M$-th parametric rule to a framework that already has~$D$ levels of nested cases costs $O(D)$ three-line discharge blocks, and these are not optional --- the port's \texttt{lake build} fails until every level is covered.
+
+In the \texttt{Core.lean} case, $M = 2$ and $D \approx 7$, yielding 14~discharges, totalling ${\sim}42$~lines of discharge after factoring. This is manageable and visible in the diff. A framework with $M = 3$ parametric rules and $D \approx 15$ nested levels (roughly, one that serves five domains instead of two) would incur ${\sim}90$~discharges and ${\sim}270$~lines. At that scale, either (a)~a custom \texttt{cases\_family} tactic that handles the pattern in one place, or (b)~a small-step inversion representation that avoids the nested-cases idiom entirely, becomes worth the investment. Neither is implemented in this work; both are identified as future work in~\S\ref{sec:conclusion}.
+
+The practical consequence for a framework author contemplating a family-parametric refactor is: count the nested \texttt{cases} levels in the existing inversion theorems before you start, multiply by the number of parametric rules you intend to introduce, and use that product as the size of the boilerplate discharge you will have to carry. In the warp-types case the product was~14, the port landed in one session, and the framework was preserved. For larger products, a tactic or a small-step encoding becomes mandatory.
+
+%% ============================================================
+%% 7. Related Work
+%% ============================================================
+
+\section{Related Work}\label{sec:related}
+
+The framework draws on three bodies of prior work: session types and linear types for process calculi, typestate and permission systems for resource tracking, and GPU correctness type systems for warp-level safety. This section positions complemented typestate relative to each and identifies the structural gap it occupies.
+
+\subsection{Session types and linear types for process calculi}\label{sec:session-types}
+
+The linearity discipline of the typing judgment --- $\Gamma \vdash e : \tau \dashv \Gamma'$, with bindings consumed exactly once --- descends from the session-type tradition originating in Honda's \emph{Types for Dyadic Interaction}~\cite{honda:concur:1993} and developed by Honda, Yoshida, and Carbone into the multiparty session type (MPST) framework~\cite{honda:popl:2008}. The Caires--Pfenning correspondence~\cite{caires:concur:2010} established a Curry--Howard link between intuitionistic linear logic and session types, showing that linear propositions correspond to process types and cut elimination corresponds to communication. Wadler's \emph{Propositions as Sessions}~\cite{wadler:icfp:2012} extended the correspondence to classical linear logic, giving a different proof-theoretic foundation for the same session-type discipline; the two correspondences are complementary, and the present framework's linear context threading is compatible with either foundation. The explicit context-threading discipline $\Gamma \vdash e : \tau \dashv \Gamma'$ used in the present framework follows the standard presentation in Walker's tutorial on substructural type systems~\cite{walker:attapl:2005} and Gay and Vasconcelos's linear type theory for asynchronous sessions~\cite{gay:jfp:2010}.
+
+The key distinction is in what linearity tracks. Session types track \emph{channel endpoints} --- a linear variable represents one end of a communication channel, and the type prescribes the sequence of send/receive operations. Complemented typestate tracks \emph{participant sets} --- a linear variable represents a permission handle on a set of participants, and the type prescribes which participants are active. The two are orthogonal: a session-typed channel could carry a complemented-typestate handle as a payload, and the CSP instance~(\S\ref{sec:csp-collective}) demonstrates that the topology-constrained \texttt{send}/\texttt{recv} rules coexist with the participant-set gates without interference. The framework does not subsume session types (it has no duality, no recursion, no subtyping on session types), and session types do not subsume the framework (they have no notion of participant-set complement at merge). Kobayashi's type systems for deadlock-free processes~\cite{kobayashi:concur:2006} are the closest point of overlap between the session-type cluster and the present work: Kobayashi tracks resource multiplicity via usage types in a way structurally closer to participant-set tracking than standard session types. The present framework does not address deadlock~(\S\ref{sec:conclusion} identifies this as a limitation), and Kobayashi's system does not address participant-set complements.
+
+Multiparty session types~\cite{honda:popl:2008,honda:jacm:2016} are the closest point of contact. MPST governs correctness of multi-party protocols by projecting a global type onto local types for each participant, with linearity ensuring that each message is consumed exactly once. The CSP instance shares the ``multiple participants, one protocol'' structure, but the complement gate --- requiring that two sub-groups cover a parent before merging --- has no MPST analog. MPST's safety comes from the projection being well-formed; complemented typestate's safety comes from the bitvector algebra being sound. The two are complementary verification strategies, not competitors.
+
+\subsection{Typestate and permission systems}\label{sec:typestate}
+
+Typestate was introduced by Strom and Yemini~\cite{strom:tse:1986} and developed into a practical type-system component by DeLine and F\"ahndrich~\cite{deline:ecoop:2004}, who applied it to resource management in Vault and later to the Fugue protocol checker. Bierhoff and Aldrich~\cite{bierhoff:oopsla:2007} extended typestate to aliased objects by introducing \emph{access permissions} --- a fine-grained ownership discipline that lets typestate checks survive in the presence of shared references. The present framework avoids the aliasing problem entirely via linearity (each handle is consumed exactly once), which is a simpler but less flexible strategy than Bierhoff--Aldrich's permission-based approach. The core idea --- types that change as operations are applied --- is the ancestor of the present framework's participant-set tracking. Each \texttt{diverge} changes the type of the warp handle from \texttt{.warp\;s} to a pair of handles at the two sub-sets; each \texttt{merge} changes the types of two sub-set handles back to a single parent handle. The participant-set index is the typestate, and the transition rules are the typing rules.
+
+Boyland's fractional permissions~\cite{boyland:sas:2003} and Bornat, Calcagno, O'Hearn, and Parkinson's permission accounting in separation logic~\cite{bornat:popl:2005} address a related problem: tracking how a resource is shared among concurrent accessors. Fractional permissions split a full permission into read shares and recombine them; complemented typestate splits a participant set into disjoint halves and recombines them. The structural parallel is suggestive but the mechanisms differ. Fractional permissions track \emph{access rights} (read vs.\ write) on a single resource; complemented typestate tracks \emph{membership} in a participant set. Fractional permissions use rational-number arithmetic (halving, summing to~1); complemented typestate uses bitvector algebra (AND, OR, complement). The two could in principle be composed --- a handle could carry both a participant set and a fractional permission --- but the present framework does not attempt the composition.
+
+Rust's ownership system (the borrow checker) is a linearity discipline applied to memory safety. The analogy to complemented typestate is structural: Rust's \texttt{\&mut T} is a linear permission to mutate, and the borrow checker ensures that at most one mutable reference exists at a time. The difference is scope: Rust tracks individual memory locations, while complemented typestate tracks sets of participants. The Fence instance~(\S\ref{sec:partial-write-fence}) is the closest point of contact --- byte-granularity write permissions are analogous to byte-granularity borrow scopes --- but the complement gate (requiring that two byte-sets cover the full buffer before a fence commits) has no Rust analog. Rust's borrow checker does not reason about set complements.
+
+\subsection{GPU correctness type systems}\label{sec:gpu-correctness}
+
+Prior work on GPU correctness has used verification rather than type systems. Betts, Chong, Donaldson, Qadeer, and Thomson~\cite{betts:oopsla:2012} introduced GPUVerify, which uses barrier invariants and two-thread reduction to verify data-race freedom and barrier-divergence freedom for GPU kernels. GPUVerify specifically addresses the barrier-divergence bug class that the Fence instance models --- its barrier invariants require all threads to reach a barrier, structurally analogous to the complement gate requiring all bytes to be written before a fence. GPUVerify and subsequent SMT-based GPU verification tools verify specific programs against specific assertions; complemented typestate rejects entire classes of programs by construction. The two approaches are complementary: SMT verification can prove properties (liveness, data-flow correctness) that a type system cannot, while the type system provides zero-cost compile-time rejection of the bug class that SMT must check at analysis time.
+
+To our knowledge, no prior type system tracks active lane masks at the type level to prevent shuffle-from-inactive-lane bugs. The GPU instance~(\S\ref{sec:gpu-divergence}) is the first type-directed approach to this bug class. The present framework goes further in two directions: the participant-set index is width-parametric ($\PSet\;n$ at arbitrary~$n$, not fixed at 32~lanes), so the same typing rules apply to AMD 64-lane wavefronts and to non-GPU domains; and the generic core~(\S\ref{sec:core}) factors the merge and extract gates into family-parametric rules, so the type system is no longer SIMT-specific.
+
+NVIDIA's own response to the shuffle-from-inactive-lane bug class was to deprecate the \texttt{\_\_shfl} API family in CUDA~9.0 and replace it with \texttt{\_\_shfl\_sync}, which takes an explicit lane mask argument. This is a run-time mitigation: the programmer supplies the mask, and the hardware trusts it. Complemented typestate is a compile-time prevention: the type system computes the mask from the divergence history, and a wrong mask is untypable. The five bug witnesses in \texttt{Metatheory.lean}~(\S\ref{sec:gpu-divergence}) model programs that would compile without error under \texttt{\_\_shfl\_sync} if the programmer supplied the wrong mask --- the type system catches them; the API change does not.
+
+\subsection{Positioning}\label{sec:positioning}
+
+Complemented typestate sits in a gap between these three traditions. It inherits linear context threading from session types, typestate transitions from the DeLine--F\"ahndrich tradition, and the specific bug-class motivation from GPU correctness work. What it contributes is the \emph{complement gate} --- a structural gate on the bitvector algebra of participant sets --- that is orthogonal to all three: session types have no notion of set complement, typestate systems have no notion of participant sets, and GPU correctness work has not previously used type-directed safety or been generalised across domains. The factoring of~\S\ref{sec:core}, which states the gate once in a family-parametric form and instantiates it at four domains, is the technical mechanism by which the generality is realised; the four domain instances of~\S\ref{sec:domains} are the evidence that the generalisation does not lose domain-specific theorem coverage.
+
+%% ============================================================
+%% 8. Conclusion
+%% ============================================================
+
+\section{Conclusion}\label{sec:conclusion}
+
+This paper presented complemented typestate, a generic type system for parallel computation whose safety is purchased at merge by requiring that two operand participant sets are complementary with respect to a parent. The framework was stated once, in a family-parametric Lean~4 core (\texttt{Core.lean}, 276~lines), and instantiated at four domains: GPU warp divergence (32~lanes), CSP mesh collectives (6~tiles with topology), partial-write fencing (8~bytes), and tree all-reduce (4~leaves). The four instances share the same two gates --- \texttt{PSet.IsComplement} at merge, \texttt{PSet.all n} at extract --- and differ only in their type-family constructor (\texttt{.warp} for GPU, \texttt{.group} for CSP and Fence, \texttt{.reduced} for Reduce), their domain-specific expression constructors, and their concrete participant-set width.
+
+The mechanization is zero-\texttt{sorry}, zero user-declared \texttt{axiom}, and verified by \texttt{lake build WarpTypes}. The four domain instances collectively carry five CVE-class GPU bug witnesses, two topology-violation witnesses for CSP, a partial-write untypability witness for Fence, a partial-reduce untypability witness for Reduce, and positive typability witnesses for all four domains. Fence and Reduce inherit full-depth reduction metatheory (progress and preservation, yielding type safety) from the generic \texttt{CoreMetatheory.lean} via one-line specialisations at their concrete widths; GPU carries its own standalone metatheory (pre-dating the factoring) with the same depth; CSP retains per-domain inversion depth without reduction metatheory, because its topology parameter is orthogonal to the factoring~(\S\ref{sec:spine}).
+
+The caller-side cost of the family-parametric factoring is real and quantified: +108~lines net, 14~discharge blocks across 7~nested-cases levels~(\S\ref{sec:evaluation}). The factoring pays for itself structurally --- adding a fifth domain costs one \TyTag{} constructor and four dispatcher clauses, not a fresh copy of the typing judgment --- but does not pay for itself numerically until 5~or more domains reuse the core on a lines-saved-per-discharge-cost basis. The honest evaluation is that the factoring is an engineering investment in extensibility, not a line-count win, and the threshold for a custom \texttt{cases\_family} tactic that would eliminate the discharge pattern entirely is roughly $M \times D \geq 30$ --- currently below threshold but reachable at a sixth or seventh domain.
+
+\paragraph{Limitations and future work.}
+The CSP instance carries a topology parameter that is orthogonal to the complement-gate factoring~(\S\ref{sec:spine},~\S\ref{sec:csp-collective}). Porting it onto \texttt{Core.lean} is mechanically de-risked by a probe in \texttt{CspCoreExperiment.lean} but out of scope for this paper. The GPU instance pre-dates the factoring and retains its standalone typing judgment and metatheory; a retrofit is structurally possible but would purchase no saving because GPU's rules share no bodies with Fence or Reduce. The metatheory covers only the reduction-preservation chain (substitution, progress, preservation, type safety); no domain instance proves deadlock freedom, termination, or liveness properties --- all three are meaningful for CSP and Reduce but are orthogonal to the participant-set safety that the complement gate provides. The loop rules in the GPU instance~(\S\ref{sec:gpu-divergence}) track warp handles through iteration but make no convergence guarantee; a refinement that distinguishes converging from non-converging loops at the type level is left as future work.
+
+%% ============================================================
+%% Bibliography
+%% ============================================================
+
+\bibliography{references}
+
+\end{document}
