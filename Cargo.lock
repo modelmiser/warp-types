@@ -71,24 +71,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "warp-types-ballot"
-version = "0.2.0"
-
-[[package]]
-name = "warp-types-bitwise"
-version = "0.2.0"
-
-[[package]]
 name = "warp-types-builder"
 version = "0.3.1"
-
-[[package]]
-name = "warp-types-divtree"
-version = "0.2.0"
-
-[[package]]
-name = "warp-types-invariant"
-version = "0.1.0"
 
 [[package]]
 name = "warp-types-kernel"
@@ -107,10 +91,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "warp-types-overflow"
-version = "0.1.0"
 
 [[package]]
 name = "warp-types-sat"

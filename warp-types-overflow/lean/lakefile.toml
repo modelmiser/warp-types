@@ -1,6 +1,0 @@
-name = "WarpTypesOverflow"
-version = "0.1.0"
-defaultTargets = ["WarpTypesOverflow"]
-
-[[lean_lib]]
-name = "WarpTypesOverflow"
