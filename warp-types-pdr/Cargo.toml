@@ -1,0 +1,21 @@
+[package]
+name = "warp-types-pdr"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chad Aldreda"]
+description = "Phase-typed Property-Directed Reachability (IC3) with compile-time phase ordering, built on warp-types-sat"
+license = "MIT"
+rust-version = "1.75"
+repository = "https://github.com/modelmiser/warp-types"
+readme = "README.md"
+keywords = ["pdr", "ic3", "model-checking", "sat", "typestate"]
+categories = ["algorithms", "science"]
+
+[[bin]]
+name = "pdr"
+path = "src/bin/pdr.rs"
+
+[dependencies]
+warp-types = { path = "..", version = "0.3.2" }
+warp-types-sat = { path = "../warp-types-sat", version = "0.3.0" }
+warp-types-bmc = { path = "../warp-types-bmc", version = "0.1.0" }

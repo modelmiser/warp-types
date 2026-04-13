@@ -101,6 +101,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp-types-pdr"
+version = "0.1.0"
+dependencies = [
+ "warp-types",
+ "warp-types-bmc",
+ "warp-types-sat",
+]
+
+[[package]]
 name = "warp-types-sat"
 version = "0.3.0"
 dependencies = [
