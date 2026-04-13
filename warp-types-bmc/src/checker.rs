@@ -6,8 +6,8 @@
 //! encode before unrolling, cannot deepen after finding a counterexample.
 
 use crate::model::TransitionSystem;
-use crate::session::{self, BmcSession};
 use crate::phase::*;
+use crate::session::{self, BmcSession};
 use crate::unroll;
 
 use warp_types_sat::solver::{solve_watched_budget, SolveResult};
@@ -16,18 +16,11 @@ use warp_types_sat::solver::{solve_watched_budget, SolveResult};
 #[derive(Debug)]
 pub enum BmcResult {
     /// Counterexample found at depth `depth`. Contains the state trace.
-    CounterexampleFound {
-        depth: u32,
-        trace: Vec<Vec<bool>>,
-    },
+    CounterexampleFound { depth: u32, trace: Vec<Vec<bool>> },
     /// No counterexample found up to `max_depth`. Bounded safety.
-    BoundedSafe {
-        max_depth: u32,
-    },
+    BoundedSafe { max_depth: u32 },
     /// SAT solver budget exhausted at depth `depth`.
-    Exhausted {
-        depth: u32,
-    },
+    Exhausted { depth: u32 },
 }
 
 /// Run bounded model checking on a transition system.
@@ -37,11 +30,7 @@ pub enum BmcResult {
 /// the correct ordering: build → unroll → encode → check → (deepen | stop).
 ///
 /// `conflict_budget` limits the SAT solver's work per depth. 0 = unlimited.
-pub fn check(
-    sys: &TransitionSystem,
-    max_depth: u32,
-    conflict_budget: u64,
-) -> BmcResult {
+pub fn check(sys: &TransitionSystem, max_depth: u32, conflict_budget: u64) -> BmcResult {
     session::with_session(|init: BmcSession<'_, Init>| {
         let modeled = init.build_model();
         let mut unrolled = modeled.unroll();
@@ -59,11 +48,7 @@ pub fn check(
             match result {
                 SolveResult::Sat(assignment) => {
                     // Counterexample found — extract trace
-                    let trace = unroll::extract_trace(
-                        &assignment,
-                        sys.num_state_vars,
-                        depth,
-                    );
+                    let trace = unroll::extract_trace(&assignment, sys.num_state_vars, depth);
                     let _cex = encoded.check_counterexample();
                     return BmcResult::CounterexampleFound { depth, trace };
                 }

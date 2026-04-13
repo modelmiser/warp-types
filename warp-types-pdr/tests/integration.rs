@@ -66,7 +66,7 @@ fn unsafe_counter() {
 fn initial_violation() {
     let mut sys = TransitionSystem::new(1);
     sys.add_initial(vec![Lit::pos(0)]); // s₀ = 1
-    // Identity
+                                        // Identity
     sys.add_transition(vec![Lit::neg(0), Lit::pos(1)]);
     sys.add_transition(vec![Lit::pos(0), Lit::neg(1)]);
     sys.add_property(vec![Lit::neg(0)]); // ¬s₀ — violated initially

@@ -266,13 +266,16 @@ impl EufSolver {
                 // Remove old signature
                 let old_sig = Signature {
                     func,
-                    arg_reprs: args.iter().map(|&a| {
-                        // What was the old representative? For args that aren't child,
-                        // their repr is unchanged. For child, old repr was child.
-                        let r = self.find(a);
-                        // find(a) now returns root if a was in child's class
-                        r
-                    }).collect(),
+                    arg_reprs: args
+                        .iter()
+                        .map(|&a| {
+                            // What was the old representative? For args that aren't child,
+                            // their repr is unchanged. For child, old repr was child.
+                            let r = self.find(a);
+                            // find(a) now returns root if a was in child's class
+                            r
+                        })
+                        .collect(),
                 };
                 // The old signature was computed with child as repr for child's class.
                 // But now find() returns root. So old_sig already has the NEW reprs.
@@ -364,10 +367,8 @@ impl EufSolver {
                 if let (
                     TermKind::Apply { args: args_a, .. },
                     TermKind::Apply { args: args_b, .. },
-                ) = (
-                    &self.term_kinds[fa.index()],
-                    &self.term_kinds[fb.index()],
-                ) {
+                ) = (&self.term_kinds[fa.index()], &self.term_kinds[fb.index()])
+                {
                     for (&ai, &bi) in args_a.iter().zip(args_b.iter()) {
                         if ai != bi {
                             self.bfs_explain(ai, bi, atoms);
@@ -377,7 +378,6 @@ impl EufSolver {
             }
         }
     }
-
 }
 
 // ============================================================================
@@ -399,8 +399,7 @@ impl TheorySolver for EufSolver {
 
         // Process new trail entries incrementally
         let entries = trail.entries();
-        for i in self.trail_pos..trail_len {
-            let entry = &entries[i];
+        for entry in entries.iter().take(trail_len).skip(self.trail_pos) {
             let var = entry.lit.var();
             let is_true = !entry.lit.is_negated();
 
@@ -408,19 +407,13 @@ impl TheorySolver for EufSolver {
             if let Some((t1, t2)) = self.atom_map.atom_for_var(var) {
                 if is_true {
                     // Equality asserted: merge t1 and t2
-                    let atom_id = self.atom_map.eq_to_atom[&if t1 <= t2 {
-                        (t1, t2)
-                    } else {
-                        (t2, t1)
-                    }];
+                    let atom_id =
+                        self.atom_map.eq_to_atom[&if t1 <= t2 { (t1, t2) } else { (t2, t1) }];
                     self.merge(t1, t2, MergeReason::Asserted(atom_id));
                 } else {
                     // Disequality asserted: record it
-                    let atom_id = self.atom_map.eq_to_atom[&if t1 <= t2 {
-                        (t1, t2)
-                    } else {
-                        (t2, t1)
-                    }];
+                    let atom_id =
+                        self.atom_map.eq_to_atom[&if t1 <= t2 { (t1, t2) } else { (t2, t1) }];
                     self.disequalities.push((t1, t2, atom_id));
                 }
             }
@@ -587,11 +580,41 @@ mod tests {
         let s = SortId(0);
         let f = FuncId(0);
 
-        let a = arena.intern(TermKind::Variable { name: "a".into(), sort: s }, s); // 0
-        let b = arena.intern(TermKind::Variable { name: "b".into(), sort: s }, s); // 1
-        let c = arena.intern(TermKind::Variable { name: "c".into(), sort: s }, s); // 2
-        let fa = arena.intern(TermKind::Apply { func: f, args: vec![a] }, s); // 3
-        let fb = arena.intern(TermKind::Apply { func: f, args: vec![b] }, s); // 4
+        let a = arena.intern(
+            TermKind::Variable {
+                name: "a".into(),
+                sort: s,
+            },
+            s,
+        ); // 0
+        let b = arena.intern(
+            TermKind::Variable {
+                name: "b".into(),
+                sort: s,
+            },
+            s,
+        ); // 1
+        let c = arena.intern(
+            TermKind::Variable {
+                name: "c".into(),
+                sort: s,
+            },
+            s,
+        ); // 2
+        let fa = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![a],
+            },
+            s,
+        ); // 3
+        let fb = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![b],
+            },
+            s,
+        ); // 4
 
         (arena, a, b, c, fa, fb)
     }

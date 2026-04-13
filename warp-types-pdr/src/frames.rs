@@ -91,9 +91,7 @@ pub struct FrameSequence {
 impl FrameSequence {
     /// Create an empty frame sequence.
     pub fn new() -> Self {
-        FrameSequence {
-            frames: Vec::new(),
-        }
+        FrameSequence { frames: Vec::new() }
     }
 
     /// Add a frame to the sequence.
@@ -109,6 +107,11 @@ impl FrameSequence {
     /// Number of frames.
     pub fn len(&self) -> usize {
         self.frames.len()
+    }
+
+    /// Whether the sequence is empty.
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
     }
 
     /// Access a frame by index.
@@ -138,12 +141,7 @@ impl FrameSequence {
         if self.frames.len() < 3 {
             return None; // Need at least F₀, F₁, F₂
         }
-        for i in 1..self.frames.len() - 1 {
-            if frames_equal(&self.frames[i], &self.frames[i + 1]) {
-                return Some(i);
-            }
-        }
-        None
+        (1..self.frames.len() - 1).find(|&i| frames_equal(&self.frames[i], &self.frames[i + 1]))
     }
 }
 

@@ -15,8 +15,8 @@
 
 use crate::cube::{shift_lit, Cube};
 use crate::frames::{Frame, FrameSequence};
-use crate::session::{self, PdrSession};
 use crate::phase::*;
+use crate::session::{self, PdrSession};
 
 use warp_types_bmc::TransitionSystem;
 use warp_types_sat::bcp::ClauseDb;
@@ -63,11 +63,7 @@ struct Obligation {
 /// - `sys`: the transition system (initial states, transitions, safety property)
 /// - `max_frames`: maximum number of frames before giving up
 /// - `conflict_budget`: SAT conflict budget per query (0 = unlimited)
-pub fn check(
-    sys: &TransitionSystem,
-    max_frames: u32,
-    conflict_budget: u64,
-) -> PdrResult {
+pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> PdrResult {
     let n = sys.num_state_vars;
 
     session::with_session(|init: PdrSession<'_, Init>| {
@@ -85,11 +81,7 @@ pub fn check(
         let mut frames = FrameSequence::new();
 
         // F₀ = initial-state clauses
-        let init_clauses: Vec<Vec<Lit>> = sys
-            .initial
-            .iter()
-            .map(|c| c.lits.clone())
-            .collect();
+        let init_clauses: Vec<Vec<Lit>> = sys.initial.iter().map(|c| c.lits.clone()).collect();
         frames.push(Frame::from_clauses(init_clauses));
 
         // F₁ = empty (will accumulate blocking clauses)
@@ -104,18 +96,16 @@ pub fn check(
                 let cti = find_cti(sys, &frames, k, conflict_budget);
                 match cti {
                     None => break, // No more CTIs — frontier is clean
-                    Some(cube) => {
-                        match block_cube(sys, &mut frames, cube, k, conflict_budget) {
-                            BlockResult::Blocked => continue,
-                            BlockResult::Counterexample(trace) => {
-                                let _cex = modeled.check_counterexample();
-                                return PdrResult::CounterexampleFound {
-                                    depth: trace.len() as u32 - 1,
-                                    trace,
-                                };
-                            }
+                    Some(cube) => match block_cube(sys, &mut frames, cube, k, conflict_budget) {
+                        BlockResult::Blocked => continue,
+                        BlockResult::Counterexample(trace) => {
+                            let _cex = modeled.check_counterexample();
+                            return PdrResult::CounterexampleFound {
+                                depth: trace.len() as u32 - 1,
+                                trace,
+                            };
                         }
-                    }
+                    },
                 }
             }
 
@@ -282,9 +272,7 @@ fn block_cube(
             // Check if cube is actually reachable from initial states
             // (i.e., is I ∧ cube SAT?)
             if is_initial_reachable(sys, &queue[min_idx].cube, conflict_budget) {
-                return BlockResult::Counterexample(
-                    reconstruct_trace(&queue, min_idx, n),
-                );
+                return BlockResult::Counterexample(reconstruct_trace(&queue, min_idx, n));
             }
             // Not actually reachable from I — remove this obligation
             queue.remove(min_idx);
@@ -344,11 +332,7 @@ fn find_min_level(queue: &[Obligation]) -> Option<usize> {
 }
 
 /// Check if a cube overlaps with the initial states.
-fn is_initial_reachable(
-    sys: &TransitionSystem,
-    cube: &Cube,
-    conflict_budget: u64,
-) -> bool {
+fn is_initial_reachable(sys: &TransitionSystem, cube: &Cube, conflict_budget: u64) -> bool {
     let n = sys.num_state_vars;
     let mut db = ClauseDb::new();
 
@@ -428,7 +412,8 @@ fn generalize(
 
         // Check: is the reduced cube still blocked?
         // i.e., is F_{level-1} ∧ T ∧ candidate' UNSAT?
-        if level > 0 && check_predecessor(sys, frames, &candidate_cube, level - 1, conflict_budget).is_none()
+        if level > 0
+            && check_predecessor(sys, frames, &candidate_cube, level - 1, conflict_budget).is_none()
         {
             // Still blocked — keep the reduction
             reduced_lits = candidate;
@@ -540,7 +525,12 @@ fn add_frame_clauses(db: &mut ClauseDb, frame: &Frame, offset: u32) {
 /// Add ¬P(s) (negated property) using Tseitin encoding.
 /// `prop_offset`: variable offset for property literals (0 for current-state, n for next-state).
 /// `tseitin_base`: first Tseitin variable index.
-fn add_negated_property(db: &mut ClauseDb, sys: &TransitionSystem, prop_offset: u32, tseitin_base: u32) {
+fn add_negated_property(
+    db: &mut ClauseDb,
+    sys: &TransitionSystem,
+    prop_offset: u32,
+    tseitin_base: u32,
+) {
     let num_tseitin = sys.property.len() as u32;
 
     // Activation clause: at least one property clause must be violated

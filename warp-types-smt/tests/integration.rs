@@ -220,10 +220,7 @@ fn disjunction_sat() {
         let declared = session.finish_declarations();
         let asserted = declared
             .assert_formula(SmtFormula::And(vec![
-                SmtFormula::Or(vec![
-                    SmtFormula::Eq(a, b),
-                    SmtFormula::Eq(c, d),
-                ]),
+                SmtFormula::Or(vec![SmtFormula::Eq(a, b), SmtFormula::Eq(c, d)]),
                 SmtFormula::Neq(fa, fb),
             ]))
             .finish_assertions();

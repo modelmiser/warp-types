@@ -168,8 +168,20 @@ mod tests {
     fn distinct_terms_get_distinct_ids() {
         let mut arena = TermArena::new();
         let s = SortId(0);
-        let a = arena.intern(TermKind::Variable { name: "a".into(), sort: s }, s);
-        let b = arena.intern(TermKind::Variable { name: "b".into(), sort: s }, s);
+        let a = arena.intern(
+            TermKind::Variable {
+                name: "a".into(),
+                sort: s,
+            },
+            s,
+        );
+        let b = arena.intern(
+            TermKind::Variable {
+                name: "b".into(),
+                sort: s,
+            },
+            s,
+        );
         assert_ne!(a, b);
         assert_eq!(arena.len(), 2);
     }
@@ -179,9 +191,27 @@ mod tests {
         let mut arena = TermArena::new();
         let s = SortId(0);
         let f = FuncId(0);
-        let a = arena.intern(TermKind::Variable { name: "a".into(), sort: s }, s);
-        let fa1 = arena.intern(TermKind::Apply { func: f, args: vec![a] }, s);
-        let fa2 = arena.intern(TermKind::Apply { func: f, args: vec![a] }, s);
+        let a = arena.intern(
+            TermKind::Variable {
+                name: "a".into(),
+                sort: s,
+            },
+            s,
+        );
+        let fa1 = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![a],
+            },
+            s,
+        );
+        let fa2 = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![a],
+            },
+            s,
+        );
         assert_eq!(fa1, fa2);
         assert_eq!(arena.len(), 2); // "a" and "f(a)"
     }

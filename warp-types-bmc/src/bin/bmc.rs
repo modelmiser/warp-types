@@ -25,8 +25,8 @@ fn counter_reaches_bad_state() -> TransitionSystem {
     //   (s₀ ∨ s₀')  — if s₀=0 then s₀'=1
     //   (¬s₀ ∨ ¬s₀') — if s₀=1 then s₀'=0
     // State vars: 0=s₀, 1=s₁, 2=s₀', 3=s₁'
-    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]);   // s₀ ∨ s₀'
-    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]);   // ¬s₀ ∨ ¬s₀'
+    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]); // s₀ ∨ s₀'
+    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]); // ¬s₀ ∨ ¬s₀'
 
     // s₁' = s₀ ⊕ s₁ (XOR):
     //   (¬s₀ ∨ ¬s₁ ∨ ¬s₁') — if both 1, next high bit is 0

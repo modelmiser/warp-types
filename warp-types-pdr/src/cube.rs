@@ -52,10 +52,7 @@ impl Cube {
 
     /// Extract a cube from next-state variables in a SAT assignment.
     /// Maps variables `[offset, offset + num_state_vars)` back to `[0, num_state_vars)`.
-    pub fn from_assignment_next_state(
-        assignment: &[bool],
-        num_state_vars: u32,
-    ) -> Cube {
+    pub fn from_assignment_next_state(assignment: &[bool], num_state_vars: u32) -> Cube {
         let offset = num_state_vars as usize;
         let lits: Vec<Lit> = (0..num_state_vars)
             .map(|v| {

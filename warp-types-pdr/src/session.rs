@@ -8,8 +8,8 @@
 //!
 //! Zero-sized — all PDR state (frames, obligations) lives inside `checker::check()`.
 
-use core::marker::PhantomData;
 use crate::phase::*;
+use core::marker::PhantomData;
 
 // ============================================================================
 // PDR session

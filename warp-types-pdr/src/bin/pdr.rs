@@ -11,7 +11,7 @@ use warp_types_sat::literal::Lit;
 fn safe_constant() -> TransitionSystem {
     let mut sys = TransitionSystem::new(1);
     sys.add_initial(vec![Lit::neg(0)]); // s₀ = 0
-    // Identity transition: s₀' = s₀
+                                        // Identity transition: s₀' = s₀
     sys.add_transition(vec![Lit::neg(0), Lit::pos(1)]); // ¬s₀ ∨ s₀'
     sys.add_transition(vec![Lit::pos(0), Lit::neg(1)]); // s₀ ∨ ¬s₀'
     sys.add_property(vec![Lit::neg(0)]); // P: ¬s₀
@@ -26,8 +26,8 @@ fn unsafe_counter() -> TransitionSystem {
     sys.add_initial(vec![Lit::neg(1)]); // s₁ = 0
 
     // s₀' = ¬s₀
-    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]);   // s₀ ∨ s₀'
-    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]);   // ¬s₀ ∨ ¬s₀'
+    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]); // s₀ ∨ s₀'
+    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]); // ¬s₀ ∨ ¬s₀'
 
     // s₁' = s₀ ⊕ s₁
     sys.add_transition(vec![Lit::neg(0), Lit::neg(1), Lit::neg(3)]);
@@ -52,13 +52,13 @@ fn invariant_discovery() -> TransitionSystem {
 
     // s₀' = ¬s₀ (toggle):
     //   (s₀ ∨ s₀') and (¬s₀ ∨ ¬s₀')
-    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]);   // s₀ ∨ s₀'
-    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]);   // ¬s₀ ∨ ¬s₀'
+    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]); // s₀ ∨ s₀'
+    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]); // ¬s₀ ∨ ¬s₀'
 
     // s₁' = s₁ (identity):
     //   (¬s₁ ∨ s₁') and (s₁ ∨ ¬s₁')
-    sys.add_transition(vec![Lit::neg(1), Lit::pos(3)]);   // ¬s₁ ∨ s₁'
-    sys.add_transition(vec![Lit::pos(1), Lit::neg(3)]);   // s₁ ∨ ¬s₁'
+    sys.add_transition(vec![Lit::neg(1), Lit::pos(3)]); // ¬s₁ ∨ s₁'
+    sys.add_transition(vec![Lit::pos(1), Lit::neg(3)]); // s₁ ∨ ¬s₁'
 
     // Property: ¬s₁
     sys.add_property(vec![Lit::neg(1)]);

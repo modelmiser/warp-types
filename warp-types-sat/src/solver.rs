@@ -359,8 +359,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
-        let mut initial_bcp =
-            watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
+        let mut initial_bcp = watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
 
         // ── Initial BCP + theory check loop (level 0) ──
         // Theory may propagate at level 0, which needs further BCP.
@@ -386,18 +385,13 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                             for p in props {
                                 trail.record_theory_propagation(p.lit, p.key);
                             }
-                            initial_bcp = watch::run_bcp_watched(
-                                db,
-                                &mut watches,
-                                &mut trail,
-                                &propagate,
-                            );
+                            initial_bcp =
+                                watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
                             continue;
                         }
                         TheoryResult::Conflict(_) => {
                             // Theory conflict at level 0 → UNSAT
-                            let _ =
-                                propagate.finish_conflict().analyze().backtrack().unsat();
+                            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
                             return SolveResult::Unsat;
                         }
                     }
@@ -507,8 +501,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                     &propagate,
                                 );
                                 stats.bcp_ns += t.elapsed().as_nanos() as u64;
-                                stats.propagations +=
-                                    (trail.len() - trail_before_theory) as u64;
+                                stats.propagations += (trail.len() - trail_before_theory) as u64;
                                 // Continue inner loop: re-check theory after BCP
                                 continue;
                             }
@@ -2660,10 +2653,7 @@ p cnf 5 10
             match (a, b) {
                 (Some(true), Some(true)) => {
                     // Both true → conflict: theory lemma ¬a ∨ ¬b
-                    TheoryResult::Conflict(vec![
-                        Lit::neg(self.var_a),
-                        Lit::neg(self.var_b),
-                    ])
+                    TheoryResult::Conflict(vec![Lit::neg(self.var_a), Lit::neg(self.var_b)])
                 }
                 (Some(true), None) => {
                     // a=true, b unassigned → propagate ¬b
@@ -2702,10 +2692,7 @@ p cnf 5 10
         db.add_clause(vec![Lit::pos(0), Lit::pos(1)]); // x0 ∨ x1
         db.add_clause(vec![Lit::pos(1), Lit::pos(2)]); // x1 ∨ x2
 
-        let mut theory = ExclusiveTheory {
-            var_a: 0,
-            var_b: 1,
-        };
+        let mut theory = ExclusiveTheory { var_a: 0, var_b: 1 };
 
         match solve_with_theory(db, 3, &mut theory) {
             SolveResult::Sat(assign) => {
@@ -2717,15 +2704,9 @@ p cnf 5 10
                     assign[1]
                 );
                 // Clause (x0 ∨ x1) satisfied
-                assert!(
-                    assign[0] || assign[1],
-                    "clause (x0 ∨ x1) violated"
-                );
+                assert!(assign[0] || assign[1], "clause (x0 ∨ x1) violated");
                 // Clause (x1 ∨ x2) satisfied
-                assert!(
-                    assign[1] || assign[2],
-                    "clause (x1 ∨ x2) violated"
-                );
+                assert!(assign[1] || assign[2], "clause (x1 ∨ x2) violated");
             }
             SolveResult::Unsat => panic!("expected SAT"),
             SolveResult::Unknown => panic!("unexpected Unknown"),
@@ -2741,10 +2722,7 @@ p cnf 5 10
         db.add_clause(vec![Lit::pos(0)]); // x0 must be true
         db.add_clause(vec![Lit::pos(1)]); // x1 must be true
 
-        let mut theory = ExclusiveTheory {
-            var_a: 0,
-            var_b: 1,
-        };
+        let mut theory = ExclusiveTheory { var_a: 0, var_b: 1 };
 
         match solve_with_theory(db, 2, &mut theory) {
             SolveResult::Unsat => {}

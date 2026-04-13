@@ -55,17 +55,21 @@ pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
     for t in 0..depth {
         let current_offset = t * n;
         for tc in &sys.transition {
-            let lits: Vec<Lit> = tc.lits.iter().map(|&l| {
-                let v = l.var();
-                if v < n {
-                    // Current-state variable → offset by t*n
-                    shift_lit(l, current_offset)
-                } else {
-                    // Next-state variable (v >= n) → offset by t*n
-                    // Original: v in [n, 2n), after shift: v - n + (t+1)*n = v + t*n
-                    shift_lit(l, current_offset)
-                }
-            }).collect();
+            let lits: Vec<Lit> = tc
+                .lits
+                .iter()
+                .map(|&l| {
+                    let v = l.var();
+                    if v < n {
+                        // Current-state variable → offset by t*n
+                        shift_lit(l, current_offset)
+                    } else {
+                        // Next-state variable (v >= n) → offset by t*n
+                        // Original: v in [n, 2n), after shift: v - n + (t+1)*n = v + t*n
+                        shift_lit(l, current_offset)
+                    }
+                })
+                .collect();
             db.add_clause(lits);
         }
     }
@@ -105,11 +109,7 @@ pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
 ///
 /// Returns a vector of frames, where each frame is the state variable
 /// assignments at that time step.
-pub fn extract_trace(
-    assignment: &[bool],
-    num_state_vars: u32,
-    depth: u32,
-) -> Vec<Vec<bool>> {
+pub fn extract_trace(assignment: &[bool], num_state_vars: u32, depth: u32) -> Vec<Vec<bool>> {
     let n = num_state_vars as usize;
     (0..=depth as usize)
         .map(|t| {
