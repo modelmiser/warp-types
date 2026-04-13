@@ -1,0 +1,20 @@
+[package]
+name = "warp-types-smt"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chad Aldreda"]
+description = "Phase-typed SMT solver for QF_EUF with compile-time phase ordering, built on warp-types-sat"
+license = "MIT"
+rust-version = "1.75"
+repository = "https://github.com/modelmiser/warp-types"
+readme = "README.md"
+keywords = ["smt", "euf", "solver", "typestate", "verification"]
+categories = ["algorithms", "science"]
+
+[[bin]]
+name = "smt"
+path = "src/bin/smt.rs"
+
+[dependencies]
+warp-types = { path = "..", version = "0.3.2" }
+warp-types-sat = { path = "../warp-types-sat", version = "0.3.0" }
