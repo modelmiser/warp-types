@@ -24,4 +24,4 @@ warp-types = { path = "..", version = "0.3.2" }
 cudarc = { version = "0.19", features = ["driver", "cuda-12000"], optional = true }
 
 [build-dependencies]
-warp-types-builder = { path = "../warp-types-builder", optional = true }
+warp-types-builder = { path = "../warp-types-builder", version = "0.3.1", optional = true }

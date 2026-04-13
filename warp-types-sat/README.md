@@ -22,8 +22,9 @@ variable assignment in standard SAT competition format.
 - **Tile-local BCP** (`bcp.rs`, `clause_tile.rs`) — ballot-based clause checking that maps to GPU warp operations
 - **1-UIP conflict analysis** (`analyze.rs`) — implication graph traversal, learned clause derivation
 - **Trail** (`trail.rs`) — assignment stack with decision levels and reasons
+- **Theory solver** (`theory.rs`) — `TheorySolver` trait for DPLL(T) integration: check, backtrack, explain
 - **DIMACS parser** (`dimacs.rs`) — full CNF format support
-- **Solver** (`solver.rs`) — top-level CDCL loop using the phase-typed session
+- **Solver** (`solver.rs`) — top-level CDCL loop using the phase-typed session, with `solve_with_theory()` for SMT
 
 ## License
 
