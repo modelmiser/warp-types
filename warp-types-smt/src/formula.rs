@@ -5,7 +5,7 @@
 //! into a propositional CNF skeleton (for the SAT solver) plus an [`AtomMap`]
 //! (for the EUF theory solver to map SAT variables back to equality atoms).
 
-use crate::term::TermId;
+use crate::term::{TermArena, TermId, TermKind};
 use warp_types_sat::bcp::ClauseDb;
 use warp_types_sat::literal::Lit;
 
@@ -141,8 +141,13 @@ pub struct Abstraction {
 /// each sub-formula gets an auxiliary variable, and implication
 /// clauses enforce equivalence between the auxiliary and the sub-formula.
 ///
-/// The top-level formula variables are asserted true (unit clauses).
-pub fn abstract_formulas(formulas: &[SmtFormula]) -> Abstraction {
+/// After encoding, **argument pair purification** creates equality atoms
+/// for the arguments of matching function applications. If the formula
+/// contains `(f(a), f(b))` as an equality atom, the atom `(a, b)` is
+/// created so cross-theory equalities (e.g., BV evaluating `a = b`)
+/// can be communicated through the combining solver. This iterates
+/// to fixpoint for nested applications.
+pub fn abstract_formulas(formulas: &[SmtFormula], arena: &TermArena) -> Abstraction {
     let mut atom_map = AtomMap::new();
     let mut db = ClauseDb::new();
 
@@ -151,6 +156,9 @@ pub fn abstract_formulas(formulas: &[SmtFormula]) -> Abstraction {
         // Assert the top-level formula is true
         db.add_clause(vec![Lit::pos(top_var)]);
     }
+
+    // Purify: ensure argument-pair atoms exist for congruent applications.
+    purify_argument_pairs(&mut atom_map, arena);
 
     // Pad var_to_atom to cover all allocated variables
     while atom_map.var_to_atom.len() < atom_map.next_var as usize {
@@ -161,6 +169,79 @@ pub fn abstract_formulas(formulas: &[SmtFormula]) -> Abstraction {
         num_vars: atom_map.num_vars(),
         db,
         atom_map,
+    }
+}
+
+/// Create equality atoms for argument pairs of matching function applications.
+///
+/// If the atom map has `(f(a₁..aₙ), f(b₁..bₙ))`, creates atoms for each
+/// `(aᵢ, bᵢ)` where `aᵢ ≠ bᵢ`. This enables cross-theory equality sharing:
+/// the combining solver can only propagate equalities that have SAT atoms.
+///
+/// Handles both `Apply` (uninterpreted functions) and `BvOp` (bitvector
+/// operations). Iterates to fixpoint for nested applications.
+fn purify_argument_pairs(atom_map: &mut AtomMap, arena: &TermArena) {
+    loop {
+        let mut new_pairs: Vec<(TermId, TermId)> = Vec::new();
+        let num_atoms = atom_map.num_atoms();
+
+        for atom_idx in 0..num_atoms {
+            let atom_id = AtomId(atom_idx);
+            let var = atom_map.var_for_atom(atom_id);
+            let Some((t1, t2)) = atom_map.atom_for_var(var) else {
+                continue;
+            };
+            if let Some((args1, args2)) = matching_congruence_args(arena, t1, t2) {
+                for (&ai, &bi) in args1.iter().zip(args2.iter()) {
+                    if ai != bi {
+                        let key = if ai <= bi { (ai, bi) } else { (bi, ai) };
+                        if !atom_map.eq_to_atom.contains_key(&key) {
+                            new_pairs.push((ai, bi));
+                        }
+                    }
+                }
+            }
+        }
+
+        if new_pairs.is_empty() {
+            break;
+        }
+        new_pairs.sort();
+        new_pairs.dedup();
+        for (a, b) in new_pairs {
+            atom_map.get_or_create(a, b);
+        }
+    }
+}
+
+/// If two terms are applications of the same function (or same BvOp with
+/// matching width), return their argument lists for congruence pairing.
+fn matching_congruence_args<'a>(
+    arena: &'a TermArena,
+    t1: TermId,
+    t2: TermId,
+) -> Option<(&'a [TermId], &'a [TermId])> {
+    let k1 = &arena.get(t1).kind;
+    let k2 = &arena.get(t2).kind;
+    match (k1, k2) {
+        (TermKind::Apply { func: f1, args: a1 }, TermKind::Apply { func: f2, args: a2 })
+            if f1 == f2 && a1.len() == a2.len() =>
+        {
+            Some((a1, a2))
+        }
+        (
+            TermKind::BvOp {
+                op: o1,
+                width: w1,
+                args: a1,
+            },
+            TermKind::BvOp {
+                op: o2,
+                width: w2,
+                args: a2,
+            },
+        ) if o1 == o2 && w1 == w2 && a1.len() == a2.len() => Some((a1, a2)),
+        _ => None,
     }
 }
 
@@ -270,15 +351,34 @@ fn tseitin_encode(formula: &SmtFormula, atom_map: &mut AtomMap, db: &mut ClauseD
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::term::{SortId, TermKind};
 
     fn tid(n: u32) -> TermId {
         TermId(n)
     }
 
+    /// Dummy arena with `n` Variable entries — purification sees no Apply/BvOp
+    /// terms, so no new atoms are created. Allows formula.rs tests (which use
+    /// raw TermIds) to pass the arena to `abstract_formulas`.
+    fn dummy_arena(n: usize) -> TermArena {
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        for i in 0..n {
+            arena.intern(
+                TermKind::Variable {
+                    name: format!("t{i}"),
+                    sort: s,
+                },
+                s,
+            );
+        }
+        arena
+    }
+
     #[test]
     fn single_equality_atom() {
         let formulas = vec![SmtFormula::Eq(tid(0), tid(1))];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(2));
         // One equality atom → one SAT variable (var 0)
         // Plus one unit clause asserting it true
         assert_eq!(abs.atom_map.num_atoms(), 1);
@@ -291,7 +391,7 @@ mod tests {
     #[test]
     fn disequality_creates_auxiliary() {
         let formulas = vec![SmtFormula::Neq(tid(0), tid(1))];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // One equality atom (var 0) + one Neq auxiliary (var 1)
         assert_eq!(abs.atom_map.num_atoms(), 1);
         assert_eq!(abs.num_vars, 2);
@@ -303,7 +403,7 @@ mod tests {
             SmtFormula::Eq(tid(0), tid(1)),
             SmtFormula::Eq(tid(2), tid(3)),
         ])];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // 2 equality atoms (vars 0, 1) + 1 And auxiliary (var 2)
         assert_eq!(abs.atom_map.num_atoms(), 2);
         assert_eq!(abs.num_vars, 3);
@@ -315,7 +415,7 @@ mod tests {
             SmtFormula::Eq(tid(0), tid(1)),
             SmtFormula::Eq(tid(2), tid(3)),
         ])];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // 2 equality atoms + 1 Or auxiliary
         assert_eq!(abs.atom_map.num_atoms(), 2);
         assert_eq!(abs.num_vars, 3);
@@ -328,7 +428,7 @@ mod tests {
             SmtFormula::Eq(tid(0), tid(1)),
             SmtFormula::Eq(tid(1), tid(0)), // reversed — same canonical pair
         ];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // Only one atom despite two formulas (canonical ordering dedup)
         assert_eq!(abs.atom_map.num_atoms(), 1);
         assert_eq!(abs.num_vars, 1);
@@ -340,7 +440,7 @@ mod tests {
             Box::new(SmtFormula::Eq(tid(0), tid(1))),
             Box::new(SmtFormula::Eq(tid(2), tid(3))),
         )];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // 2 equality atoms + 1 Implies auxiliary
         assert_eq!(abs.atom_map.num_atoms(), 2);
         assert_eq!(abs.num_vars, 3);
@@ -353,7 +453,7 @@ mod tests {
             SmtFormula::Eq(tid(0), tid(1)),
             SmtFormula::Not(Box::new(SmtFormula::Eq(tid(2), tid(3)))),
         ])];
-        let abs = abstract_formulas(&formulas);
+        let abs = abstract_formulas(&formulas, &dummy_arena(4));
         // 2 atoms + 1 Not aux + 1 And aux = 4 vars
         assert_eq!(abs.atom_map.num_atoms(), 2);
         assert_eq!(abs.num_vars, 4);

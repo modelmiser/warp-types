@@ -585,17 +585,12 @@ mod tests {
 
     #[test]
     fn bv_euf_congruence_unsat() {
-        // x = 3 ∧ y = 4 ∧ (bvadd(x,1)=y ∨ bvadd(x,1)≠y) ∧ f(bvadd(x,1)) ≠ f(y)
-        // The disjunction is a tautology — creates the interface atom for bvadd(x,1)=y.
+        // x = 3 ∧ y = 4 ∧ f(bvadd(x,1)) ≠ f(y)
+        // Purification creates atom (bvadd(x,1), y) from the f-application pair.
         // BV propagates bvadd(x,1) = y → EUF congruence: f(bvadd(x,1)) = f(y) → UNSAT
         let (env, kinds) = bv_euf_env(vec![SmtFormula::And(vec![
-            SmtFormula::Eq(t(0), t(2)), // x = three
-            SmtFormula::Eq(t(1), t(3)), // y = four
-            SmtFormula::Or(vec![
-                // tautology for atom creation
-                SmtFormula::Eq(t(5), t(1)),
-                SmtFormula::Neq(t(5), t(1)),
-            ]),
+            SmtFormula::Eq(t(0), t(2)),  // x = three
+            SmtFormula::Eq(t(1), t(3)),  // y = four
             SmtFormula::Neq(t(6), t(7)), // f(bvadd(x,1)) ≠ f(y)
         ])]);
         let module = BvSolver::new(&kinds);
@@ -604,13 +599,10 @@ mod tests {
 
     #[test]
     fn bv_euf_same_formula_sat_without_module() {
+        // Same formula — SAT without BV (bvadd uninterpreted, pick bvadd(x,1) ≠ y)
         let (env, _) = bv_euf_env(vec![SmtFormula::And(vec![
             SmtFormula::Eq(t(0), t(2)),
             SmtFormula::Eq(t(1), t(3)),
-            SmtFormula::Or(vec![
-                SmtFormula::Eq(t(5), t(1)),
-                SmtFormula::Neq(t(5), t(1)),
-            ]),
             SmtFormula::Neq(t(6), t(7)),
         ])]);
         assert_eq!(check_sat_combined(env, NullModule), SmtResult::Sat);

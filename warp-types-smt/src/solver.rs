@@ -42,8 +42,9 @@ pub(crate) fn check_sat_combined<M: TheoryModule>(env: SmtEnv, module: M) -> Smt
         return SmtResult::Sat;
     }
 
-    // Step 1: Boolean abstraction — Tseitin-transform formulas to CNF
-    let abstraction = formula::abstract_formulas(&env.assertions);
+    // Step 1: Boolean abstraction — Tseitin-transform formulas to CNF,
+    // then purify argument pairs for cross-theory equality sharing.
+    let abstraction = formula::abstract_formulas(&env.assertions, &env.arena);
 
     // Step 2: Build theory solvers
     let euf = EufSolver::new(&env.arena, abstraction.atom_map);
