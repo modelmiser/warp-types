@@ -268,6 +268,31 @@ theorem all_lanes_active (i : Fin 32) : ActiveSet.all[i] = true := by
   revert i; decide
 
 -- ============================================================================
+-- POSITIVE instance: merge reconverges warp, enabling shuffle (n=32)
+-- ============================================================================
+
+/-- Merging even and odd lane handles (which are complements within All)
+    reconverges the warp, enabling a shuffle on the full participant set.
+    This is the GPU-domain positive typability witness, parallel to
+    `fence_after_full_write_typable` (Fence), `finalize_tree_reduce_typable`
+    (Reduce), and `j1_send_adjacent_typable` (CSP). -/
+theorem merge_then_shuffle_typable :
+    ∃ ctx', HasType (n := 32) []
+      (.shuffle (.merge (.warpVal ActiveSet.even) (.warpVal ActiveSet.odd)) .perLaneVal)
+      .perLane ctx' := by
+  refine ⟨[], ?_⟩
+  exact HasType.shuffle [] [] []
+    (.merge (.warpVal ActiveSet.even) (.warpVal ActiveSet.odd))
+    .perLaneVal
+    (HasType.merge [] [] []
+      (.warpVal ActiveSet.even) (.warpVal ActiveSet.odd)
+      ActiveSet.even ActiveSet.odd (PSet.all 32)
+      (HasType.warpVal [] ActiveSet.even)
+      (HasType.warpVal [] ActiveSet.odd)
+      even_odd_complement)
+    (HasType.perLaneVal [])
+
+-- ============================================================================
 -- Values — parameterized by width n
 -- ============================================================================
 
