@@ -204,10 +204,11 @@ These are inherently unprovable (negative claims about the literature) but appro
 10. ~~Clarify D in scaling formula (L6)~~ — D redefined as helper depth, inversion blocks stated separately
 11. ~~Qualify MPST analog claim (H4)~~ — "no direct MPST analog, though..."
 
-**Optional polish (6 items):**
-12. md5 location (L1)
-13. Hedge "no prior type-system treatment" for fencing (L2)
-14. Diverge-partition uniqueness note (L3)
-15. "+108 lines" commit-state disclosure (L4)
-16. "empirically linear" for discharge cost (L5)
-17. Table 4 rationale helpers count (M5)
+**Optional polish — DONE (commit TBD):**
+12. ~~md5 location (L1)~~ — "Core.lean's headnote records the invariant; the specific hash is recorded in CspCoreExperiment.lean"
+13. ~~Hedge "no prior type-system treatment" for fencing (L2)~~ — "to our knowledge" added
+14. ~~Diverge-partition uniqueness note (L3)~~ — "(as can be verified by inspection of the typing judgment: no other rule produces two sub-groups from a single group)"
+15. ~~"+108 lines" commit-state disclosure (L4)~~ — "at the port commit" qualifier added to §1 Contribution (3)
+16. ~~"empirically linear" for discharge cost (L5)~~ — word "empirically" added
+17. ~~Table 4 rationale helpers count (M5)~~ — "4 helpers" → "4 `cases` sites", "5 helpers" → "5 `cases` sites"
+18. ~~Soften "instantiated at four domains" (H1)~~ — §1: "can subsume... currently for two of the four, with the same complement gate governing all four"; §8: "exercised across four domains"
