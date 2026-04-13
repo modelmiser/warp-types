@@ -123,7 +123,7 @@ fn main() {
 | Shuffle semantics | Verified on H200 (sm_90), RTX 4000 Ada (sm_89), MI300X (gfx942) | `bash reproduce/runpod-h200.sh` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | Full Lean 4 mechanization (31 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Full Lean 4 mechanization (32 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
@@ -174,7 +174,7 @@ warp-types/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (31 named theorems, zero sorry)
+├── lean/                   # Lean 4 formalization (32 named theorems, zero sorry)
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft
