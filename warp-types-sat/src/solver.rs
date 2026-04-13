@@ -12,6 +12,7 @@ use crate::bcp::{self, BcpResult, CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::restart::LubyRestarts;
 use crate::session;
+use crate::theory::{NoTheory, TheoryContext, TheoryResult, TheorySolver};
 use crate::trail::{Reason, Trail};
 use crate::vsids::Vsids;
 use crate::watch;
@@ -174,6 +175,7 @@ fn solve_cdcl_core_stats(
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        &mut NoTheory,
     );
     (result, stats)
 }
@@ -196,6 +198,7 @@ pub fn solve_watched_budget(
         0.0,
         conflict_limit,
         DEFAULT_PIVOT_BUMP_SCALE,
+        &mut NoTheory,
     );
     (result, stats)
 }
@@ -214,6 +217,7 @@ pub(crate) fn solve_cdcl_core(mut db: ClauseDb, num_vars: u32, mut vsids: Vsids)
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        &mut NoTheory,
     )
 }
 
@@ -240,6 +244,7 @@ pub fn solve_watched_trail_gradient(
         boost_scale,
         0,
         0.0,
+        &mut NoTheory,
     )
 }
 
@@ -264,6 +269,7 @@ pub fn solve_watched_trail_gradient_stats(
         boost_scale,
         conflict_limit,
         0.0,
+        &mut NoTheory,
     );
     (result, stats)
 }
@@ -295,12 +301,13 @@ pub fn solve_watched_combined(
         gradient_boost,
         conflict_limit,
         pivot_bump_scale,
+        &mut NoTheory,
     );
     (result, stats)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn solve_cdcl_core_inner(
+fn solve_cdcl_core_inner<T: TheorySolver>(
     db: &mut ClauseDb,
     num_vars: u32,
     vsids: &mut Vsids,
@@ -309,6 +316,7 @@ fn solve_cdcl_core_inner(
     trail_gradient_boost: f64,
     conflict_limit: u64,
     pivot_bump_scale: f64,
+    theory: &mut T,
 ) -> SolveResult {
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
@@ -351,11 +359,50 @@ fn solve_cdcl_core_inner(
 
     session::with_session(|initial_session| {
         let propagate = initial_session.propagate();
-        if let BcpResult::Conflict { .. } =
-            watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate)
-        {
-            let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-            return SolveResult::Unsat;
+        let mut initial_bcp =
+            watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
+
+        // ── Initial BCP + theory check loop (level 0) ──
+        // Theory may propagate at level 0, which needs further BCP.
+        // Theory conflict at level 0 means UNSAT (no backtrack possible).
+        loop {
+            match initial_bcp {
+                BcpResult::Conflict { .. } => {
+                    let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                    return SolveResult::Unsat;
+                }
+                BcpResult::Ok => {
+                    let theory_result = {
+                        let ctx = TheoryContext {
+                            trail: &trail,
+                            db: &*db,
+                            num_vars,
+                        };
+                        theory.check(&ctx)
+                    };
+                    match theory_result {
+                        TheoryResult::Consistent => break,
+                        TheoryResult::Propagate(props) => {
+                            for p in props {
+                                trail.record_theory_propagation(p.lit, p.key);
+                            }
+                            initial_bcp = watch::run_bcp_watched(
+                                db,
+                                &mut watches,
+                                &mut trail,
+                                &propagate,
+                            );
+                            continue;
+                        }
+                        TheoryResult::Conflict(_) => {
+                            // Theory conflict at level 0 → UNSAT
+                            let _ =
+                                propagate.finish_conflict().analyze().backtrack().unsat();
+                            return SolveResult::Unsat;
+                        }
+                    }
+                }
+            }
         }
         let mut idle = propagate.finish_no_conflict();
 
@@ -367,6 +414,7 @@ fn solve_cdcl_core_inner(
                     vsids.notify_unassigned(entry.lit.var());
                 }
                 trail.backtrack_to(0);
+                theory.backtrack(0);
                 watches.notify_backtrack(trail.len());
                 restart_pending = false;
 
@@ -428,8 +476,52 @@ fn solve_cdcl_core_inner(
             loop {
                 match bcp_result {
                     BcpResult::Ok => {
-                        idle = propagate.finish_no_conflict();
-                        break;
+                        // ── Theory consistency check (DPLL(T) hook) ──
+                        // After BCP fixpoint, ask the theory if the current
+                        // partial assignment is consistent.
+                        let theory_result = {
+                            let ctx = TheoryContext {
+                                trail: &trail,
+                                db: &*db,
+                                num_vars,
+                            };
+                            theory.check(&ctx)
+                        };
+                        match theory_result {
+                            TheoryResult::Consistent => {
+                                idle = propagate.finish_no_conflict();
+                                break;
+                            }
+                            TheoryResult::Propagate(props) => {
+                                // Record theory-implied literals on the trail,
+                                // then re-run BCP to propagate consequences.
+                                let trail_before_theory = trail.len();
+                                for p in props {
+                                    trail.record_theory_propagation(p.lit, p.key);
+                                }
+                                let t = Instant::now();
+                                bcp_result = watch::run_bcp_watched(
+                                    db,
+                                    &mut watches,
+                                    &mut trail,
+                                    &propagate,
+                                );
+                                stats.bcp_ns += t.elapsed().as_nanos() as u64;
+                                stats.propagations +=
+                                    (trail.len() - trail_before_theory) as u64;
+                                // Continue inner loop: re-check theory after BCP
+                                continue;
+                            }
+                            TheoryResult::Conflict(lits) => {
+                                // Theory found the current assignment inconsistent.
+                                // Add the theory conflict clause to the DB and
+                                // enter conflict resolution.
+                                let cref = db.add_clause(lits);
+                                watches.add_clause(db, cref);
+                                bcp_result = BcpResult::Conflict { clause: cref };
+                                continue;
+                            }
+                        }
                     }
                     BcpResult::Conflict { clause } => {
                         conflicts += 1;
@@ -447,8 +539,13 @@ fn solve_cdcl_core_inner(
                         }
 
                         let t = Instant::now();
-                        let analysis =
-                            analyze::analyze_conflict_with(&mut analyze_work, &trail, db, clause);
+                        let analysis = analyze::analyze_conflict_with_theory(
+                            &mut analyze_work,
+                            &trail,
+                            db,
+                            clause,
+                            theory,
+                        );
                         stats.analyze_ns += t.elapsed().as_nanos() as u64;
                         stats.analyze_resolve_ns += analysis.resolve_ns;
                         stats.analyze_minimize_ns += analysis.minimize_ns;
@@ -481,6 +578,7 @@ fn solve_cdcl_core_inner(
                         }
 
                         trail.backtrack_to(analysis.backtrack_level);
+                        theory.backtrack(analysis.backtrack_level);
                         watches.notify_backtrack(trail.len());
 
                         let asserting_lit = analysis.learned[0];
@@ -521,6 +619,89 @@ fn build_locked_set(trail: &Trail) -> HashSet<CRef> {
         }
     }
     locked
+}
+
+// ============================================================================
+// Theory-aware solver entry points (DPLL(T))
+// ============================================================================
+
+/// Solve a CNF instance with a theory solver (DPLL(T)).
+///
+/// The SAT solver interleaves BCP with theory consistency checks:
+/// after each BCP fixpoint, `theory.check()` is called. The theory can
+/// propagate implied literals, report conflicts, or confirm consistency.
+/// During conflict analysis, `theory.explain()` lazily produces explanation
+/// clauses for theory-propagated literals.
+///
+/// For pure SAT, use [`solve_watched`] (equivalent to `NoTheory`).
+pub fn solve_with_theory<T: TheorySolver>(
+    db: ClauseDb,
+    num_vars: u32,
+    theory: &mut T,
+) -> SolveResult {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        theory,
+    )
+}
+
+/// Solve with a theory solver, returning both the result and performance stats.
+pub fn solve_with_theory_stats<T: TheorySolver>(
+    db: ClauseDb,
+    num_vars: u32,
+    theory: &mut T,
+) -> (SolveResult, SolveStats) {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        theory,
+    );
+    (result, stats)
+}
+
+/// Solve with a theory solver and a conflict budget.
+pub fn solve_with_theory_budget<T: TheorySolver>(
+    db: ClauseDb,
+    num_vars: u32,
+    conflict_limit: u64,
+    theory: &mut T,
+) -> (SolveResult, SolveStats) {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let mut stats = SolveStats::default();
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut stats,
+        0,
+        0.0,
+        conflict_limit,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        theory,
+    );
+    (result, stats)
 }
 
 /// Result of an instrumented solve run.
@@ -2457,6 +2638,150 @@ p cnf 5 10
                 "  {:<25} {:>10} {:>10} {:>10} {:>+10.1}",
                 cfg.name, total_conflicts, solved, unknown, vs_base
             );
+        }
+    }
+
+    // ── Theory solver integration tests ──
+
+    use crate::theory::{TheoryContext, TheoryProp, TheoryResult};
+
+    /// A simple theory: variables `a` and `b` cannot both be true.
+    /// Equivalent to adding the clause (¬a ∨ ¬b), but enforced through
+    /// the theory mechanism to exercise the full DPLL(T) integration.
+    struct ExclusiveTheory {
+        var_a: u32,
+        var_b: u32,
+    }
+
+    impl TheorySolver for ExclusiveTheory {
+        fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
+            let a = ctx.trail.value(self.var_a);
+            let b = ctx.trail.value(self.var_b);
+            match (a, b) {
+                (Some(true), Some(true)) => {
+                    // Both true → conflict: theory lemma ¬a ∨ ¬b
+                    TheoryResult::Conflict(vec![
+                        Lit::neg(self.var_a),
+                        Lit::neg(self.var_b),
+                    ])
+                }
+                (Some(true), None) => {
+                    // a=true, b unassigned → propagate ¬b
+                    TheoryResult::Propagate(vec![TheoryProp {
+                        lit: Lit::neg(self.var_b),
+                        key: 0,
+                    }])
+                }
+                (None, Some(true)) => {
+                    // b=true, a unassigned → propagate ¬a
+                    TheoryResult::Propagate(vec![TheoryProp {
+                        lit: Lit::neg(self.var_a),
+                        key: 1,
+                    }])
+                }
+                _ => TheoryResult::Consistent,
+            }
+        }
+
+        fn backtrack(&mut self, _new_level: u32) {
+            // Stateless theory — nothing to retract
+        }
+
+        fn explain(&mut self, _lit: Lit, _key: u32) -> Vec<Lit> {
+            // Both keys have the same explanation: ¬a ∨ ¬b
+            vec![Lit::neg(self.var_a), Lit::neg(self.var_b)]
+        }
+    }
+
+    #[test]
+    fn theory_exclusive_sat() {
+        // Formula: (x0 ∨ x1) ∧ (x1 ∨ x2)
+        // Theory: x0 and x1 cannot both be true
+        // Expected: SAT (e.g., x0=true, x1=false, x2=true)
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]); // x0 ∨ x1
+        db.add_clause(vec![Lit::pos(1), Lit::pos(2)]); // x1 ∨ x2
+
+        let mut theory = ExclusiveTheory {
+            var_a: 0,
+            var_b: 1,
+        };
+
+        match solve_with_theory(db, 3, &mut theory) {
+            SolveResult::Sat(assign) => {
+                // Theory constraint: not both true
+                assert!(
+                    !(assign[0] && assign[1]),
+                    "theory violated: x0={} x1={} — both true",
+                    assign[0],
+                    assign[1]
+                );
+                // Clause (x0 ∨ x1) satisfied
+                assert!(
+                    assign[0] || assign[1],
+                    "clause (x0 ∨ x1) violated"
+                );
+                // Clause (x1 ∨ x2) satisfied
+                assert!(
+                    assign[1] || assign[2],
+                    "clause (x1 ∨ x2) violated"
+                );
+            }
+            SolveResult::Unsat => panic!("expected SAT"),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn theory_exclusive_unsat() {
+        // Formula: (x0) ∧ (x1)  — forces both true
+        // Theory: x0 and x1 cannot both be true
+        // Expected: UNSAT
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]); // x0 must be true
+        db.add_clause(vec![Lit::pos(1)]); // x1 must be true
+
+        let mut theory = ExclusiveTheory {
+            var_a: 0,
+            var_b: 1,
+        };
+
+        match solve_with_theory(db, 2, &mut theory) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(a) => panic!("expected UNSAT, got SAT: {:?}", a),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn theory_no_theory_matches_pure_sat() {
+        // Verify NoTheory produces the same result as solve_watched
+        let cnf = "\
+p cnf 6 9
+1 2 0
+3 4 0
+5 6 0
+-1 -3 0
+-1 -5 0
+-3 -5 0
+-2 -4 0
+-2 -6 0
+-4 -6 0
+";
+        let inst1 = dimacs::parse_dimacs_str(cnf).unwrap();
+        let inst2 = dimacs::parse_dimacs_str(cnf).unwrap();
+
+        let r1 = solve_watched(inst1.db, inst1.num_vars);
+        let r2 = solve_with_theory(inst2.db, inst2.num_vars, &mut NoTheory);
+
+        match (&r1, &r2) {
+            (SolveResult::Unsat, SolveResult::Unsat) => {}
+            (SolveResult::Sat(_), SolveResult::Sat(_)) => {}
+            _ => panic!(
+                "NoTheory and pure SAT disagree: {:?} vs {:?}",
+                matches!(r1, SolveResult::Sat(_)),
+                matches!(r2, SolveResult::Sat(_))
+            ),
         }
     }
 }

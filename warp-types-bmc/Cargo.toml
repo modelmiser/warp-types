@@ -17,4 +17,4 @@ path = "src/bin/bmc.rs"
 
 [dependencies]
 warp-types = { path = "..", version = "0.3.2" }
-warp-types-sat = { path = "../warp-types-sat", version = "0.2.0" }
+warp-types-sat = { path = "../warp-types-sat", version = "0.3.0" }

@@ -50,6 +50,7 @@ pub mod restart;
 pub mod scheduler;
 pub mod session;
 pub mod solver;
+pub mod theory;
 pub mod trail;
 pub mod vsids;
 pub mod watch;
@@ -69,6 +70,7 @@ pub use phase::{
 };
 pub use session::{with_session, SolverSession};
 pub use solver::{
-    solve, solve_instrumented, solve_watched, solve_watched_stats, InstrumentedResult, SolveResult,
-    SolveStats,
+    solve, solve_instrumented, solve_watched, solve_watched_stats, solve_with_theory,
+    solve_with_theory_budget, solve_with_theory_stats, InstrumentedResult, SolveResult, SolveStats,
 };
+pub use theory::{NoTheory, TheoryContext, TheoryProp, TheoryResult, TheorySolver};

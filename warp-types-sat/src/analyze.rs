@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
+use crate::theory::{NoTheory, TheorySolver};
 use crate::trail::{Reason, Trail};
 
 /// A single resolution step in 1-UIP analysis.
@@ -146,16 +147,34 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: CRef) -> 
     analyze_conflict_with(&mut work, trail, db, conflict_clause)
 }
 
-/// Run 1-UIP conflict analysis using persistent scratch buffers.
+/// Run 1-UIP conflict analysis using persistent scratch buffers (pure SAT).
 ///
-/// `conflict_clause` is the index of the clause that caused the conflict.
-/// Returns the learned clause and backtrack level.
+/// Delegates to [`analyze_conflict_with_theory`] with [`NoTheory`].
 #[allow(clippy::needless_range_loop)]
 pub fn analyze_conflict_with(
     work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
     conflict_clause: CRef,
+) -> AnalysisResult {
+    analyze_conflict_with_theory(work, trail, db, conflict_clause, &mut NoTheory)
+}
+
+/// Run 1-UIP conflict analysis with theory solver integration.
+///
+/// When the resolution loop encounters a `TheoryPropagation(key)` reason,
+/// it calls `theory.explain(lit, key)` to lazily retrieve the explanation
+/// clause, then resolves through it exactly like a BCP reason clause.
+///
+/// For pure SAT (T = NoTheory), the compiler monomorphizes away all theory
+/// code paths — the generated code is identical to the pre-theory version.
+#[allow(clippy::needless_range_loop)]
+pub fn analyze_conflict_with_theory<T: TheorySolver>(
+    work: &mut AnalyzeWork,
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict_clause: CRef,
+    theory: &mut T,
 ) -> AnalysisResult {
     let current_level = trail.current_level();
     let t_resolve = Instant::now();
@@ -233,16 +252,31 @@ pub fn analyze_conflict_with(
                 );
                 break;
             }
-            Reason::Propagation(reason_clause) => {
-                debug_assert!(
-                    !db.is_deleted(reason_clause),
-                    "resolving through deleted clause {reason_clause} for var {}",
-                    entry.lit.var()
-                );
+            // Propagation or TheoryPropagation: get reason literals, resolve.
+            // For Propagation, reason literals come from the clause DB.
+            // For TheoryPropagation, lazily retrieved via theory.explain().
+            _ => {
+                let reason_lits_owned;
+                let reason_lits: &[Lit] = match entry.reason {
+                    Reason::Propagation(reason_clause) => {
+                        debug_assert!(
+                            !db.is_deleted(reason_clause),
+                            "resolving through deleted clause {reason_clause} for var {}",
+                            entry.lit.var()
+                        );
+                        unsafe { db.clause_unchecked(reason_clause) }.literals
+                    }
+                    Reason::TheoryPropagation(key) => {
+                        reason_lits_owned = theory.explain(entry.lit, key);
+                        &reason_lits_owned
+                    }
+                    Reason::Decision => unreachable!(),
+                };
+
                 num_at_current_level -= 1;
                 work.pivots.push(entry.lit.var()); // pivot = resolved-away variable
                 unsafe { *work.seen.get_unchecked_mut(entry.lit.var() as usize) = false };
-                for &lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
+                for &lit in reason_lits {
                     let var = lit.var();
                     if var == entry.lit.var() {
                         continue;
@@ -435,6 +469,15 @@ pub fn analyze_conflict_instrumented(
                 debug_assert!(num_at_current_level <= 1);
                 break;
             }
+            Reason::TheoryPropagation(_) => {
+                // Instrumented analysis is not used with theory solvers.
+                // If a theory propagation appears in an instrumented run,
+                // it indicates a logic error in the solver integration.
+                panic!(
+                    "TheoryPropagation in instrumented analysis — \
+                     use analyze_conflict_with_theory for DPLL(T)"
+                );
+            }
             Reason::Propagation(reason_clause) => {
                 debug_assert!(!db.is_deleted(reason_clause));
                 num_at_current_level -= 1;
@@ -595,6 +638,11 @@ fn lit_redundant_with(
     };
     let reason_clause = match entry.reason {
         Reason::Decision => return false, // decisions are never redundant
+        // Conservative: theory-propagated literals are not checked for
+        // redundancy (would require calling theory.explain, which this
+        // function doesn't have access to). Safe but may keep literals
+        // that a theory-aware minimizer could remove.
+        Reason::TheoryPropagation(_) => return false,
         Reason::Propagation(ci) => ci,
     };
 
@@ -638,7 +686,7 @@ fn lit_redundant_with(
         }
 
         let ci = match re.reason {
-            Reason::Decision => {
+            Reason::Decision | Reason::TheoryPropagation(_) => {
                 for v in work.min_to_clear.drain(top..) {
                     unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
                 }

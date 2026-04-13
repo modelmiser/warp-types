@@ -20,6 +20,12 @@ pub enum Reason {
     Decision,
     /// Forced by unit propagation from the clause at this CRef.
     Propagation(CRef),
+    /// Forced by a theory solver. The `u32` is an opaque key passed to
+    /// [`TheorySolver::explain`] during conflict analysis to lazily retrieve
+    /// the reason clause. Theory propagations are recorded on the trail
+    /// (not through BcpTrail) and their consequences are propagated by
+    /// a subsequent BCP call.
+    TheoryPropagation(u32),
 }
 
 /// A single trail entry.
@@ -133,6 +139,32 @@ impl Trail {
             lit,
             level: self.current_level,
             reason: Reason::Decision,
+        });
+    }
+
+    /// Record a theory-propagated literal at the current decision level.
+    ///
+    /// Theory propagations use an opaque `key` (not a clause reference) as their
+    /// reason. During conflict analysis, [`TheorySolver::explain`] is called with
+    /// this key to lazily produce the explanation clause.
+    ///
+    /// # Panics
+    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
+    pub fn record_theory_propagation(&mut self, lit: Lit, key: u32) {
+        debug_assert!(
+            self.assignments[lit.var() as usize].is_none(),
+            "record_theory_propagation on already-assigned variable {}",
+            lit.var()
+        );
+        self.assignments[lit.var() as usize] = Some(!lit.is_negated());
+        self.lit_values[lit.code() as usize] = Some(true);
+        self.lit_values[lit.complement().code() as usize] = Some(false);
+        self.var_position[lit.var() as usize] = Some(self.entries.len());
+        self.num_unassigned -= 1;
+        self.entries.push(TrailEntry {
+            lit,
+            level: self.current_level,
+            reason: Reason::TheoryPropagation(key),
         });
     }
 
@@ -408,5 +440,54 @@ mod tests {
         assert_eq!(e.reason, Reason::Propagation(0));
 
         assert!(trail.entry_for_var(2).is_none());
+    }
+
+    #[test]
+    fn theory_propagation() {
+        let mut trail = Trail::new(4);
+
+        // Level 0: theory propagates x0=true with key 42
+        trail.record_theory_propagation(Lit::pos(0), 42);
+        assert_eq!(trail.current_level(), 0);
+        assert_eq!(trail.value(0), Some(true));
+        assert_eq!(trail.len(), 1);
+
+        let e = trail.entry_for_var(0).unwrap();
+        assert_eq!(e.reason, Reason::TheoryPropagation(42));
+        assert_eq!(e.level, 0);
+
+        // Level 1: decide x1, theory propagates x2=false with key 7
+        trail.new_decision(Lit::pos(1));
+        trail.record_theory_propagation(Lit::neg(2), 7);
+        assert_eq!(trail.value(2), Some(false));
+        assert_eq!(trail.len(), 3);
+
+        let e = trail.entry_for_var(2).unwrap();
+        assert_eq!(e.reason, Reason::TheoryPropagation(7));
+        assert_eq!(e.level, 1);
+
+        // Backtrack to level 0: theory propagation at level 1 is retracted
+        trail.backtrack_to(0);
+        assert_eq!(trail.value(2), None);
+        assert_eq!(trail.value(1), None);
+        assert_eq!(trail.value(0), Some(true)); // level 0 survives
+    }
+
+    #[test]
+    fn remap_skips_theory_propagations() {
+        let mut trail = Trail::new(3);
+
+        trail.new_decision(Lit::pos(0));
+        trail.record_propagation(Lit::pos(1), 10); // CRef 10
+        trail.record_theory_propagation(Lit::pos(2), 99); // theory key 99
+
+        // Remap CRef 10 → 20. Theory propagation should be unaffected.
+        trail.remap_reasons(&[(10, 20)]);
+
+        let e1 = trail.entry_for_var(1).unwrap();
+        assert_eq!(e1.reason, Reason::Propagation(20)); // remapped
+
+        let e2 = trail.entry_for_var(2).unwrap();
+        assert_eq!(e2.reason, Reason::TheoryPropagation(99)); // unchanged
     }
 }

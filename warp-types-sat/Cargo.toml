@@ -1,6 +1,6 @@
 [package]
 name = "warp-types-sat"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Chad Aldreda"]
 description = "Phase-typed CDCL SAT solver with compile-time phase ordering, built on warp-types"
