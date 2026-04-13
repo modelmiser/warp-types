@@ -189,20 +189,20 @@ These are inherently unprovable (negative claims about the literature) but appro
 
 ## Recommended Fix Priority
 
-**Before submission (4 items):**
-1. Add GPU positive-typability theorem (C1) — ~15 min of Lean
-2. Hedge the two unhedged novelty claims (H2, H3) — 2 words each
-3. Fix "all four" → "three of the four" if not adding the theorem (C1 alt)
-4. Qualify "five CVE-class" (C4) — one parenthetical
+**Before submission — DONE (commit `89518395f`):**
+1. ~~Add GPU positive-typability theorem (C1)~~ — `merge_then_shuffle_typable` in Basic.lean
+2. ~~Hedge the two unhedged novelty claims (H2, H3)~~ — "to our knowledge" added
+3. ~~Fix "all four" now holds (C1)~~ — GPU witness added
+4. ~~Qualify "five CVE-class" (C4)~~ — "four real-world, one synthetic"
 
-**Same editing pass (7 items):**
-5. Resolve "six" vs "four" internal contradiction (C2/M6)
-6. Add sentence about bug-witness correspondence being illustrative (C3)
-7. Soften "instantiated at four domains" framing (H1)
-8. Correct discharge-block and line counts (M1, M2, M3)
-9. Use exact CoreMetatheory line count (M4)
-10. Clarify D in scaling formula (L6)
-11. Qualify MPST analog claim (H4)
+**Same editing pass — DONE (commit TBD):**
+5. ~~Resolve "six" vs "four" internal contradiction (C2/M6)~~ — done in prior commit
+6. ~~Add sentence about bug-witness correspondence being illustrative (C3)~~ — done in prior commit
+7. Soften "instantiated at four domains" framing (H1) — **DEFERRED** (body is transparent, optional polish)
+8. ~~Correct discharge-block and line counts (M1, M2, M3)~~ — 18 total (14 helper + 4 inversion), ~50 lines, pre-port helper was 10 lines
+9. ~~Use exact CoreMetatheory line count (M4)~~ — 1362
+10. ~~Clarify D in scaling formula (L6)~~ — D redefined as helper depth, inversion blocks stated separately
+11. ~~Qualify MPST analog claim (H4)~~ — "no direct MPST analog, though..."
 
 **Optional polish (6 items):**
 12. md5 location (L1)
