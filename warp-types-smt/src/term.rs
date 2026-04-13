@@ -61,6 +61,19 @@ pub struct FuncDecl {
 // Term structure
 // ============================================================================
 
+/// Bitvector operation kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BvOpKind {
+    /// Addition modulo 2^width.
+    Add,
+    /// Bitwise AND.
+    And,
+    /// Bitwise OR.
+    Or,
+    /// Bitwise XOR.
+    Xor,
+}
+
 /// The internal structure of a term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TermKind {
@@ -68,6 +81,15 @@ pub enum TermKind {
     Variable { name: String, sort: SortId },
     /// Function application: `f(t₁, ..., tₙ)`.
     Apply { func: FuncId, args: Vec<TermId> },
+    /// Bitvector constant: a `width`-bit value.
+    BvConst { width: u32, value: u64 },
+    /// Bitvector operation: interpreted by the BV theory module,
+    /// uninterpreted by EUF (congruence only, no evaluation).
+    BvOp {
+        op: BvOpKind,
+        width: u32,
+        args: Vec<TermId>,
+    },
 }
 
 /// Arena entry for a term.

@@ -20,24 +20,12 @@
 //! The equality sharing loop is driven by the SAT solver's theory-check
 //! protocol — no internal fixpoint loop:
 //!
-//! 1. EUF processes the trail until fixpoint (conflict / propagation / consistent)
+//! 1. EUF processes the trail until fixpoint
 //! 2. Once consistent, the combiner shares trail equalities to the module
-//! 3. The module reports any new equalities it discovered
-//! 4. The combiner propagates them to the SAT solver as [`TheoryProp`]s
-//! 5. The SAT solver records them on the trail, re-runs BCP, calls `check()` again
-//! 6. EUF now sees the module's equalities on the trail and processes them
-//!
-//! This continues until both theories reach fixpoint or a conflict is found.
-//!
-//! # Limitations (v0.1)
-//!
-//! - Module equalities must correspond to existing atoms in the formula.
-//!   Full Nelson-Oppen requires *purification* (introducing interface atoms
-//!   for all shared variable pairs) — a formula-level transform.
-//! - Module propagations are currently explained as axiomatic (unit clauses).
-//!   A full implementation would trace through module-internal reasoning.
-//! - Convex variant only: no case-split enumeration for non-convex theories
-//!   like QF_BV (the non-convex extension enumerates disjunctions of equalities).
+//! 3. The module reports new equalities (with premises) or conflicts
+//! 4. The combiner propagates equalities to the SAT solver, or returns
+//!    conflict clauses constructed from the module's premises
+//! 5. The SAT solver records propagations, re-runs BCP, calls `check()` again
 
 use crate::euf::EufSolver;
 use crate::term::TermId;
@@ -49,13 +37,32 @@ use warp_types_sat::theory::{TheoryContext, TheoryProp, TheoryResult, TheorySolv
 // Theory module trait
 // ============================================================================
 
+/// An equality discovered by a theory module, with its premises.
+///
+/// The premises are the trail equalities that the module relied on
+/// to derive this conclusion. The combining solver needs them to
+/// construct sound conflict clauses and explanation clauses.
+pub struct ModuleEquality {
+    /// First term.
+    pub t1: TermId,
+    /// Second term.
+    pub t2: TermId,
+    /// Trail equality atoms that this deduction depends on.
+    /// Each `(a, b)` means "the module used `a = b` from the trail."
+    pub premises: Vec<(TermId, TermId)>,
+}
+
 /// Result of a theory module's consistency check.
 pub enum ModuleResult {
-    /// Module is consistent. May report new equalities over shared variables
-    /// to be communicated to other theories.
-    Consistent(Vec<(TermId, TermId)>),
-    /// Module detected an inconsistency in its current assertions.
-    Conflict,
+    /// Module is consistent. May report new equalities with premises.
+    Consistent(Vec<ModuleEquality>),
+    /// Module detected an inconsistency.
+    Conflict {
+        /// Equality premises (asserted true on trail) contributing to the conflict.
+        eq_premises: Vec<(TermId, TermId)>,
+        /// Disequality premises (asserted false on trail) contributing to the conflict.
+        diseq_premises: Vec<(TermId, TermId)>,
+    },
 }
 
 /// A theory module for Nelson-Oppen combination.
@@ -63,16 +70,7 @@ pub enum ModuleResult {
 /// Unlike [`TheorySolver`] (the SAT-facing interface that scans the trail),
 /// a `TheoryModule` receives equality and disequality assertions directly
 /// from the combining solver. It reasons within its own theory and reports
-/// implied equalities for sharing with other theories.
-///
-/// # Contract
-///
-/// - `notify_equality` / `notify_disequality`: inform the module of ground
-///   truth from the SAT trail. Must be idempotent (re-asserting a known
-///   fact after backtrack + replay is a no-op).
-/// - `propagate`: check consistency and return new equalities. Returning
-///   previously-reported equalities is allowed (the combiner deduplicates).
-/// - `backtrack` + `push_level`: support level-based undo for CDCL.
+/// implied equalities (with premises) for sharing with other theories.
 pub trait TheoryModule {
     /// The module is informed that `t1 = t2`.
     fn notify_equality(&mut self, t1: TermId, t2: TermId);
@@ -125,24 +123,20 @@ impl TheoryModule for NullModule {
 // ============================================================================
 
 /// Key-space partition: EUF propagations use keys `0..MODULE_KEY_OFFSET`,
-/// module propagations use `MODULE_KEY_OFFSET..`. This avoids a tagged enum
-/// in the hot path of conflict analysis.
+/// module propagations use `MODULE_KEY_OFFSET..`.
 const MODULE_KEY_OFFSET: u32 = 1 << 24;
 
 /// Record for lazily explaining a module-originated propagation.
 struct ModulePropRecord {
-    /// The propagated literal.
     lit: Lit,
+    /// Trail equality premises the module relied on for this deduction.
+    premises: Vec<(TermId, TermId)>,
 }
 
 /// Nelson-Oppen combining solver.
 ///
 /// Wraps an [`EufSolver`] and a [`TheoryModule`], implementing
-/// [`TheorySolver`] for the SAT backbone. Equality sharing between EUF
-/// and the module is mediated through SAT-level propagations: when the
-/// module discovers `t1 = t2`, the combiner tells the SAT solver, which
-/// records it on the trail. On the next `check()`, EUF picks it up
-/// naturally — no cross-theory mutation needed.
+/// [`TheorySolver`] for the SAT backbone.
 pub struct CombiningSolver<M: TheoryModule> {
     euf: EufSolver,
     module: M,
@@ -164,9 +158,6 @@ impl<M: TheoryModule> CombiningSolver<M> {
     }
 
     /// Dispatch trail equalities/disequalities to the module.
-    ///
-    /// Scans trail entries the module hasn't seen yet and translates
-    /// SAT assignments into theory-level notifications.
     fn share_trail_to_module(&mut self, ctx: &TheoryContext<'_>) {
         let entries = ctx.trail.entries();
         let trail_len = ctx.trail.len();
@@ -185,15 +176,38 @@ impl<M: TheoryModule> CombiningSolver<M> {
         }
         self.module_trail_pos = trail_len;
     }
+
+    /// Build a conflict clause from module premises.
+    ///
+    /// Equality premises are negated (they're true on the trail),
+    /// disequality premises become positive (they're false on the trail).
+    fn build_conflict_clause(
+        &self,
+        eq_premises: &[(TermId, TermId)],
+        diseq_premises: &[(TermId, TermId)],
+    ) -> Vec<Lit> {
+        let mut clause = Vec::new();
+        for &(t1, t2) in eq_premises {
+            let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+            if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&key) {
+                let var = self.euf.atom_map.var_for_atom(atom_id);
+                clause.push(Lit::neg(var));
+            }
+        }
+        for &(t1, t2) in diseq_premises {
+            let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+            if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&key) {
+                let var = self.euf.atom_map.var_for_atom(atom_id);
+                clause.push(Lit::pos(var));
+            }
+        }
+        clause
+    }
 }
 
 impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
     fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
         // ── Phase 1: EUF processes the trail ──
-        //
-        // EUF handles equality/disequality assertions from the trail,
-        // updates congruence closure, checks for disequality violations,
-        // and returns any implied equalities as propagations.
         let euf_result = self.euf.check(ctx);
         match &euf_result {
             TheoryResult::Conflict(_) | TheoryResult::Propagate(_) => {
@@ -203,62 +217,65 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
         }
 
         // ── Phase 2: Share trail to module ──
-        //
-        // EUF is at fixpoint. Notify the module of all equality/disequality
-        // atoms from the trail that it hasn't processed yet.
         self.share_trail_to_module(ctx);
 
         // ── Phase 3: Module consistency + equality sharing ──
-        //
-        // Ask the module for new equalities. For each one:
-        // - If already known to EUF → skip
-        // - If no SAT atom exists → skip (needs purification)
-        // - If SAT var unassigned → propagate to SAT solver
-        // - If SAT var true → skip (already consistent)
-        // - If SAT var false → conflict (module axiom contradicts trail)
         match self.module.propagate() {
-            ModuleResult::Conflict => {
-                // Module-only conflict. A full implementation would have
-                // the module return involved atoms for clause construction.
-                // Conservative: return Consistent (sound but incomplete).
-                TheoryResult::Consistent
+            ModuleResult::Conflict {
+                eq_premises,
+                diseq_premises,
+            } => {
+                let clause = self.build_conflict_clause(&eq_premises, &diseq_premises);
+                if clause.is_empty() {
+                    TheoryResult::Consistent // Can't express conflict (missing atoms)
+                } else {
+                    TheoryResult::Conflict(clause)
+                }
             }
             ModuleResult::Consistent(new_eqs) => {
                 let mut props = Vec::new();
 
-                for (t1, t2) in new_eqs {
-                    // Already in the same equivalence class?
-                    if self.euf.find(t1) == self.euf.find(t2) {
+                for meq in new_eqs {
+                    if self.euf.find(meq.t1) == self.euf.find(meq.t2) {
                         continue;
                     }
 
-                    // Look up the SAT atom for this equality
-                    let canonical = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+                    let canonical = if meq.t1 <= meq.t2 {
+                        (meq.t1, meq.t2)
+                    } else {
+                        (meq.t2, meq.t1)
+                    };
                     let atom_id = match self.euf.atom_map.eq_to_atom.get(&canonical) {
                         Some(&id) => id,
-                        None => continue, // No atom — needs purification
+                        None => continue,
                     };
                     let var = self.euf.atom_map.var_for_atom(atom_id);
 
                     match ctx.trail.value(var) {
                         None => {
-                            // Unassigned — propagate to SAT solver.
-                            // EUF will see it on the trail next check().
                             let key = self.module_props.len() as u32;
-                            self.module_props
-                                .push(ModulePropRecord { lit: Lit::pos(var) });
+                            self.module_props.push(ModulePropRecord {
+                                lit: Lit::pos(var),
+                                premises: meq.premises,
+                            });
                             props.push(TheoryProp {
                                 lit: Lit::pos(var),
                                 key: MODULE_KEY_OFFSET + key,
                             });
                         }
-                        Some(true) => {
-                            // Already true — consistent, nothing to do.
-                        }
+                        Some(true) => {}
                         Some(false) => {
                             // Trail says t1 ≠ t2, module says t1 = t2.
-                            // Theory conflict: unit clause asserting the equality.
-                            return TheoryResult::Conflict(vec![Lit::pos(var)]);
+                            // Conflict clause: negate eq premises + assert diseq as eq.
+                            let mut clause = Vec::new();
+                            for &(pt1, pt2) in &meq.premises {
+                                let k = if pt1 <= pt2 { (pt1, pt2) } else { (pt2, pt1) };
+                                if let Some(&aid) = self.euf.atom_map.eq_to_atom.get(&k) {
+                                    clause.push(Lit::neg(self.euf.atom_map.var_for_atom(aid)));
+                                }
+                            }
+                            clause.push(Lit::pos(var)); // The equality must hold
+                            return TheoryResult::Conflict(clause);
                         }
                     }
                 }
@@ -275,21 +292,22 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
     fn backtrack(&mut self, new_level: u32) {
         self.euf.backtrack(new_level);
         self.module.backtrack(new_level);
-        // Reset trail position — module will be re-notified of surviving
-        // equalities when share_trail_to_module runs on the next check().
         self.module_trail_pos = 0;
     }
 
     fn explain(&mut self, lit: Lit, key: u32) -> Vec<Lit> {
         if key >= MODULE_KEY_OFFSET {
-            // Module propagation — currently axiomatic (unit clause).
-            // The module asserted this equality unconditionally.
-            // A full implementation would have the module provide premise
-            // atoms for a proper explanation chain.
             let idx = (key - MODULE_KEY_OFFSET) as usize;
-            vec![self.module_props[idx].lit]
+            let record = &self.module_props[idx];
+            let mut clause = vec![record.lit];
+            for &(t1, t2) in &record.premises {
+                let k = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+                if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&k) {
+                    clause.push(Lit::neg(self.euf.atom_map.var_for_atom(atom_id)));
+                }
+            }
+            clause
         } else {
-            // EUF propagation — delegate to EUF's BFS explanation.
             self.euf.explain(lit, key)
         }
     }
@@ -302,18 +320,18 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bv::BvSolver;
     use crate::formula::SmtFormula;
     use crate::session::SmtEnv;
     use crate::solver::{check_sat_combined, SmtResult};
-    use crate::term::{FuncDecl, FuncId, Sort, SortId, TermArena, TermKind};
+    use crate::term::{BvOpKind, FuncDecl, FuncId, Sort, SortId, TermArena, TermKind};
 
-    // ── Test module ──
+    fn t(n: u32) -> TermId {
+        TermId(n)
+    }
 
-    /// Theory module that unconditionally asserts pre-configured equalities.
-    ///
-    /// On every `propagate()` call, it reports the same equalities. The
-    /// combining solver deduplicates (skips those already known to EUF or
-    /// already assigned on the trail).
+    // ── EUF-only helpers (ConstantModule) ──
+
     struct ConstantModule {
         equalities: Vec<(TermId, TermId)>,
     }
@@ -323,22 +341,27 @@ mod tests {
         fn notify_disequality(&mut self, _t1: TermId, _t2: TermId) {}
 
         fn propagate(&mut self) -> ModuleResult {
-            ModuleResult::Consistent(self.equalities.clone())
+            ModuleResult::Consistent(
+                self.equalities
+                    .iter()
+                    .map(|&(t1, t2)| ModuleEquality {
+                        t1,
+                        t2,
+                        premises: Vec::new(), // Axiomatic
+                    })
+                    .collect(),
+            )
         }
 
         fn push_level(&mut self) {}
         fn backtrack(&mut self, _level: u32) {}
     }
 
-    // ── Helpers ──
-
-    /// Build a test environment: sort S, function f: S → S.
-    /// Terms interned in order: a=0, b=1, f(a)=2, f(b)=3.
-    fn test_env(assertions: Vec<SmtFormula>) -> SmtEnv {
+    /// EUF-only test environment: sort S, f: S → S, a=0, b=1, f(a)=2, f(b)=3.
+    fn euf_env(assertions: Vec<SmtFormula>) -> SmtEnv {
         let mut arena = TermArena::new();
         let s = SortId(0);
         let f = FuncId(0);
-
         let a = arena.intern(
             TermKind::Variable {
                 name: "a".into(),
@@ -367,7 +390,6 @@ mod tests {
             },
             s,
         );
-
         SmtEnv {
             arena,
             sorts: vec![Sort { name: "S".into() }],
@@ -380,38 +402,26 @@ mod tests {
         }
     }
 
-    fn t(n: u32) -> TermId {
-        TermId(n)
-    }
-
-    // ── Pass-through tests (NullModule = bare EUF) ──
+    // ── EUF pass-through tests ──
 
     #[test]
     fn null_module_passthrough_sat() {
-        let env = test_env(vec![SmtFormula::Eq(t(0), t(1))]);
+        let env = euf_env(vec![SmtFormula::Eq(t(0), t(1))]);
         assert_eq!(check_sat_combined(env, NullModule), SmtResult::Sat);
     }
 
     #[test]
     fn null_module_passthrough_unsat() {
-        // a = b ∧ f(a) ≠ f(b) — UNSAT by congruence
-        let env = test_env(vec![SmtFormula::And(vec![
+        let env = euf_env(vec![SmtFormula::And(vec![
             SmtFormula::Eq(t(0), t(1)),
             SmtFormula::Neq(t(2), t(3)),
         ])]);
         assert_eq!(check_sat_combined(env, NullModule), SmtResult::Unsat);
     }
 
-    // ── Equality sharing tests ──
-
     #[test]
-    fn module_equality_forces_unsat() {
-        // Formula: (a = b → f(a) = f(b)) ∧ f(a) ≠ f(b)
-        // Without module: SAT (a ≠ b satisfies implication vacuously)
-        // With ConstantModule(a = b): UNSAT
-        //   Module propagates a = b → EUF congruence gives f(a) = f(b)
-        //   → conflicts with f(a) ≠ f(b)
-        let env = test_env(vec![SmtFormula::And(vec![
+    fn constant_module_forces_unsat() {
+        let env = euf_env(vec![SmtFormula::And(vec![
             SmtFormula::Implies(
                 Box::new(SmtFormula::Eq(t(0), t(1))),
                 Box::new(SmtFormula::Eq(t(2), t(3))),
@@ -426,8 +436,7 @@ mod tests {
 
     #[test]
     fn same_formula_sat_without_module() {
-        // Same formula — SAT when no module forces a = b
-        let env = test_env(vec![SmtFormula::And(vec![
+        let env = euf_env(vec![SmtFormula::And(vec![
             SmtFormula::Implies(
                 Box::new(SmtFormula::Eq(t(0), t(1))),
                 Box::new(SmtFormula::Eq(t(2), t(3))),
@@ -437,27 +446,173 @@ mod tests {
         assert_eq!(check_sat_combined(env, NullModule), SmtResult::Sat);
     }
 
-    #[test]
-    fn module_equality_consistent_with_formula() {
-        // Formula: a = b. Module: also says a = b. Redundant — still SAT.
-        let env = test_env(vec![SmtFormula::Eq(t(0), t(1))]);
-        let module = ConstantModule {
-            equalities: vec![(t(0), t(1))],
+    // ── BV cross-theory tests ──
+
+    /// BV test environment:
+    ///   0: x (Variable)
+    ///   1: y (Variable)
+    ///   2: bvconst(5, 3) "three"
+    ///   3: bvconst(5, 4) "four"
+    ///   4: bvconst(5, 1) "one"
+    ///   5: bvadd(5, [x, one])
+    fn bv_env(assertions: Vec<SmtFormula>) -> (SmtEnv, Vec<TermKind>) {
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let x = arena.intern(
+            TermKind::Variable {
+                name: "x".into(),
+                sort: s,
+            },
+            s,
+        );
+        let _y = arena.intern(
+            TermKind::Variable {
+                name: "y".into(),
+                sort: s,
+            },
+            s,
+        );
+        let _three = arena.intern(TermKind::BvConst { width: 5, value: 3 }, s);
+        let _four = arena.intern(TermKind::BvConst { width: 5, value: 4 }, s);
+        let one = arena.intern(TermKind::BvConst { width: 5, value: 1 }, s);
+        let _add = arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Add,
+                width: 5,
+                args: vec![x, one],
+            },
+            s,
+        );
+        // Collect term kinds for BvSolver construction
+        let kinds: Vec<TermKind> = (0..arena.len())
+            .map(|i| arena.get(TermId(i as u32)).kind.clone())
+            .collect();
+        let env = SmtEnv {
+            arena,
+            sorts: vec![Sort { name: "BV5".into() }],
+            func_decls: Vec::new(),
+            assertions,
         };
-        assert_eq!(check_sat_combined(env, module), SmtResult::Sat);
+        (env, kinds)
+    }
+
+    /// BV+EUF test environment — adds f: S → S on top of bv_env.
+    ///   6: f(bvadd(x, one)) = Apply(f, [5])
+    ///   7: f(y) = Apply(f, [1])
+    fn bv_euf_env(assertions: Vec<SmtFormula>) -> (SmtEnv, Vec<TermKind>) {
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let f = FuncId(0);
+        let x = arena.intern(
+            TermKind::Variable {
+                name: "x".into(),
+                sort: s,
+            },
+            s,
+        );
+        let y = arena.intern(
+            TermKind::Variable {
+                name: "y".into(),
+                sort: s,
+            },
+            s,
+        );
+        let _three = arena.intern(TermKind::BvConst { width: 5, value: 3 }, s);
+        let _four = arena.intern(TermKind::BvConst { width: 5, value: 4 }, s);
+        let one = arena.intern(TermKind::BvConst { width: 5, value: 1 }, s);
+        let add = arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Add,
+                width: 5,
+                args: vec![x, one],
+            },
+            s,
+        );
+        let _f_add = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![add],
+            },
+            s,
+        );
+        let _f_y = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![y],
+            },
+            s,
+        );
+        let kinds: Vec<TermKind> = (0..arena.len())
+            .map(|i| arena.get(TermId(i as u32)).kind.clone())
+            .collect();
+        let env = SmtEnv {
+            arena,
+            sorts: vec![Sort { name: "BV5".into() }],
+            func_decls: vec![FuncDecl {
+                name: "f".into(),
+                arg_sorts: vec![s],
+                ret_sort: s,
+            }],
+            assertions,
+        };
+        (env, kinds)
     }
 
     #[test]
-    fn module_equality_already_on_trail() {
-        // Formula: a = b ∧ f(a) = f(b). Module: a = b (redundant).
-        // SAT — module adds nothing new.
-        let env = test_env(vec![SmtFormula::And(vec![
-            SmtFormula::Eq(t(0), t(1)),
-            SmtFormula::Eq(t(2), t(3)),
+    fn bv_constant_eval_unsat() {
+        // x = 3 ∧ y = 4 ∧ bvadd(x, 1) ≠ y
+        // Without BV: SAT (bvadd is uninterpreted)
+        // With BV: bvadd(3, 1) = 4 = y → conflict with disequality → UNSAT
+        let (env, kinds) = bv_env(vec![SmtFormula::And(vec![
+            SmtFormula::Eq(t(0), t(2)),  // x = three
+            SmtFormula::Eq(t(1), t(3)),  // y = four
+            SmtFormula::Neq(t(5), t(1)), // bvadd(x,1) ≠ y
         ])]);
-        let module = ConstantModule {
-            equalities: vec![(t(0), t(1))],
-        };
-        assert_eq!(check_sat_combined(env, module), SmtResult::Sat);
+        let module = BvSolver::new(&kinds);
+        assert_eq!(check_sat_combined(env, module), SmtResult::Unsat);
+    }
+
+    #[test]
+    fn bv_same_formula_sat_without_module() {
+        // Same formula — SAT when BV doesn't interpret bvadd
+        let (env, _) = bv_env(vec![SmtFormula::And(vec![
+            SmtFormula::Eq(t(0), t(2)),
+            SmtFormula::Eq(t(1), t(3)),
+            SmtFormula::Neq(t(5), t(1)),
+        ])]);
+        assert_eq!(check_sat_combined(env, NullModule), SmtResult::Sat);
+    }
+
+    #[test]
+    fn bv_euf_congruence_unsat() {
+        // x = 3 ∧ y = 4 ∧ (bvadd(x,1)=y ∨ bvadd(x,1)≠y) ∧ f(bvadd(x,1)) ≠ f(y)
+        // The disjunction is a tautology — creates the interface atom for bvadd(x,1)=y.
+        // BV propagates bvadd(x,1) = y → EUF congruence: f(bvadd(x,1)) = f(y) → UNSAT
+        let (env, kinds) = bv_euf_env(vec![SmtFormula::And(vec![
+            SmtFormula::Eq(t(0), t(2)), // x = three
+            SmtFormula::Eq(t(1), t(3)), // y = four
+            SmtFormula::Or(vec![
+                // tautology for atom creation
+                SmtFormula::Eq(t(5), t(1)),
+                SmtFormula::Neq(t(5), t(1)),
+            ]),
+            SmtFormula::Neq(t(6), t(7)), // f(bvadd(x,1)) ≠ f(y)
+        ])]);
+        let module = BvSolver::new(&kinds);
+        assert_eq!(check_sat_combined(env, module), SmtResult::Unsat);
+    }
+
+    #[test]
+    fn bv_euf_same_formula_sat_without_module() {
+        let (env, _) = bv_euf_env(vec![SmtFormula::And(vec![
+            SmtFormula::Eq(t(0), t(2)),
+            SmtFormula::Eq(t(1), t(3)),
+            SmtFormula::Or(vec![
+                SmtFormula::Eq(t(5), t(1)),
+                SmtFormula::Neq(t(5), t(1)),
+            ]),
+            SmtFormula::Neq(t(6), t(7)),
+        ])]);
+        assert_eq!(check_sat_combined(env, NullModule), SmtResult::Sat);
     }
 }
