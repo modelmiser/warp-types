@@ -189,13 +189,13 @@ impl EufSolver {
 
     // ── Union-Find ──
 
-    /// Find the representative of `x` with path halving.
+    /// Find the representative of `x` (non-compressing path walk).
     ///
-    /// Path halving is safe for backtracking: we only compress the query
-    /// path, which doesn't change the logical structure (representatives
-    /// stay the same). However, for simplicity with our undo-based
-    /// backtracking, we use non-compressing find to keep parent[] stable.
-    fn find(&self, mut x: TermId) -> TermId {
+    /// Non-compressing find keeps `parent[]` stable for undo-based
+    /// backtracking. Public within the crate so that [`CombiningSolver`]
+    /// can check which terms are already in the same equivalence class
+    /// before propagating module equalities.
+    pub(crate) fn find(&self, mut x: TermId) -> TermId {
         while self.parent[x.index()] != x {
             x = self.parent[x.index()];
         }

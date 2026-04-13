@@ -31,6 +31,7 @@
 //! via the DPLL(T) protocol: check after BCP fixpoint, lazy explanation
 //! during conflict analysis, backtrackable union-find.
 
+pub mod combine;
 pub mod euf;
 pub mod formula;
 pub mod phase;
@@ -38,6 +39,7 @@ pub mod session;
 pub mod solver;
 pub mod term;
 
+pub use combine::{CombiningSolver, ModuleResult, NullModule, TheoryModule};
 pub use euf::EufSolver;
 pub use formula::{AtomId, AtomMap, SmtFormula};
 pub use phase::{Asserted, Declared, Init, Phase, Sat, Unknown, Unsat};

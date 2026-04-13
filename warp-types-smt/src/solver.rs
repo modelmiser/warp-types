@@ -6,6 +6,7 @@
 //! 3. Call `solve_with_theory()` from `warp_types_sat` (DPLL(T) loop)
 //! 4. Interpret the SAT result as an SMT result
 
+use crate::combine::{CombiningSolver, NullModule, TheoryModule};
 use crate::euf::EufSolver;
 use crate::formula;
 use crate::session::SmtEnv;
@@ -25,9 +26,18 @@ pub enum SmtResult {
 
 /// Run the full SMT solving pipeline on the accumulated environment.
 ///
-/// Called by `SmtSession<'s, Asserted>::check_sat()`.
+/// Called by `SmtSession<'s, Asserted>::check_sat()`. Uses [`NullModule`]
+/// as the second theory (zero overhead — compiles identical to bare EUF).
 pub(crate) fn check_sat(env: SmtEnv) -> SmtResult {
-    // Handle empty assertions: trivially satisfiable
+    check_sat_combined(env, NullModule)
+}
+
+/// Run the SMT pipeline with a custom theory module for Nelson-Oppen combination.
+///
+/// The module receives equality/disequality notifications from the trail
+/// and can propagate new equalities back through the combining solver.
+/// See [`CombiningSolver`] for the full protocol.
+pub(crate) fn check_sat_combined<M: TheoryModule>(env: SmtEnv, module: M) -> SmtResult {
     if env.assertions.is_empty() {
         return SmtResult::Sat;
     }
@@ -35,16 +45,14 @@ pub(crate) fn check_sat(env: SmtEnv) -> SmtResult {
     // Step 1: Boolean abstraction — Tseitin-transform formulas to CNF
     let abstraction = formula::abstract_formulas(&env.assertions);
 
-    // Step 2: Build EUF theory solver with the atom map
-    let mut euf = EufSolver::new(&env.arena, abstraction.atom_map);
+    // Step 2: Build theory solvers
+    let euf = EufSolver::new(&env.arena, abstraction.atom_map);
+    let mut combiner = CombiningSolver::new(euf, module);
 
-    // Step 3: DPLL(T) — the SAT solver drives decisions and BCP,
-    // calling euf.check() after each fixpoint, euf.backtrack() on
-    // conflict-driven backjumping, and euf.explain() lazily during
-    // conflict analysis.
-    let result = solve_with_theory(abstraction.db, abstraction.num_vars, &mut euf);
+    // Step 3: DPLL(T) — the SAT solver drives the combining solver,
+    // which mediates between EUF and the theory module via equality sharing.
+    let result = solve_with_theory(abstraction.db, abstraction.num_vars, &mut combiner);
 
-    // Step 4: Interpret
     match result {
         SolveResult::Sat(_) => SmtResult::Sat,
         SolveResult::Unsat => SmtResult::Unsat,
