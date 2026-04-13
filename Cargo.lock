@@ -71,6 +71,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp-types-bmc"
+version = "0.1.0"
+dependencies = [
+ "warp-types",
+ "warp-types-sat",
+]
+
+[[package]]
 name = "warp-types-builder"
 version = "0.3.1"
 
