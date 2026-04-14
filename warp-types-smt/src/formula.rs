@@ -216,11 +216,11 @@ fn purify_argument_pairs(atom_map: &mut AtomMap, arena: &TermArena) {
 
 /// If two terms are applications of the same function (or same BvOp with
 /// matching width), return their argument lists for congruence pairing.
-fn matching_congruence_args<'a>(
-    arena: &'a TermArena,
+fn matching_congruence_args(
+    arena: &TermArena,
     t1: TermId,
     t2: TermId,
-) -> Option<(&'a [TermId], &'a [TermId])> {
+) -> Option<(&[TermId], &[TermId])> {
     let k1 = &arena.get(t1).kind;
     let k2 = &arena.get(t2).kind;
     match (k1, k2) {
