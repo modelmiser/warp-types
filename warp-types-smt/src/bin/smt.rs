@@ -1,14 +1,16 @@
-//! SMT command-line tool.
+//! SMT solver demo.
 //!
-//! Demonstrates the phase-typed SMT solver on QF_EUF examples.
+//! Demonstrates the phase-typed SMT solver on QF_EUF and QF_UFBV examples,
+//! including Nelson-Oppen cross-theory reasoning.
 
-use warp_types_smt::{with_session, SmtFormula, SmtResult};
+use warp_types_smt::{with_session, BvOpKind, SmtFormula, SmtResult};
 
 fn main() {
-    println!("warp-types-smt: Phase-typed SMT Solver for QF_EUF\n");
+    println!("warp-types-smt: Phase-typed SMT Solver\n");
 
-    // ── Example 1: SAT — a = b, f(a) = f(b) ──
-    println!("── Example 1: a = b, f(a) = f(b) ──");
+    // ── EUF examples ──
+
+    println!("── 1: a = b, f(a) = f(b) ──");
     let result = with_session(|session| {
         let (session, s) = session.declare_sort("S");
         let (session, f) = session.declare_fun("f", &[s], s);
@@ -28,8 +30,7 @@ fn main() {
     });
     print_result(&result);
 
-    // ── Example 2: UNSAT — a = b, f(a) ≠ f(b) (congruence violation) ──
-    println!("\n── Example 2: a = b, f(a) ≠ f(b) — congruence violation ──");
+    println!("── 2: a = b, f(a) ≠ f(b) — congruence violation ──");
     let result = with_session(|session| {
         let (session, s) = session.declare_sort("S");
         let (session, f) = session.declare_fun("f", &[s], s);
@@ -49,8 +50,7 @@ fn main() {
     });
     print_result(&result);
 
-    // ── Example 3: UNSAT — a = b, b = c, f(a) ≠ f(c) (transitivity + congruence) ──
-    println!("\n── Example 3: a = b, b = c, f(a) ≠ f(c) — transitivity chain ──");
+    println!("── 3: a = b, b = c, f(a) ≠ f(c) — transitivity chain ──");
     let result = with_session(|session| {
         let (session, s) = session.declare_sort("S");
         let (session, f) = session.declare_fun("f", &[s], s);
@@ -72,8 +72,7 @@ fn main() {
     });
     print_result(&result);
 
-    // ── Example 4: SAT — (a = b OR c = d), f(a) ≠ f(b) — Boolean reasoning ──
-    println!("\n── Example 4: (a = b ∨ c = d), f(a) ≠ f(b) — Boolean + theory ──");
+    println!("── 4: (a = b ∨ c = d), f(a) ≠ f(b) — Boolean + theory ──");
     let result = with_session(|session| {
         let (session, s) = session.declare_sort("S");
         let (session, f) = session.declare_fun("f", &[s], s);
@@ -94,12 +93,110 @@ fn main() {
         asserted.check_sat()
     });
     print_result(&result);
+
+    // ── Cross-theory: EUF + BV (Nelson-Oppen combination) ──
+
+    println!("\n── 5: x = 3, y = 4, bvadd(x,1) ≠ y — BV constant eval ──");
+    println!("  (SAT with EUF only, UNSAT with BV — bvadd is interpreted)");
+    let result_euf = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add_x_1) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+                SmtFormula::Neq(add_x_1, y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat()
+    });
+    let result_bv = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add_x_1) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+                SmtFormula::Neq(add_x_1, y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    print!("  EUF only: ");
+    print_result(&result_euf);
+    print!("  EUF + BV: ");
+    print_result(&result_bv);
+
+    println!("── 6: x = 3, y = 4, f(bvadd(x,1)) ≠ f(y) — BV + congruence ──");
+    println!("  (BV evaluates bvadd(3,1) = 4 = y → EUF congruence: f(bvadd(x,1)) = f(y))");
+    let result_euf = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add_x_1) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+        let (session, f_add) = session.apply(f, &[add_x_1]);
+        let (session, f_y) = session.apply(f, &[y]);
+
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+                SmtFormula::Neq(f_add, f_y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat()
+    });
+    let result_bv = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add_x_1) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+        let (session, f_add) = session.apply(f, &[add_x_1]);
+        let (session, f_y) = session.apply(f, &[y]);
+
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+                SmtFormula::Neq(f_add, f_y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    print!("  EUF only: ");
+    print_result(&result_euf);
+    print!("  EUF + BV: ");
+    print_result(&result_bv);
 }
 
 fn print_result(result: &SmtResult) {
     match result {
-        SmtResult::Sat => println!("  SAT"),
-        SmtResult::Unsat => println!("  UNSAT"),
-        SmtResult::Unknown => println!("  UNKNOWN"),
+        SmtResult::Sat => println!("SAT"),
+        SmtResult::Unsat => println!("UNSAT"),
+        SmtResult::Unknown => println!("UNKNOWN"),
     }
 }

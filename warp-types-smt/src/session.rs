@@ -14,7 +14,7 @@
 use core::marker::PhantomData;
 
 use crate::phase::*;
-use crate::term::{FuncDecl, FuncId, Sort, SortId, TermArena, TermId, TermKind};
+use crate::term::{BvOpKind, FuncDecl, FuncId, Sort, SortId, TermArena, TermId, TermKind};
 
 // ============================================================================
 // Environment (accumulated state across phases)
@@ -137,6 +137,41 @@ impl<'s> SmtSession<'s, Init> {
         (self, id)
     }
 
+    /// Create a bitvector constant in the term arena.
+    /// Returns the session and the term ID.
+    pub fn bv_const(
+        mut self,
+        width: u32,
+        value: u64,
+        sort: SortId,
+    ) -> (SmtSession<'s, Init>, TermId) {
+        let id = self
+            .env
+            .arena
+            .intern(TermKind::BvConst { width, value }, sort);
+        (self, id)
+    }
+
+    /// Create a bitvector operation term in the arena.
+    /// Returns the session and the term ID.
+    pub fn bv_op(
+        mut self,
+        op: BvOpKind,
+        width: u32,
+        args: &[TermId],
+        sort: SortId,
+    ) -> (SmtSession<'s, Init>, TermId) {
+        let id = self.env.arena.intern(
+            TermKind::BvOp {
+                op,
+                width,
+                args: args.to_vec(),
+            },
+            sort,
+        );
+        (self, id)
+    }
+
     /// Finish declarations and move to the assertion phase.
     pub fn finish_declarations(self) -> SmtSession<'s, Declared> {
         SmtSession::new(self.env)
@@ -168,12 +203,24 @@ impl<'s> SmtSession<'s, Declared> {
 // ============================================================================
 
 impl<'s> SmtSession<'s, Asserted> {
-    /// Check satisfiability. Consumes the session and returns the result.
+    /// Check satisfiability with EUF only. Consumes the session.
     ///
-    /// Wires the Boolean abstraction layer, EUF theory solver, and
-    /// warp-types-sat's DPLL(T) engine together.
+    /// Bitvector operations (`BvOp`) are treated as uninterpreted.
     pub fn check_sat(self) -> crate::solver::SmtResult {
         crate::solver::check_sat(self.env)
+    }
+
+    /// Check satisfiability with EUF + bitvector reasoning. Consumes the session.
+    ///
+    /// The BV theory module evaluates ground bitvector operations and shares
+    /// discovered equalities with EUF via Nelson-Oppen combination. Use this
+    /// when the formula contains `BvConst` / `BvOp` terms.
+    pub fn check_sat_bv(self) -> crate::solver::SmtResult {
+        let kinds: Vec<TermKind> = (0..self.env.arena.len())
+            .map(|i| self.env.arena.get(TermId(i as u32)).kind.clone())
+            .collect();
+        let module = crate::bv::BvSolver::new(&kinds);
+        crate::solver::check_sat_combined(self.env, module)
     }
 }
 
