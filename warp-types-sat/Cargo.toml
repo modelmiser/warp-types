@@ -25,3 +25,19 @@ cudarc = { version = "0.19", features = ["driver", "cuda-12000"], optional = tru
 
 [build-dependencies]
 warp-types-builder = { path = "../warp-types-builder", version = "0.3.1", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Peer-solver comparison (`batsat`, `splr`) is a Tier-2 follow-up:
+# verify current crate versions + public APIs against their docs on
+# docs.rs before adding. Scaffolding in benches/random_3sat.rs marks
+# the integration points; intentionally not wired here.
+
+[[bench]]
+name = "random_3sat"
+harness = false
+
+[[bench]]
+name = "cardinality"
+harness = false
