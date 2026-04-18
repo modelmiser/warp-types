@@ -537,7 +537,7 @@ Inside the \texttt{cases tag <;>} block, the dispatcher reduces to a concrete co
 Table~\ref{fig:line-count} tallies the pre-port and post-port line counts across the three files that the factoring touches.
 
 \begin{table}[t]
-\caption{Line count before and after the \texttt{Core.lean} factoring. The net change is +108~lines --- the factoring makes the total corpus larger, not smaller. The structural saving is real but it does not show up in a line count, because the caller-side discharge pattern consumes more lines than the removed rule duplications freed. \emph{Note:} Pre-port and Post-port reflect the state at the port commit. The Phase~6 metatheory extension~(\S\ref{sec:theorem-placement}) subsequently added corollary specialisations and supporting imports to each domain file, bringing current line counts to 238 (\texttt{Fence.lean}) and 222 (\texttt{Reduce.lean}); the structural conclusion of this figure is unchanged.}
+\caption{Line count before and after the \texttt{Core.lean} factoring. The net change is +108~lines --- the factoring makes the total corpus larger, not smaller. The structural saving is real but it does not show up in a line count, because the caller-side discharge pattern consumes more lines than the removed rule duplications freed. \emph{Note:} Pre-port and Post-port reflect the state at the port commit. The metatheory extension~(\S\ref{sec:theorem-placement}) subsequently added corollary specialisations and supporting imports to each domain file, bringing current line counts to 238 (\texttt{Fence.lean}) and 222 (\texttt{Reduce.lean}); the structural conclusion of this figure is unchanged.}
 \label{fig:line-count}
 \small
 \begin{tabular}{@{}lrrrl@{}}
