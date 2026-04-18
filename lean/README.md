@@ -64,14 +64,39 @@ lean/
   lakefile.toml          Build configuration
   lean-toolchain         Lean version (v4.28.0)
   Main.lean              Entry point (build verification)
-  WarpTypes.lean         Module root
+  WarpTypes.lean         Module root (imports the 10 files below)
   WarpTypes/
-    Basic.lean           Type system: active sets, types, expressions,
-                         typing rules, diverge/complement/shuffle theorems,
-                         warpFree predicate, loop rules, value predicate
-    Metatheory.lean      Metatheory: substitution, reduction, canonical
+    Generic.lean         Width-parameterized participant sets (PSet n),
+                         bitwise-algebraic theorems that don't depend
+                         on a concrete width
+    Basic.lean           GPU instantiation: ActiveSet := PSet 32, type
+                         system (Ty n, Expr n, HasType, Step), generic
+                         theorems (diverge_partition, complement_symmetric,
+                         shuffle_requires_all), loop rules
+    Metatheory.lean      GPU metatheory: substitution, reduction, canonical
                          forms, progress, preservation, context lemmas,
-                         substitution lemma, 5 bug proofs
+                         5 bug proofs at n=32
+    SolExperiment.lean   Sol experiment theorems (LLM proof construction
+                         from specifications) — bitvector + dependent-type
+                         instances, all width-generic
+    Csp.lean             CSP collective domain (Level 2b): send/recv/
+                         collective on a Topology-indexed mesh, J1 grid
+                         instance (n=6), three concrete j1_* witnesses
+    Protocol.lean        Protocol state (Level 3): FollowsProtocol as a
+                         separate judgment composed orthogonally with
+                         CspHasType (PingPong concrete instance)
+    Core.lean            Generic core spine: family-parametric merge/
+                         finalize factoring of Fence (Level 2c) and
+                         Reduce (Level 2d) typing rules
+    CoreMetatheory.lean  Reduction semantics and progress/preservation
+                         for CoreHasType, inherited at concrete widths
+                         by Fence (n=8) and Reduce (n=4)
+    Fence.lean           Partial-write fence (Level 2c, post-port):
+                         ByteBuf := PSet 8, thin domain view over
+                         CoreHasType, four-theorem stack
+    Reduce.lean          Tree all-reduce (Level 2d, post-port):
+                         Col := PSet 4, thin domain view over
+                         CoreHasType, four-theorem stack
 ```
 
 ## Provenance
