@@ -18,21 +18,25 @@ path = "src/bin/solve.rs"
 [features]
 default = []
 gpu = ["dep:cudarc", "dep:warp-types-builder"]
+# Enables peer-solver comparison benches (`batsat` + `splr`).
+# Off by default so the normal bench run has no extra compile cost.
+compare = ["dep:batsat", "dep:splr"]
 
 [dependencies]
 warp-types = { path = "..", version = "0.3.2" }
 cudarc = { version = "0.19", features = ["driver", "cuda-12000"], optional = true }
+# Peer solvers for comparison benches. Listed as optional [dependencies]
+# (not [dev-dependencies]) because Cargo rejects `optional = true` on
+# dev-deps. They only compile under `--features compare`, so downstream
+# consumers never pay for them.
+batsat = { version = "0.6", optional = true }
+splr = { version = "0.17", optional = true }
 
 [build-dependencies]
 warp-types-builder = { path = "../warp-types-builder", version = "0.3.1", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-
-# Peer-solver comparison (`batsat`, `splr`) is a Tier-2 follow-up:
-# verify current crate versions + public APIs against their docs on
-# docs.rs before adding. Scaffolding in benches/random_3sat.rs marks
-# the integration points; intentionally not wired here.
 
 [[bench]]
 name = "random_3sat"

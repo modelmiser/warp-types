@@ -7,10 +7,12 @@ the top-level README for the rationale.
 ## What's wired today
 
 - `random_3sat.rs` — random 3-SAT at the phase-transition ratio
-  (~4.267), sizes 50/75/100 variables. Currently measures our CDCL
-  only; peer-solver comparison is a Tier-2 follow-up (see TODO in the
-  file). Primary signal: does our CDCL performance regress between
-  releases?
+  (~4.267), sizes 50/75/100 variables. Measures our CDCL
+  unconditionally; under `--features compare`, also measures
+  `batsat 0.6` and `splr 0.17` on the same inputs, and runs a
+  one-shot agreement check that panics if the three solvers
+  disagree on SAT/UNSAT. Primary signal: does our CDCL performance
+  regress between releases?
 - `cardinality.rs` — pigeonhole PHP(n) and parity XOR chains.
   Cardinality-heavy instances where the gradient path should shine.
   Currently measures the CDCL path only; gradient-path benches land
@@ -22,17 +24,14 @@ the top-level README for the rationale.
 ```bash
 cargo bench -p warp-types-sat
 cargo bench -p warp-types-sat --bench random_3sat
+
+# With peer-solver comparison (batsat + splr):
+cargo bench -p warp-types-sat --bench random_3sat --features compare
 ```
 
 Results land in `target/criterion/` with HTML reports.
 
 ## Follow-up work (not yet wired)
-
-**Peer-solver comparison.** Add `batsat` and `splr` as optional
-`dev-dependencies` under a `compare` feature. Verify current
-versions and public APIs on docs.rs — do not guess. The scaffolding
-in `random_3sat.rs` marks the integration point with a TODO
-comment.
 
 **Gradient-path benchmarks.** Once `gradient::solve` has a stable
 public signature, add matching `bench_pigeonhole_gradient` and

@@ -9,12 +9,8 @@
 //! We do NOT benchmark against Kissat / CaDiCaL here. See
 //! `benches/README.md` for why.
 //!
-//! TODO(tier-2 follow-up): wire `batsat` and `splr` comparison
-//! passes. Do NOT guess their APIs — verify current versions and
-//! public surfaces on docs.rs, then add `dev-dependencies` to
-//! Cargo.toml and matching `bench_batsat` / `bench_splr` functions
-//! below, gated behind a `compare` feature flag so the default
-//! bench run still works without the extra deps.
+//! Peer comparison runs under `--features compare`:
+//!   cargo bench -p warp-types-sat --bench random_3sat --features compare
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use warp_types_sat::dimacs;
@@ -51,10 +47,13 @@ fn generate_random_3cnf(num_vars: u32, seed: u64) -> String {
     out
 }
 
+const SIZES: &[u32] = &[50, 75, 100];
+const SEED: u64 = 0xDEADBEEF;
+
 fn bench_our_solver(c: &mut Criterion) {
     let mut group = c.benchmark_group("random_3sat/warp-types-sat");
-    for &n in &[50u32, 75, 100] {
-        let cnf = generate_random_3cnf(n, 0xDEADBEEF);
+    for &n in SIZES {
+        let cnf = generate_random_3cnf(n, SEED);
         group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
@@ -65,5 +64,123 @@ fn bench_our_solver(c: &mut Criterion) {
     group.finish();
 }
 
+// -------- peer-solver benches (feature-gated) --------
+
+#[cfg(feature = "compare")]
+mod peer {
+    use super::*;
+    use std::sync::Once;
+
+    /// Convert our DIMACS text into splr-native clauses (Vec<Vec<i32>>).
+    /// Our generator emits well-formed `p cnf` + `l1 l2 l3 0\n`, so a
+    /// hand-rolled split is adequate here — no need for full DIMACS.
+    fn dimacs_to_clauses(cnf: &str) -> Vec<Vec<i32>> {
+        let mut out = Vec::new();
+        for line in cnf.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('c') || line.starts_with('p') {
+                continue;
+            }
+            let clause: Vec<i32> = line
+                .split_whitespace()
+                .map(|s| s.parse::<i32>().expect("dimacs int"))
+                .take_while(|&l| l != 0)
+                .collect();
+            if !clause.is_empty() {
+                out.push(clause);
+            }
+        }
+        out
+    }
+
+    fn solve_warp(cnf: &str) -> bool {
+        use warp_types_sat::solver::SolveResult;
+        let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
+        matches!(solver::solve(inst.db, inst.num_vars), SolveResult::Sat(_))
+    }
+
+    fn solve_batsat(cnf: &str) -> bool {
+        use batsat::callbacks::Basic;
+        use batsat::{dimacs as bdimacs, lbool, Solver, SolverInterface, SolverOpts};
+        use std::io::Cursor;
+        let mut reader = Cursor::new(cnf.as_bytes());
+        let mut s: Solver<Basic> = Solver::new(SolverOpts::default(), Basic::new());
+        bdimacs::parse(&mut reader, &mut s, false, false).expect("batsat parse");
+        if !s.simplify() {
+            return false;
+        }
+        s.solve_limited(&[]) == lbool::TRUE
+    }
+
+    fn solve_splr(clauses: &[Vec<i32>]) -> bool {
+        use splr::{Certificate, SolverError};
+        match Certificate::try_from(clauses.to_vec()) {
+            Ok(Certificate::SAT(_)) => true,
+            Ok(Certificate::UNSAT) => false,
+            Err(SolverError::EmptyClause) => false,
+            Err(e) => panic!("splr solver error: {:?}", e),
+        }
+    }
+
+    /// Runs once per process — verifies all three solvers return the
+    /// same SAT/UNSAT verdict on the benchmark inputs. If this fails,
+    /// we've wired an API wrong and any timing numbers are meaningless.
+    pub fn check_agreement() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            for &n in SIZES {
+                let cnf = generate_random_3cnf(n, SEED);
+                let clauses = dimacs_to_clauses(&cnf);
+                let w = solve_warp(&cnf);
+                let b = solve_batsat(&cnf);
+                let sp = solve_splr(&clauses);
+                assert!(
+                    w == b && b == sp,
+                    "solver disagreement at n={}: warp={} batsat={} splr={}",
+                    n, w, b, sp
+                );
+                eprintln!("[agreement] n={}: all three solvers -> {}", n,
+                    if w { "SAT" } else { "UNSAT" });
+            }
+        });
+    }
+
+    pub fn bench_batsat(c: &mut Criterion) {
+        check_agreement();
+        let mut group = c.benchmark_group("random_3sat/batsat");
+        for &n in SIZES {
+            let cnf = generate_random_3cnf(n, SEED);
+            group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
+                b.iter(|| {
+                    let _ = solve_batsat(black_box(cnf));
+                });
+            });
+        }
+        group.finish();
+    }
+
+    pub fn bench_splr(c: &mut Criterion) {
+        check_agreement();
+        let mut group = c.benchmark_group("random_3sat/splr");
+        for &n in SIZES {
+            let cnf = generate_random_3cnf(n, SEED);
+            let clauses = dimacs_to_clauses(&cnf);
+            group.bench_with_input(BenchmarkId::from_parameter(n), &clauses, |b, cls| {
+                b.iter(|| {
+                    // Certificate::try_from consumes the Vec, so we
+                    // clone per iteration. At n=100 that's ~427
+                    // clauses × 3 i32s — negligible vs CDCL runtime.
+                    let _ = solve_splr(black_box(cls));
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
+#[cfg(feature = "compare")]
+criterion_group!(benches, bench_our_solver, peer::bench_batsat, peer::bench_splr);
+#[cfg(not(feature = "compare"))]
 criterion_group!(benches, bench_our_solver);
+
 criterion_main!(benches);
