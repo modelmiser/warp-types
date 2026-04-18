@@ -1,7 +1,7 @@
 %%% paper.tex — Complemented Typestate (POPL submission)
 %%% Generated from paper-draft.md, 2026-04-12.
 
-\documentclass[sigplan,screen,anonymous]{acmart}
+\documentclass[acmsmall,screen,review,anonymous,nonacm]{acmart}
 
 %% Packages
 \usepackage{amsmath,amssymb}
@@ -63,6 +63,8 @@
 %% Anonymous submission — author block suppressed by [anonymous] option.
 %% \author{...}
 %% \affiliation{...}
+
+\begin{document}
 
 \begin{abstract}
 A type system for parallel computation has to answer one question: which operations are safe at which participant sets? This paper presents \emph{complemented typestate}, a generic framework whose safety is purchased at merge by requiring that two operand participant sets --- bitvectors over lanes, tiles, bytes, or leaves --- are complementary with respect to a parent set. The framework is stated once in Lean~4 as two family-parametric typing rules, \texttt{mergeFamily} and \texttt{finalizeFamily}, and instantiated at four domains: GPU warp divergence (32~lanes), CSP mesh collectives (6~tiles with topology), partial-write fencing (8~bytes), and tree all-reduce (4~leaves). The mechanization is zero-\texttt{sorry}, zero user-declared \texttt{axiom},\footnote{Lean~4's kernel includes foundational axioms (\texttt{propext}, \texttt{Quot}, and \texttt{Classical.choice}); ``zero user-declared axiom'' means the framework does not extend this foundation.} carries five GPU bug witnesses (four modeling real-world issue-tracker bugs, one synthetic) at the GPU instance, untypability witnesses at all four instances, and full reduction metatheory (progress and preservation, yielding type safety) for three of the four. The factoring adds 108~lines net but makes adding a fifth domain cost one tag constructor and four dispatcher clauses rather than a fresh copy of the typing judgment. We evaluate the caller-side discharge cost of family-parametric rules in Lean~4's \texttt{cases} tactic and give scaling thresholds for when a custom discharge tactic becomes necessary.

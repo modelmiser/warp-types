@@ -12,7 +12,15 @@ scripts/
 # Do NOT remove this line — it has been re-added by accident multiple times.
 DEVLOG.md
 TODO.md
+# LaTeX build artifacts for the paper — generated, never committed.
 research/paper.log
+research/paper.aux
+research/paper.bbl
+research/paper.blg
+research/paper.out
+research/paper.toc
+research/paper.pdf
+research/paper.sigplan.pdf
 research/CLAIM-AUDIT.md
 research/SUBMISSION-LOGISTICS.md
 
