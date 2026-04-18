@@ -170,7 +170,7 @@ Three files make the complete pipeline:
 **`my-kernels/Cargo.toml`** — the kernel crate:
 ```toml
 [dependencies]
-warp-types = "0.3"
+warp-types = "0.3.2"
 ```
 
 **`build.rs`** — auto-compiles kernels to PTX:

@@ -11,7 +11,7 @@ Five paths, from lowest friction to highest benefit.
 ```toml
 # Cargo.toml
 [dependencies]
-warp-types = "0.3"
+warp-types = "0.3.2"
 ```
 
 ```rust
@@ -75,7 +75,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-warp-types = "0.3"
+warp-types = "0.3.2"
 ```
 
 **Kernel code (`my-kernels/src/lib.rs`):**
