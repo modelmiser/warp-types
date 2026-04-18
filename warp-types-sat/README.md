@@ -82,10 +82,37 @@ errors."
 
 ## Performance expectations
 
-Benchmarks are scaffolded in `benches/` (criterion) but not yet published.
-Tier-1 plan: honest numbers against `batsat` and `splr` on SATLIB uf50/uf75
-(Rust-peer solvers, not Kissat) plus a cardinality-heavy suite where the
-gradient path should earn its keep. Expect updates.
+**CDCL baseline is batsat/splr-class, not Kissat-class.** Peer-solver
+comparison numbers pending (see `benches/README.md` for scaffolding).
+
+**Hybrid gradient + CDCL on the advertised niche** (UNSAT pigeonhole,
+where resolution-based CDCL faces exponential lower bounds):
+
+| n | Pure CDCL | `hybrid_solve` (default config) | `hybrid_solve` (tuned `num_starts=8, max_iters=100`) |
+|---|-----------|--------------------------------|------------------------------------------------------|
+| 4 | 1.44 ms   | 30.0 ms (0.05×, **loses**)     | 1.00 ms (1.4×) |
+| 5 | 17.2 ms   | 58.1 ms (0.3×, **loses**)      | 2.03 ms (8.5×) |
+| 6 | 336 ms    | 93.2 ms (**3.6×**)             | 5.18 ms (**65×**) |
+
+All 12 runs verified returning `Unsat` — CDCL's completeness preserved;
+gradient contributes VSIDS phase hints and initial activities, CDCL
+closes the UNSAT proof from a warm start. Median of 3 runs on an
+isolcpus E-core at 4100 MHz; criterion 20-sample CV < 1%.
+
+**Read this table carefully.** At smaller sizes the default-config
+gradient overhead exceeds the CDCL savings (default hybrid loses to
+pure CDCL at PHP(4) and PHP(5)). The advantage only materializes
+once CDCL's resolution search gets expensive enough to amortize the
+gradient work. Counter-intuitively, **fewer gradient iterations give
+better warm-starts on UNSAT instances** — over-converged gradient
+commits confidently to wrong polarities (no satisfying assignment
+exists by construction), which CDCL then has to backtrack through.
+Tuning matters; treat these numbers as guidance to measure on your
+own workload, not a drop-in competition setup.
+
+Peer-solver comparison (`batsat`/`splr` on random 3-SAT) is the
+remaining Tier-2 follow-up — until published, read the CDCL column
+here as a within-solver reference, not a cross-solver claim.
 
 ## Usage
 
