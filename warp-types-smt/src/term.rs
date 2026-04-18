@@ -62,16 +62,31 @@ pub struct FuncDecl {
 // ============================================================================
 
 /// Bitvector operation kinds.
+///
+/// `Add`/`And`/`Or`/`Xor` are variadic on `args`. `Sub`/`Concat` are binary.
+/// `Not`/`Extract` are unary. The evaluator enforces arity; the session
+/// helpers enforce it at term-construction time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BvOpKind {
-    /// Addition modulo 2^width.
+    /// Addition modulo 2^width (variadic).
     Add,
-    /// Bitwise AND.
+    /// Bitwise AND (variadic).
     And,
-    /// Bitwise OR.
+    /// Bitwise OR (variadic).
     Or,
-    /// Bitwise XOR.
+    /// Bitwise XOR (variadic).
     Xor,
+    /// Width-masked bitwise complement (unary).
+    Not,
+    /// Modular subtraction `a - b mod 2^width` (binary).
+    Sub,
+    /// Extract bits `[hi:lo]` inclusive from a single BV term.
+    /// Result width is `hi - lo + 1`. Requires `lo ≤ hi` and
+    /// `hi < source_width`; the session helper checks these.
+    Extract { hi: u32, lo: u32 },
+    /// Concatenate two BV terms; the first arg becomes the high bits.
+    /// Result width is the sum of arg widths (binary).
+    Concat,
 }
 
 /// The internal structure of a term.

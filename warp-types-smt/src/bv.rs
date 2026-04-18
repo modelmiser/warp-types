@@ -20,20 +20,57 @@ use crate::term::{BvOpKind, TermId, TermKind};
 // BV evaluation
 // ============================================================================
 
-/// Evaluate a bitvector operation on concrete values.
-fn evaluate(op: BvOpKind, width: u32, args: &[u64]) -> u64 {
-    let mask = if width >= 64 {
+/// Mask for a `width`-bit unsigned value. Handles `width == 64` without
+/// the `1u64 << 64` panic trap.
+fn width_mask(width: u32) -> u64 {
+    if width >= 64 {
         u64::MAX
     } else {
         (1u64 << width) - 1
-    };
+    }
+}
+
+/// Evaluate a bitvector operation on concrete `(arg_width, arg_value)` pairs.
+///
+/// `result_width` is the output width (for `Extract` this is `hi - lo + 1`;
+/// for `Concat` it is the sum of arg widths; for the rest it is the common
+/// arg width). Per-arg widths are needed for `Concat`, which shifts the
+/// first arg left by the *second* arg's width.
+fn evaluate(op: BvOpKind, result_width: u32, args: &[(u32, u64)]) -> u64 {
+    let out_mask = width_mask(result_width);
+    let vals = || args.iter().map(|&(_, v)| v);
     let result = match op {
-        BvOpKind::Add => args.iter().copied().sum::<u64>(),
-        BvOpKind::And => args.iter().copied().fold(mask, |a, b| a & b),
-        BvOpKind::Or => args.iter().copied().fold(0, |a, b| a | b),
-        BvOpKind::Xor => args.iter().copied().fold(0, |a, b| a ^ b),
+        BvOpKind::Add => vals().sum::<u64>(),
+        BvOpKind::And => vals().fold(out_mask, |a, b| a & b),
+        BvOpKind::Or => vals().fold(0, |a, b| a | b),
+        BvOpKind::Xor => vals().fold(0, |a, b| a ^ b),
+        BvOpKind::Not => {
+            debug_assert_eq!(args.len(), 1, "bvnot is unary");
+            !args[0].1
+        }
+        BvOpKind::Sub => {
+            debug_assert_eq!(args.len(), 2, "bvsub is binary");
+            args[0].1.wrapping_sub(args[1].1)
+        }
+        BvOpKind::Extract { hi, lo } => {
+            debug_assert_eq!(args.len(), 1, "extract is unary");
+            debug_assert!(lo <= hi, "extract requires lo <= hi");
+            args[0].1 >> lo
+        }
+        BvOpKind::Concat => {
+            debug_assert_eq!(args.len(), 2, "concat is binary");
+            let (_, hi_val) = args[0];
+            let (rhs_width, lo_val) = args[1];
+            // rhs_width ≤ 64 (validated at construction); guard the shift.
+            let shifted = if rhs_width >= 64 {
+                0
+            } else {
+                hi_val << rhs_width
+            };
+            shifted | (lo_val & width_mask(rhs_width))
+        }
     };
-    result & mask
+    result & out_mask
 }
 
 // ============================================================================
@@ -222,12 +259,10 @@ impl TheoryModule for BvSolver {
                 ref args,
             } = self.term_kinds[op_tid.index()].clone()
             {
-                let arg_values: Option<Vec<u64>> = args
-                    .iter()
-                    .map(|&a| self.known_value[a.index()].map(|(_, v)| v))
-                    .collect();
-                if let Some(vals) = arg_values {
-                    let result = evaluate(op, width, &vals);
+                let arg_pairs: Option<Vec<(u32, u64)>> =
+                    args.iter().map(|&a| self.known_value[a.index()]).collect();
+                if let Some(pairs) = arg_pairs {
+                    let result = evaluate(op, width, &pairs);
                     self.set_value(op_tid, width, result, ValueReason::Evaluation);
                 }
             }
@@ -390,10 +425,59 @@ mod tests {
 
     #[test]
     fn evaluate_bv_ops() {
-        assert_eq!(evaluate(BvOpKind::Add, 5, &[3, 1]), 4);
-        assert_eq!(evaluate(BvOpKind::Add, 3, &[7, 1]), 0); // overflow: (7+1) & 0b111 = 0
-        assert_eq!(evaluate(BvOpKind::And, 8, &[0xFF, 0x0F]), 0x0F);
-        assert_eq!(evaluate(BvOpKind::Or, 8, &[0xF0, 0x0F]), 0xFF);
-        assert_eq!(evaluate(BvOpKind::Xor, 8, &[0xFF, 0xFF]), 0x00);
+        assert_eq!(evaluate(BvOpKind::Add, 5, &[(5, 3), (5, 1)]), 4);
+        // overflow: (7+1) & 0b111 = 0
+        assert_eq!(evaluate(BvOpKind::Add, 3, &[(3, 7), (3, 1)]), 0);
+        assert_eq!(evaluate(BvOpKind::And, 8, &[(8, 0xFF), (8, 0x0F)]), 0x0F);
+        assert_eq!(evaluate(BvOpKind::Or, 8, &[(8, 0xF0), (8, 0x0F)]), 0xFF);
+        assert_eq!(evaluate(BvOpKind::Xor, 8, &[(8, 0xFF), (8, 0xFF)]), 0x00);
+    }
+
+    #[test]
+    fn evaluate_bvnot() {
+        // 5-bit: ~0b01010 & 0b11111 = 0b10101 = 21
+        assert_eq!(evaluate(BvOpKind::Not, 5, &[(5, 0b01010)]), 0b10101);
+        // 64-bit: ~0 = u64::MAX
+        assert_eq!(evaluate(BvOpKind::Not, 64, &[(64, 0)]), u64::MAX);
+    }
+
+    #[test]
+    fn evaluate_bvsub() {
+        // 5 - 2 = 3 (no wrap)
+        assert_eq!(evaluate(BvOpKind::Sub, 5, &[(5, 5), (5, 2)]), 3);
+        // 0 - 1 = 31 in 5-bit (wrap): (-1 as u64) & 0b11111 = 0b11111 = 31
+        assert_eq!(evaluate(BvOpKind::Sub, 5, &[(5, 0), (5, 1)]), 31);
+    }
+
+    #[test]
+    fn evaluate_extract() {
+        // extract [3:1] of 8-bit 0b11010110 = 0b011 = 3
+        // (bit 7)1 1 0 1 0 1 1 0 (bit 0); bits 3..=1 are 0 1 1 → 0b011
+        let v = 0b1101_0110;
+        assert_eq!(
+            evaluate(BvOpKind::Extract { hi: 3, lo: 1 }, 3, &[(8, v)]),
+            0b011
+        );
+        // extract [7:7] of 8-bit 0b10000000 = 0b1
+        assert_eq!(
+            evaluate(BvOpKind::Extract { hi: 7, lo: 7 }, 1, &[(8, 0x80)]),
+            1
+        );
+        // extract [7:0] = identity on 8 bits
+        assert_eq!(
+            evaluate(BvOpKind::Extract { hi: 7, lo: 0 }, 8, &[(8, 0xAB)]),
+            0xAB
+        );
+    }
+
+    #[test]
+    fn evaluate_concat() {
+        // concat(3-bit 0b101, 3-bit 0b010) = 6-bit 0b101_010 = 42
+        assert_eq!(
+            evaluate(BvOpKind::Concat, 6, &[(3, 0b101), (3, 0b010)]),
+            0b101_010
+        );
+        // concat(4-bit 0xF, 4-bit 0x0) = 8-bit 0xF0
+        assert_eq!(evaluate(BvOpKind::Concat, 8, &[(4, 0xF), (4, 0x0)]), 0xF0);
     }
 }

@@ -3,7 +3,7 @@
 //! Each test exercises the full DPLL(T) pipeline:
 //! session API → formula abstraction → EUF theory solver → SAT solver.
 
-use warp_types_smt::{with_session, SmtFormula, SmtResult};
+use warp_types_smt::{with_session, BvOpKind, SmtFormula, SmtResult};
 
 // ============================================================================
 // Helper: build common test scenarios through the session API
@@ -344,6 +344,109 @@ fn contradiction_unsat() {
             .assert_formula(SmtFormula::Neq(a, b))
             .finish_assertions();
         asserted.check_sat()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// ============================================================================
+// BV operator tests — exercise the constant-propagation BV module on each
+// of the operators added in this commit (Not, Sub, Extract, Concat). Each
+// asserts a concrete ground instance and checks that `check_sat_bv` reaches
+// UNSAT when the computed value conflicts with a disequality.
+// ============================================================================
+
+#[test]
+fn bvnot_detects_conflict() {
+    // x = 0b01010, y = 0b10101, bvnot(x) ≠ y → UNSAT (bvnot(0b01010) = 0b10101)
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, five_val) = session.bv_const(5, 0b01010, s);
+        let (session, twenty_one) = session.bv_const(5, 0b10101, s);
+        let (session, not_x) = session.bv_op(BvOpKind::Not, 5, &[x], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, five_val),
+                SmtFormula::Eq(y, twenty_one),
+                SmtFormula::Neq(not_x, y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bvsub_detects_conflict() {
+    // x = 5, y = 2, z = 3, bvsub(x, y) ≠ z → UNSAT (5 - 2 = 3 in 5-bit)
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, z) = session.var("z", s);
+        let (session, five_) = session.bv_const(5, 5, s);
+        let (session, two) = session.bv_const(5, 2, s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, sub) = session.bv_op(BvOpKind::Sub, 5, &[x, y], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, five_),
+                SmtFormula::Eq(y, two),
+                SmtFormula::Eq(z, three),
+                SmtFormula::Neq(sub, z),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bvextract_detects_conflict() {
+    // x = 0b1101_0110 (8-bit), extract[3:1](x) = 0b011 (3-bit)
+    // Assert extract(x) ≠ 0b011 → UNSAT.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, x) = session.var("x", s);
+        let (session, full) = session.bv_const(8, 0b1101_0110, s);
+        let (session, expected) = session.bv_const(3, 0b011, s);
+        let (session, ext) = session.bv_extract(3, 1, x, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, full),
+                SmtFormula::Neq(ext, expected),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bvconcat_detects_conflict() {
+    // a = 0b101 (3-bit), b = 0b010 (3-bit), concat(a, b) = 0b101_010 (6-bit)
+    // Assert concat ≠ 0b101010 → UNSAT.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, hi_val) = session.bv_const(3, 0b101, s);
+        let (session, lo_val) = session.bv_const(3, 0b010, s);
+        let (session, expected) = session.bv_const(6, 0b101_010, s);
+        let (session, cat) = session.bv_concat(a, 3, b, 3, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, hi_val),
+                SmtFormula::Eq(b, lo_val),
+                SmtFormula::Neq(cat, expected),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
     });
     assert_eq!(result, SmtResult::Unsat);
 }

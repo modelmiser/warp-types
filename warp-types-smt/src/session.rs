@@ -172,6 +172,66 @@ impl<'s> SmtSession<'s, Init> {
         (self, id)
     }
 
+    /// Extract bits `[hi:lo]` inclusive from a BV term.
+    /// Result width is `hi - lo + 1`.
+    ///
+    /// The caller is responsible for ensuring `t` has enough bits to cover
+    /// `hi` (matches the contract of [`bv_op`](Self::bv_op), which trusts
+    /// the caller-supplied width).
+    ///
+    /// # Panics
+    /// Panics if `lo > hi`.
+    pub fn bv_extract(
+        mut self,
+        hi: u32,
+        lo: u32,
+        t: TermId,
+        sort: SortId,
+    ) -> (SmtSession<'s, Init>, TermId) {
+        assert!(lo <= hi, "bv_extract: lo ({lo}) must be <= hi ({hi})");
+        let result_width = hi - lo + 1;
+        let id = self.env.arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Extract { hi, lo },
+                width: result_width,
+                args: vec![t],
+            },
+            sort,
+        );
+        (self, id)
+    }
+
+    /// Concatenate two BV terms; the first arg becomes the high bits.
+    /// Result width is `hi_w + lo_w`. Widths are explicit because the
+    /// arena does not carry BV widths for `Variable` terms.
+    ///
+    /// # Panics
+    /// Panics if `hi_w + lo_w > 64` (this implementation uses `u64`
+    /// for values).
+    pub fn bv_concat(
+        mut self,
+        hi_arg: TermId,
+        hi_w: u32,
+        lo_arg: TermId,
+        lo_w: u32,
+        sort: SortId,
+    ) -> (SmtSession<'s, Init>, TermId) {
+        let result_width = hi_w + lo_w;
+        assert!(
+            result_width <= 64,
+            "bv_concat: combined width ({result_width}) exceeds 64"
+        );
+        let id = self.env.arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Concat,
+                width: result_width,
+                args: vec![hi_arg, lo_arg],
+            },
+            sort,
+        );
+        (self, id)
+    }
+
     /// Finish declarations and move to the assertion phase.
     pub fn finish_declarations(self) -> SmtSession<'s, Declared> {
         SmtSession::new(self.env)
