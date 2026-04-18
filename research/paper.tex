@@ -112,8 +112,11 @@ The two gates are orthogonal to two further axes: the extract gate can return a 
 
 \paragraph{Contributions.}
 \textbf{(1)}~A generic core language for complemented typestate (\texttt{Core.lean}, 276~lines) whose two family-parametric rules subsume the merge and extract rules of Fence and Reduce, while the same complement gate governs all four domains at the \texttt{Generic.lean} level.
+
 \textbf{(2)}~A zero-\texttt{sorry}, zero-user-declared-\texttt{axiom} Lean~4 mechanization, verified by \texttt{lake build WarpTypes}.
+
 \textbf{(3)}~A structural extensibility win: adding a fifth domain costs one tag constructor and four dispatcher clauses, not a fresh typing judgment --- though the refactor adds 108~lines net at the port commit~(\S\ref{sec:evaluation}).
+
 \textbf{(4)}~An elaboration-layer finding: family-parametric rules in Lean~4 require a \emph{double} equality witness (one on the expression, one on the output type), and the caller-side discharge cost is empirically linear in the product of nested-cases depth and parametric-rule count~(\S\ref{sec:evaluation}).
 
 Figure~\ref{fig:witnesses} summarises the four witnesses.
