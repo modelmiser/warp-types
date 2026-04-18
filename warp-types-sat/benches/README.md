@@ -31,6 +31,49 @@ cargo bench -p warp-types-sat --bench random_3sat --features compare
 
 Results land in `target/criterion/` with HTML reports.
 
+## Measured peer-comparison numbers (2026-04-18)
+
+Random 3-SAT at the phase-transition ratio, seed `0xDEADBEEF`,
+100 Criterion samples per cell. Medians shown; 95% CI widths are
+all below 0.3% of the median. All three solvers verified as SAT at
+each size by the in-harness agreement check.
+
+| n   | warp-types-sat | batsat 0.6 | splr 0.17 | ours / batsat | ours / splr |
+|-----|----------------|------------|-----------|---------------|-------------|
+| 50  | 1.251 ms       | 35.63 µs   | 103.73 µs | ~35×          | ~12×        |
+| 75  | 2.787 ms       | 56.75 µs   | 173.68 µs | ~49×          | ~16×        |
+| 100 | 6.164 ms       | 69.70 µs   | 210.74 µs | ~88×          | ~29×        |
+
+### Configuration (honest disclosure)
+
+- **CPU:** Intel i9-13900H (Raptor Lake-H, laptop).
+- **Cores:** `taskset -c 16-19` — the kernel's isolated E-cores
+  (`isolcpus=16-19`), which stay quiet under normal P-core desktop
+  load.
+- **Governor:** `powersave`. Not `performance` — absolute numbers
+  are lower than a best-case run, but all three solvers run under
+  identical conditions, so the *ratios* are governor-invariant.
+- **Kernel:** Linux 6.18.7-76061807-generic.
+- **Load average during run:** ~3.0 (P-cores; E-cores stay clean).
+- **Outlier fraction** (Criterion classification): ours 6–10%,
+  batsat 1%, splr 0–5%. E-cores at `powersave` explain the higher
+  variance in our longer-running iterations.
+
+### Reading the ratios
+
+The informative signal is not the absolute gap — it is the
+super-linear *widening* (35× at n=50 to 88× at n=100 against
+batsat). That is exactly what you would expect from a solver
+that lacks watched-literal BCP and multi-tier learnt-clause
+management. Both peers implement watched literals; we do not
+(by design at v0.3). If a future refactor narrows that
+n-dependence, it will show up here as a flatter ratio curve,
+not just smaller absolute numbers.
+
+This table exists to detect *regressions* and to give readers
+honest context — not to claim competitiveness. The bench file
+header is explicit: peer range, not peer parity.
+
 ## Follow-up work (not yet wired)
 
 **Gradient-path benchmarks.** Once `gradient::solve` has a stable
