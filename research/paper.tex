@@ -332,7 +332,7 @@ The typing judgment \texttt{CspHasType} is indexed by a \texttt{Topology n} witn
 
 The concrete topology instance is \texttt{j1Grid : Topology 6}, a $2\times3$ grid with 7~bidirectional links and 3-hop diameter, modeling the physical layout of 6 Super-J1 cores. Two concrete complement instances --- \texttt{leftCol\_rightCol\_complement} (left column vs.\ right column) and \texttt{topRow\_bottomRow\_complement\_within} (top row vs.\ bottom row within their union) --- exercise the same \IsComplement{} / \IsComplementAll{} predicates as the GPU domain.
 
-The per-domain theorem stack for CSP includes four inversion and soundness theorems, two concrete untypability witnesses, and one positive typability instance:
+The per-domain theorem stack for CSP includes four inversion lemmas, one general untypability theorem, three concrete untypability witnesses, and one positive typability instance:
 
 \begin{itemize}
   \item \texttt{csp\_diverge\_partition}: re-export of the generic diverge partition lemma.
@@ -341,6 +341,7 @@ The per-domain theorem stack for CSP includes four inversion and soundness theor
   \item \texttt{csp\_send\_requires\_active}: inversion theorem extracting the participant-set activity premise from any well-typed \texttt{send}.
   \item \texttt{collective\_after\_diverge\_untypable}: the CSP analog of \texttt{shuffle\_diverged\_untypable} --- collective on a diverged sub-group is untypable when the sub-group does not cover all participants. Same proof structure as the GPU version.
   \item \texttt{j1\_send\_opposite\_corners\_untypable} and \texttt{j1\_send\_diagonal\_untypable}: concrete untypability witnesses at $n = 6$ on the J1 grid. Sending from core~0 to core~5 (opposite corners, 3~hops) and from core~0 to core~3 (diagonal, 2~hops) are both untypable because neither pair is adjacent.
+  \item \texttt{j1\_collective\_after\_column\_split}: concrete untypability witness at $n = 6$ showing that a \texttt{collective} after splitting the grid into left and right columns is untypable. The CSP analog of the GPU-side bug witnesses \texttt{bug1}--\texttt{bug5} above.
 \end{itemize}
 
 A positive instance, \texttt{j1\_send\_adjacent\_typable}, demonstrates that sending from core~0 to the adjacent core~1 \emph{is} well-typed. The presence of both positive and negative instances for the topology constraint --- in addition to the positive and negative instances for the complement gate --- is what makes the CSP domain more than a rename of the GPU domain: the topology parameter adds an orthogonal axis of safety that the generic framework does not subsume but composes cleanly with.
