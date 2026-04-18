@@ -624,6 +624,41 @@ The caller-side cost of the family-parametric factoring is real and quantified: 
 The CSP instance carries a topology parameter that is orthogonal to the complement-gate factoring~(\S\ref{sec:spine},~\S\ref{sec:csp-collective}). Porting it onto \texttt{Core.lean} is mechanically de-risked by a probe in \texttt{CspCoreExperiment.lean} but out of scope for this paper. The GPU instance pre-dates the factoring and retains its standalone typing judgment and metatheory; a retrofit is structurally possible but would purchase no saving because GPU's rules share no bodies with Fence or Reduce. The metatheory covers only the reduction-preservation chain (substitution, progress, preservation, type safety); no domain instance proves deadlock freedom, termination, or liveness properties --- all three are meaningful for CSP and Reduce but are orthogonal to the participant-set safety that the complement gate provides. The loop rules in the GPU instance~(\S\ref{sec:gpu-divergence}) track warp handles through iteration but make no convergence guarantee; a refinement that distinguishes converging from non-converging loops at the type level is left as future work.
 
 %% ============================================================
+%% Artifact (POPL AEC)
+%% ============================================================
+
+\section{Artifact}\label{sec:artifact}
+
+The mechanization described in this paper is packaged for submission to the POPL 2027 Artifact Evaluation Committee. The artifact contains the Lean~4 library that realises \texttt{Generic.lean}, \texttt{Core.lean}, \texttt{CoreMetatheory.lean}, and the four domain instances (\texttt{Basic.lean}/\texttt{Metatheory.lean}, \texttt{Csp.lean}, \texttt{Fence.lean}, \texttt{Reduce.lean}) referenced throughout the paper, together with a Rust host-side workspace from which the kernel compilation pipeline described in~\S\ref{sec:gpu-divergence} is driven.
+
+\paragraph{Toolchain pins.}
+The Lean library pins v4.28.0 via a checked-in \texttt{lean-toolchain} file and takes no Mathlib dependency. The Rust workspace pins a dated nightly via \texttt{rust-toolchain.toml}; the nightly is required only for the \texttt{nvptx64} compile-to-PTX backend and is not on the proof path.
+
+\paragraph{Build and run.}
+From a clean clone, with \texttt{elan} and \texttt{rustup} installed, the full verification is \texttt{lake build WarpTypes} followed by \texttt{cargo test --workspace}; both commands complete offline against the pinned toolchains. The Lean build emits only cosmetic \texttt{unused simp arg} warnings. The Rust test suite runs 395 tests in total (317~unit, 50~example, 28~doc). Running \texttt{\#print axioms} on \texttt{type\_safety}, \texttt{progress}, and \texttt{preservation} reports only the three Lean~4 kernel axioms (\texttt{propext}, \texttt{Quot.sound}, \texttt{Classical.choice}); no user-declared axioms extend the foundation.
+
+\paragraph{Library layout.}
+The \texttt{WarpTypes.lean} module root imports ten files: \texttt{Generic.lean} (width-parametric layer); \texttt{Basic.lean} and \texttt{Metatheory.lean} (GPU instance, 32~lanes, standalone metatheory pre-dating the factoring); \texttt{Csp.lean} and \texttt{Protocol.lean} (CSP collective with J1 topology, \(n=6\)); \texttt{Core.lean} and \texttt{CoreMetatheory.lean} (family-parametric spine); \texttt{Fence.lean} (\(n=8\)) and \texttt{Reduce.lean} (\(n=4\)), both inheriting the Core metatheory via one-line specialisations; and \texttt{SolExperiment.lean} (a bitvector probe carried alongside the spine for the Sol experiment referenced in~\S\ref{sec:generic-lean}). Two further files, \texttt{CoreExperiment.lean} and \texttt{CspCoreExperiment.lean}, are not imported by the build target and carry exploratory probes only (\S\ref{sec:csp-collective}).
+
+\paragraph{Claim-to-witness map.}
+Each formal claim in the paper maps to a named \texttt{theorem} or \texttt{def} declaration that a reviewer can grep from the top of the indicated file.
+
+\begin{itemize}\small
+\item \textit{Zero user-declared axioms on \texttt{progress}, \texttt{preservation}, \texttt{type\_safety}} (\S\ref{sec:spine},~\S\ref{sec:core}) --- \texttt{\#print axioms} on the three theorems in \texttt{Metatheory.lean} and \texttt{CoreMetatheory.lean} reports only the Lean kernel axioms.
+\item \textit{Five GPU bug witnesses at \(n=32\)} (\S\ref{sec:gpu-divergence}) --- \texttt{bug1\_*}\,--\,\texttt{bug5\_*} theorems in \texttt{Metatheory.lean}: four modeling real-world issue-tracker bugs, one synthetic.
+\item \textit{Three concrete CSP untypability witnesses and four inversion lemmas} (\S\ref{sec:csp-collective}) --- three \texttt{j1\_*\_untypable} theorems (opposite-corners send, diagonal send, collective after column split) together with the four inversion lemmas grouped above them in \texttt{Csp.lean}.
+\item \textit{Partial-write untypability} (\S\ref{sec:partial-write-fence}) --- untypability witness at \(n=8\) in \texttt{Fence.lean}.
+\item \textit{Partial-reduce untypability} (\S\ref{sec:tree-all-reduce}) --- untypability witness at \(n=4\) in \texttt{Reduce.lean}.
+\item \textit{\texttt{mergeFamily} and \texttt{finalizeFamily} family-parametric rules} (\S\ref{sec:mergefamily},~\S\ref{sec:finalizefamily}) --- \texttt{CoreHasType} constructors in \texttt{Core.lean}, dispatched over \texttt{TyTag}.
+\item \textit{Fence and Reduce inherit progress, preservation, and type safety via one-line specialisations} (\S\ref{sec:post-refactor}) --- specialised \texttt{theorem} blocks at the tails of \texttt{Fence.lean} and \texttt{Reduce.lean}.
+\item \textit{\texttt{Core.lean} is 276 lines} (\S\ref{sec:core}) --- reproducible via \texttt{wc -l} on the file.
+\item \textit{Caller-side cost of the factoring: +108 lines net, 18 discharge blocks (14 helpers, 4 inversion)} (\S\ref{sec:evaluation}) --- counts reproducible from the repository's tagged pre- and post-refactor snapshots.
+\end{itemize}
+
+\paragraph{Availability.}
+The artifact will be made available via the POPL 2027 AEC submission portal upon conditional acceptance; a DOI-stamped, identity-bearing copy will be linked from the de-anonymised camera-ready version. The exact commit used to build this version of the paper is pinned in the submission package's manifest.
+
+%% ============================================================
 %% Bibliography
 %% ============================================================
 
