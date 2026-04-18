@@ -248,7 +248,7 @@ The family-parametric rules carry their safety side conditions \emph{inline} as 
 
 \subsection{Theorem placement across the layers}\label{sec:theorem-placement}
 
-The metatheory follows the standard Wright--Felleisen~\cite{wright:ic:1994} approach: progress and preservation are proved independently, and type safety is their standard corollary (induction over multi-step reduction). The generic-versus-domain split in the file graph has a counterpart at the theorem level. Table~\ref{fig:theorem-placement} tallies which theorem classes live at which layer, which are stated parametrically in~$n$, and which carry untypability proofs for a real-world bug class.
+The metatheory follows the standard Wright--Felleisen~\cite{wright:ic:1994} approach: progress and preservation are proved independently, and type safety follows as a corollary (induction over multi-step reduction). The generic-versus-domain split in the file graph has a counterpart at the theorem level. Table~\ref{fig:theorem-placement} tallies which theorem classes live at which layer, which are stated parametrically in~$n$, and which carry untypability proofs for a real-world bug class.
 
 \begin{table*}[t]
 \caption{Theorem placement by layer. ``Width'' is the~$n$ each theorem commits to; ``$\forall\,n$?'' is whether the theorem is stated parametrically; ``Bug witness?'' is whether the layer carries an untypability proof of a real-world bug class.}
