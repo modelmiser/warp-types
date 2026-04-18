@@ -120,11 +120,8 @@ fn bench_pigeonhole_gradient(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = gradient::gradient_search(
-                    black_box(&inst.db),
-                    black_box(inst.num_vars),
-                    &cfg,
-                );
+                let _ =
+                    gradient::gradient_search(black_box(&inst.db), black_box(inst.num_vars), &cfg);
             });
         });
     }
@@ -139,11 +136,7 @@ fn bench_pigeonhole_hybrid(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = gradient::hybrid_solve(
-                    black_box(inst.db),
-                    black_box(inst.num_vars),
-                    &cfg,
-                );
+                let _ = gradient::hybrid_solve(black_box(inst.db), black_box(inst.num_vars), &cfg);
             });
         });
     }
@@ -174,11 +167,8 @@ fn bench_parity_gradient(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(k), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = gradient::gradient_search(
-                    black_box(&inst.db),
-                    black_box(inst.num_vars),
-                    &cfg,
-                );
+                let _ =
+                    gradient::gradient_search(black_box(&inst.db), black_box(inst.num_vars), &cfg);
             });
         });
     }
@@ -193,11 +183,7 @@ fn bench_parity_hybrid(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(k), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = gradient::hybrid_solve(
-                    black_box(inst.db),
-                    black_box(inst.num_vars),
-                    &cfg,
-                );
+                let _ = gradient::hybrid_solve(black_box(inst.db), black_box(inst.num_vars), &cfg);
             });
         });
     }

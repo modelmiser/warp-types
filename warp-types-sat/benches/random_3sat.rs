@@ -25,7 +25,9 @@ fn generate_random_3cnf(num_vars: u32, seed: u64) -> String {
     // Linear congruential RNG — deterministic, adequate for benchmark inputs.
     let mut state = seed;
     let mut next = || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         state
     };
 
@@ -137,10 +139,16 @@ mod peer {
                 assert!(
                     w == b && b == sp,
                     "solver disagreement at n={}: warp={} batsat={} splr={}",
-                    n, w, b, sp
+                    n,
+                    w,
+                    b,
+                    sp
                 );
-                eprintln!("[agreement] n={}: all three solvers -> {}", n,
-                    if w { "SAT" } else { "UNSAT" });
+                eprintln!(
+                    "[agreement] n={}: all three solvers -> {}",
+                    n,
+                    if w { "SAT" } else { "UNSAT" }
+                );
             }
         });
     }
@@ -179,7 +187,12 @@ mod peer {
 }
 
 #[cfg(feature = "compare")]
-criterion_group!(benches, bench_our_solver, peer::bench_batsat, peer::bench_splr);
+criterion_group!(
+    benches,
+    bench_our_solver,
+    peer::bench_batsat,
+    peer::bench_splr
+);
 #[cfg(not(feature = "compare"))]
 criterion_group!(benches, bench_our_solver);
 
