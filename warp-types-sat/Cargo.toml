@@ -45,3 +45,7 @@ harness = false
 [[bench]]
 name = "cardinality"
 harness = false
+
+[[bench]]
+name = "satlib_sweep"
+harness = false

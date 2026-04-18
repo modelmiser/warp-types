@@ -14,3 +14,9 @@ DEVLOG.md
 TODO.md
 research/paper.log
 research/CLAIM-AUDIT.md
+
+# SATLIB corpus is user-provided at bench time; never committed.
+# See warp-types-sat/benches/README.md for the fetch URL.
+warp-types-sat/benches/satlib/*.cnf
+warp-types-sat/benches/satlib/*.cnf.gz
+warp-types-sat/benches/satlib/*.tar.gz

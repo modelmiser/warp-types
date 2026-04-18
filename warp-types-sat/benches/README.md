@@ -18,6 +18,14 @@ the top-level README for the rationale.
   Currently measures the CDCL path only; gradient-path benches land
   once that public API stabilizes. Primary signal: does
   `gradient::solve` beat CDCL on pigeonhole?
+- `satlib_sweep.rs` — auto-discovering sweep over user-provided
+  SATLIB `*.cnf` instances. Drop files into `benches/satlib/`
+  (gitignored); see `benches/satlib/README.md` for the fetch
+  recipe. Under `--features compare`, benches each instance
+  against batsat and splr. Runs cleanly on an empty directory
+  (prints skip, exits 0). Default cap 10 files; override with
+  `SATLIB_MAX=<n>`. Primary signal: do our ratios hold on
+  standard benchmark inputs, not just our in-tree RNG?
 
 ## Running
 
@@ -27,6 +35,11 @@ cargo bench -p warp-types-sat --bench random_3sat
 
 # With peer-solver comparison (batsat + splr):
 cargo bench -p warp-types-sat --bench random_3sat --features compare
+
+# SATLIB sweep (requires user-provided CNFs in benches/satlib/):
+cargo bench -p warp-types-sat --bench satlib_sweep
+cargo bench -p warp-types-sat --bench satlib_sweep --features compare
+SATLIB_MAX=20 cargo bench -p warp-types-sat --bench satlib_sweep
 ```
 
 Results land in `target/criterion/` with HTML reports.
@@ -81,16 +94,6 @@ public signature, add matching `bench_pigeonhole_gradient` and
 `bench_parity_gradient` functions to `cardinality.rs`. This is the
 load-bearing measurement for the "promote the gradient path in the
 README" decision.
-
-**SATLIB corpus.** For reproducible comparison against standard
-benchmarks, drop SATLIB CNF files into `benches/satlib/` (add to
-`.gitignore`). Fetch from:
-
-- <https://www.cs.ubc.ca/~hoos/SATLIB/benchm.html>
-- `uf50-218.tar.gz`, `uf75-325.tar.gz`, `uuf50-218.tar.gz`
-
-A harness that auto-discovers `benches/satlib/**.cnf` is easy to
-add on top of the current scaffolding. Never commit the corpus.
 
 ## What we deliberately don't benchmark against
 
