@@ -39,7 +39,7 @@ WORKDIR /warp-types
 # Stage 1 --- toolchain pins only. Cached independently of source changes
 # so reviewers iterating on the paper don't re-download toolchains.
 COPY lean/lean-toolchain ./lean/lean-toolchain
-RUN cd lean && lake --version
+RUN cd lean && lake env -- lean --version
 
 COPY rust-toolchain.toml ./rust-toolchain.toml
 RUN cargo --version
