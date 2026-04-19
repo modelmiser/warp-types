@@ -33,11 +33,11 @@ if ! command -v rustup &>/dev/null; then
 else
     echo "Rust already installed" | tee -a "$RESULTS"
 fi
-rustup install nightly-2026-03-19
-rustup default nightly-2026-03-19
+rustup install nightly-2026-04-03
+rustup default nightly-2026-04-03
 # rust-src needed for -Z build-std=core (cross-compile core for nvptx64).
 # Install for both pinned and generic nightly (WarpBuilder uses generic).
-rustup component add rust-src --toolchain nightly-2026-03-19
+rustup component add rust-src --toolchain nightly-2026-04-03
 rustup component add rust-src --toolchain nightly 2>/dev/null || true
 rustc --version | tee -a "$RESULTS"
 echo "" | tee -a "$RESULTS"
