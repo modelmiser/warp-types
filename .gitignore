@@ -23,6 +23,9 @@ research/paper.pdf
 research/paper.sigplan.pdf
 research/CLAIM-AUDIT.md
 research/SUBMISSION-LOGISTICS.md
+research/paper-claims-audit-*.md
+research/paper-prose-pass-*.md
+texput.log
 
 # SATLIB corpus is user-provided at bench time; never committed.
 # See warp-types-sat/benches/README.md for the fetch URL.
