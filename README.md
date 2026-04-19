@@ -128,7 +128,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` |
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (32 tests) | `cargo test gradual` |
-| All claims | Full test suite (395 tests) | `cargo test && cargo test --examples` |
+| Main-crate claims | Main-crate test suite (395 tests) | `cargo test && cargo test --examples` |
 
 ## Project Structure
 
