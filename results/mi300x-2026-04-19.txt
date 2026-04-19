@@ -1,0 +1,98 @@
+=== warp-types MI300X Verification ===
+Date: 2026-04-19T05:12:09Z
+
+=== Step 0: GPU Info ===
+
+========================= ROCm System Management Interface =========================
+=========================== Version of System Component ============================
+Driver version: 6.10.5
+====================================================================================
+=================================== Product Info ===================================
+GPU[0]		: Card series: 		AMD Instinct MI300X OAM
+GPU[0]		: Card model: 		0x74a1
+GPU[0]		: Card vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[0]		: Card SKU: 		MI3SRIOV
+====================================================================================
+=============================== End of ROCm SMI Log ================================
+HIP version: 5.7.31921-d1770ee1b
+AMD clang version 17.0.0 (https://github.com/RadeonOpenCompute/llvm-project roc-5.7.0 23352 d1e13c532a947d0cbfc94759c00dcf152294aa13)
+Target: x86_64-unknown-linux-gnu
+
+=== Step 1: Installing Rust ===
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+
+=== Step 2: Clone ===
+Commit: 13aef6b
+
+=== Step 3: Rust Tests (CPU, vendor-agnostic) ===
+test result: ok. 317 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 154 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 28.52s
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 28 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+=== Step 4: HIP Kernel Suite (AMD MI300X) ===
+Compiling amd_mi300x_verify.hip for --offload-arch=gfx942...
+Running...
+warp-types AMD Verification
+===========================
+GPU: AMD Radeon Graphics
+GCN arch: gfx942:sramecc+:xnack-
+Wavefront size: 64
+
+--- Test 0: Wavefront ballot ---
+ballot(1) popcount: 64 (expected 64)
+ballot low  32 bits: 0xFFFFFFFF
+ballot high 32 bits: 0xFFFFFFFF
+
+--- Test 1: Full 64-lane butterfly reduction (6 stages) ---
+Lane 0: 2016 (expected 2016)
+All lanes correct: YES
+VERDICT: PASS — 6-stage butterfly correct on 64-wide
+
+--- Test 2: 5-stage butterfly (NVIDIA pattern on 64-wide AMD) ---
+Lane 0: 496 (expected 2016 for full reduce)
+Lane 0: 496 (half-sum = 496 if 5 stages only reduce within 32)
+Lane 32: 1520 (half-sum = 1520 if 5 stages only reduce within 32)
+VERDICT: CONFIRMED — 5-stage reduction WRONG on 64-wide (warp-types would catch this)
+
+--- Test 3: Diverged shuffle (even lanes only, xor=1) ---
+Lane 0: 0 (xor partner lane 1 has val -1 sentinel)
+Lane 1: -1 (odd lane, sentinel -1)
+Lane 2: 0 (xor partner lane 3 has val -1 sentinel)
+Lane 62: 0 (xor partner lane 63 has val -1 sentinel)
+VERDICT: Even lanes got unexpected (bug or sentinel) values — warp-types: shuffle on Warp<Even> is a type error
+
+--- Test 4: Diverged half-wavefront reduction ---
+Lane 0: 32 (expected 32 if correct half-reduce)
+Lane 31: 32
+Lane 32: 1 (inactive, should be 1 = initial)
+Lane 63: 1 (inactive, should be 1 = initial)
+VERDICT: warp-types types this as Warp<LowHalf> — shuffle_xor restricted to within-half masks only
+
+===========================
+Summary for warp-types paper:
+  Wavefront width: 64 lanes (vs NVIDIA 32)
+  Butterfly stages needed: 6 (vs NVIDIA 5)
+  Bug surface: 2x larger (64 lanes to go wrong vs 32)
+  Type system prediction: ActiveSet needs BitVec 64
+
+=== DONE ===
+
+Expected outcomes (see amd_mi300x_verify.hip for test definitions):
+  Wavefront size:       64
+  ballot(1) popcount:   64 (all lanes active)
+  Test 1 (6-stage):     PASS --- every lane reads sum(0..63) = 2016
+  Test 2 (5-stage bug): CONFIRMED --- lane 0 reads 496 (half-sum), not 2016
+  Test 3 (diverged):    demonstrates even-only shuffle reads inactive lanes
+  Test 4 (half-active): demonstrates 32-of-64 active-lane divergence
+
+Paper claim: all four test patterns that produce wrong answers or undefined
+results on MI300X are *untypable* in the Rust type system. The type checker
+rejects them at compile time; see warp-types-kernel's ActiveSet-indexed APIs.
+
+Results saved to /tmp/mi300x-results.txt
