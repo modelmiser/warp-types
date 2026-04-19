@@ -5,5 +5,6 @@ targets = ["nvptx64-nvidia-cuda"]
 # GPU kernels require nightly for abi_ptx and asm_experimental_arch.
 # The type system itself works on stable Rust (1.75+).
 # Pin nightly for reproducible artifact evaluation.
-# BLOCKER: pred register class still missing for nvptx64 (ballot_sync).
+# Note: pred register class still missing for nvptx64; warp-types-kernel uses
+# a setp/selp workaround for ballot_sync that is runtime-verified on sm_89.
 # UPDATE POLICY: refresh pin at least quarterly. See .github/workflows/ci.yml.
