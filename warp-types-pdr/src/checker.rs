@@ -30,6 +30,13 @@ pub enum PdrResult {
     Safe {
         /// The frame index where convergence was detected.
         invariant_frame: usize,
+        /// The inductive invariant itself: the converged frame's blocking
+        /// clauses. Each clause is a disjunction of literals over state
+        /// variables `[0, num_state_vars)`; their conjunction over-approximates
+        /// every reachable state and is closed under the transition relation.
+        /// Empty means the safety property was already inductive with no
+        /// strengthening (P implies its own closure).
+        invariant: Vec<Vec<Lit>>,
     },
     /// Counterexample found — concrete state trace to a bad state.
     CounterexampleFound {
@@ -112,8 +119,10 @@ pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> P
             // PROPAGATE: push clauses forward, check convergence
             if let Some(inv_frame) = propagate_clauses(sys, &mut frames, conflict_budget) {
                 let _safe = modeled.check_safe();
+                let invariant = frames.frame(inv_frame).clauses().to_vec();
                 return PdrResult::Safe {
                     invariant_frame: inv_frame,
+                    invariant,
                 };
             }
 

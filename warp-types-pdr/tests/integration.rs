@@ -105,6 +105,47 @@ fn invariant_discovery() {
 }
 
 // ============================================================================
+// Test 4b: Safe exposes the discovered inductive invariant
+// ============================================================================
+
+#[test]
+fn safe_returns_inductive_invariant() {
+    // Same system as invariant_discovery: s₀ toggles, s₁ stays; property ¬s₁.
+    // ¬s₁ is inductive, so the converged frame carries it as a blocking clause.
+    let mut sys = TransitionSystem::new(2);
+    sys.add_initial(vec![Lit::neg(0)]);
+    sys.add_initial(vec![Lit::neg(1)]);
+    sys.add_transition(vec![Lit::pos(0), Lit::pos(2)]);
+    sys.add_transition(vec![Lit::neg(0), Lit::neg(2)]);
+    sys.add_transition(vec![Lit::neg(1), Lit::pos(3)]);
+    sys.add_transition(vec![Lit::pos(1), Lit::neg(3)]);
+    sys.add_property(vec![Lit::neg(1)]); // ¬s₁
+
+    match check(&sys, 20, 0) {
+        PdrResult::Safe { invariant, .. } => {
+            assert!(
+                !invariant.is_empty(),
+                "expected a non-empty inductive invariant"
+            );
+            // Every literal must reference a current-state variable [0, n).
+            for clause in &invariant {
+                for lit in clause {
+                    assert!(
+                        lit.var() < sys.num_state_vars,
+                        "invariant literal references a non-state var {}",
+                        lit.var()
+                    );
+                }
+            }
+            // The invariant must mention s₁ (var 1) — that's the load-bearing fact.
+            let mentions_s1 = invariant.iter().flatten().any(|l| l.var() == 1);
+            assert!(mentions_s1, "invariant should constrain s₁");
+        }
+        other => panic!("expected Safe, got {:?}", other),
+    }
+}
+
+// ============================================================================
 // Test 5: Frame budget exhaustion
 // ============================================================================
 

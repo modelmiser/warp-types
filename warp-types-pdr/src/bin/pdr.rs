@@ -83,8 +83,14 @@ fn main() {
 
 fn print_result(result: &PdrResult) {
     match result {
-        PdrResult::Safe { invariant_frame } => {
-            println!("  SAFE: inductive invariant at frame {invariant_frame}");
+        PdrResult::Safe {
+            invariant_frame,
+            invariant,
+        } => {
+            println!(
+                "  SAFE: inductive invariant at frame {invariant_frame} ({} learned clauses)",
+                invariant.len()
+            );
         }
         PdrResult::CounterexampleFound { depth, trace } => {
             println!("  UNSAFE: counterexample at depth {depth}");
