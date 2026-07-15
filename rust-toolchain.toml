@@ -1,5 +1,5 @@
 [toolchain]
-channel = "nightly-2026-04-03"
+channel = "nightly-2026-07-01"
 components = ["rust-src", "clippy", "rustfmt"]
 targets = ["nvptx64-nvidia-cuda"]
 # GPU kernels require nightly for abi_ptx and asm_experimental_arch.

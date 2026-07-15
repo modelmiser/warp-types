@@ -14,11 +14,7 @@ use warp_types_smt::{with_session, BvOpKind, SmtFormula, SmtResult};
 fn check_with_vars_and_fun(
     var_names: &[&str],
     need_func: bool,
-    build: impl for<'s> FnOnce(
-        &[warp_types_smt::TermId],
-        Option<warp_types_smt::FuncId>,
-        &mut Vec<SmtFormula>,
-    ),
+    build: impl FnOnce(&[warp_types_smt::TermId], Option<warp_types_smt::FuncId>, &mut Vec<SmtFormula>),
 ) -> SmtResult {
     with_session(|session| {
         // Declare sort S
