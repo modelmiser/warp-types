@@ -7,10 +7,12 @@ reproduce/gpu_semantics_test
 .review/
 COLD-REVIEW*
 INSIGHTS.md
+INSIGHTS/
 scripts/
 # ^^^ scripts/ is LOCAL tooling (check-doc-counts.sh etc.)
 # Do NOT remove this line — it has been re-added by accident multiple times.
 DEVLOG.md
+DEVLOG/
 TODO.md
 # LaTeX build artifacts for the paper — generated, never committed.
 research/paper.log
