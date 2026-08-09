@@ -173,7 +173,7 @@ impl Trail {
     ///
     /// # Panics
     /// Panics if the variable is already assigned (would create a zombie trail entry).
-    pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
+    pub(crate) fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
         assert!(
             self.assignments[lit.var() as usize].is_none(),
             "record_propagation on already-assigned variable {}",
@@ -241,7 +241,7 @@ impl Trail {
     /// `var` must be < `self.num_vars()`. This is guaranteed for all variables
     /// from the clause DB (validated at solver startup: `max_variable() < num_vars`).
     #[inline]
-    pub unsafe fn entry_for_var_unchecked(&self, var: u32) -> Option<&TrailEntry> {
+    pub(crate) unsafe fn entry_for_var_unchecked(&self, var: u32) -> Option<&TrailEntry> {
         match *self.var_position.get_unchecked(var as usize) {
             Some(pos) => Some(self.entries.get_unchecked(pos)),
             None => None,
@@ -252,7 +252,7 @@ impl Trail {
     ///
     /// `remap` is a sorted list of `(old_cref, new_cref)` pairs produced by
     /// `ClauseDb::compact()`. Uses binary search for O(log n) per trail entry.
-    pub fn remap_reasons(&mut self, remap: &[(CRef, CRef)]) {
+    pub(crate) fn remap_reasons(&mut self, remap: &[(CRef, CRef)]) {
         for entry in &mut self.entries {
             if let Reason::Propagation(ref mut cref) = entry.reason {
                 match remap.binary_search_by_key(cref, |&(old, _)| old) {
@@ -288,7 +288,7 @@ impl Trail {
     /// Split the trail for BCP: yields a mutable assigns slice (stable pointer)
     /// and a writer for trail entries. The compiler can prove these don't alias,
     /// so the assigns pointer stays in a register across propagations.
-    pub fn bcp_split(&mut self) -> BcpTrail<'_> {
+    pub(crate) fn bcp_split(&mut self) -> BcpTrail<'_> {
         BcpTrail {
             assigns: &mut self.assignments,
             lit_values: &mut self.lit_values,
@@ -309,7 +309,7 @@ impl Trail {
 /// This eliminates the pointer re-derivation that occurs when BCP calls
 /// `trail.record_propagation()` (which takes `&mut Trail`, invalidating all
 /// references including the assignments slice).
-pub struct BcpTrail<'a> {
+pub(crate) struct BcpTrail<'a> {
     /// Mutable slice into the variable-indexed assignment array.
     /// Kept in sync for non-BCP consumers (value(), assignments()).
     pub assigns: &'a mut [Option<bool>],
@@ -330,7 +330,10 @@ impl<'a> BcpTrail<'a> {
     }
 
     /// Returns true if the trail has no entries.
+    /// Kept as the conventional companion to `len`; unused since `BcpTrail`
+    /// became `pub(crate)` (the external surface that referenced it is gone).
     #[inline]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -344,18 +347,25 @@ impl<'a> BcpTrail<'a> {
     /// Record a propagated literal. Writes to `assigns` (stable pointer)
     /// and pushes to `entries` (disjoint field).
     ///
-    /// Uses unchecked indexing for `assigns` and `var_position` after asserting
-    /// the bound. This is a release-mode assert (not debug-only): `bcp_split` is
-    /// public, so safe code can reach this method with an arbitrary literal —
-    /// a debug-only guard would make an out-of-bounds write UB in release.
-    /// Hot-path cost: two compares against values already in registers.
+    /// Uses unchecked indexing for `assigns`, `lit_values`, and `var_position`.
+    /// The bound `var < assigns.len()` is a `debug_assert!`: `bcp_split` is now
+    /// `pub(crate)`, so the only caller is the in-crate BCP loop
+    /// (`run_bcp_watched`), which validates `db.max_variable() < num_vars` at
+    /// entry — every literal it feeds here is a DB literal in range. The
+    /// external safe path that once made this a release assert (a public
+    /// `bcp_split` reachable with an arbitrary literal) no longer exists. The
+    /// already-assigned check just below indexes `assigns[var]` with a bounds
+    /// check, so a stray out-of-range var still panics safely in release rather
+    /// than causing UB. Dropping the release compare keeps the per-propagation
+    /// hot path minimal (the 504-insn/prop budget).
     ///
     /// # Panics
-    /// Panics if `lit.var() >= num_vars` or the variable is already assigned.
+    /// Panics if the variable is already assigned; in debug builds also if
+    /// `lit.var() >= num_vars`.
     #[inline]
-    pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
+    pub(crate) fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
         let var = lit.var() as usize;
-        assert!(
+        debug_assert!(
             var < self.assigns.len(),
             "BcpTrail::record_propagation variable {} out of bounds (len {})",
             var,
@@ -369,7 +379,11 @@ impl<'a> BcpTrail<'a> {
         // Trail-internal invariant (Trail::new / ensure_capacity): documented here
         // because the unchecked lit_values writes below rely on it.
         debug_assert_eq!(self.lit_values.len(), 2 * self.assigns.len());
-        // SAFETY: var < assigns.len() — asserted above.
+        // SAFETY: var < assigns.len() — guaranteed by the in-crate caller
+        // (run_bcp_watched validates db.max_variable() < num_vars at entry;
+        // see the doc comment), debug-asserted above, and the bounds-checked
+        // `assigns[var]` read in the already-assigned assert just above would
+        // panic before this point on any stray out-of-range var.
         // lit_values.len() == 2 * assigns.len() (Trail-internal invariant),
         // var_position.len() == assigns.len() (Trail-internal invariant).
         // lit.code() = 2*var + polarity <= 2*(assigns.len()-1) + 1 < lit_values.len(),
@@ -487,9 +501,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "out of bounds")]
     fn bcp_record_propagation_oob_var_panics() {
-        // bcp_split is public: safe code can reach record_propagation with an
-        // arbitrary literal. Before the release assert this was an OOB write
-        // (UB) in release builds.
+        // bcp_split is now pub(crate) — this in-crate test is the only path that
+        // can reach record_propagation with an out-of-range literal. In debug
+        // the `var < assigns.len()` debug_assert fires; in release the
+        // bounds-checked `assigns[var]` read in the already-assigned assert
+        // panics ("index out of bounds") before any unchecked write — no UB
+        // either way.
         let mut trail = Trail::new(2);
         let mut bt = trail.bcp_split();
         bt.record_propagation(Lit::pos(1000), 0);

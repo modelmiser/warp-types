@@ -75,7 +75,7 @@ impl WatchEntry {
 /// Watch positions are stored inline in the clause arena (c[0] and c[1]),
 /// not in a separate array. This struct only holds per-literal watch lists
 /// and the BCP queue head.
-pub struct Watches {
+pub(crate) struct Watches {
     /// Per-literal watch lists with blocker hints.
     lists: Vec<Vec<WatchEntry>>,
     /// Trail position processed up to (for incremental propagation).
@@ -95,7 +95,7 @@ impl Watches {
     /// Reads c[0] and c[1] from each clause as the watched pair — the
     /// inline-watch invariant must already hold (true at init and maintained
     /// by swap_literal_unchecked during BCP).
-    pub fn new(db: &ClauseDb, num_vars: u32) -> Self {
+    pub(crate) fn new(db: &ClauseDb, num_vars: u32) -> Self {
         let num_lits = 2 * num_vars as usize;
         let mut lists = vec![Vec::new(); num_lits];
 
@@ -127,7 +127,7 @@ impl Watches {
     ///
     /// Reads c[0] and c[1] as the watched pair (caller must ensure the
     /// asserting literal is at c[0] and the second watch is at c[1]).
-    pub fn add_clause(&mut self, db: &ClauseDb, cref: CRef) {
+    pub(crate) fn add_clause(&mut self, db: &ClauseDb, cref: CRef) {
         self.cref_bound = self.cref_bound.max(db.arena_len());
         let lits = &db.clause(cref).literals;
         if lits.len() < 2 {
@@ -141,12 +141,12 @@ impl Watches {
     }
 
     /// Reset queue head after backtracking (trail is shorter now).
-    pub fn notify_backtrack(&mut self, new_trail_len: usize) {
+    pub(crate) fn notify_backtrack(&mut self, new_trail_len: usize) {
         self.queue_head = self.queue_head.min(new_trail_len);
     }
 
     /// Set queue head and mark initial scan as done (used after watch rebuild).
-    pub fn set_queue_head(&mut self, pos: usize) {
+    pub(crate) fn set_queue_head(&mut self, pos: usize) {
         self.queue_head = pos;
         self.initial_scan_done = true;
     }
@@ -187,7 +187,7 @@ unsafe fn eval_lit_indexed(lit: Lit, lit_values: &[Option<bool>]) -> Option<bool
 ///   arena-length bound recorded at `Watches::new`/`add_clause` time. A
 ///   same-length but *different* DB cannot be detected by this check; the
 ///   caller must not mix watches across databases.
-pub fn run_bcp_watched(
+pub(crate) fn run_bcp_watched(
     db: &mut ClauseDb,
     watches: &mut Watches,
     trail: &mut Trail,
@@ -613,5 +613,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Surface guard for the `add_clause` UB leg.
+    ///
+    /// `Watches`, `Watches::add_clause`, and `run_bcp_watched` are `pub(crate)`.
+    /// The historical UB path was: external safe code hand-crafts a `Watches`,
+    /// calls `add_clause` with a mid-clause / bogus `CRef`, and the next
+    /// `run_bcp_watched` reaches `lits.get_unchecked(k)` — undefined behavior
+    /// from safe code. With these items `pub(crate)`, no code OUTSIDE this
+    /// crate can name `Watches` or reach `add_clause`/`run_bcp_watched` at all,
+    /// so the leg is closed structurally (a compile-level fact, not a runtime
+    /// check). This test is the in-crate witness that `add_clause` is reachable
+    /// ONLY from within the crate and, fed a genuine `CRef` from
+    /// `ClauseDb::add_clause` (the only way the solver ever calls it), behaves
+    /// correctly.
+    ///
+    /// If `Watches` or `add_clause` are ever made `pub` again, this comment is
+    /// the record of why they must not be: the unchecked BCP replacement search
+    /// trusts every stored `CRef` to be a genuine clause header.
+    #[test]
+    fn add_clause_leg_is_crate_internal_and_sound_with_genuine_cref() {
+        // (¬x0 ∨ x1) present at init; then learn (¬x1 ∨ x2) the way the solver
+        // does — append via ClauseDb::add_clause (genuine CRef), register with
+        // Watches::add_clause, then propagate.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
+        let mut w = Watches::new(&db, 3);
+
+        let learned = db.add_clause(vec![Lit::neg(1), Lit::pos(2)]);
+        w.add_clause(&db, learned); // genuine, in-bounds header CRef
+
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0));
+        assert_eq!(
+            bcp_after_decision(&mut db, &mut w, &mut trail),
+            BcpResult::Ok
+        );
+        // x0 ⇒ x1 (original) ⇒ x2 (learned): both must propagate true.
+        assert_eq!(trail.value(1), Some(true));
+        assert_eq!(trail.value(2), Some(true));
     }
 }

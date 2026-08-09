@@ -180,13 +180,13 @@ impl ClauseDb {
 
     /// Mark the current clause count as "original". Clauses added after this
     /// point are "learned" and eligible for LBD-based deletion.
-    pub fn freeze_original(&mut self) {
+    pub(crate) fn freeze_original(&mut self) {
         self.original_limit = self.arena.len() as u32;
         self.num_original = self.num_clauses;
     }
 
     /// Set the LBD score for a clause.
-    pub fn set_lbd(&mut self, cref: CRef, lbd: u16) {
+    pub(crate) fn set_lbd(&mut self, cref: CRef, lbd: u16) {
         let h = self.arena[cref as usize];
         let len = header_len(h);
         let deleted = header_is_deleted(h);
@@ -199,7 +199,7 @@ impl ClauseDb {
     }
 
     /// Check if a clause has been deleted (tombstoned).
-    pub fn is_deleted(&self, cref: CRef) -> bool {
+    pub(crate) fn is_deleted(&self, cref: CRef) -> bool {
         header_is_deleted(self.arena[cref as usize])
     }
 
@@ -208,7 +208,7 @@ impl ClauseDb {
     /// # Safety
     /// `cref` must point to a valid header in the arena.
     #[inline]
-    pub unsafe fn is_deleted_unchecked(&self, cref: CRef) -> bool {
+    pub(crate) unsafe fn is_deleted_unchecked(&self, cref: CRef) -> bool {
         header_is_deleted(*self.arena.get_unchecked(cref as usize))
     }
 
@@ -222,7 +222,7 @@ impl ClauseDb {
     /// Strategy: sort by LBD, keep the best half. Standard MiniSat/Glucose.
     ///
     /// Returns CRefs of deleted clauses (for watch list cleanup).
-    pub fn reduce_learned(&mut self, locked: &HashSet<CRef>) -> Vec<CRef> {
+    pub(crate) fn reduce_learned(&mut self, locked: &HashSet<CRef>) -> Vec<CRef> {
         let mut candidates: Vec<(CRef, u16)> = Vec::new();
         let mut pos = self.original_limit;
         while (pos as usize) < self.arena.len() {
@@ -246,7 +246,7 @@ impl ClauseDb {
     }
 
     /// Store the resolution depth for a learned clause.
-    pub fn set_depth(&mut self, cref: CRef, depth: u16) {
+    pub(crate) fn set_depth(&mut self, cref: CRef, depth: u16) {
         self.depth.insert(cref, depth);
     }
 
@@ -260,7 +260,7 @@ impl ClauseDb {
     /// Scores each candidate clause by `LBD + depth_weight * resolution_depth`
     /// (both as f64), then deletes the top half by score. `depth_weight = 0.0`
     /// is equivalent to `reduce_learned`.
-    pub fn reduce_learned_weighted(
+    pub(crate) fn reduce_learned_weighted(
         &mut self,
         locked: &HashSet<CRef>,
         depth_weight: f64,
@@ -296,7 +296,7 @@ impl ClauseDb {
     /// Returns a remap table of `(old_cref, new_cref)` pairs for live clauses,
     /// sorted by old_cref. Callers must update all stored clause references
     /// (trail reasons, watch lists) using this table.
-    pub fn compact(&mut self) -> Vec<(CRef, CRef)> {
+    pub(crate) fn compact(&mut self) -> Vec<(CRef, CRef)> {
         let mut new_arena = Vec::with_capacity(self.arena.len());
         let mut remap = Vec::new();
         let mut new_original_limit = 0u32;
@@ -363,7 +363,7 @@ impl ClauseDb {
     /// check a garbage CRef could yield a slice up to 2^20 words past the
     /// arena in release builds (UB from safe code). Hot loops use
     /// [`clause_unchecked`](Self::clause_unchecked) and skip both checks.
-    pub fn clause(&self, cref: CRef) -> ClauseRef<'_> {
+    pub(crate) fn clause(&self, cref: CRef) -> ClauseRef<'_> {
         let pos = cref as usize;
         let len = header_len(self.arena[pos]) as usize;
         assert!(
@@ -390,7 +390,7 @@ impl ClauseDb {
     /// # Safety
     /// `cref` must point to a valid header in the arena.
     #[inline]
-    pub unsafe fn clause_unchecked(&self, cref: CRef) -> ClauseRef<'_> {
+    pub(crate) unsafe fn clause_unchecked(&self, cref: CRef) -> ClauseRef<'_> {
         let pos = cref as usize;
         let len = header_len(*self.arena.get_unchecked(pos)) as usize;
         let raw_ptr = self.arena.as_ptr().add(pos + 1) as *const Lit;
@@ -408,14 +408,14 @@ impl ClauseDb {
     /// # Safety
     /// `cref` must be valid. `a` and `b` must be < clause length.
     #[inline]
-    pub unsafe fn swap_literal_unchecked(&mut self, cref: CRef, a: usize, b: usize) {
+    pub(crate) unsafe fn swap_literal_unchecked(&mut self, cref: CRef, a: usize, b: usize) {
         let pos = cref as usize;
         let ptr = self.arena.as_mut_ptr();
         std::ptr::swap(ptr.add(pos + 1 + a), ptr.add(pos + 1 + b));
     }
 
     /// Highest variable index across all clauses. Returns 0 if empty.
-    pub fn max_variable(&self) -> u32 {
+    pub(crate) fn max_variable(&self) -> u32 {
         self.max_var
     }
 
@@ -423,7 +423,7 @@ impl ClauseDb {
     ///
     /// Walks the arena linearly — O(n) in total. CRef iteration replaces
     /// the old `for i in 0..db.len()` pattern.
-    pub fn iter_crefs(&self) -> CRefIter<'_> {
+    pub(crate) fn iter_crefs(&self) -> CRefIter<'_> {
         CRefIter {
             arena: &self.arena,
             pos: 0,
@@ -435,7 +435,7 @@ impl ClauseDb {
     /// Convenience method for code that needs random access by sequential
     /// index (gradient solver, SoA construction). Not needed on the BCP
     /// hot path, which accesses clauses by CRef from WatchEntry.
-    pub fn crefs(&self) -> Vec<CRef> {
+    pub(crate) fn crefs(&self) -> Vec<CRef> {
         self.iter_crefs().collect()
     }
 }

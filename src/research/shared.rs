@@ -61,13 +61,13 @@ impl<T: GpuValue, const OWNER: u8> SharedRegion<T, OWNER> {
     /// In a real implementation, this would be enforced by requiring
     /// proof that the caller is in the owning role.
     pub fn write(&mut self, index: usize, value: T) {
-        assert!(index < 32, "Index out of bounds");
+        assert!(index < WARP_SIZE as usize, "Index out of bounds");
         self.data[index] = value;
     }
 
     /// Read from a slot. Owner always has read access.
     pub fn read(&self, index: usize) -> T {
-        assert!(index < 32, "Index out of bounds");
+        assert!(index < WARP_SIZE as usize, "Index out of bounds");
         self.data[index]
     }
 

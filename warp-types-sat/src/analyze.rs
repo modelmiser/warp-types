@@ -58,7 +58,7 @@ pub struct ConflictProfile {
 }
 
 /// Result of conflict analysis.
-pub struct AnalysisResult {
+pub(crate) struct AnalysisResult {
     /// The learned clause (asserting clause). The first literal is the
     /// asserting literal (the 1-UIP, negated).
     pub learned: Vec<Lit>,
@@ -80,7 +80,7 @@ pub struct AnalysisResult {
 ///
 /// Allocated once at solver init, reused across all conflicts. Eliminates
 /// the per-conflict heap allocation of `seen` and `levels_seen` vectors.
-pub struct AnalyzeWork {
+pub(crate) struct AnalyzeWork {
     /// Per-variable seen flag. Sized for num_vars at init, cleared
     /// incrementally via `touched` after each analysis.
     seen: Vec<bool>,
@@ -100,7 +100,7 @@ pub struct AnalyzeWork {
 
 impl AnalyzeWork {
     /// Create scratch buffers for a solver with `num_vars` variables.
-    pub fn new(num_vars: usize) -> Self {
+    pub(crate) fn new(num_vars: usize) -> Self {
         AnalyzeWork {
             seen: vec![false; num_vars],
             touched: Vec::with_capacity(64),
@@ -170,7 +170,11 @@ fn reason_clause_lits(db: &ClauseDb, cref: CRef, num_vars: usize) -> &[Lit] {
 /// Run 1-UIP conflict analysis (allocates fresh scratch buffers).
 ///
 /// Convenience wrapper for callers that don't reuse buffers (old solver, tests).
-pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: CRef) -> AnalysisResult {
+pub(crate) fn analyze_conflict(
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict_clause: CRef,
+) -> AnalysisResult {
     let num_vars = trail.num_vars().max(db.max_variable() as usize + 1);
     let mut work = AnalyzeWork::new(num_vars);
     analyze_conflict_with(&mut work, trail, db, conflict_clause)
@@ -180,7 +184,7 @@ pub fn analyze_conflict(trail: &Trail, db: &ClauseDb, conflict_clause: CRef) -> 
 ///
 /// Delegates to [`analyze_conflict_with_theory`] with [`NoTheory`].
 #[allow(clippy::needless_range_loop)]
-pub fn analyze_conflict_with(
+pub(crate) fn analyze_conflict_with(
     work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
@@ -198,7 +202,7 @@ pub fn analyze_conflict_with(
 /// For pure SAT (T = NoTheory), the compiler monomorphizes away all theory
 /// code paths — the generated code is identical to the pre-theory version.
 #[allow(clippy::needless_range_loop)]
-pub fn analyze_conflict_with_theory<T: TheorySolver>(
+pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
@@ -533,7 +537,7 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
 /// Same as `analyze_conflict_with` but records each resolution step.
 /// Use for proof DAG mining — adds ~1 Vec::push per resolution step.
 #[allow(clippy::needless_range_loop)]
-pub fn analyze_conflict_instrumented(
+pub(crate) fn analyze_conflict_instrumented(
     work: &mut AnalyzeWork,
     trail: &Trail,
     db: &ClauseDb,
