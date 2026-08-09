@@ -1,0 +1,30 @@
+name: Doc Counts
+
+# Runs the doc-count freshness guard (scripts/check-doc-counts.sh) in CI.
+#
+# Deliberately has NO paths-ignore: unlike ci.yml (which skips *.md / paper /
+# blog), this guard's entire purpose is to compare doc claims against the real
+# test/theorem counts, so it MUST run when docs change too — including doc-only
+# PRs from external contributors who do not have the local pre-push hook.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  doc-counts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-01
+          # Same pin as ci.yml. The guard compiles the workspace to count
+          # unit/doc/example tests; no rustfmt/clippy components needed.
+      - name: Doc-count freshness guard
+        run: bash scripts/check-doc-counts.sh
