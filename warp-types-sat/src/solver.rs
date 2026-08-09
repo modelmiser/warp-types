@@ -582,10 +582,19 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                         propagate.finish_conflict().analyze().backtrack().unsat();
                                     return SolveResult::Unsat;
                                 }
-                                debug_assert!(
-                                    lits.iter().all(|l| trail.value(l.var())
-                                        == Some(l.is_negated())),
-                                    "theory conflict clause must be falsified by the current assignment"
+                                // Release check, not debug_assert: a non-falsified
+                                // lemma silently corrupts the solve in release —
+                                // all-unassigned literals give max_level 0 (wrong
+                                // UNSAT below), partially-unassigned ones reach
+                                // analysis, whose None trail-entry arm treats them
+                                // as level-0 facts (corrupt learned clause). Cold
+                                // path: once per theory conflict.
+                                assert!(
+                                    lits.iter()
+                                        .all(|l| trail.value(l.var()) == Some(l.is_negated())),
+                                    "TheorySolver contract violated: check() returned a conflict \
+                                     clause that is not falsified by the current assignment \
+                                     (contains an unassigned or satisfied literal)"
                                 );
                                 // Order by descending decision level so watched
                                 // positions 0 and 1 hold the literals that are
@@ -3058,6 +3067,40 @@ p cnf 5 10
             SolveResult::Unsat => panic!("expected SAT"),
             SolveResult::Unknown => panic!("unexpected Unknown"),
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "TheorySolver contract violated")]
+    fn theory_non_falsified_conflict_panics_cleanly() {
+        // A buggy theory returning a conflict clause that is NOT falsified
+        // (here: full of unassigned literals). In release this used to slip
+        // past a debug_assert: all-unassigned literals gave max_level 0 and
+        // a silent wrong UNSAT. It must now panic with a contract-naming
+        // message. Fires above level 0 so it reaches the conflict-resolution
+        // path (the level-0 pre-loop treats theory conflicts as UNSAT
+        // without analysis).
+        struct NonFalsifiedConflictTheory;
+        impl TheorySolver for NonFalsifiedConflictTheory {
+            fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
+                if ctx.trail.current_level() > 0 {
+                    // Neither clause propagates after one decision, so at
+                    // least two of these variables are still unassigned.
+                    TheoryResult::Conflict(vec![Lit::neg(0), Lit::neg(1), Lit::neg(2), Lit::neg(3)])
+                } else {
+                    TheoryResult::Consistent
+                }
+            }
+            fn backtrack(&mut self, _new_level: u32) {}
+            fn explain(&mut self, _lit: Lit, _key: u32) -> Vec<Lit> {
+                unreachable!("NonFalsifiedConflictTheory never propagates")
+            }
+        }
+
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
+        db.add_clause(vec![Lit::pos(2), Lit::pos(3)]);
+
+        let _ = solve_with_theory(db, 4, &mut NonFalsifiedConflictTheory);
     }
 
     #[test]

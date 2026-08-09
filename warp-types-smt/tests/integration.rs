@@ -611,6 +611,188 @@ fn cross_session_term_id_fails_loudly() {
     });
 }
 
+// ============================================================================
+// Round-2 regression tests: cross-theory equality loss (finding A)
+// ============================================================================
+
+// Witness 1: a trail equality between two not-yet-valued terms must not be
+// dropped — the BV module has to re-examine it when either side later
+// becomes valued. Pre-fix, `x = y` arrives while both are unvalued and is
+// discarded, so `x = 3 ∧ y = 4` never conflicts (order-dependent Sat).
+
+#[test]
+fn bv_unvalued_equality_then_values_unsat() {
+    // x = y ∧ x = 3 ∧ y = 4 (this assertion order) → UNSAT
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, y),
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bv_unvalued_equality_reversed_order_unsat() {
+    // Same formula, values first: x = 3 ∧ y = 4 ∧ x = y → UNSAT.
+    // Control for the order-dependence of the pre-fix bug.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+                SmtFormula::Eq(x, y),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// Witness 2: EUF-derived merges (congruence) must reach the BV module.
+// a = b forces f(a) ~ f(b) inside EUF only — no trail atom exists for the
+// pair, so trail sharing alone never tells BV that f(a) = f(b).
+
+#[test]
+fn bv_euf_congruence_merge_reaches_module_unsat() {
+    // a = b ∧ x = f(a) ∧ y = f(b) ∧ x = 3 ∧ y = 4 → UNSAT
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (session, fa) = session.apply(f, &[a]);
+        let (session, fb) = session.apply(f, &[b]);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, b),
+                SmtFormula::Eq(x, fa),
+                SmtFormula::Eq(y, fb),
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(y, four),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// ============================================================================
+// Round-2 regression tests: bv_op session-level validation (finding D)
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "bv_op: bvnot is unary")]
+fn bv_op_rejects_wrong_arity_not() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, y) = session.var("y", s);
+        let (_session, _t) = session.bv_op(BvOpKind::Not, 5, &[x, y], s);
+    });
+}
+
+#[test]
+#[should_panic(expected = "bv_op: bvsub is binary")]
+fn bv_op_rejects_wrong_arity_sub() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (_session, _t) = session.bv_op(BvOpKind::Sub, 5, &[x], s);
+    });
+}
+
+#[test]
+#[should_panic(expected = "bv_op: Extract lo")]
+fn bv_op_rejects_malformed_extract_bounds() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, x) = session.var("x", s);
+        // lo > hi
+        let (_session, _t) = session.bv_op(BvOpKind::Extract { hi: 3, lo: 5 }, 1, &[x], s);
+    });
+}
+
+#[test]
+#[should_panic(expected = "bv_op: Extract hi")]
+fn bv_op_rejects_extract_hi_64() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, x) = session.var("x", s);
+        let (_session, _t) = session.bv_op(BvOpKind::Extract { hi: 64, lo: 0 }, 65, &[x], s);
+    });
+}
+
+#[test]
+#[should_panic(expected = "bv_op: Extract")]
+fn bv_op_rejects_extract_width_mismatch() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, x) = session.var("x", s);
+        // hi - lo + 1 = 3, but width says 5
+        let (_session, _t) = session.bv_op(BvOpKind::Extract { hi: 3, lo: 1 }, 5, &[x], s);
+    });
+}
+
+#[test]
+#[should_panic(expected = "at least one argument")]
+fn bv_op_rejects_empty_variadic() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (_session, _t) = session.bv_op(BvOpKind::Add, 5, &[], s);
+    });
+}
+
+// ============================================================================
+// Round-2: ground-only completeness boundary (finding E)
+// ============================================================================
+
+#[test]
+fn bv_ground_only_incompleteness_width1_pinned() {
+    // Canonical incompleteness witness documented on `check_sat_bv` and
+    // `SmtResult::Sat`: at width 1, x ≠ 0 ∧ x ≠ 1 is BV-unsat, but the BV
+    // module is ground-only (no bit-blasting) — x never becomes ground, no
+    // ground conflict exists, and the solver reports Sat. This test pins
+    // that documented boundary; if it starts failing, the docs on
+    // `check_sat_bv` / `SmtResult::Sat` must be updated in the same change.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV1");
+        let (session, x) = session.var("x", s);
+        let (session, zero) = session.bv_const(1, 0, s);
+        let (session, one) = session.bv_const(1, 1, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Neq(x, zero),
+                SmtFormula::Neq(x, one),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Sat);
+}
+
 #[test]
 fn bvconcat_detects_conflict() {
     // a = 0b101 (3-bit), b = 0b010 (3-bit), concat(a, b) = 0b101_010 (6-bit)

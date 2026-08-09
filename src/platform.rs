@@ -165,7 +165,11 @@ where
         let mut result = PortableVector::default();
         for i in 0..WIDTH {
             // Clamp: lanes where i+delta >= WIDTH read their own value (GPU semantics).
-            let src_idx = if i + delta < WIDTH { i + delta } else { i };
+            // checked_add: a huge delta must clamp, not overflow-wrap into a low lane.
+            let src_idx = match i.checked_add(delta) {
+                Some(s) if s < WIDTH => s,
+                _ => i,
+            };
             result.data[i] = source.data[src_idx];
         }
         result
@@ -273,13 +277,13 @@ impl Platform for GpuWarp32 {
         // GPU shfl.sync.down clamps: lanes where lane + delta >= WIDTH read
         // their own value (not wrapped).  CpuSimd also clamps (same behavior).
         let mut result = PortableVector::default();
-        for i in 0..32 {
-            let src_idx = i + delta;
-            result.data[i] = if src_idx < 32 {
-                source.data[src_idx]
-            } else {
-                source.data[i]
+        for i in 0..32usize {
+            // checked_add: a huge delta must clamp, not overflow-wrap into a low lane.
+            let src_idx = match i.checked_add(delta) {
+                Some(s) if s < 32 => s,
+                _ => i,
             };
+            result.data[i] = source.data[src_idx];
         }
         result
     }
@@ -423,6 +427,33 @@ mod tests {
         }
         let sum = butterfly_reduce_sum::<8, i32>(v);
         assert_eq!(sum, 36);
+    }
+
+    #[test]
+    fn test_shuffle_down_huge_delta_clamps() {
+        // delta near usize::MAX must clamp to self (documented clamp
+        // semantics), not overflow-wrap into a wrong low lane.
+        let mut v = PortableVector::<i32, 8>::default();
+        for i in 0..8 {
+            v = v.insert(i, i as i32 * 10);
+        }
+        let r = CpuSimd::<8>::shuffle_down(v, usize::MAX);
+        for i in 0..8 {
+            assert_eq!(r.extract(i), i as i32 * 10, "lane {i} must keep own value");
+        }
+
+        let mut v32 = PortableVector::<i32, 32>::default();
+        for i in 0..32 {
+            v32 = v32.insert(i, i as i32 * 10);
+        }
+        let r32 = GpuWarp32::shuffle_down(v32, usize::MAX);
+        for i in 0..32 {
+            assert_eq!(
+                r32.extract(i),
+                i as i32 * 10,
+                "lane {i} must keep own value"
+            );
+        }
     }
 
     #[test]

@@ -121,6 +121,19 @@ impl ClauseDataSoA {
     pub fn num_batches(&self) -> usize {
         self.padded_len / WARP_SIZE
     }
+
+    /// True when the SoA contains at least one warp batch of packed
+    /// 3-literal clauses.
+    ///
+    /// A kernel launch with `grid_dim = (0, 1, 1)` is a CUDA `DriverError`,
+    /// not a no-op — GPU paths must skip all uploads/launches when this is
+    /// false and return "no assignment" so hybrid callers fall through to
+    /// CDCL. The SimWarp path needs no such guard: its batch loop simply
+    /// runs zero times. Host-side (not gpu-gated) so the guard condition
+    /// is testable without hardware.
+    pub fn has_gpu_work(&self) -> bool {
+        self.num_batches() > 0
+    }
 }
 
 // ─── Per-lane clause loss (kernel body) ──────────────────────────────
@@ -644,6 +657,19 @@ pub fn gradient_search_gpu(
     let initial_weights = vec![1.0; db.len()];
     let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
 
+    // Zero 3-literal clauses → zero warp batches → grid_dim (0, 1, 1),
+    // which CUDA rejects (DriverError → expect() panic) on otherwise-valid
+    // input. Return "no assignment" so hybrid callers fall through to CDCL,
+    // mirroring the SimWarp path's tolerance.
+    if !soa_template.has_gpu_work() {
+        return GradientResult {
+            assignment: None,
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
+
     let mut result = GradientResult {
         assignment: None,
         best_continuous: None,
@@ -788,6 +814,17 @@ pub fn gradient_search_gpu_resident(
 
     let initial_weights = vec![1.0; db.len()];
     let (soa_template, _skipped) = ClauseDataSoA::from_clause_db(db, &initial_weights);
+
+    // Same guard as gradient_search_gpu: grid_dim (0, 1, 1) is a CUDA
+    // error, not a no-op. Fall through to CDCL via "no assignment".
+    if !soa_template.has_gpu_work() {
+        return GradientResult {
+            assignment: None,
+            best_continuous: None,
+            starts: vec![],
+            clause_evals: 0,
+        };
+    }
 
     let mut result = GradientResult {
         assignment: None,
@@ -1103,6 +1140,34 @@ mod tests {
         assert_eq!(soa.padded_len, 0);
         assert_eq!(soa.num_batches(), 0);
         assert_eq!(total_loss_simwarp(&soa, &[0.5; 10]), 0.0);
+    }
+
+    #[test]
+    fn zero_three_lit_db_has_no_gpu_work() {
+        // A non-empty db with NO 3-literal clauses packs into zero warp
+        // batches. The GPU paths gate every upload/launch on has_gpu_work()
+        // — without the guard, grid_dim (0, 1, 1) is a CUDA DriverError and
+        // an expect() panic on valid input. This validates the host-side
+        // guard condition; the launches themselves are cfg(feature = "gpu").
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]); // 2-SAT, skipped by SoA
+        db.add_clause(vec![Lit::neg(0)]); // unit, skipped by SoA
+        let weights = vec![1.0; db.len()];
+        let (soa, skipped) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+        assert_eq!(skipped, 2);
+        assert_eq!(soa.num_batches(), 0);
+        assert!(!soa.has_gpu_work(), "zero 3-lit clauses must short-circuit");
+
+        // Empty db likewise has no GPU work.
+        let (empty_soa, _) = ClauseDataSoA::from_clause_db(&ClauseDb::new(), &[]);
+        assert!(!empty_soa.has_gpu_work());
+
+        // One 3-literal clause is enough for a (padded) batch.
+        let mut db3 = ClauseDb::new();
+        db3.add_clause(vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)]);
+        let (soa3, _) = ClauseDataSoA::from_clause_db(&db3, &[1.0]);
+        assert!(soa3.has_gpu_work());
     }
 
     #[test]

@@ -36,7 +36,14 @@ use std::process::Command;
 pub enum GpuTarget {
     /// NVIDIA nvptx64 (32-lane warps, PTX output)
     Nvidia,
-    /// AMD amdgcn (64-lane wavefronts, AMDGPU output)
+    /// AMD amdgcn (64-lane wavefronts, AMDGPU output).
+    ///
+    /// **Not yet supported:** [`WarpBuilder::build`] returns
+    /// [`BuildError::UnsupportedTarget`] for this target. Two gaps remain:
+    /// the builder passes NVIDIA `sm_*` values as `-C target-cpu` (rejected
+    /// by the amdgcn LLVM backend), and kernel entry parsing understands
+    /// only PTX `.visible .entry` syntax, so an amdgcn build would yield a
+    /// kernel-less module.
     Amd,
 }
 
@@ -136,6 +143,20 @@ impl WarpBuilder {
     ///
     /// Also prints `cargo:rerun-if-changed` for all kernel source files (recursive).
     pub fn build(self) -> Result<BuildResult, BuildError> {
+        // AMD emission is not yet supported — fail loudly and immediately
+        // rather than (1) passing an NVIDIA sm_* target-cpu to the amdgcn
+        // backend (raw LLVM error) or (2) parsing amdgcn assembly with the
+        // PTX-only entry parser (silently kernel-less module).
+        if matches!(self.target, GpuTarget::Amd) {
+            return Err(BuildError::UnsupportedTarget(
+                "GpuTarget::Amd is not yet supported: the builder passes NVIDIA sm_* values \
+                 as -C target-cpu (rejected by the amdgcn LLVM backend), and kernel entry \
+                 parsing is PTX-only (an amdgcn build would produce a kernel-less module). \
+                 Use GpuTarget::Nvidia."
+                    .to_string(),
+            ));
+        }
+
         let manifest_dir =
             env::var("CARGO_MANIFEST_DIR").map_err(|_| BuildError::NotInBuildScript)?;
         let out_dir = env::var("OUT_DIR").map_err(|_| BuildError::NotInBuildScript)?;
@@ -271,6 +292,8 @@ pub enum BuildError {
     NotInBuildScript,
     /// Kernel crate directory not found.
     KernelCrateNotFound(PathBuf),
+    /// The selected GPU target is not supported yet.
+    UnsupportedTarget(String),
     /// cargo build failed.
     CargoFailed(String),
     /// Kernel crate compilation failed.
@@ -293,6 +316,7 @@ impl std::fmt::Display for BuildError {
             BuildError::KernelCrateNotFound(p) => {
                 write!(f, "Kernel crate not found: {}", p.display())
             }
+            BuildError::UnsupportedTarget(s) => write!(f, "Unsupported GPU target: {}", s),
             BuildError::CargoFailed(s) => write!(f, "Cargo invocation failed: {}", s),
             BuildError::CompilationFailed(s) => write!(f, "Kernel compilation failed:\n{}", s),
             BuildError::PtxNotFound(s) => write!(f, "PTX file not found: {}", s),
@@ -671,6 +695,26 @@ mod tests {
         let picked = pick_newest(vec![stale.clone(), fresh.clone()]);
         assert_eq!(picked, Some(fresh));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- GpuTarget::Amd: loud typed error instead of raw/silent failure ---
+
+    #[test]
+    fn amd_target_errors_loudly() {
+        // Must fail before any cargo invocation or env-var lookup: the
+        // target is unsupported regardless of environment.
+        let err = match WarpBuilder::new("kernels").target(GpuTarget::Amd).build() {
+            Err(e) => e,
+            Ok(_) => panic!("expected UnsupportedTarget error, got Ok"),
+        };
+        match err {
+            BuildError::UnsupportedTarget(msg) => {
+                assert!(msg.contains("GpuTarget::Amd"), "names the target: {msg}");
+                assert!(msg.contains("target-cpu"), "names the sm_* gap: {msg}");
+                assert!(msg.contains("PTX-only"), "names the parser gap: {msg}");
+            }
+            other => panic!("expected UnsupportedTarget, got: {other:?}"),
+        }
     }
 
     // --- parse_kernel_entries: pure PTX parsing ---

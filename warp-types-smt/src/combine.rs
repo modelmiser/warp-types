@@ -72,8 +72,15 @@ pub enum ModuleResult {
 /// from the combining solver. It reasons within its own theory and reports
 /// implied equalities (with premises) for sharing with other theories.
 pub trait TheoryModule {
-    /// The module is informed that `t1 = t2`.
+    /// The module is informed that `t1 = t2`, asserted as a trail atom.
     fn notify_equality(&mut self, t1: TermId, t2: TermId);
+
+    /// The module is informed that `t1 = t2` was *derived* by another theory
+    /// (EUF congruence/transitivity over shared terms). The pair itself need
+    /// not be a trail atom; `premises` are the trail equality atoms that
+    /// justify it, and the module must use those (not the pair) when the
+    /// equality contributes to a conflict or an explanation.
+    fn notify_derived_equality(&mut self, t1: TermId, t2: TermId, premises: Vec<(TermId, TermId)>);
 
     /// The module is informed that `t1 ≠ t2`.
     fn notify_disequality(&mut self, t1: TermId, t2: TermId);
@@ -102,6 +109,15 @@ pub struct NullModule;
 impl TheoryModule for NullModule {
     #[inline(always)]
     fn notify_equality(&mut self, _t1: TermId, _t2: TermId) {}
+
+    #[inline(always)]
+    fn notify_derived_equality(
+        &mut self,
+        _t1: TermId,
+        _t2: TermId,
+        _premises: Vec<(TermId, TermId)>,
+    ) {
+    }
 
     #[inline(always)]
     fn notify_disequality(&mut self, _t1: TermId, _t2: TermId) {}
@@ -148,6 +164,9 @@ pub struct CombiningSolver<M: TheoryModule> {
     /// level — otherwise retracted values persist and the module emits
     /// conflict/explanation clauses that are not currently falsified.
     module_level: u32,
+    /// EUF merge records already forwarded to the module (cursor into
+    /// `euf.merge_reasons`). Reset to 0 on backtrack, like `module_trail_pos`.
+    module_merge_pos: usize,
     /// Lazy-explanation records for module propagations.
     module_props: Vec<ModulePropRecord>,
 }
@@ -160,6 +179,7 @@ impl<M: TheoryModule> CombiningSolver<M> {
             module,
             module_trail_pos: 0,
             module_level: 0,
+            module_merge_pos: 0,
             module_props: Vec::new(),
         }
     }
@@ -191,10 +211,65 @@ impl<M: TheoryModule> CombiningSolver<M> {
         self.module_trail_pos = trail_len;
     }
 
+    /// Forward newly recorded EUF congruence merges to the module
+    /// (Nelson-Oppen equality sharing in the EUF → module direction).
+    ///
+    /// Trail-asserted merges are skipped — `share_trail_to_module` already
+    /// delivers those. Congruence merges have no trail atom, so without this
+    /// the module never learns that e.g. `f(a) = f(b)` follows from `a = b`,
+    /// and misses conflicts between the values it assigns the two terms.
+    /// Each forwarded merge carries its premises (the asserted equality atoms
+    /// from the EUF explanation) so the module can build valid clauses.
+    fn share_euf_merges_to_module(&mut self) {
+        let merge_count = self.euf.merge_count();
+        while self.module_merge_pos < merge_count {
+            let idx = self.module_merge_pos;
+            self.module_merge_pos += 1;
+            let Some((t1, t2)) = self.euf.congruence_merge_at(idx) else {
+                continue;
+            };
+            let premises: Vec<(TermId, TermId)> = self
+                .euf
+                .explain_equality(t1, t2)
+                .into_iter()
+                .map(|atom| {
+                    let var = self.euf.atom_map.var_for_atom(atom);
+                    self.euf
+                        .atom_map
+                        .atom_for_var(var)
+                        .expect("equality atom's SAT variable must map back to its term pair")
+                })
+                .collect();
+            self.module.notify_derived_equality(t1, t2, premises);
+        }
+    }
+
+    /// SAT variable for a premise pair. Panics if the pair has no atom:
+    /// every premise a module reports must be a trail equality atom —
+    /// silently dropping it would strengthen the clause into a
+    /// theory-invalid lemma (and a fully dropped conflict would read as
+    /// consistent). This is a `TheoryModule` contract requirement.
+    fn var_for_premise(&self, t1: TermId, t2: TermId) -> u32 {
+        let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+        match self.euf.atom_map.eq_to_atom.get(&key) {
+            Some(&atom_id) => self.euf.atom_map.var_for_atom(atom_id),
+            None => panic!(
+                "TheoryModule premise ({t1:?}, {t2:?}) has no SAT atom — every premise in a \
+                 module conflict/equality must be a trail equality atom (derived equalities \
+                 must be reported through their own atom-level premises); dropping it would \
+                 produce an invalid stronger lemma"
+            ),
+        }
+    }
+
     /// Build a conflict clause from module premises.
     ///
     /// Equality premises are negated (they're true on the trail),
     /// disequality premises become positive (they're false on the trail).
+    ///
+    /// # Panics
+    /// Panics if any premise has no SAT atom, or if the module reported a
+    /// conflict with no premises at all (see [`Self::var_for_premise`]).
     fn build_conflict_clause(
         &self,
         eq_premises: &[(TermId, TermId)],
@@ -202,19 +277,16 @@ impl<M: TheoryModule> CombiningSolver<M> {
     ) -> Vec<Lit> {
         let mut clause = Vec::new();
         for &(t1, t2) in eq_premises {
-            let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-            if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&key) {
-                let var = self.euf.atom_map.var_for_atom(atom_id);
-                clause.push(Lit::neg(var));
-            }
+            clause.push(Lit::neg(self.var_for_premise(t1, t2)));
         }
         for &(t1, t2) in diseq_premises {
-            let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-            if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&key) {
-                let var = self.euf.atom_map.var_for_atom(atom_id);
-                clause.push(Lit::pos(var));
-            }
+            clause.push(Lit::pos(self.var_for_premise(t1, t2)));
         }
+        assert!(
+            !clause.is_empty(),
+            "TheoryModule reported a conflict with no premises — a conflict must cite the \
+             trail assertions it depends on, or it cannot be expressed as a falsified lemma"
+        );
         clause
     }
 }
@@ -230,22 +302,16 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
             TheoryResult::Consistent => {}
         }
 
-        // ── Phase 2: Share trail to module ──
+        // ── Phase 2: Share trail + EUF-derived merges to module ──
         self.share_trail_to_module(ctx);
+        self.share_euf_merges_to_module();
 
         // ── Phase 3: Module consistency + equality sharing ──
         match self.module.propagate() {
             ModuleResult::Conflict {
                 eq_premises,
                 diseq_premises,
-            } => {
-                let clause = self.build_conflict_clause(&eq_premises, &diseq_premises);
-                if clause.is_empty() {
-                    TheoryResult::Consistent // Can't express conflict (missing atoms)
-                } else {
-                    TheoryResult::Conflict(clause)
-                }
-            }
+            } => TheoryResult::Conflict(self.build_conflict_clause(&eq_premises, &diseq_premises)),
             ModuleResult::Consistent(new_eqs) => {
                 let mut props = Vec::new();
 
@@ -281,13 +347,14 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
                         Some(false) => {
                             // Trail says t1 ≠ t2, module says t1 = t2.
                             // Conflict clause: negate eq premises + assert diseq as eq.
-                            let mut clause = Vec::new();
-                            for &(pt1, pt2) in &meq.premises {
-                                let k = if pt1 <= pt2 { (pt1, pt2) } else { (pt2, pt1) };
-                                if let Some(&aid) = self.euf.atom_map.eq_to_atom.get(&k) {
-                                    clause.push(Lit::neg(self.euf.atom_map.var_for_atom(aid)));
-                                }
-                            }
+                            // Premise atoms are mandatory (var_for_premise
+                            // panics on a missing one — silently dropping a
+                            // premise would strengthen the lemma unsoundly).
+                            let mut clause: Vec<Lit> = meq
+                                .premises
+                                .iter()
+                                .map(|&(pt1, pt2)| Lit::neg(self.var_for_premise(pt1, pt2)))
+                                .collect();
                             clause.push(Lit::pos(var)); // The equality must hold
                             return TheoryResult::Conflict(clause);
                         }
@@ -310,18 +377,21 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
             self.module_level = new_level;
         }
         self.module_trail_pos = 0;
+        // EUF truncated its merge records; re-forward the survivors after the
+        // next trail re-scan (same rationale as module_trail_pos).
+        self.module_merge_pos = 0;
     }
 
     fn explain(&mut self, lit: Lit, key: u32) -> Vec<Lit> {
         if key >= MODULE_KEY_OFFSET {
             let idx = (key - MODULE_KEY_OFFSET) as usize;
             let record = &self.module_props[idx];
+            let premises = record.premises.clone();
             let mut clause = vec![record.lit];
-            for &(t1, t2) in &record.premises {
-                let k = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-                if let Some(&atom_id) = self.euf.atom_map.eq_to_atom.get(&k) {
-                    clause.push(Lit::neg(self.euf.atom_map.var_for_atom(atom_id)));
-                }
+            for (t1, t2) in premises {
+                // Missing premise atoms panic (see var_for_premise): dropping
+                // one would yield an explanation clause that was never unit.
+                clause.push(Lit::neg(self.var_for_premise(t1, t2)));
             }
             clause
         } else {
@@ -355,6 +425,13 @@ mod tests {
 
     impl TheoryModule for ConstantModule {
         fn notify_equality(&mut self, _t1: TermId, _t2: TermId) {}
+        fn notify_derived_equality(
+            &mut self,
+            _t1: TermId,
+            _t2: TermId,
+            _premises: Vec<(TermId, TermId)>,
+        ) {
+        }
         fn notify_disequality(&mut self, _t1: TermId, _t2: TermId) {}
 
         fn propagate(&mut self) -> ModuleResult {

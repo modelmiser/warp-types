@@ -317,17 +317,47 @@ impl EufSolver {
     ///
     /// Uses BFS through the merge-reason graph to find a path from `t1` to
     /// `t2`, then recursively explains congruence steps.
-    fn explain_equality(&self, t1: TermId, t2: TermId) -> Vec<AtomId> {
+    ///
+    /// # Panics
+    /// Panics if `t1` and `t2` are not in the same equivalence class. Every
+    /// caller explains an equality the solver currently relies on (a conflict
+    /// between merged terms, a recorded propagation whose premises survive on
+    /// the trail, or a congruence merge being forwarded to the module), so an
+    /// unmerged pair here means the union-find no longer matches the trail —
+    /// returning an empty reason set would silently produce an unconditional
+    /// (theory-invalid) lemma.
+    pub(crate) fn explain_equality(&self, t1: TermId, t2: TermId) -> Vec<AtomId> {
         if t1 == t2 {
             return Vec::new();
         }
-        if self.find(t1) != self.find(t2) {
-            return Vec::new(); // shouldn't happen if called correctly
-        }
+        assert!(
+            self.find(t1) == self.find(t2),
+            "explain_equality({t1:?}, {t2:?}): terms are not in the same equivalence class — \
+             EUF state is inconsistent with the assignment this explanation is for \
+             (backtrack retracted merges whose premises survive?)"
+        );
 
         let mut atoms = Vec::new();
         self.bfs_explain(t1, t2, &mut atoms);
         atoms
+    }
+
+    /// Number of merges currently recorded. Grows as merges happen and is
+    /// truncated by `backtrack`; the combiner uses it as a cursor to forward
+    /// newly derived merges to the theory module (Nelson-Oppen equality
+    /// sharing in the EUF → module direction).
+    pub(crate) fn merge_count(&self) -> usize {
+        self.merge_reasons.len()
+    }
+
+    /// If merge `idx` was congruence-derived (not a trail-asserted atom),
+    /// return the merged pair. Trail-asserted merges return `None` — the
+    /// combiner already shares those with the module directly from the trail.
+    pub(crate) fn congruence_merge_at(&self, idx: usize) -> Option<(TermId, TermId)> {
+        match self.merge_reasons[idx] {
+            (a, b, MergeReason::Congruence(_, _)) => Some((a, b)),
+            (_, _, MergeReason::Asserted(_)) => None,
+        }
     }
 
     /// BFS-based explanation: build a graph from merge reasons and find
@@ -400,17 +430,25 @@ impl TheorySolver for EufSolver {
         let trail = ctx.trail;
         let trail_len = trail.len();
 
-        // Ensure level marks cover the current decision level
-        let current_level = trail.current_level() as usize;
-        while self.level_marks.len() <= current_level + 1 {
-            self.level_marks.push(self.undo_stack.len());
-            self.merge_level_marks.push(self.merge_reasons.len());
-            self.diseq_level_marks.push(self.disequalities.len());
-        }
-
         // Process new trail entries incrementally
         let entries = trail.entries();
         for entry in entries.iter().take(trail_len).skip(self.trail_pos) {
+            // Push the level mark for level L when the FIRST level-L entry is
+            // scanned — i.e. after every entry of levels < L has been
+            // processed (entries arrive in nondecreasing level order). This
+            // placement is what makes `backtrack(L)` retract strictly-above-L
+            // merges only. Pushing marks up-front at the start of check()
+            // (the previous scheme) recorded the mark for level L+1 BEFORE
+            // the level-L entries were processed, so backtrack(L) also
+            // retracted level-L merges whose atoms survive on the trail —
+            // and explain() for a surviving propagation, called between the
+            // backjump and the next check(), found the classes unmerged.
+            while self.level_marks.len() <= entry.level as usize {
+                self.level_marks.push(self.undo_stack.len());
+                self.merge_level_marks.push(self.merge_reasons.len());
+                self.diseq_level_marks.push(self.disequalities.len());
+            }
+
             let var = entry.lit.var();
             let is_true = !entry.lit.is_negated();
 
@@ -906,6 +944,102 @@ mod tests {
         explanation.sort_by_key(|a| a.0);
         explanation.dedup();
         assert_eq!(explanation, vec![AtomId(0), AtomId(1), AtomId(2)]);
+    }
+
+    /// Round-2 finding B: `backtrack(L)` must retract strictly-above-L merges
+    /// only. Pre-fix, `check()` pushed level marks BEFORE processing the
+    /// current level's trail entries, so the mark for level L+1 predated the
+    /// level-L merges and `backtrack(L)` retracted them — while their atoms
+    /// survive on the trail. The solver calls `explain` for surviving theory
+    /// propagations inside the window before the next `check()` rescans;
+    /// `explain_equality` then found the classes unmerged and returned an
+    /// empty reason set (an invalid unconditional lemma).
+    #[test]
+    fn explain_after_backjump_keeps_surviving_level_merges() {
+        use warp_types_sat::bcp::ClauseDb;
+        use warp_types_sat::trail::Trail;
+
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let mk_var = |arena: &mut TermArena, name: &str| {
+            arena.intern(
+                TermKind::Variable {
+                    name: name.into(),
+                    sort: s,
+                },
+                s,
+            )
+        };
+        let a = mk_var(&mut arena, "a");
+        let b = mk_var(&mut arena, "b");
+        let c = mk_var(&mut arena, "c");
+        let d = mk_var(&mut arena, "d");
+
+        let mut atom_map = AtomMap::new();
+        let (_, v_ab) = atom_map.get_or_create(a, b); // var 0
+        let (_, v_bc) = atom_map.get_or_create(b, c); // var 1
+        let (_, v_ac) = atom_map.get_or_create(a, c); // var 2
+        let (_, v_cd) = atom_map.get_or_create(c, d); // var 3
+
+        let mut euf = EufSolver::new(&arena, atom_map);
+        let db = ClauseDb::new();
+        let mut trail = Trail::new(4);
+
+        // Level 1: a = b (decision) and b = c (as a propagation at level 1).
+        trail.new_decision(Lit::pos(v_ab));
+        trail.record_theory_propagation(Lit::pos(v_bc), 999); // fake key, never explained
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 4,
+        };
+        // check() merges a~b, b~c and must propagate (a = c) with key 0.
+        let key = match euf.check(&ctx) {
+            TheoryResult::Propagate(props) => {
+                assert_eq!(props.len(), 1);
+                assert_eq!(props[0].lit, Lit::pos(v_ac));
+                props[0].key
+            }
+            _ => panic!("expected a = c to be theory-propagated at level 1"),
+        };
+        trail.record_theory_propagation(Lit::pos(v_ac), key);
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 4,
+        };
+        assert!(matches!(euf.check(&ctx), TheoryResult::Consistent));
+
+        // Level 2: c = d (decision), then check.
+        trail.new_decision(Lit::pos(v_cd));
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 4,
+        };
+        assert!(matches!(euf.check(&ctx), TheoryResult::Consistent));
+
+        // Backjump to level 1: all level-1 assignments (a=b, b=c, a=c) survive.
+        trail.backtrack_to(1);
+        euf.backtrack(1);
+
+        // The level-1 merges must survive the backtrack...
+        assert_eq!(
+            euf.find(a),
+            euf.find(c),
+            "backtrack(1) retracted level-1 merges whose atoms survive on the trail"
+        );
+        // ...and the level-2 merge must be gone.
+        assert_ne!(euf.find(c), euf.find(d));
+
+        // explain() for the surviving propagation must return the real
+        // premises — pre-fix it returned just [lit] (empty reason set).
+        let clause = euf.explain(Lit::pos(v_ac), key);
+        assert!(clause.contains(&Lit::pos(v_ac)));
+        assert!(
+            clause.contains(&Lit::neg(v_ab)) && clause.contains(&Lit::neg(v_bc)),
+            "explanation clause {clause:?} lost its premises after backjump"
+        );
     }
 
     /// Finding E evidence: later merges do not change an earlier connection's

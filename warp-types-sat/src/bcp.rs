@@ -143,7 +143,27 @@ impl ClauseDb {
     }
 
     /// Add a clause, returns its CRef (arena offset of the header word).
+    ///
+    /// # Panics
+    /// Panics if the clause exceeds the 20-bit header length field, or if the
+    /// arena would grow past the 2^31-word CRef space (bit 31 of a CRef is
+    /// reserved for the watch list's BINARY_FLAG). Without these guards the
+    /// header length would be silently masked and `arena.len() as u32` would
+    /// silently truncate — both corrupt the arena walk. Off the hot path:
+    /// once per clause insertion.
     pub fn add_clause(&mut self, literals: Vec<Lit>) -> CRef {
+        assert!(
+            literals.len() as u64 <= HEADER_LEN_MASK as u64,
+            "add_clause: clause length {} exceeds the {}-literal header capacity",
+            literals.len(),
+            HEADER_LEN_MASK
+        );
+        assert!(
+            self.arena.len() + 1 + literals.len() < (1usize << 31),
+            "add_clause: arena would grow to {} words, exceeding the 2^31 CRef space \
+             (bit 31 is reserved for the watch list's BINARY_FLAG)",
+            self.arena.len() + 1 + literals.len()
+        );
         let cref = self.arena.len() as u32;
         let len = literals.len() as u32;
         self.arena.push(make_header(len, 0, false));
@@ -655,6 +675,21 @@ mod tests {
         db.add_clause(vec![Lit::pos(100_000)]);
         let _ = db.clause(1);
     }
+
+    #[test]
+    #[should_panic(expected = "exceeds the 1048575-literal header capacity")]
+    fn add_clause_rejects_oversized_clause() {
+        // HEADER_LEN_MASK + 1 literals (4 MiB of Lit) — one past the 20-bit
+        // header length field. Previously the length was silently masked to
+        // 0, corrupting the arena walk (the next header would be read from
+        // the first literal word).
+        let mut db = ClauseDb::new();
+        let lits = vec![Lit::pos(0); HEADER_LEN_MASK as usize + 1];
+        let _ = db.add_clause(lits);
+    }
+
+    // The companion 2^31-word arena guard is asserted in add_clause but not
+    // exercised by a test: reaching it requires allocating an 8 GiB arena.
 
     #[test]
     #[should_panic]

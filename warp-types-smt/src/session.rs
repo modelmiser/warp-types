@@ -201,7 +201,12 @@ impl<'s> SmtSession<'s, Init> {
     /// Returns the session and the term ID.
     ///
     /// # Panics
-    /// Panics if any of `args` is out of range for this session.
+    /// Panics if:
+    /// - any of `args` is out of range for this session;
+    /// - the arity is wrong for `op` (`Not`/`Extract` are unary, `Sub`/
+    ///   `Concat` are binary, `Add`/`And`/`Or`/`Xor` need at least one arg);
+    /// - `op` is `Extract { hi, lo }` with `lo > hi`, `hi >= 64` (values are
+    ///   `u64`-backed), or `width != hi - lo + 1`.
     pub fn bv_op(
         mut self,
         op: BvOpKind,
@@ -210,6 +215,44 @@ impl<'s> SmtSession<'s, Init> {
         sort: SortId,
     ) -> (SmtSession<'s, Init>, TermId) {
         self.check_term_ids("bv_op", args);
+        match op {
+            BvOpKind::Not => assert!(
+                args.len() == 1,
+                "bv_op: bvnot is unary (got {} args)",
+                args.len()
+            ),
+            BvOpKind::Sub => assert!(
+                args.len() == 2,
+                "bv_op: bvsub is binary (got {} args)",
+                args.len()
+            ),
+            BvOpKind::Concat => assert!(
+                args.len() == 2,
+                "bv_op: concat is binary (got {} args)",
+                args.len()
+            ),
+            BvOpKind::Extract { hi, lo } => {
+                assert!(
+                    args.len() == 1,
+                    "bv_op: Extract is unary (got {} args)",
+                    args.len()
+                );
+                assert!(lo <= hi, "bv_op: Extract lo ({lo}) must be <= hi ({hi})");
+                assert!(
+                    hi < 64,
+                    "bv_op: Extract hi ({hi}) must be < 64 (values are u64-backed)"
+                );
+                assert!(
+                    width == hi - lo + 1,
+                    "bv_op: Extract{{hi: {hi}, lo: {lo}}} result width must be {} (got {width})",
+                    hi - lo + 1
+                );
+            }
+            BvOpKind::Add | BvOpKind::And | BvOpKind::Or | BvOpKind::Xor => assert!(
+                !args.is_empty(),
+                "bv_op: {op:?} needs at least one argument"
+            ),
+        }
         let id = self.env.arena.intern(
             TermKind::BvOp {
                 op,
@@ -332,6 +375,20 @@ impl<'s> SmtSession<'s, Asserted> {
     /// The BV theory module evaluates ground bitvector operations and shares
     /// discovered equalities with EUF via Nelson-Oppen combination. Use this
     /// when the formula contains `BvConst` / `BvOp` terms.
+    ///
+    /// # Completeness boundary (ground-only BV)
+    ///
+    /// BV reasoning is ground-only: the module evaluates operations once all
+    /// their arguments have concrete values, but performs no bit-blasting and
+    /// no word-level solving. Consequently:
+    ///
+    /// - [`SmtResult::Unsat`](crate::SmtResult::Unsat) is always sound.
+    /// - [`SmtResult::Sat`](crate::SmtResult::Sat) means **no ground conflict
+    ///   was found**; it is a complete "a model exists" verdict only for
+    ///   formulas whose BV terms all become ground under the found
+    ///   assignment. Canonical incompleteness witness: at width 1,
+    ///   `x ≠ 0 ∧ x ≠ 1` returns `Sat` although it is BV-unsatisfiable,
+    ///   because nothing forces `x` to a concrete value.
     pub fn check_sat_bv(self) -> crate::solver::SmtResult {
         let kinds: Vec<TermKind> = (0..self.env.arena.len())
             .map(|i| self.env.arena.get(TermId(i as u32)).kind.clone())

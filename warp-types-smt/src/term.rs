@@ -63,9 +63,12 @@ pub struct FuncDecl {
 
 /// Bitvector operation kinds.
 ///
-/// `Add`/`And`/`Or`/`Xor` are variadic on `args`. `Sub`/`Concat` are binary.
-/// `Not`/`Extract` are unary. The evaluator enforces arity; the session
-/// helpers enforce it at term-construction time.
+/// `Add`/`And`/`Or`/`Xor` are variadic on `args` (at least one). `Sub`/
+/// `Concat` are binary. `Not`/`Extract` are unary. The session entry points
+/// ([`bv_op`](crate::SmtSession::bv_op), [`bv_extract`](crate::SmtSession::bv_extract),
+/// [`bv_concat`](crate::SmtSession::bv_concat)) enforce arity and `Extract`
+/// bounds at term-construction time with release panics; the evaluator only
+/// debug-asserts them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BvOpKind {
     /// Addition modulo 2^width (variadic).

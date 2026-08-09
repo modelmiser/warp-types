@@ -184,6 +184,18 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     work.ensure_capacity(max_var);
     work.pivots.clear();
 
+    // Cross-argument boundary (same pattern as run_bcp_watched): every DB
+    // literal must index within the trail's per-var arrays. The resolution
+    // loop below reads reason clauses via clause_unchecked and feeds their
+    // variables to unchecked seen/trail indexing — without this check, a
+    // caller-supplied db/trail mismatch is release UB, not a panic.
+    // Once per call, off the hot resolution path.
+    assert!(
+        db.is_empty() || (db.max_variable() as usize) < max_var,
+        "analyze: clause DB references variable {} out of range (trail num_vars {max_var})",
+        db.max_variable()
+    );
+
     // Start with the conflict clause's literals.
     // Accumulate abstract_levels during resolution (eliminates a second pass
     // over the learned clause for the minimization filter).
@@ -291,6 +303,22 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
                     }
                     Reason::TheoryPropagation(key) => {
                         reason_lits_owned = theory.explain(entry.lit, key);
+                        // Theory explanations are produced by external safe
+                        // code at resolution time — unlike DB reason clauses,
+                        // their variables were never validated at startup, and
+                        // they feed the same unchecked seen/trail indexing
+                        // below (plus minimization and watch selection later).
+                        // Validate once per explanation clause, at the point
+                        // it enters resolution.
+                        for l in &reason_lits_owned {
+                            assert!(
+                                (l.var() as usize) < max_var,
+                                "TheorySolver::explain returned literal with variable {} out of \
+                                 range (num_vars {max_var}) — explanation clauses must only \
+                                 mention problem variables",
+                                l.var()
+                            );
+                        }
                         &reason_lits_owned
                     }
                     Reason::Decision => unreachable!(),
@@ -468,6 +496,15 @@ pub fn analyze_conflict_instrumented(
 
     let max_var = trail.num_vars();
     work.ensure_capacity(max_var);
+
+    // Same cross-argument boundary as analyze_conflict_with_theory: reason
+    // clauses below are read unchecked, so a db/trail mismatch must panic
+    // here instead of being release UB.
+    assert!(
+        db.is_empty() || (db.max_variable() as usize) < max_var,
+        "analyze: clause DB references variable {} out of range (trail num_vars {max_var})",
+        db.max_variable()
+    );
 
     let mut learned = Vec::new();
     let mut num_at_current_level = 0;
@@ -1496,6 +1533,75 @@ mod tests {
 
         let mut work = AnalyzeWork::new(6);
         let _ = analyze_conflict_with(&mut work, &trail, &db, c0);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn reason_clause_var_out_of_range_panics_cleanly() {
+        // A REASON clause (not the conflict clause) referencing a variable
+        // beyond the trail's num_vars previously fed unchecked trail/seen
+        // indexing during resolution (UB in release): the per-literal
+        // conflict-clause validation never saw it. The entry-point boundary
+        // assert must reject the db/trail mismatch up front.
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::pos(1), Lit::pos(5)]); // x5 >= num_vars
+        let c1 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);
+
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.record_propagation(Lit::pos(1), c0); // x1=T, reason mentions x5
+
+        let _ = analyze_conflict(&trail, &db, c1);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn instrumented_reason_clause_var_out_of_range_panics_cleanly() {
+        // Same db/trail mismatch through the instrumented entry point.
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::pos(1), Lit::pos(5)]); // x5 >= num_vars
+        let c1 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);
+
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        trail.record_propagation(Lit::pos(1), c0);
+
+        let mut work = AnalyzeWork::new(2);
+        let _ = analyze_conflict_instrumented(&mut work, &trail, &db, c1);
+    }
+
+    #[test]
+    #[should_panic(expected = "TheorySolver::explain returned literal with variable")]
+    fn theory_explanation_var_out_of_range_panics_cleanly() {
+        // A theory whose explain() emits an out-of-range variable. The
+        // explanation literals feed the same unchecked seen/trail indexing
+        // as DB reason clauses, but are produced at resolution time by
+        // external safe code — a safe TheorySolver returning one bad var
+        // was release UB before the explanation-clause validation.
+        use crate::theory::{TheoryContext, TheoryResult};
+
+        struct BadExplainTheory;
+        impl TheorySolver for BadExplainTheory {
+            fn check(&mut self, _ctx: &TheoryContext<'_>) -> TheoryResult {
+                TheoryResult::Consistent
+            }
+            fn backtrack(&mut self, _new_level: u32) {}
+            fn explain(&mut self, lit: Lit, _key: u32) -> Vec<Lit> {
+                vec![lit, Lit::neg(5)] // x5 >= num_vars — contract violation
+            }
+        }
+
+        let mut db = ClauseDb::new();
+        // Conflict clause with BOTH literals at the current level, so
+        // resolution must walk through x1's TheoryPropagation reason.
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);
+
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.record_theory_propagation(Lit::pos(1), 0); // x1=T, theory reason
+
+        let mut work = AnalyzeWork::new(2);
+        let _ = analyze_conflict_with_theory(&mut work, &trail, &db, c0, &mut BadExplainTheory);
     }
 
     #[test]

@@ -14,10 +14,13 @@
 //! because it doesn't know the other lanes' values. SimWarp fills this gap
 //! by holding `[T; WIDTH]` and implementing the actual GPU shuffle semantics:
 //!
-//! - `shuffle_xor(mask)`: lane[i] reads from lane[i ^ mask]
-//! - `shuffle_down(delta)`: lane[i] reads from lane[i + delta] (clamps at WIDTH)
-//! - `shuffle_up(delta)`: lane[i] reads from lane[i - delta] (clamps at 0)
+//! - `shuffle_xor(mask)`: lane[i] reads from lane[i ^ (mask & (WIDTH-1))]
+//! - `shuffle_down(delta)`: lane[i] reads from lane[i + (delta & (WIDTH-1))] (clamps at WIDTH)
+//! - `shuffle_up(delta)`: lane[i] reads from lane[i - (delta & (WIDTH-1))] (clamps at 0)
 //! - Width-confined variants partition into segments of `width` lanes
+//!
+//! The operand masking mirrors hardware: PTX `shfl.sync` masks its `b`
+//! operand to `b[4:0]` (5 bits for 32 lanes, 6 for 64) in every mode.
 
 /// Multi-lane warp simulator with real shuffle semantics.
 ///
@@ -58,32 +61,48 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     // Shuffle operations — real GPU semantics
     // ========================================================================
 
-    /// Butterfly shuffle: lane[i] reads from lane[i ^ mask].
+    /// Butterfly shuffle: lane[i] reads from lane[i ^ (mask & (WIDTH-1))].
     ///
     /// GPU: `shfl.sync.bfly.b32`. XOR is its own inverse — applying twice
     /// returns to the original arrangement.
+    ///
+    /// Hardware masks the operand to its low log2(WIDTH) bits (PTX:
+    /// `bval = b[4:0]`), so mask=33 on 32 lanes behaves as mask=1 —
+    /// never as identity.
     pub fn shuffle_xor(&self, mask: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
+        let m = (mask as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            let src = (i as u32 ^ mask) as usize;
-            out[i] = if src < WIDTH {
-                self.lanes[src]
-            } else {
-                self.lanes[i]
-            };
+            out[i] = self.lanes[i ^ m];
         }
         SimWarp { lanes: out }
     }
 
-    /// Shuffle down: lane[i] reads from lane[i + delta].
+    /// Shuffle down: lane[i] reads from lane[i + (delta & (WIDTH-1))].
     /// Out-of-range lanes read their own value (GPU clamp behavior).
+    ///
+    /// The PTX `shfl.sync` pseudocode masks the operand (`bval = b[4:0]`)
+    /// in every mode, so delta ≥ WIDTH acts as `delta & (WIDTH-1)` on
+    /// silicon (delta ≥ warpSize is out-of-contract at the CUDA C level).
     pub fn shuffle_down(&self, delta: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
+        let d = (delta as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            // Use u64 arithmetic to prevent usize overflow on 32-bit platforms.
-            let src = i as u64 + delta as u64;
-            out[i] = if src < WIDTH as u64 {
-                self.lanes[src as usize]
+            // i < WIDTH and d < WIDTH, so i + d cannot overflow usize.
+            out[i] = if i + d < WIDTH {
+                self.lanes[i + d]
             } else {
                 self.lanes[i]
             };
@@ -91,13 +110,22 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
         SimWarp { lanes: out }
     }
 
-    /// Shuffle up: lane[i] reads from lane[i - delta].
-    /// Lanes below delta read their own value (GPU clamp behavior).
+    /// Shuffle up: lane[i] reads from lane[i - (delta & (WIDTH-1))].
+    /// Lanes below the masked delta read their own value (GPU clamp behavior).
+    ///
+    /// Same `b[4:0]` operand masking as [`SimWarp::shuffle_down`].
     pub fn shuffle_up(&self, delta: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
+        let d = (delta as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            out[i] = if (i as u32) >= delta {
-                self.lanes[i - delta as usize]
+            out[i] = if i >= d {
+                self.lanes[i - d]
             } else {
                 self.lanes[i]
             };
@@ -316,6 +344,25 @@ mod tests {
         assert_eq!(result.lane(1), 0);
         assert_eq!(result.lane(2), 3);
         assert_eq!(result.lane(3), 2);
+    }
+
+    #[test]
+    fn shuffle_xor_masks_operand_like_hardware() {
+        // PTX shfl.sync masks the operand to b[4:0]: mask=33 on 32 lanes
+        // behaves as mask=1 on silicon, never as identity.
+        let sw = SimWarp::<i32>::new(|i| i as i32 * 3 + 1);
+        assert_eq!(sw.shuffle_xor(33).lanes, sw.shuffle_xor(1).lanes);
+        // mask=32 masks to 0: identity.
+        assert_eq!(sw.shuffle_xor(32).lanes, sw.lanes);
+    }
+
+    #[test]
+    fn shuffle_down_up_mask_operand_like_hardware() {
+        // Same b[4:0] masking applies to .up and .down modes (PTX pseudocode
+        // masks bval uniformly across all shfl modes).
+        let sw = SimWarp::<i32>::new(|i| i as i32 * 3 + 1);
+        assert_eq!(sw.shuffle_down(33).lanes, sw.shuffle_down(1).lanes);
+        assert_eq!(sw.shuffle_up(33).lanes, sw.shuffle_up(1).lanes);
     }
 
     #[test]

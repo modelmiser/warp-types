@@ -85,12 +85,29 @@ fn evaluate(op: BvOpKind, result_width: u32, args: &[(u32, u64)]) -> u64 {
 enum ValueReason {
     /// Inherent BvConst — no trail dependency.
     Constant,
-    /// Propagated from an equality notification: `(t1, t2)` was asserted
-    /// on the trail, and the other side had a known value.
-    Equality(TermId, TermId),
+    /// Propagated through an asserted equality from `source`, which had a
+    /// known value. `premises` are the trail equality atoms justifying the
+    /// equality itself: for a trail atom that is the atom's own pair; for an
+    /// EUF-derived equality it is the premise set the combiner supplied.
+    Equality {
+        source: TermId,
+        premises: Vec<(TermId, TermId)>,
+    },
     /// Computed by evaluating a BvOp whose args all had known values.
     /// Premises come from the args' reasons (recursive).
     Evaluation,
+}
+
+/// An equality the module has been told about, with the trail atoms that
+/// justify it. Kept for the whole (level-scoped) lifetime of the assertion:
+/// an equality between two not-yet-valued terms is value-relevant later,
+/// when either side becomes valued, so `propagate()` re-examines the list
+/// to fixpoint instead of dropping it (standard Nelson-Oppen treatment).
+struct EqRecord {
+    t1: TermId,
+    t2: TermId,
+    /// Trail equality atoms justifying `t1 = t2`.
+    premises: Vec<(TermId, TermId)>,
 }
 
 /// Undo record for backtracking.
@@ -120,17 +137,17 @@ pub struct BvSolver {
     bv_ops: Vec<TermId>,
     /// Reverse map: `(width, value)` → term IDs with that constant value.
     value_to_terms: HashMap<(u32, u64), Vec<TermId>>,
+    /// Active equalities (trail atoms and EUF-derived), with premises.
+    /// Re-examined to fixpoint by `propagate()` — see [`EqRecord`].
+    equalities: Vec<EqRecord>,
     /// Active disequalities from the trail.
     disequalities: Vec<(TermId, TermId)>,
-    /// Conflict detected during equality notification: a trail equality
-    /// between two terms whose known values differ. Stored as the equality
-    /// premises for the conflict clause; reported by the next `propagate()`.
-    pending_conflict: Option<Vec<(TermId, TermId)>>,
     /// Whether re-evaluation is needed.
     dirty: bool,
     // ── Backtracking ──
     undo_stack: Vec<BvUndo>,
     level_marks: Vec<usize>,
+    eq_level_marks: Vec<usize>,
     diseq_level_marks: Vec<usize>,
 }
 
@@ -166,11 +183,12 @@ impl BvSolver {
             value_reasons,
             bv_ops,
             value_to_terms,
+            equalities: Vec::new(),
             disequalities: Vec::new(),
-            pending_conflict: None,
             dirty: false,
             undo_stack: Vec::new(),
             level_marks: vec![0],
+            eq_level_marks: vec![0],
             diseq_level_marks: vec![0],
         }
     }
@@ -198,11 +216,10 @@ impl BvSolver {
     fn collect_premises(&self, tid: TermId, out: &mut Vec<(TermId, TermId)>) {
         match &self.value_reasons[tid.index()] {
             Some(ValueReason::Constant) => {}
-            Some(ValueReason::Equality(t1, t2)) => {
-                out.push((*t1, *t2));
+            Some(ValueReason::Equality { source, premises }) => {
+                out.extend(premises.iter().copied());
                 // Also collect premises from the source term
-                let source = if *t1 == tid { *t2 } else { *t1 };
-                self.collect_premises(source, out);
+                self.collect_premises(*source, out);
             }
             Some(ValueReason::Evaluation) => {
                 if let TermKind::BvOp { ref args, .. } = self.term_kinds[tid.index()] {
@@ -231,87 +248,131 @@ impl BvSolver {
 
 impl TheoryModule for BvSolver {
     fn notify_equality(&mut self, t1: TermId, t2: TermId) {
-        let v1 = self.known_value[t1.index()];
-        let v2 = self.known_value[t2.index()];
-        match (v1, v2) {
-            (Some(val1), Some(val2)) => {
-                // Both known: a mismatch is a theory conflict. (Nothing else
-                // detects this — the equality premise chain plus this trail
-                // equality forms the conflict clause.)
-                if val1 != val2 && self.pending_conflict.is_none() {
-                    let mut eq_premises = vec![(t1, t2)];
-                    self.collect_premises(t1, &mut eq_premises);
-                    self.collect_premises(t2, &mut eq_premises);
-                    eq_premises.sort();
-                    eq_premises.dedup();
-                    self.pending_conflict = Some(eq_premises);
-                }
-            }
-            (Some((w, val)), None) => {
-                self.set_value(t2, w, val, ValueReason::Equality(t2, t1));
-            }
-            (None, Some((w, val))) => {
-                self.set_value(t1, w, val, ValueReason::Equality(t1, t2));
-            }
-            (None, None) => {}
-        }
+        // A trail equality atom is its own premise.
+        self.notify_derived_equality(t1, t2, vec![(t1, t2)]);
+    }
+
+    fn notify_derived_equality(&mut self, t1: TermId, t2: TermId, premises: Vec<(TermId, TermId)>) {
+        // Record only — value propagation, mismatch detection, and the
+        // (both-unvalued) case are all handled uniformly by the fixpoint in
+        // `propagate()`. Dropping an equality between two not-yet-valued
+        // terms here was the round-2 finding-A unsoundness.
+        self.equalities.push(EqRecord { t1, t2, premises });
+        self.dirty = true;
     }
 
     fn notify_disequality(&mut self, t1: TermId, t2: TermId) {
         self.disequalities.push((t1, t2));
+        // A disequality is value-relevant on its own: both sides may already
+        // be valued equal, and nothing else would re-trigger the check.
+        self.dirty = true;
     }
 
     fn propagate(&mut self) -> ModuleResult {
-        // A mismatch recorded during equality notification takes priority
-        // (it does not set `dirty`, so check before the early return).
-        if let Some(eq_premises) = self.pending_conflict.take() {
-            return ModuleResult::Conflict {
-                eq_premises,
-                diseq_premises: Vec::new(),
-            };
-        }
-
         if !self.dirty {
             return ModuleResult::Consistent(Vec::new());
         }
-        self.dirty = false;
 
-        // Evaluate BvOp terms whose args are all known
-        for i in 0..self.bv_ops.len() {
-            let op_tid = self.bv_ops[i];
-            if let TermKind::BvOp {
-                op,
-                width,
-                ref args,
-            } = self.term_kinds[op_tid.index()].clone()
-            {
-                let arg_pairs: Option<Vec<(u32, u64)>> =
-                    args.iter().map(|&a| self.known_value[a.index()]).collect();
-                if let Some(pairs) = arg_pairs {
-                    let result = evaluate(op, width, &pairs);
-                    match self.known_value[op_tid.index()] {
-                        None => self.set_value(op_tid, width, result, ValueReason::Evaluation),
-                        Some(recorded) => {
-                            // The op already has a value (e.g. forced by a
-                            // trail equality). If ground evaluation disagrees,
-                            // that is a conflict — same class as the
-                            // notify_equality mismatch above.
-                            if recorded != (width, result) {
-                                let mut eq_premises = Vec::new();
-                                self.collect_premises(op_tid, &mut eq_premises);
-                                for &arg in args {
-                                    self.collect_premises(arg, &mut eq_premises);
+        // Fixpoint: equality propagation can enable BvOp evaluation, whose
+        // results can make further recorded equalities value-relevant.
+        loop {
+            self.dirty = false;
+
+            // Propagate recorded equalities. Each is re-examined every pass:
+            // an equality between two unvalued terms becomes actionable as
+            // soon as either side gains a value.
+            for i in 0..self.equalities.len() {
+                let (t1, t2) = (self.equalities[i].t1, self.equalities[i].t2);
+                let v1 = self.known_value[t1.index()];
+                let v2 = self.known_value[t2.index()];
+                match (v1, v2) {
+                    (Some(val1), Some(val2)) => {
+                        // Both known: a mismatch is a theory conflict. The
+                        // equality's own premises plus both value-premise
+                        // chains form the conflict clause.
+                        if val1 != val2 {
+                            let mut eq_premises = self.equalities[i].premises.clone();
+                            self.collect_premises(t1, &mut eq_premises);
+                            self.collect_premises(t2, &mut eq_premises);
+                            eq_premises.sort();
+                            eq_premises.dedup();
+                            return ModuleResult::Conflict {
+                                eq_premises,
+                                diseq_premises: Vec::new(),
+                            };
+                        }
+                    }
+                    (Some((w, val)), None) => {
+                        let premises = self.equalities[i].premises.clone();
+                        self.set_value(
+                            t2,
+                            w,
+                            val,
+                            ValueReason::Equality {
+                                source: t1,
+                                premises,
+                            },
+                        );
+                    }
+                    (None, Some((w, val))) => {
+                        let premises = self.equalities[i].premises.clone();
+                        self.set_value(
+                            t1,
+                            w,
+                            val,
+                            ValueReason::Equality {
+                                source: t2,
+                                premises,
+                            },
+                        );
+                    }
+                    // Neither side valued yet — stays recorded; revisited when
+                    // a later pass (or a later propagate() call) adds values.
+                    (None, None) => {}
+                }
+            }
+
+            // Evaluate BvOp terms whose args are all known
+            for i in 0..self.bv_ops.len() {
+                let op_tid = self.bv_ops[i];
+                if let TermKind::BvOp {
+                    op,
+                    width,
+                    ref args,
+                } = self.term_kinds[op_tid.index()].clone()
+                {
+                    let arg_pairs: Option<Vec<(u32, u64)>> =
+                        args.iter().map(|&a| self.known_value[a.index()]).collect();
+                    if let Some(pairs) = arg_pairs {
+                        let result = evaluate(op, width, &pairs);
+                        match self.known_value[op_tid.index()] {
+                            None => self.set_value(op_tid, width, result, ValueReason::Evaluation),
+                            Some(recorded) => {
+                                // The op already has a value (e.g. forced by a
+                                // trail equality). If ground evaluation disagrees,
+                                // that is a conflict — same class as the
+                                // equality mismatch above.
+                                if recorded != (width, result) {
+                                    let mut eq_premises = Vec::new();
+                                    self.collect_premises(op_tid, &mut eq_premises);
+                                    for &arg in args {
+                                        self.collect_premises(arg, &mut eq_premises);
+                                    }
+                                    eq_premises.sort();
+                                    eq_premises.dedup();
+                                    return ModuleResult::Conflict {
+                                        eq_premises,
+                                        diseq_premises: Vec::new(),
+                                    };
                                 }
-                                eq_premises.sort();
-                                eq_premises.dedup();
-                                return ModuleResult::Conflict {
-                                    eq_premises,
-                                    diseq_premises: Vec::new(),
-                                };
                             }
                         }
                     }
                 }
+            }
+
+            if !self.dirty {
+                break;
             }
         }
 
@@ -364,6 +425,7 @@ impl TheoryModule for BvSolver {
 
     fn push_level(&mut self) {
         self.level_marks.push(self.undo_stack.len());
+        self.eq_level_marks.push(self.equalities.len());
         self.diseq_level_marks.push(self.disequalities.len());
     }
 
@@ -379,15 +441,18 @@ impl TheoryModule for BvSolver {
             self.level_marks.truncate(target);
             self.rebuild_value_to_terms();
         }
+        if target < self.eq_level_marks.len() {
+            let eq_target = self.eq_level_marks[target];
+            self.equalities.truncate(eq_target);
+            self.eq_level_marks.truncate(target);
+        }
         if target < self.diseq_level_marks.len() {
             let dq_target = self.diseq_level_marks[target];
             self.disequalities.truncate(dq_target);
             self.diseq_level_marks.truncate(target);
         }
-        // A pending conflict may depend on retracted assignments; drop it.
-        // The combiner re-notifies the surviving trail, so a still-valid
-        // conflict is rediscovered.
-        self.pending_conflict = None;
+        // The combiner re-notifies the surviving trail, so any still-valid
+        // conflict is rediscovered by the next propagate().
         self.dirty = true;
     }
 }
@@ -451,7 +516,56 @@ mod tests {
         let mut bv = BvSolver::new(&kinds);
         // Tell module: x = bvconst(5, 3)
         bv.notify_equality(TermId(0), TermId(1));
+        let _ = bv.propagate();
         assert_eq!(bv.known_value[0], Some((5, 3)));
+    }
+
+    // ── Round-2 finding A: an equality between two not-yet-valued terms must
+    //    be re-examined when either side becomes valued, not dropped. ──
+
+    #[test]
+    fn unvalued_equality_reexamined_on_later_value() {
+        let (_, kinds) = make_arena();
+        let mut bv = BvSolver::new(&kinds);
+        // x = bvadd(x,1): both unvalued at notification time. (Uses the two
+        // unvalued terms of the arena; the semantic content doesn't matter —
+        // only that the link is kept.)
+        bv.notify_equality(TermId(0), TermId(3));
+        let _ = bv.propagate();
+        assert_eq!(bv.known_value[3], None);
+        // Later x = 3 arrives: the recorded x = bvadd(x,1) link must now
+        // fire — bvadd gets forced to 3, evaluation says 3+1 = 4 → conflict.
+        bv.notify_equality(TermId(0), TermId(1)); // x = 3
+        let result = bv.propagate();
+        match result {
+            ModuleResult::Conflict { eq_premises, .. } => {
+                assert!(eq_premises.contains(&(TermId(0), TermId(3))));
+                assert!(eq_premises.contains(&(TermId(0), TermId(1))));
+            }
+            _ => panic!("dropped unvalued equality: x = bvadd(x,1) ∧ x = 3 must conflict"),
+        }
+    }
+
+    #[test]
+    fn derived_equality_carries_supplied_premises() {
+        let (_, kinds) = make_arena();
+        let mut bv = BvSolver::new(&kinds);
+        // Combiner-style derived equality: bvadd(x,1) = bvconst(5,4) is not a
+        // trail atom; its justification is some other atom pair, here (x, x+1)
+        // standing in for a congruence explanation.
+        bv.notify_derived_equality(TermId(3), TermId(4), vec![(TermId(0), TermId(3))]);
+        bv.notify_equality(TermId(3), TermId(1)); // bvadd = 3, but derived says 4
+        let result = bv.propagate();
+        match result {
+            ModuleResult::Conflict { eq_premises, .. } => {
+                // The derived premises (not the non-atom pair itself) must
+                // appear in the conflict.
+                assert!(eq_premises.contains(&(TermId(0), TermId(3))));
+                assert!(eq_premises.contains(&(TermId(3), TermId(1))));
+                assert!(!eq_premises.contains(&(TermId(3), TermId(4))));
+            }
+            _ => panic!("conflicting derived equality must conflict"),
+        }
     }
 
     #[test]

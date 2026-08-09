@@ -292,6 +292,17 @@ pub fn step(expr: &Expr) -> Option<Expr> {
         // Values don't step
         _ if is_value(expr) => None,
 
+        // PAIR congruence: step the left component if it's not a value,
+        // else step the right. (Both-values pairs are caught by the
+        // is_value guard above.)
+        Expr::PairVal(e1, e2) => {
+            if !is_value(e1) {
+                step(e1).map(|e1_| Expr::PairVal(Box::new(e1_), e2.clone()))
+            } else {
+                step(e2).map(|e2_| Expr::PairVal(e1.clone(), Box::new(e2_)))
+            }
+        }
+
         // DIVERGE: split warp value
         Expr::Diverge(w, pred) => {
             if let Expr::WarpVal(s) = w.as_ref() {
@@ -624,6 +635,51 @@ mod tests {
         let diverge = Expr::Diverge(Box::new(all_warp), Predicate::Even);
 
         assert!(preservation_check(&diverge));
+    }
+
+    #[test]
+    fn test_progress_pair_with_nonvalue_component() {
+        // PairVal with a non-value component is well-typed and not a value,
+        // so Progress requires it to step (congruence inside pairs).
+        let left = Expr::PairVal(
+            Box::new(Expr::Diverge(
+                Box::new(Expr::WarpVal(ProofActiveSet::all())),
+                Predicate::Even,
+            )),
+            Box::new(Expr::UnitVal),
+        );
+        assert!(!is_value(&left));
+        assert!(step(&left).is_some(), "pair must step its left component");
+        assert!(progress_check(&left));
+
+        let right = Expr::PairVal(
+            Box::new(Expr::UnitVal),
+            Box::new(Expr::Diverge(
+                Box::new(Expr::WarpVal(ProofActiveSet::all())),
+                Predicate::Even,
+            )),
+        );
+        assert!(!is_value(&right));
+        assert!(step(&right).is_some(), "pair must step its right component");
+        assert!(progress_check(&right));
+    }
+
+    #[test]
+    fn test_type_safety_let_bound_pair() {
+        // let p = (diverge(warp_all, even), unit) in p
+        let pair = Expr::PairVal(
+            Box::new(Expr::Diverge(
+                Box::new(Expr::WarpVal(ProofActiveSet::all())),
+                Predicate::Even,
+            )),
+            Box::new(Expr::UnitVal),
+        );
+        let program = Expr::Let(
+            "p".to_string(),
+            Box::new(pair),
+            Box::new(Expr::Var("p".to_string())),
+        );
+        assert!(type_safety_check(&program));
     }
 
     #[test]

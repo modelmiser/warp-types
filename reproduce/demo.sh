@@ -80,8 +80,24 @@ echo ""
 
 # Actually compile it and capture the error
 cp "$SCRIPT_DIR/buggy_pattern.rs" "$PROJECT_ROOT/examples/buggy_pattern.rs" 2>/dev/null || true
-COMPILE_OUTPUT=$(cd "$PROJECT_ROOT" && cargo check --example buggy_pattern 2>&1 || true)
+CHECK_STATUS=0
+COMPILE_OUTPUT=$(cd "$PROJECT_ROOT" && cargo check --example buggy_pattern 2>&1) || CHECK_STATUS=$?
 rm -f "$PROJECT_ROOT/examples/buggy_pattern.rs"
+
+# The demo's claim is that this pattern FAILS to compile with a "no method
+# named" error. Assert exactly that — if cargo check succeeds (type-system
+# regression) or fails for any other reason, fail loudly instead of
+# proceeding as if the rejection had been demonstrated.
+if [ "$CHECK_STATUS" -eq 0 ]; then
+    echo "  FAILURE: cargo check unexpectedly SUCCEEDED — the buggy pattern compiled." >&2
+    echo "  The type system no longer rejects shuffle on a diverged warp." >&2
+    exit 1
+fi
+if ! echo "$COMPILE_OUTPUT" | grep -q "no method named"; then
+    echo "  FAILURE: cargo check failed, but not with the expected 'no method named' error:" >&2
+    echo "$COMPILE_OUTPUT" | tail -20 | sed 's/^/    /' >&2
+    exit 1
+fi
 
 # Show just the relevant error
 echo "$COMPILE_OUTPUT" | grep -A5 "no method named" | head -8 | sed 's/^/    /'

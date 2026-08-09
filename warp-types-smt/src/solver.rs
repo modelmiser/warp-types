@@ -16,7 +16,17 @@ use warp_types_sat::solver::{solve_with_theory, SolveResult};
 /// Result of an SMT satisfiability check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SmtResult {
-    /// Satisfiable — a model exists.
+    /// No conflict found.
+    ///
+    /// For [`check_sat`](crate::SmtSession::check_sat) (EUF only) this means
+    /// a model exists — EUF reasoning is complete.
+    ///
+    /// For [`check_sat_bv`](crate::SmtSession::check_sat_bv), `Sat` means no
+    /// *ground* conflict was found. The BV module evaluates only ground
+    /// (fully valued) terms — no bit-blasting — so the result is complete
+    /// only for formulas whose BV terms all become ground. The canonical
+    /// incompleteness witness: at width 1, `x ≠ 0 ∧ x ≠ 1` returns `Sat`
+    /// even though it is BV-unsatisfiable, because `x` never becomes ground.
     Sat,
     /// Unsatisfiable — no model exists.
     Unsat,

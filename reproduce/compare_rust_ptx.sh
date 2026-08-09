@@ -26,7 +26,15 @@ SRC="rust_ptx_typed.rs"
 PTX="rust_ptx_typed.ptx"
 
 echo "=== Compiling Rust to PTX (nvptx64-nvidia-cuda, -O) ==="
-rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O "${SRC}" -o "${PTX}" 2>&1 | grep -v warning || true
+# Check rustc's exit status BEFORE filtering its output: a
+# `rustc ... | grep -v warning || true` pipeline would swallow a compile
+# failure and let the script "compare" a stale checked-in ${PTX}.
+if ! COMPILE_LOG=$(rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O "${SRC}" -o "${PTX}" 2>&1); then
+    echo "ERROR: rustc failed to compile ${SRC}:" >&2
+    echo "${COMPILE_LOG}" >&2
+    exit 1
+fi
+echo "${COMPILE_LOG}" | grep -v warning || true
 echo "Generated: ${PTX}"
 echo ""
 
