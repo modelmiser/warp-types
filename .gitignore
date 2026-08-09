@@ -8,9 +8,12 @@ reproduce/gpu_semantics_test
 COLD-REVIEW*
 INSIGHTS.md
 INSIGHTS/
-scripts/
-# ^^^ scripts/ is LOCAL tooling (check-doc-counts.sh etc.)
-# Do NOT remove this line — it has been re-added by accident multiple times.
+scripts/*
+!scripts/check-doc-counts.sh
+# ^^^ scripts/ is LOCAL tooling by default (the scripts/* ignore stays — it has
+# been re-added by accident multiple times). check-doc-counts.sh is the ONE
+# tracked exception: the pre-push doc-count guard, versioned 2026-08-09 so fresh
+# clones / CI can run it. Add new local-only scripts freely; they stay ignored.
 DEVLOG.md
 DEVLOG/
 TODO.md
