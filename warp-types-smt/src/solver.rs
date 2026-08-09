@@ -19,7 +19,12 @@ pub enum SmtResult {
     /// No conflict found.
     ///
     /// For [`check_sat`](crate::SmtSession::check_sat) (EUF only) this means
-    /// a model exists — EUF reasoning is complete.
+    /// a model exists in EUF semantics — EUF reasoning is complete for pure
+    /// EUF formulas. Caveat: for formulas containing `BvConst` terms, "EUF
+    /// semantics" treats those constants as uninterpreted — EUF will happily
+    /// merge distinct constants (e.g. `3 = 4` comes back `Sat`), so `Sat`
+    /// need not correspond to a bitvector model. Use
+    /// [`check_sat_bv`](crate::SmtSession::check_sat_bv) for those formulas.
     ///
     /// For [`check_sat_bv`](crate::SmtSession::check_sat_bv), `Sat` means no
     /// *ground* conflict was found. The BV module evaluates only ground

@@ -131,7 +131,7 @@ fn safe_returns_inductive_invariant() {
             for clause in &invariant {
                 for lit in clause {
                     assert!(
-                        lit.var() < sys.num_state_vars,
+                        lit.var() < sys.num_state_vars(),
                         "invariant literal references a non-state var {}",
                         lit.var()
                     );

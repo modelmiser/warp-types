@@ -793,6 +793,78 @@ fn bv_ground_only_incompleteness_width1_pinned() {
     assert_eq!(result, SmtResult::Sat);
 }
 
+// ============================================================================
+// Round-3 regression tests: module→EUF equality sharing (finding A)
+// ============================================================================
+
+// Mirror of the round-2 EUF→module fix, in the opposite direction: a
+// module-derived equality whose pair has no SAT atom (purification only
+// creates atoms for argument pairs of matching applications) must still
+// reach EUF. Pre-fix, `None => continue` dropped it: BV learns u = v (both
+// evaluate to 2) but EUF never merges u ~ v, never congruence-merges
+// f(u) ~ f(v), and misses the a ≠ b conflict → spurious Sat.
+
+#[test]
+fn bv_module_equality_without_atom_reaches_euf_unsat() {
+    // a = f(u) ∧ b = f(v) ∧ a ≠ b ∧ u = bvadd(one, one) ∧ v = two → UNSAT
+    // (all ground: u = 1+1 = 2 = v, so f(u) = f(v), so a = b).
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, u) = session.var("u", s);
+        let (session, v) = session.var("v", s);
+        let (session, fu) = session.apply(f, &[u]);
+        let (session, fv) = session.apply(f, &[v]);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, two) = session.bv_const(5, 2, s);
+        let (session, add) = session.bv_op(BvOpKind::Add, 5, &[one, one], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, fu),
+                SmtFormula::Eq(b, fv),
+                SmtFormula::Neq(a, b),
+                SmtFormula::Eq(u, add),
+                SmtFormula::Eq(v, two),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bv_module_equality_without_atom_control_sat() {
+    // Control: same shape without the disequality — must stay Sat post-fix
+    // (the derived merge alone is not a conflict).
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, u) = session.var("u", s);
+        let (session, v) = session.var("v", s);
+        let (session, fu) = session.apply(f, &[u]);
+        let (session, fv) = session.apply(f, &[v]);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, two) = session.bv_const(5, 2, s);
+        let (session, add) = session.bv_op(BvOpKind::Add, 5, &[one, one], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, fu),
+                SmtFormula::Eq(b, fv),
+                SmtFormula::Eq(u, add),
+                SmtFormula::Eq(v, two),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Sat);
+}
+
 #[test]
 fn bvconcat_detects_conflict() {
     // a = 0b101 (3-bit), b = 0b010 (3-bit), concat(a, b) = 0b101_010 (6-bit)

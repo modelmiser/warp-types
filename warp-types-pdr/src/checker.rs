@@ -87,7 +87,7 @@ struct Obligation {
 /// - `max_frames`: maximum number of frames before giving up
 /// - `conflict_budget`: SAT conflict budget per query (0 = unlimited)
 pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> PdrResult {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
 
     session::with_session(|init: PdrSession<'_, Init>| {
         let modeled = init.build_model();
@@ -97,7 +97,7 @@ pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> P
         // so ¬P is unsatisfiable and no state is bad. (The Tseitin encoding
         // of ¬P would otherwise emit nothing, wrongly turning I alone into
         // a depth-0 "violation".)
-        if sys.property.is_empty() {
+        if sys.property().is_empty() {
             let _safe = modeled.check_safe();
             return PdrResult::Safe {
                 invariant_frame: 0,
@@ -124,7 +124,7 @@ pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> P
         let mut frames = FrameSequence::new();
 
         // F₀ = initial-state clauses
-        let init_clauses: Vec<Vec<Lit>> = sys.initial.iter().map(|c| c.lits.clone()).collect();
+        let init_clauses: Vec<Vec<Lit>> = sys.initial().iter().map(|c| c.lits.clone()).collect();
         frames.push(Frame::from_clauses(init_clauses));
 
         // F₁ = empty (will accumulate blocking clauses)
@@ -209,14 +209,14 @@ enum BlockResult {
 
 /// Check I(s) ∧ ¬P(s). `Sat(assignment)` means an initial violation.
 fn check_initiation(sys: &TransitionSystem, conflict_budget: u64) -> Query<Vec<bool>> {
-    let n = sys.num_state_vars;
-    let num_tseitin = sys.property.len() as u32;
+    let n = sys.num_state_vars();
+    let num_tseitin = sys.property().len() as u32;
     let total_vars = n + num_tseitin;
 
     let mut db = ClauseDb::new();
 
     // Initial-state clauses I(s)
-    for clause in &sys.initial {
+    for clause in sys.initial() {
         db.add_clause(clause.lits.clone());
     }
 
@@ -244,8 +244,8 @@ fn find_cti(
     level: usize,
     conflict_budget: u64,
 ) -> Query<Cube> {
-    let n = sys.num_state_vars;
-    let num_tseitin = sys.property.len() as u32;
+    let n = sys.num_state_vars();
+    let num_tseitin = sys.property().len() as u32;
     let total_vars = n + num_tseitin;
 
     let mut db = ClauseDb::new();
@@ -278,7 +278,7 @@ fn check_predecessor(
     level: usize,
     conflict_budget: u64,
 ) -> Query<Cube> {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
     let total_vars = 2 * n;
 
     let mut db = ClauseDb::new();
@@ -287,7 +287,7 @@ fn check_predecessor(
     add_frame_clauses(&mut db, frames.frame(level), 0);
 
     // Transition relation
-    for tc in &sys.transition {
+    for tc in sys.transition() {
         db.add_clause(tc.lits.clone());
     }
 
@@ -322,7 +322,7 @@ fn block_cube(
     level: usize,
     conflict_budget: u64,
 ) -> BlockResult {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
 
     // Work queue: (level, cube, parent_index) — process lowest level first
     let mut queue: Vec<Obligation> = vec![Obligation {
@@ -426,11 +426,11 @@ fn find_min_level(queue: &[Obligation]) -> Option<usize> {
 /// This is both the level-0 reachability test and the initiation side of
 /// relative induction (a cube may only be blocked if `Unsat` here).
 fn intersects_initial(sys: &TransitionSystem, cube: &Cube, conflict_budget: u64) -> Query<()> {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
     let mut db = ClauseDb::new();
 
     // Initial-state clauses
-    for clause in &sys.initial {
+    for clause in sys.initial() {
         db.add_clause(clause.lits.clone());
     }
 
@@ -553,7 +553,7 @@ fn propagate_clauses(
     frames: &mut FrameSequence,
     conflict_budget: u64,
 ) -> Option<usize> {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
     let frontier = frames.frontier();
 
     for level in 1..frontier {
@@ -606,7 +606,7 @@ fn is_clause_inductive(
     db.add_clause(clause.to_vec());
 
     // Transition relation
-    for tc in &sys.transition {
+    for tc in sys.transition() {
         db.add_clause(tc.lits.clone());
     }
 
@@ -643,7 +643,7 @@ fn add_negated_property(
     prop_offset: u32,
     tseitin_base: u32,
 ) {
-    let num_tseitin = sys.property.len() as u32;
+    let num_tseitin = sys.property().len() as u32;
 
     // Activation clause: at least one property clause must be violated
     let activation: Vec<Lit> = (0..num_tseitin)
@@ -654,7 +654,7 @@ fn add_negated_property(
     }
 
     // Per-clause implications: tᵢ → all literals in cᵢ are false
-    for (i, clause) in sys.property.iter().enumerate() {
+    for (i, clause) in sys.property().iter().enumerate() {
         let t_var = tseitin_base + i as u32;
         for &lit in &clause.lits {
             let shifted = shift_lit(lit, prop_offset);

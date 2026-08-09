@@ -36,17 +36,17 @@ fn shift_lit(lit: Lit, offset: u32) -> Lit {
 /// Each cᵢ is a disjunction of literals, so ¬cᵢ is a conjunction of negated literals.
 /// We introduce a Tseitin variable for each clause and assert their disjunction.
 pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
-    let n = sys.num_state_vars;
+    let n = sys.num_state_vars();
     // State vars: (depth+1) * n for frames 0..=depth
     // Plus Tseitin vars for property negation
     let num_state_sat_vars = (depth + 1) * n;
-    let num_tseitin = sys.property.len() as u32;
+    let num_tseitin = sys.property().len() as u32;
     let total_vars = num_state_sat_vars + num_tseitin;
 
     let mut db = ClauseDb::new();
 
     // ── Initial state: I(s₀) ──
-    for clause in &sys.initial {
+    for clause in sys.initial() {
         let lits: Vec<Lit> = clause.lits.iter().map(|&l| shift_lit(l, 0)).collect();
         db.add_clause(lits);
     }
@@ -54,7 +54,7 @@ pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
     // ── Transition relation: T(sₜ, sₜ₊₁) for t = 0..depth ──
     for t in 0..depth {
         let current_offset = t * n;
-        for tc in &sys.transition {
+        for tc in sys.transition() {
             let lits: Vec<Lit> = tc
                 .lits
                 .iter()
@@ -96,7 +96,7 @@ pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
     db.add_clause(activation);
 
     // Per-clause implications: tᵢ → all literals in cᵢ are false
-    for (i, clause) in sys.property.iter().enumerate() {
+    for (i, clause) in sys.property().iter().enumerate() {
         let t_var = tseitin_base + i as u32;
         for &lit in &clause.lits {
             let shifted = shift_lit(lit, prop_offset);

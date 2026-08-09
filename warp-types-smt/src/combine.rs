@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The equality sharing loop is driven by the SAT solver's theory-check
-//! protocol — no internal fixpoint loop:
+//! protocol, with one bounded internal loop:
 //!
 //! 1. EUF processes the trail until fixpoint
 //! 2. Once consistent, the combiner shares trail equalities to the module
@@ -26,6 +26,12 @@
 //! 4. The combiner propagates equalities to the SAT solver, or returns
 //!    conflict clauses constructed from the module's premises
 //! 5. The SAT solver records propagations, re-runs BCP, calls `check()` again
+//!
+//! Module equalities whose pair has no SAT atom cannot ride this protocol
+//! (they produce no trail activity), so `check()` asserts them into EUF
+//! directly as derived merges and iterates steps 1–4 internally until no
+//! atomless equality joins two distinct classes. The iteration is bounded
+//! by the number of EUF equivalence classes.
 
 use crate::euf::EufSolver;
 use crate::term::TermId;
@@ -140,7 +146,18 @@ impl TheoryModule for NullModule {
 
 /// Key-space partition: EUF propagations use keys `0..MODULE_KEY_OFFSET`,
 /// module propagations use `MODULE_KEY_OFFSET..`.
-const MODULE_KEY_OFFSET: u32 = 1 << 24;
+///
+/// The partition bounds both sides:
+/// - EUF may hand out at most `2^24` propagation keys per solve
+///   (`prop_records` grows monotonically and is never truncated). The EUF
+///   side enforces this with a release assert at key handout — without it,
+///   key `2^24` would silently alias into module key space and `explain`
+///   would decode it against the wrong record table.
+/// - The module side has `2^32 - 2^24` keys before `MODULE_KEY_OFFSET + key`
+///   wraps. That bound is unreachable in practice (each record carries a
+///   heap-allocated premise list, so memory exhausts orders of magnitude
+///   earlier), which is why only the EUF side carries the assert.
+pub(crate) const MODULE_KEY_OFFSET: u32 = 1 << 24;
 
 /// Record for lazily explaining a module-originated propagation.
 struct ModulePropRecord {
@@ -244,15 +261,15 @@ impl<M: TheoryModule> CombiningSolver<M> {
         }
     }
 
-    /// SAT variable for a premise pair. Panics if the pair has no atom:
+    /// Equality atom for a premise pair. Panics if the pair has no atom:
     /// every premise a module reports must be a trail equality atom —
     /// silently dropping it would strengthen the clause into a
     /// theory-invalid lemma (and a fully dropped conflict would read as
     /// consistent). This is a `TheoryModule` contract requirement.
-    fn var_for_premise(&self, t1: TermId, t2: TermId) -> u32 {
+    fn atom_for_premise(&self, t1: TermId, t2: TermId) -> crate::formula::AtomId {
         let key = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
         match self.euf.atom_map.eq_to_atom.get(&key) {
-            Some(&atom_id) => self.euf.atom_map.var_for_atom(atom_id),
+            Some(&atom_id) => atom_id,
             None => panic!(
                 "TheoryModule premise ({t1:?}, {t2:?}) has no SAT atom — every premise in a \
                  module conflict/equality must be a trail equality atom (derived equalities \
@@ -260,6 +277,13 @@ impl<M: TheoryModule> CombiningSolver<M> {
                  produce an invalid stronger lemma"
             ),
         }
+    }
+
+    /// SAT variable for a premise pair (see [`Self::atom_for_premise`]).
+    fn var_for_premise(&self, t1: TermId, t2: TermId) -> u32 {
+        self.euf
+            .atom_map
+            .var_for_atom(self.atom_for_premise(t1, t2))
     }
 
     /// Build a conflict clause from module premises.
@@ -275,11 +299,21 @@ impl<M: TheoryModule> CombiningSolver<M> {
         eq_premises: &[(TermId, TermId)],
         diseq_premises: &[(TermId, TermId)],
     ) -> Vec<Lit> {
+        // Sort + dedup at the clause construction boundary (cold path): the
+        // TheoryModule contract does not guarantee premise lists free of
+        // duplicates, and a duplicate literal in an installed clause puts
+        // both watch slots on the same literal.
+        let mut eq_premises = eq_premises.to_vec();
+        eq_premises.sort();
+        eq_premises.dedup();
+        let mut diseq_premises = diseq_premises.to_vec();
+        diseq_premises.sort();
+        diseq_premises.dedup();
         let mut clause = Vec::new();
-        for &(t1, t2) in eq_premises {
+        for &(t1, t2) in &eq_premises {
             clause.push(Lit::neg(self.var_for_premise(t1, t2)));
         }
-        for &(t1, t2) in diseq_premises {
+        for &(t1, t2) in &diseq_premises {
             clause.push(Lit::pos(self.var_for_premise(t1, t2)));
         }
         assert!(
@@ -293,78 +327,122 @@ impl<M: TheoryModule> CombiningSolver<M> {
 
 impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
     fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
-        // ── Phase 1: EUF processes the trail ──
-        let euf_result = self.euf.check(ctx);
-        match &euf_result {
-            TheoryResult::Conflict(_) | TheoryResult::Propagate(_) => {
-                return euf_result;
-            }
-            TheoryResult::Consistent => {}
-        }
-
-        // ── Phase 2: Share trail + EUF-derived merges to module ──
-        self.share_trail_to_module(ctx);
-        self.share_euf_merges_to_module();
-
-        // ── Phase 3: Module consistency + equality sharing ──
-        match self.module.propagate() {
-            ModuleResult::Conflict {
-                eq_premises,
-                diseq_premises,
-            } => TheoryResult::Conflict(self.build_conflict_clause(&eq_premises, &diseq_premises)),
-            ModuleResult::Consistent(new_eqs) => {
-                let mut props = Vec::new();
-
-                for meq in new_eqs {
-                    if self.euf.find(meq.t1) == self.euf.find(meq.t2) {
-                        continue;
-                    }
-
-                    let canonical = if meq.t1 <= meq.t2 {
-                        (meq.t1, meq.t2)
-                    } else {
-                        (meq.t2, meq.t1)
-                    };
-                    let atom_id = match self.euf.atom_map.eq_to_atom.get(&canonical) {
-                        Some(&id) => id,
-                        None => continue,
-                    };
-                    let var = self.euf.atom_map.var_for_atom(atom_id);
-
-                    match ctx.trail.value(var) {
-                        None => {
-                            let key = self.module_props.len() as u32;
-                            self.module_props.push(ModulePropRecord {
-                                lit: Lit::pos(var),
-                                premises: meq.premises,
-                            });
-                            props.push(TheoryProp {
-                                lit: Lit::pos(var),
-                                key: MODULE_KEY_OFFSET + key,
-                            });
-                        }
-                        Some(true) => {}
-                        Some(false) => {
-                            // Trail says t1 ≠ t2, module says t1 = t2.
-                            // Conflict clause: negate eq premises + assert diseq as eq.
-                            // Premise atoms are mandatory (var_for_premise
-                            // panics on a missing one — silently dropping a
-                            // premise would strengthen the lemma unsoundly).
-                            let mut clause: Vec<Lit> = meq
-                                .premises
-                                .iter()
-                                .map(|&(pt1, pt2)| Lit::neg(self.var_for_premise(pt1, pt2)))
-                                .collect();
-                            clause.push(Lit::pos(var)); // The equality must hold
-                            return TheoryResult::Conflict(clause);
-                        }
-                    }
+        // Equality-sharing loop. Module equalities whose pair HAS a SAT atom
+        // are routed through SAT propagation (the SAT solver records them,
+        // re-runs BCP, and calls check() again — no loop needed here). But a
+        // module equality whose pair has no atom produces no trail activity
+        // at all, so nothing would re-trigger check(): it must be asserted
+        // into EUF directly (as a derived merge carrying its premise chain)
+        // and EUF re-checked within THIS call. The loop is bounded: it
+        // repeats only when a derived merge actually joined two distinct EUF
+        // classes, and the class count is finite (≤ term count).
+        loop {
+            // ── Phase 1: EUF processes the trail (and any derived merges) ──
+            let euf_result = self.euf.check(ctx);
+            match &euf_result {
+                TheoryResult::Conflict(_) | TheoryResult::Propagate(_) => {
+                    return euf_result;
                 }
+                TheoryResult::Consistent => {}
+            }
 
-                if props.is_empty() {
-                    TheoryResult::Consistent
-                } else {
-                    TheoryResult::Propagate(props)
+            // ── Phase 2: Share trail + EUF-derived merges to module ──
+            self.share_trail_to_module(ctx);
+            self.share_euf_merges_to_module();
+
+            // ── Phase 3: Module consistency + equality sharing ──
+            match self.module.propagate() {
+                ModuleResult::Conflict {
+                    eq_premises,
+                    diseq_premises,
+                } => {
+                    return TheoryResult::Conflict(
+                        self.build_conflict_clause(&eq_premises, &diseq_premises),
+                    )
+                }
+                ModuleResult::Consistent(new_eqs) => {
+                    let mut props = Vec::new();
+                    let mut derived_merge = false;
+
+                    for meq in new_eqs {
+                        if self.euf.find(meq.t1) == self.euf.find(meq.t2) {
+                            continue;
+                        }
+
+                        let canonical = if meq.t1 <= meq.t2 {
+                            (meq.t1, meq.t2)
+                        } else {
+                            (meq.t2, meq.t1)
+                        };
+                        let atom_id = match self.euf.atom_map.eq_to_atom.get(&canonical) {
+                            Some(&id) => id,
+                            None => {
+                                // No SAT atom for this pair (purification only
+                                // creates atoms for argument pairs of matching
+                                // applications). Assert it into EUF as a
+                                // derived merge — dropping it here was the
+                                // round-3 finding-A unsoundness (EUF never
+                                // learned module equalities like u = v, so
+                                // congruence f(u) ~ f(v) and the downstream
+                                // conflict were missed). Premises must be
+                                // trail atoms (atom_for_premise panics
+                                // otherwise), so explanations crossing this
+                                // merge stay expressible.
+                                let premise_atoms = meq
+                                    .premises
+                                    .iter()
+                                    .map(|&(pt1, pt2)| self.atom_for_premise(pt1, pt2))
+                                    .collect();
+                                self.euf.merge_derived(meq.t1, meq.t2, premise_atoms);
+                                derived_merge = true;
+                                continue;
+                            }
+                        };
+                        let var = self.euf.atom_map.var_for_atom(atom_id);
+
+                        match ctx.trail.value(var) {
+                            None => {
+                                let key = self.module_props.len() as u32;
+                                self.module_props.push(ModulePropRecord {
+                                    lit: Lit::pos(var),
+                                    premises: meq.premises,
+                                });
+                                props.push(TheoryProp {
+                                    lit: Lit::pos(var),
+                                    key: MODULE_KEY_OFFSET + key,
+                                });
+                            }
+                            Some(true) => {}
+                            Some(false) => {
+                                // Trail says t1 ≠ t2, module says t1 = t2.
+                                // Conflict clause: negate eq premises + assert diseq as eq.
+                                // Premise atoms are mandatory (var_for_premise
+                                // panics on a missing one — silently dropping a
+                                // premise would strengthen the lemma unsoundly).
+                                let mut premises = meq.premises.clone();
+                                premises.sort();
+                                premises.dedup();
+                                let mut clause: Vec<Lit> = premises
+                                    .iter()
+                                    .map(|&(pt1, pt2)| Lit::neg(self.var_for_premise(pt1, pt2)))
+                                    .collect();
+                                clause.push(Lit::pos(var)); // The equality must hold
+                                return TheoryResult::Conflict(clause);
+                            }
+                        }
+                    }
+
+                    if !props.is_empty() {
+                        // Derived merges (if any) are already recorded in EUF;
+                        // the next check() call continues from them.
+                        return TheoryResult::Propagate(props);
+                    }
+                    if !derived_merge {
+                        return TheoryResult::Consistent;
+                    }
+                    // A derived merge joined two EUF classes without any SAT
+                    // activity — re-run EUF (conflict/propagation scan over
+                    // the new merges) and re-share before concluding.
                 }
             }
         }
@@ -386,7 +464,11 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
         if key >= MODULE_KEY_OFFSET {
             let idx = (key - MODULE_KEY_OFFSET) as usize;
             let record = &self.module_props[idx];
-            let premises = record.premises.clone();
+            // Sort + dedup at the explanation construction boundary — same
+            // rationale as `build_conflict_clause`.
+            let mut premises = record.premises.clone();
+            premises.sort();
+            premises.dedup();
             let mut clause = vec![record.lit];
             for (t1, t2) in premises {
                 // Missing premise atoms panic (see var_for_premise): dropping

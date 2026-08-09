@@ -400,18 +400,35 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                             // at level 0 means the theory's explanation clause
                             // is falsified at level 0 → UNSAT.
                             let trail_before = trail.len();
-                            let mut false_propagation = false;
+                            let mut false_propagation: Option<(Lit, u32)> = None;
                             for p in props {
                                 match trail.value(p.lit.var()) {
                                     None => trail.record_theory_propagation(p.lit, p.key),
                                     Some(v) if v == !p.lit.is_negated() => {} // already true
                                     Some(_) => {
-                                        false_propagation = true;
+                                        false_propagation = Some((p.lit, p.key));
                                         break;
                                     }
                                 }
                             }
-                            if false_propagation {
+                            if let Some((lit, key)) = false_propagation {
+                                // The theory insists on a literal already false
+                                // at level 0 → UNSAT, but only if its
+                                // explanation clause is a genuine level-0
+                                // conflict. A contract-violating theory would
+                                // otherwise yield a silent wrong UNSAT (same
+                                // hazard the main-loop conflict assert guards;
+                                // this is its level-0 twin). Cold: at most once.
+                                let expl = theory.explain(lit, key);
+                                assert!(
+                                    theory_conflict_is_falsified_at_level_0(
+                                        &trail, num_vars, &expl
+                                    ),
+                                    "TheorySolver contract violated: explain() for an \
+                                     already-falsified level-0 propagation returned a clause \
+                                     that is empty or not falsified by the current \
+                                     assignment (unassigned, satisfied, or out-of-range literal)"
+                                );
                                 let _ = propagate.finish_conflict().analyze().backtrack().unsat();
                                 return SolveResult::Unsat;
                             }
@@ -424,8 +441,20 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
                             continue;
                         }
-                        TheoryResult::Conflict(_) => {
-                            // Theory conflict at level 0 → UNSAT
+                        TheoryResult::Conflict(lits) => {
+                            // Theory conflict at level 0 → UNSAT, but only if
+                            // the clause is a genuine falsified conflict. A
+                            // contract-violating theory (unassigned/satisfied/
+                            // out-of-range literal) would otherwise produce a
+                            // silent wrong UNSAT here — the round-2 assert only
+                            // guards the main loop; this is its level-0 twin.
+                            // Cold: at most once.
+                            assert!(
+                                theory_conflict_is_falsified_at_level_0(&trail, num_vars, &lits),
+                                "TheorySolver contract violated: check() returned a level-0 \
+                                 conflict clause that is empty or not falsified by the current \
+                                 assignment (unassigned, satisfied, or out-of-range literal)"
+                            );
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
                             return SolveResult::Unsat;
                         }
@@ -720,6 +749,21 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
             }
         }
     })
+}
+
+/// True iff `lits` is a non-empty clause whose every literal references an
+/// in-range variable and is falsified by the current assignment.
+///
+/// Used by the level-0 pre-loop to validate a theory-reported conflict (or the
+/// explanation of an already-falsified level-0 propagation) before concluding
+/// UNSAT: a contract-violating theory that returns a non-falsified clause
+/// would otherwise yield a silent wrong UNSAT. Mirrors the main-loop
+/// conflict-resolution assert. Cold path — called at most once per solve.
+fn theory_conflict_is_falsified_at_level_0(trail: &Trail, num_vars: u32, lits: &[Lit]) -> bool {
+    !lits.is_empty()
+        && lits
+            .iter()
+            .all(|l| l.var() < num_vars && trail.value(l.var()) == Some(l.is_negated()))
 }
 
 /// Build a set of CRefs for clauses that are "locked" — currently
@@ -3101,6 +3145,38 @@ p cnf 5 10
         db.add_clause(vec![Lit::pos(2), Lit::pos(3)]);
 
         let _ = solve_with_theory(db, 4, &mut NonFalsifiedConflictTheory);
+    }
+
+    #[test]
+    #[should_panic(expected = "TheorySolver contract violated")]
+    fn theory_non_falsified_conflict_at_level_zero_panics_cleanly() {
+        // Finding C (level-0 twin of theory_non_falsified_conflict_panics_cleanly):
+        // the level-0 pre-loop returned UNSAT on TheoryResult::Conflict with
+        // NO falsification check (round 2's assert covered only the main
+        // loop). A theory returning a non-falsified conflict here — clause
+        // full of unassigned literals — yielded a silent wrong UNSAT. It must
+        // now panic naming the contract.
+        struct Level0NonFalsifiedConflict;
+        impl TheorySolver for Level0NonFalsifiedConflict {
+            fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
+                if ctx.trail.current_level() == 0 {
+                    // Nothing propagated at level 0 → all four unassigned.
+                    TheoryResult::Conflict(vec![Lit::neg(0), Lit::neg(1), Lit::neg(2), Lit::neg(3)])
+                } else {
+                    TheoryResult::Consistent
+                }
+            }
+            fn backtrack(&mut self, _new_level: u32) {}
+            fn explain(&mut self, _lit: Lit, _key: u32) -> Vec<Lit> {
+                unreachable!("never propagates")
+            }
+        }
+
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
+        db.add_clause(vec![Lit::pos(2), Lit::pos(3)]);
+
+        let _ = solve_with_theory(db, 4, &mut Level0NonFalsifiedConflict);
     }
 
     #[test]

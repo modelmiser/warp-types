@@ -162,7 +162,15 @@ impl<S: ActiveSet> Warp<S> {
             S::NAME,
             S::MASK,
         );
-        PerLane::new(data.get().gpu_shfl_xor(mask))
+        // Membermask = S::MASK: under real divergence only the lanes in S
+        // execute this instruction, so the PTX membermask must name exactly
+        // those lanes — a full-warp 0xFFFFFFFF would name inactive lanes,
+        // which is UB. The assert above guarantees every source lane
+        // (i ^ mask) is also in S, discharging gpu_shfl_xor_masked's
+        // contract. `as u32` truncation: nvptx64 warps are 32-lane so
+        // S::MASK's low 32 bits are the whole member set; the CPU identity
+        // impl ignores the mask (the 64-lane amdgpu backend is stubbed).
+        PerLane::new(data.get().gpu_shfl_xor_masked(mask, S::MASK as u32))
     }
 }
 
@@ -301,7 +309,10 @@ impl Warp<All> {
     pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
         #[cfg(target_arch = "nvptx64")]
         {
-            let mask = crate::gpu::ballot_sync(0xFFFFFFFF, predicate.get()) as u64;
+            // SAFETY: `self: Warp<All>` witnesses that all 32 lanes are
+            // converged and executing this call, so membermask 0xFFFFFFFF
+            // names exactly the executing lanes.
+            let mask = unsafe { crate::gpu::ballot_sync(0xFFFFFFFF, predicate.get()) } as u64;
             BallotResult::from_mask(Uniform::from_const(mask))
         }
         #[cfg(not(target_arch = "nvptx64"))]
@@ -856,6 +867,34 @@ mod tests {
                 "lane {lane}'s partner {partner} should be in LowHalf"
             );
         }
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_membermask_plumbing() {
+        // Finding A regression: shuffle_xor_within must route through
+        // gpu_shfl_xor_masked with S::MASK (on nvptx64 that becomes the PTX
+        // membermask; 0xFFFFFFFF under divergence names inactive lanes = UB).
+        // CPU-verifiable part: the masked entry point exists for every
+        // GpuShuffle type, ignores the membermask, and behavior through
+        // shuffle_xor_within is unchanged (identity). The nvptx64 half —
+        // that the membermask actually reaches shfl.sync.bfly — is
+        // UNTESTED-HARD (needs hardware/PTX inspection).
+        use crate::active_set::Even;
+        use crate::gpu::GpuShuffle;
+
+        let warp: Warp<Even> = Warp::new();
+        let data = PerLane::new(7i32);
+        assert_eq!(warp.shuffle_xor_within(data, 2).get(), 7);
+
+        // Direct trait-level check across types: CPU ignores the membermask.
+        assert_eq!(5i32.gpu_shfl_xor_masked(3, Even::MASK as u32), 5);
+        assert_eq!(5i32.gpu_shfl_xor_masked(3, 0), 5);
+        assert_eq!(9u32.gpu_shfl_xor_masked(1, 0xAAAA_AAAA), 9);
+        assert_eq!(2.5f32.gpu_shfl_xor_masked(1, 0x5555_5555), 2.5);
+        assert_eq!(7i64.gpu_shfl_xor_masked(1, 0xFFFF), 7);
+        assert_eq!(8u64.gpu_shfl_xor_masked(1, 0xFFFF), 8);
+        assert_eq!(1.5f64.gpu_shfl_xor_masked(1, 0xFFFF), 1.5);
+        assert!(true.gpu_shfl_xor_masked(1, 0xFFFF));
     }
 
     #[test]

@@ -17,10 +17,15 @@
 //! - `shuffle_xor(mask)`: lane[i] reads from lane[i ^ (mask & (WIDTH-1))]
 //! - `shuffle_down(delta)`: lane[i] reads from lane[i + (delta & (WIDTH-1))] (clamps at WIDTH)
 //! - `shuffle_up(delta)`: lane[i] reads from lane[i - (delta & (WIDTH-1))] (clamps at 0)
-//! - Width-confined variants partition into segments of `width` lanes
+//! - Width-confined variants partition into segments of `width` lanes,
+//!   following the PTX `maxLane`/`minLane` formulas — note that the bfly
+//!   segment check is an *upper bound only*, so a lane whose XOR partner
+//!   falls in a lower segment reads across the boundary (see
+//!   [`SimWarp::shuffle_xor_width`])
 //!
 //! The operand masking mirrors hardware: PTX `shfl.sync` masks its `b`
-//! operand to `b[4:0]` (5 bits for 32 lanes, 6 for 64) in every mode.
+//! operand to `b[4:0]` (5 bits for 32 lanes, generalized here to
+//! log2(WIDTH) bits) in every mode, including the width-confined variants.
 
 /// Multi-lane warp simulator with real shuffle semantics.
 ///
@@ -138,6 +143,14 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Uses bitwise mask (`& (WIDTH-1)`) for out-of-range indices, matching
     /// GPU hardware which masks to 5 bits (32-lane) or 6 bits (64-lane).
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
+        // `& (WIDTH-1)` is only the hardware b[4:0] masking when WIDTH is a
+        // power of two — same requirement as the sibling shuffles.
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
         let src = src_lane as usize;
         let val = self.lanes[src & (WIDTH - 1)];
         SimWarp {
@@ -147,22 +160,41 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
 
     /// Butterfly shuffle confined to segments of `width` lanes.
     ///
-    /// Each segment of `width` consecutive lanes shuffles independently.
-    /// XOR stays within the segment: if `(i ^ mask)` would leave the
-    /// segment, the lane reads its own value.
+    /// Faithful to PTX `shfl.sync.bfly` with `c = ((32-width)<<8) | 0x1F`:
+    /// the operand is masked first (`bval = b[4:0]`, generalized to
+    /// log2(WIDTH) bits), and the segment check is **upper-bound only** —
+    /// `pval = (lane ^ bval) <= maxLane`, where `maxLane` is the reader's
+    /// segment top. XOR can clear high bits, so a lane whose partner falls
+    /// in a *lower* segment reads across the boundary: lane 8 with
+    /// `mask=8, width=8` reads lane 0. Only partners *above* the segment
+    /// top clamp to the lane's own value.
+    ///
+    /// Typed callers never reach the cross-segment region:
+    /// `Tile::shuffle_xor` asserts `mask < SIZE`, and for `mask < width`
+    /// the partner never leaves the segment. Semantics derived from the PTX
+    /// ISA `shfl.sync` pseudocode; the cross-segment case is not covered by
+    /// `reproduce/gpu_semantics_test.cu` (hardware verification pending).
     pub fn shuffle_xor_width(&self, mask: u32, width: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
         let w = width as usize;
         assert!(
             w > 0 && w.is_power_of_two() && w <= WIDTH,
             "width must be power-of-2 in 1..={WIDTH}"
         );
+        let bval = (mask as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            let seg_base = (i / w) * w;
-            let within = i % w;
-            let partner_within = within ^ (mask as usize);
-            out[i] = if partner_within < w {
-                self.lanes[seg_base + partner_within]
+            // PTX: maxLane = (lane & segmask) | (cval & ~segmask), cval=0x1F
+            // → the reader's segment top.
+            let max_lane = (i / w) * w + (w - 1);
+            let j = i ^ bval; // i, bval < WIDTH (power of 2) ⇒ j < WIDTH
+            out[i] = if j <= max_lane {
+                self.lanes[j]
             } else {
                 self.lanes[i]
             };
@@ -171,20 +203,32 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     }
 
     /// Shuffle down confined to segments of `width` lanes.
+    ///
+    /// PTX `shfl.sync.down` with `c = ((32-width)<<8) | (width-1)`: operand
+    /// masked to `b[4:0]` (generalized to log2(WIDTH) bits), then
+    /// `lane + bval` clamps at the reader's segment top (`j <= maxLane`).
+    /// Since addition is monotone, down never crosses segments — unlike
+    /// [`SimWarp::shuffle_xor_width`].
     pub fn shuffle_down_width(&self, delta: u32, width: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
         let w = width as usize;
         assert!(
             w > 0 && w.is_power_of_two() && w <= WIDTH,
             "width must be power-of-2 in 1..={WIDTH}"
         );
+        let bval = (delta as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
-            let seg_base = (i / w) * w;
-            let within = i % w;
-            // Use u64 arithmetic to prevent usize overflow on 32-bit platforms.
-            let src_within = within as u64 + delta as u64;
-            out[i] = if src_within < w as u64 {
-                self.lanes[seg_base + src_within as usize]
+            let max_lane = (i / w) * w + (w - 1);
+            // i < WIDTH and bval < WIDTH ⇒ i + bval cannot overflow usize.
+            let j = i + bval;
+            out[i] = if j <= max_lane {
+                self.lanes[j]
             } else {
                 self.lanes[i]
             };
@@ -193,18 +237,30 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     }
 
     /// Shuffle up confined to segments of `width` lanes.
+    ///
+    /// PTX `shfl.sync.up` with `c = (32-width)<<8`: operand masked to
+    /// `b[4:0]` (generalized to log2(WIDTH) bits), then `lane - bval`
+    /// clamps at the reader's segment base (`j >= maxLane`, which for up
+    /// mode is the segment base since cval=0). Subtraction is monotone, so
+    /// up never crosses segments.
     pub fn shuffle_up_width(&self, delta: u32, width: u32) -> Self {
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "SimWarp shuffle requires power-of-2 WIDTH"
+            )
+        };
         let w = width as usize;
         assert!(
             w > 0 && w.is_power_of_two() && w <= WIDTH,
             "width must be power-of-2 in 1..={WIDTH}"
         );
+        let bval = (delta as usize) & (WIDTH - 1);
         let mut out = self.lanes;
         for i in 0..WIDTH {
             let seg_base = (i / w) * w;
-            let within = i % w;
-            out[i] = if within >= delta as usize {
-                self.lanes[seg_base + within - delta as usize]
+            out[i] = if i >= bval && i - bval >= seg_base {
+                self.lanes[i - bval]
             } else {
                 self.lanes[i]
             };
@@ -414,9 +470,46 @@ mod tests {
 
         // Cross-tile XOR: mask=8 in an 8-wide tile exceeds tile boundary
         let cross = sw.shuffle_xor_width(8, 8);
-        // Should clamp to own value (can't leave tile)
+        // PTX bfly clamps only on the UPPER bound (j <= maxLane). For lanes
+        // 0..7 (segment top 7) the partner j = i ^ 8 = i + 8 exceeds the top,
+        // so they clamp to own value.
         assert_eq!(cross.lane(0), 0);
         assert_eq!(cross.lane(7), 7);
+        // ...but lanes 8..15 have partner j = i ^ 8 = i - 8, which is BELOW
+        // their segment (top 15) — the upper-bound check passes and they read
+        // across the boundary downward. This is faithful PTX bfly behavior,
+        // not symmetric clamping. (Finding C: lane 8, w=8, mask=8 → lane 0.)
+        assert_eq!(
+            cross.lane(8),
+            0,
+            "lane 8 reads lane 0 cross-segment (PTX bfly upper-bound-only)"
+        );
+        assert_eq!(cross.lane(15), 7, "lane 15 reads lane 7 cross-segment");
+    }
+
+    #[test]
+    fn shuffle_xor_width_matches_full_when_mask_lt_width() {
+        // For mask < width the partner never leaves the segment, so the
+        // width-confined bfly must agree with a plain per-segment XOR — the
+        // regime typed callers (Tile::shuffle_xor asserts mask < SIZE) hit.
+        let sw = SimWarp::<i32, 32>::new(|i| i as i32 * 3 + 1);
+        for &width in &[4u32, 8, 16, 32] {
+            for mask in 1..width {
+                let got = sw.shuffle_xor_width(mask, width);
+                for i in 0..32usize {
+                    let w = width as usize;
+                    let seg_base = (i / w) * w;
+                    let within = i % w;
+                    let partner = within ^ (mask as usize);
+                    let expect = if partner < w {
+                        sw.lane(seg_base + partner)
+                    } else {
+                        sw.lane(i)
+                    };
+                    assert_eq!(got.lane(i), expect, "width={width} mask={mask} lane={i}");
+                }
+            }
+        }
     }
 
     // --- Butterfly reduce with distinct values ---

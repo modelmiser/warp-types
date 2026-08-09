@@ -119,9 +119,14 @@ echo ""
 if command -v nvidia-smi &>/dev/null; then
     echo "▸ Compiling typed Rust kernels to PTX..."
     cd "$PROJECT_ROOT/examples/gpu-project"
-    OUTPUT=$(cargo run --release 2>&1)
-    FILTERED=$(echo "$OUTPUT" | grep -E "GPU:|Result:|Input:|Expected:|Got:")
-    if [ -n "$FILTERED" ]; then
+    # Capture exit status explicitly: under `set -e`, a bare failing
+    # command substitution would abort the script before the fallback
+    # branch below could ever fire.
+    RUN_STATUS=0
+    OUTPUT=$(cargo run --release 2>&1) || RUN_STATUS=$?
+    # grep exits 1 on no match — guard it so `set -e` doesn't abort here.
+    FILTERED=$(echo "$OUTPUT" | grep -E "GPU:|Result:|Input:|Expected:|Got:" || true)
+    if [ "$RUN_STATUS" -eq 0 ] && [ -n "$FILTERED" ]; then
         echo "$FILTERED" | sed 's/^/  /'
     else
         echo "  [GPU detected but kernel build failed — showing stored output from RTX 4000 Ada]"

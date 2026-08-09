@@ -31,6 +31,16 @@ pub enum DimacsError {
     ZeroVariable,
     /// Variable index exceeds declared num_vars.
     VariableOutOfRange { var: u32, declared: u32 },
+    /// Declared `num_vars` exceeds the internal `Lit` encoding limit
+    /// (`u32::MAX / 2`). A variable this large cannot be encoded as a literal
+    /// (`var * 2 (+1)` overflows u32), so `Lit::pos`/`Lit::neg` would panic
+    /// mid-parse — reject at the header instead. The `limit` is the largest
+    /// admissible declaration.
+    NumVarsExceedsEncoding { declared: u32, limit: u32 },
+    /// A second `p cnf` header line. The first silently won overwrote
+    /// `num_vars`/`num_clauses`, which can retroactively invalidate clauses
+    /// already parsed against the first declaration — reject it.
+    DuplicateHeader,
 }
 
 impl From<std::io::Error> for DimacsError {
@@ -49,6 +59,13 @@ impl std::fmt::Display for DimacsError {
             DimacsError::VariableOutOfRange { var, declared } => {
                 write!(f, "variable {var} exceeds declared {declared}")
             }
+            DimacsError::NumVarsExceedsEncoding { declared, limit } => {
+                write!(
+                    f,
+                    "declared num_vars {declared} exceeds the Lit encoding limit {limit}"
+                )
+            }
+            DimacsError::DuplicateHeader => write!(f, "duplicate 'p cnf' header line"),
         }
     }
 }
@@ -96,12 +113,29 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
         if trimmed.starts_with("p ") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if parts.len() >= 4 && parts[1] == "cnf" {
+                // A second header would silently overwrite the first, possibly
+                // invalidating clauses already parsed against it.
+                if header_seen {
+                    return Err(DimacsError::DuplicateHeader);
+                }
                 num_vars = parts[2]
                     .parse()
                     .map_err(|_| DimacsError::BadLiteral(parts[2].to_string()))?;
                 num_clauses = parts[3]
                     .parse()
                     .map_err(|_| DimacsError::BadLiteral(parts[3].to_string()))?;
+                // A declaration past the Lit encoding limit would let an
+                // in-range-per-header literal reach Lit::pos/neg's overflow
+                // assert and panic from this Result-returning parser. Reject
+                // at the header. (Internal max var = num_vars - 1, so the
+                // guard is conservative but simple.)
+                const LIT_VAR_LIMIT: u32 = u32::MAX / 2;
+                if num_vars > LIT_VAR_LIMIT {
+                    return Err(DimacsError::NumVarsExceedsEncoding {
+                        declared: num_vars,
+                        limit: LIT_VAR_LIMIT,
+                    });
+                }
                 header_seen = true;
                 continue;
             }
@@ -273,6 +307,36 @@ p cnf 2 2
         match result {
             BcpResult::Conflict { .. } => {}
             other => panic!("expected conflict, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_error_num_vars_exceeds_encoding() {
+        // Finding D: a header declaring num_vars past the Lit encoding limit
+        // (u32::MAX / 2) would let an in-range-per-header literal reach
+        // Lit::pos/neg's overflow assert and panic from this Result-returning
+        // parser. It must be rejected at the header with a typed error.
+        let cnf = "p cnf 2147483648 1\n1 0\n"; // 2^31 > u32::MAX/2 = 2147483647
+        match parse_dimacs_str(cnf) {
+            Err(DimacsError::NumVarsExceedsEncoding { declared, limit }) => {
+                assert_eq!(declared, 2147483648);
+                assert_eq!(limit, u32::MAX / 2);
+            }
+            Err(e) => panic!("expected NumVarsExceedsEncoding, got {e:?}"),
+            Ok(_) => panic!("expected NumVarsExceedsEncoding, got Ok"),
+        }
+    }
+
+    #[test]
+    fn parse_error_duplicate_header() {
+        // Finding D: a second `p cnf` header silently overwrote num_vars/
+        // num_clauses, retroactively invalidating clauses already parsed
+        // against the first declaration. Reject it.
+        let cnf = "p cnf 3 1\n1 2 0\np cnf 5 2\n";
+        match parse_dimacs_str(cnf) {
+            Err(DimacsError::DuplicateHeader) => {}
+            Err(e) => panic!("expected DuplicateHeader, got {e:?}"),
+            Ok(_) => panic!("expected DuplicateHeader, got Ok"),
         }
     }
 

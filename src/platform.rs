@@ -176,6 +176,16 @@ where
     }
 
     fn shuffle_xor<T: GpuValue>(source: Self::Vector<T>, mask: usize) -> Self::Vector<T> {
+        // `(i ^ mask) % WIDTH` is a permutation only when WIDTH is a power of
+        // two (then `% WIDTH == & (WIDTH-1)` and XOR-then-mask is a bijection).
+        // For non-pow2 WIDTH it collides — two lanes read the same source and
+        // another is never read — so reject at compile time.
+        const {
+            assert!(
+                WIDTH.is_power_of_two(),
+                "CpuSimd<WIDTH>: shuffle_xor requires power-of-2 WIDTH"
+            )
+        };
         let mut result = PortableVector::default();
         for i in 0..WIDTH {
             let src_idx = (i ^ mask) % WIDTH;
@@ -274,15 +284,17 @@ impl Platform for GpuWarp32 {
     }
 
     fn shuffle_down<T: GpuValue>(source: Self::Vector<T>, delta: usize) -> Self::Vector<T> {
-        // GPU shfl.sync.down clamps: lanes where lane + delta >= WIDTH read
-        // their own value (not wrapped).  CpuSimd also clamps (same behavior).
+        // GPU shfl.sync.down masks its operand to b[4:0] first (delta & 31,
+        // hardware-verified), THEN clamps at the warp boundary (lanes where
+        // lane + masked_delta >= 32 read their own value). This matches
+        // `SimWarp::shuffle_down`'s b[4:0] masking — the two GPU-faithful
+        // emulators must agree. (`CpuSimd::shuffle_down` is the portable-SIMD
+        // model and clamps a huge delta to self without masking; it is a
+        // deliberately different contract.)
+        let d = delta & 31; // b[4:0]; d < 32 so i + d never overflows usize.
         let mut result = PortableVector::default();
         for i in 0..32usize {
-            // checked_add: a huge delta must clamp, not overflow-wrap into a low lane.
-            let src_idx = match i.checked_add(delta) {
-                Some(s) if s < 32 => s,
-                _ => i,
-            };
+            let src_idx = if i + d < 32 { i + d } else { i };
             result.data[i] = source.data[src_idx];
         }
         result
@@ -431,8 +443,8 @@ mod tests {
 
     #[test]
     fn test_shuffle_down_huge_delta_clamps() {
-        // delta near usize::MAX must clamp to self (documented clamp
-        // semantics), not overflow-wrap into a wrong low lane.
+        // CpuSimd (portable-SIMD contract): a huge delta clamps to self for
+        // every lane — no b[4:0] masking, no overflow-wrap into a low lane.
         let mut v = PortableVector::<i32, 8>::default();
         for i in 0..8 {
             v = v.insert(i, i as i32 * 10);
@@ -442,16 +454,37 @@ mod tests {
             assert_eq!(r.extract(i), i as i32 * 10, "lane {i} must keep own value");
         }
 
+        // GpuWarp32 (GPU-faithful contract): masks the operand to b[4:0]
+        // first, so usize::MAX behaves as delta & 31 == 31, THEN clamps at
+        // the boundary. Only lane 0 has a valid source (0 + 31 = 31); lanes
+        // 1..=31 clamp to their own value. Matches SimWarp::shuffle_down.
         let mut v32 = PortableVector::<i32, 32>::default();
         for i in 0..32 {
             v32 = v32.insert(i, i as i32 * 10);
         }
         let r32 = GpuWarp32::shuffle_down(v32, usize::MAX);
-        for i in 0..32 {
+        assert_eq!(
+            r32.extract(0),
+            31 * 10,
+            "lane 0 reads lane 31 (delta&31==31)"
+        );
+        for i in 1..32 {
             assert_eq!(
                 r32.extract(i),
                 i as i32 * 10,
-                "lane {i} must keep own value"
+                "lane {i} must keep own value (clamped)"
+            );
+        }
+
+        // Cross-check the two GPU-faithful emulators agree on b[4:0] masking.
+        let sw =
+            crate::simwarp::SimWarp::<i32, 32>::from_array(core::array::from_fn(|i| i as i32 * 10));
+        let sw_down = sw.shuffle_down(u32::MAX);
+        for i in 0..32 {
+            assert_eq!(
+                sw_down.lane(i),
+                r32.extract(i),
+                "SimWarp and GpuWarp32 shuffle_down disagree at lane {i}"
             );
         }
     }

@@ -40,6 +40,12 @@ enum MergeReason {
     Asserted(AtomId),
     /// Congruence: `f(a₁..aₙ)` and `f(b₁..bₙ)` merged because `aᵢ ~ bᵢ`.
     Congruence(TermId, TermId),
+    /// A theory module derived this equality (Nelson-Oppen sharing in the
+    /// module → EUF direction) for a pair that has no SAT atom. The payload
+    /// is the set of trail equality atoms that justify the derivation —
+    /// explanation emits them directly, so every proof chain crossing this
+    /// edge remains expressible in trail atoms.
+    ModuleDerived(Vec<AtomId>),
 }
 
 /// Record of a single union operation, for undo on backtrack.
@@ -339,6 +345,14 @@ impl EufSolver {
 
         let mut atoms = Vec::new();
         self.bfs_explain(t1, t2, &mut atoms);
+        // Sort + dedup at the construction boundary (cold path): a shared
+        // support atom can be reached twice — once on the BFS path and again
+        // through a congruence edge's recursive arg explanation. Downstream
+        // the atoms become clause literals, and a duplicate literal in an
+        // installed theory clause puts both watch slots on the same literal
+        // (outside the two-watched-literal model).
+        atoms.sort_by_key(|a| a.0);
+        atoms.dedup();
         atoms
     }
 
@@ -353,11 +367,28 @@ impl EufSolver {
     /// If merge `idx` was congruence-derived (not a trail-asserted atom),
     /// return the merged pair. Trail-asserted merges return `None` — the
     /// combiner already shares those with the module directly from the trail.
+    /// Module-derived merges also return `None` — the module reported them
+    /// in the first place, so forwarding them back would be redundant.
     pub(crate) fn congruence_merge_at(&self, idx: usize) -> Option<(TermId, TermId)> {
         match self.merge_reasons[idx] {
             (a, b, MergeReason::Congruence(_, _)) => Some((a, b)),
             (_, _, MergeReason::Asserted(_)) => None,
+            (_, _, MergeReason::ModuleDerived(_)) => None,
         }
+    }
+
+    /// Merge a module-derived equality that has no SAT atom (Nelson-Oppen
+    /// sharing in the module → EUF direction). `premise_atoms` are the trail
+    /// equality atoms justifying the derivation; explanation chains crossing
+    /// this merge emit them in place of a (nonexistent) atom for the pair.
+    /// Returns `true` if the classes were actually merged.
+    pub(crate) fn merge_derived(
+        &mut self,
+        t1: TermId,
+        t2: TermId,
+        premise_atoms: Vec<AtomId>,
+    ) -> bool {
+        self.merge(t1, t2, MergeReason::ModuleDerived(premise_atoms))
     }
 
     /// BFS-based explanation: build a graph from merge reasons and find
@@ -396,6 +427,19 @@ impl EufSolver {
                 }
             }
         }
+
+        // Defensive found-path assert, mirroring the same-class assert in
+        // `explain_equality`. That top-level assert does not cover the
+        // recursive calls from `extract_atoms_from_reason` (congruence-edge
+        // arg pairs), and a missing path here would silently drop those
+        // premises — producing a stronger, theory-invalid lemma. The merge
+        // graph's components track union-find classes exactly, so an
+        // exhausted search means the two structures have diverged.
+        panic!(
+            "bfs_explain({t1:?}, {t2:?}): no path in the merge-reason graph — \
+             merge records are inconsistent with the union-find (premises would \
+             be silently dropped)"
+        );
     }
 
     /// Extract the asserted atoms from a single merge reason.
@@ -416,6 +460,9 @@ impl EufSolver {
                         }
                     }
                 }
+            }
+            MergeReason::ModuleDerived(premise_atoms) => {
+                atoms.extend(premise_atoms.iter().copied());
             }
         }
     }
@@ -508,6 +555,17 @@ impl TheorySolver for EufSolver {
             if self.find(t1) == self.find(t2) {
                 // Theory propagation: (= t1 t2) must be true
                 let key = self.prop_records.len() as u32;
+                // Key-space partition guard: when this solver runs inside a
+                // CombiningSolver, keys >= MODULE_KEY_OFFSET are routed to
+                // the module's record table. prop_records is never truncated,
+                // so without this release assert the 2^24-th propagation
+                // would silently misroute its explanation.
+                assert!(
+                    key < crate::combine::MODULE_KEY_OFFSET,
+                    "EUF propagation key {key} would cross into the module key partition \
+                     (keys >= {} belong to the theory module — see combine::MODULE_KEY_OFFSET)",
+                    crate::combine::MODULE_KEY_OFFSET
+                );
                 self.prop_records.push(PropRecord {
                     lit: Lit::pos(var),
                     t1,
@@ -944,6 +1002,74 @@ mod tests {
         explanation.sort_by_key(|a| a.0);
         explanation.dedup();
         assert_eq!(explanation, vec![AtomId(0), AtomId(1), AtomId(2)]);
+    }
+
+    /// Round-3 finding B: a shared support atom must not appear twice in an
+    /// explanation or a conflict clause. Shape: X = (a, b), Y = (b, f(b)).
+    /// Asserting X creates the congruence edge (f(a), f(b)); asserting Y
+    /// connects b to f(b). The path a → f(a) is a —X→ b —Y→ f(b) —cong→ f(a),
+    /// and the congruence edge's arg explanation (a, b) re-emits X. Pre-fix,
+    /// the conflict clause for a ≠ f(a) carried ¬X twice — a duplicate
+    /// literal installed in the clause DB, where both watch slots can end up
+    /// on the same literal (outside the two-watched-literal model).
+    #[test]
+    fn shared_support_atom_not_duplicated() {
+        use warp_types_sat::bcp::ClauseDb;
+        use warp_types_sat::trail::Trail;
+
+        let (arena, a, b, _c, fa, fb) = test_arena();
+        let mut atom_map = AtomMap::new();
+        let (_, v_ab) = atom_map.get_or_create(a, b); // X, var 0
+        let (_, v_bfb) = atom_map.get_or_create(b, fb); // Y, var 1
+        let (_, v_afa) = atom_map.get_or_create(a, fa); // var 2
+        let mut euf = EufSolver::new(&arena, atom_map);
+
+        // Direct explanation check.
+        euf.merge(a, b, MergeReason::Asserted(AtomId(0))); // creates cong edge (fa, fb)
+        euf.merge(b, fb, MergeReason::Asserted(AtomId(1)));
+        assert_eq!(euf.find(a), euf.find(fa));
+        let explanation = euf.explain_equality(a, fa);
+        let mut deduped = explanation.clone();
+        deduped.sort_by_key(|at| at.0);
+        deduped.dedup();
+        assert_eq!(
+            explanation.len(),
+            deduped.len(),
+            "explanation {explanation:?} contains duplicate atoms"
+        );
+        assert_eq!(deduped, vec![AtomId(0), AtomId(1)]);
+
+        // Same shape through check(): the emitted conflict clause for
+        // a ≠ f(a) must not contain a duplicate literal.
+        let (arena, a2, b2, _c2, fa2, fb2) = test_arena();
+        let mut atom_map = AtomMap::new();
+        atom_map.get_or_create(a2, b2);
+        atom_map.get_or_create(b2, fb2);
+        atom_map.get_or_create(a2, fa2);
+        let mut euf = EufSolver::new(&arena, atom_map);
+        let db = ClauseDb::new();
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(v_ab));
+        trail.record_theory_propagation(Lit::pos(v_bfb), 900); // fake keys, never explained
+        trail.record_theory_propagation(Lit::neg(v_afa), 901);
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 3,
+        };
+        match euf.check(&ctx) {
+            TheoryResult::Conflict(clause) => {
+                let mut deduped = clause.clone();
+                deduped.sort_by_key(|l| l.code());
+                deduped.dedup();
+                assert_eq!(
+                    clause.len(),
+                    deduped.len(),
+                    "conflict clause {clause:?} contains duplicate literals"
+                );
+            }
+            _ => panic!("a = b ∧ b = f(b) ∧ a ≠ f(a) must be an EUF conflict"),
+        }
     }
 
     /// Round-2 finding B: `backtrack(L)` must retract strictly-above-L merges

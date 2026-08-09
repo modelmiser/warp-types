@@ -9,6 +9,37 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+
+// Abort on any CUDA API failure — a silently failed memset/memcpy leaves the
+// host buffer full of stale or zero data that a verdict branch could match.
+#define CUDA_CHECK(call)                                                       \
+    do {                                                                       \
+        cudaError_t err_ = (call);                                             \
+        if (err_ != cudaSuccess) {                                             \
+            fprintf(stderr, "CUDA ERROR at %s:%d: %s -> %s\n", __FILE__,       \
+                    __LINE__, #call, cudaGetErrorString(err_));                \
+            exit(1);                                                           \
+        }                                                                      \
+    } while (0)
+
+// After each kernel launch: check both the launch itself (cudaGetLastError)
+// and its execution (cudaDeviceSynchronize). On failure the device buffer
+// still holds the memset zeros, which can match a verdict branch — so print
+// an explicit LAUNCH FAILED with NO verdict and exit non-zero instead of
+// letting a confident false hardware-semantics verdict reach the evidence
+// file.
+static void check_launch(const char* kernel_name) {
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) {
+        err = cudaDeviceSynchronize();
+    }
+    if (err != cudaSuccess) {
+        fprintf(stderr, "LAUNCH FAILED (no verdict): %s: %s\n", kernel_name,
+                cudaGetErrorString(err));
+        exit(2);
+    }
+}
 
 // Test 1: Butterfly reduce_sum with INT32_MAX — does hardware wrap?
 __global__ void test_reduce_overflow(int32_t* result) {
@@ -105,15 +136,24 @@ __global__ void test_shuffle_up_clamp(int32_t* result) {
 int main() {
     int32_t *d_result, h_result[8];
 
-    cudaMalloc(&d_result, 8 * sizeof(int32_t));
+    CUDA_CHECK(cudaMalloc(&d_result, 8 * sizeof(int32_t)));
 
     printf("=== GPU Semantics Verification (warp-types) ===\n");
-    printf("GPU: RTX 4000 Ada, Compute 8.9\n\n");
+    // Print the actual device, not a hardcoded banner — the evidence file
+    // must record the hardware the verdicts were measured on.
+    {
+        int dev = 0;
+        cudaDeviceProp prop;
+        CUDA_CHECK(cudaGetDevice(&dev));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
+        printf("GPU: %s, Compute %d.%d\n\n", prop.name, prop.major, prop.minor);
+    }
 
     // Test 1: Overflow
-    cudaMemset(d_result, 0, 8 * sizeof(int32_t));
+    CUDA_CHECK(cudaMemset(d_result, 0, 8 * sizeof(int32_t)));
     test_reduce_overflow<<<1, 32>>>(d_result);
-    cudaMemcpy(h_result, d_result, sizeof(int32_t), cudaMemcpyDeviceToHost);
+    check_launch("test_reduce_overflow");
+    CUDA_CHECK(cudaMemcpy(h_result, d_result, sizeof(int32_t), cudaMemcpyDeviceToHost));
     printf("TEST 1: reduce_sum overflow (INT32_MAX * 32 lanes)\n");
     printf("  Result: %d (0x%08X)\n", h_result[0], (uint32_t)h_result[0]);
     int64_t expected_wrap = (int64_t)INT32_MAX * 32;
@@ -127,9 +167,10 @@ int main() {
         printf("  VERDICT: UNKNOWN behavior — result doesn't match wrap prediction\n");
 
     // Test 2: shuffle_down clamp
-    cudaMemset(d_result, 0, 8 * sizeof(int32_t));
+    CUDA_CHECK(cudaMemset(d_result, 0, 8 * sizeof(int32_t)));
     test_shuffle_down_clamp<<<1, 32>>>(d_result);
-    cudaMemcpy(h_result, d_result, 5 * sizeof(int32_t), cudaMemcpyDeviceToHost);
+    check_launch("test_shuffle_down_clamp");
+    CUDA_CHECK(cudaMemcpy(h_result, d_result, 5 * sizeof(int32_t), cudaMemcpyDeviceToHost));
     printf("\nTEST 2: shuffle_down clamp behavior\n");
     printf("  Lane 31, delta=1:  %d (expect 3100 if clamp, 0 if wrap)\n", h_result[0]);
     printf("  Lane 31, delta=16: %d (expect 3100 if clamp)\n", h_result[1]);
@@ -144,17 +185,22 @@ int main() {
         printf("  VERDICT: UNKNOWN\n");
 
     // Test 3: shuffle_idx OOB
-    cudaMemset(d_result, 0, 8 * sizeof(int32_t));
+    CUDA_CHECK(cudaMemset(d_result, 0, 8 * sizeof(int32_t)));
     test_shuffle_idx_oob<<<1, 32>>>(d_result);
-    cudaMemcpy(h_result, d_result, 4 * sizeof(int32_t), cudaMemcpyDeviceToHost);
+    check_launch("test_shuffle_idx_oob");
+    CUDA_CHECK(cudaMemcpy(h_result, d_result, 4 * sizeof(int32_t), cudaMemcpyDeviceToHost));
     printf("\nTEST 3: shuffle_idx with src_lane >= 32\n");
     printf("  src=5:  %d (expect 6)\n", h_result[0]);
     printf("  src=32: %d", h_result[1]);
-    if (h_result[1] == h_result[0] - 5 + 0 + 1) printf(" (=lane 0 value → wraps mod 32)");
-    else if (h_result[1] == 1) printf(" (=own lane 0 value → clamps to self)");
+    // Values are val = lane + 1, and the reader is lane 0. Wrap mod 32 maps
+    // src=32 → lane 0, whose value is 1 — which is also lane 0's own value,
+    // so wrap and clamp-to-self coincide here; src=33 disambiguates.
+    if (h_result[1] == 1) printf(" (=lane 0 value = 1; wrap mod 32 and clamp-to-self agree — src=33 disambiguates)");
+    else if (h_result[1] == 32) printf(" (=lane 31 value → clamps to lane 31)");
     printf("\n");
     printf("  src=33: %d", h_result[2]);
     if (h_result[2] == 2) printf(" (=lane 1 value → wraps mod 32)");
+    else if (h_result[2] == 1) printf(" (=own lane 0 value → clamps to self)");
     printf("\n");
     printf("  src=63: %d", h_result[3]);
     if (h_result[3] == 32) printf(" (=lane 31 value → wraps mod 32)");
@@ -165,9 +211,10 @@ int main() {
         printf("  VERDICT: see values above\n");
 
     // Test 4: shuffle_up clamp
-    cudaMemset(d_result, 0, 8 * sizeof(int32_t));
+    CUDA_CHECK(cudaMemset(d_result, 0, 8 * sizeof(int32_t)));
     test_shuffle_up_clamp<<<1, 32>>>(d_result);
-    cudaMemcpy(h_result, d_result, 4 * sizeof(int32_t), cudaMemcpyDeviceToHost);
+    check_launch("test_shuffle_up_clamp");
+    CUDA_CHECK(cudaMemcpy(h_result, d_result, 4 * sizeof(int32_t), cudaMemcpyDeviceToHost));
     printf("\nTEST 4: shuffle_up clamp behavior\n");
     printf("  Lane 0,  delta=1:  %d (expect 0 if clamp)\n", h_result[0]);
     printf("  Lane 0,  delta=16: %d (expect 0 if clamp)\n", h_result[1]);
@@ -180,6 +227,6 @@ int main() {
 
     printf("\n=== Done ===\n");
 
-    cudaFree(d_result);
+    CUDA_CHECK(cudaFree(d_result));
     return 0;
 }

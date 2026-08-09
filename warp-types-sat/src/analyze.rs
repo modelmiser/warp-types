@@ -138,6 +138,35 @@ impl AnalyzeWork {
     }
 }
 
+/// Fetch a reason clause with full validation: bounds/header check via
+/// [`ClauseDb::clause`] plus a variable-range check on every literal.
+///
+/// Reason CRefs come from trail entries, and `Trail::record_propagation` is
+/// safe + pub and accepts ANY CRef — so a caller-built trail can carry a
+/// bogus reason. `db.clause` rejects CRefs whose decoded length overruns the
+/// arena, but a CRef pointing INTO a clause body can decode a small in-bounds
+/// length whose "literals" are really header/literal words of other clauses —
+/// those decode to variables far beyond `num_vars`, and they feed the
+/// unchecked seen/trail indexing in resolution and minimization (release UB).
+/// The per-literal range check closes that leg.
+///
+/// Per-conflict cold path (resolution steps + minimization DFS nodes), not
+/// the per-propagation BCP hot loop: one compare per literal is noise next
+/// to the seen/trail work done on the same literals.
+#[inline]
+fn reason_clause_lits(db: &ClauseDb, cref: CRef, num_vars: usize) -> &[Lit] {
+    let lits = db.clause(cref).literals;
+    for l in lits {
+        assert!(
+            (l.var() as usize) < num_vars,
+            "reason clause {cref} contains variable {} out of range (num_vars {num_vars}) — \
+             CRef does not point at a valid clause of this DB",
+            l.var()
+        );
+    }
+    lits
+}
+
 /// Run 1-UIP conflict analysis (allocates fresh scratch buffers).
 ///
 /// Convenience wrapper for callers that don't reuse buffers (old solver, tests).
@@ -202,8 +231,9 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     // Bounds-checked clause access: `conflict_clause` is caller-supplied
     // (all entry points are safe + pub), so validate it against the db here —
     // one check per analysis, off the hot resolution path. Reason clauses in
-    // the resolution loop stay unchecked (their validity is a trail invariant
-    // maintained by the solver).
+    // the resolution loop are fetched through `reason_clause_lits` (checked
+    // clause access + per-literal var range): reason CRefs are also
+    // caller-controlled via the safe pub `Trail::record_propagation`.
     // Reserve slot 0 for the asserting literal (filled after UIP is found).
     // This avoids the O(n) insert(0, lit) while preserving literal ordering
     // (push+swap would reorder, changing which literal wins second-watch ties).
@@ -263,13 +293,27 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     let mut trail_idx = entries.len();
 
     // SAFETY for unchecked indexing throughout resolution:
-    // - trail_idx starts at entries.len(), decrements, always finds a matching
-    //   entry before reaching 0 (the precondition assert above plus the
-    //   current-level decision guarantee this).
+    // - trail_idx starts at entries.len(), decrements, and the structural
+    //   bound below guarantees it never wraps past 0.
     // - All var values come from clause literals: conflict-clause vars are
-    //   validated above; reason-clause vars are validated var < num_vars at
-    //   solver startup. work.seen.len() >= num_vars.
+    //   validated above; reason-clause vars are validated per clause by
+    //   `reason_clause_lits`; theory-explanation vars per explanation below.
+    //   work.seen.len() >= num_vars.
     while num_at_current_level > 1 {
+        // Structural bound (mirrors the 1-UIP scan guard below): every
+        // antecedent must precede the literal it propagates on the trail, so
+        // resolution always finds its seen current-level literals below the
+        // scan point. A reason/explanation clause violating that ordering —
+        // reachable from safe code via a contract-breaking TheorySolver or a
+        // caller-built trail — re-seeds `seen` with literals the backward
+        // scan has already passed; the decrement would then wrap in release
+        // and feed get_unchecked (UB) instead of panicking.
+        assert!(
+            trail_idx > 0,
+            "resolution scan ran off the start of the trail (antecedent ordering violated: \
+             a reason clause references a current-level literal assigned after the literal \
+             it explains)"
+        );
         trail_idx -= 1;
         let entry = unsafe { entries.get_unchecked(trail_idx) };
         if entry.level != current_level
@@ -299,7 +343,11 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
                             "resolving through deleted clause {reason_clause} for var {}",
                             entry.lit.var()
                         );
-                        unsafe { db.clause_unchecked(reason_clause) }.literals
+                        // Checked fetch: the reason CRef is caller-controlled
+                        // (safe pub Trail::record_propagation accepts any CRef)
+                        // — see reason_clause_lits for why clause() alone is
+                        // not enough. Per-resolution-step cold path.
+                        reason_clause_lits(db, reason_clause, max_var)
                     }
                     Reason::TheoryPropagation(key) => {
                         reason_lits_owned = theory.explain(entry.lit, key);
@@ -543,6 +591,16 @@ pub fn analyze_conflict_instrumented(
     let mut trail_idx = entries.len();
 
     while num_at_current_level > 1 {
+        // Same structural bound as analyze_conflict_with_theory. Indexing
+        // below is checked, so a wrap here is a bounds panic rather than UB —
+        // the assert exists for the diagnostic (a caller-built trail whose
+        // reason clauses violate antecedent ordering can reach it).
+        assert!(
+            trail_idx > 0,
+            "resolution scan ran off the start of the trail (antecedent ordering violated: \
+             a reason clause references a current-level literal assigned after the literal \
+             it explains)"
+        );
         trail_idx -= 1;
         let entry = &entries[trail_idx];
         if entry.level != current_level || !work.seen[entry.lit.var() as usize] {
@@ -567,7 +625,10 @@ pub fn analyze_conflict_instrumented(
                 debug_assert!(!db.is_deleted(reason_clause));
                 num_at_current_level -= 1;
                 work.seen[entry.lit.var() as usize] = false;
-                for &lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
+                // Checked fetch — reason CRefs are caller-controlled (see
+                // reason_clause_lits). The vars below feed unchecked
+                // mark_seen / entry_for_var_unchecked.
+                for &lit in reason_clause_lits(db, reason_clause, max_var) {
                     let var = lit.var();
                     if var == entry.lit.var() {
                         continue;
@@ -735,9 +796,11 @@ fn lit_redundant_with(
     };
 
     // SAFETY for unchecked indexing throughout minimization:
-    // All var/rv values come from clause literals, validated var < num_vars
-    // at solver startup. work.seen.len() == num_vars.
-    for &reason_lit in unsafe { db.clause_unchecked(reason_clause) }.literals {
+    // All var/rv values come from reason-clause literals, validated per
+    // clause by reason_clause_lits (reason CRefs are caller-controlled via
+    // the safe pub Trail::record_propagation). work.seen.len() >= num_vars.
+    let num_vars = trail.num_vars();
+    for &reason_lit in reason_clause_lits(db, reason_clause, num_vars) {
         let rv = reason_lit.var();
         if rv == lit.var() {
             continue;
@@ -786,7 +849,8 @@ fn lit_redundant_with(
         unsafe { *work.seen.get_unchecked_mut(var as usize) = true };
         work.min_to_clear.push(var);
 
-        for &reason_lit in unsafe { db.clause_unchecked(ci) }.literals {
+        // Checked fetch — same caller-controlled-CRef reasoning as above.
+        for &reason_lit in reason_clause_lits(db, ci, num_vars) {
             let rv = reason_lit.var();
             if rv == var {
                 continue;
@@ -1658,6 +1722,78 @@ mod tests {
             "second watch must be the max-level literal after minimization"
         );
         assert_eq!(result.backtrack_level, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn bogus_reason_cref_panics_cleanly() {
+        // Finding A: a reason CRef is caller-controlled — Trail::record_propagation
+        // is safe + pub and accepts ANY CRef. A CRef pointing into a clause
+        // body decodes an in-bounds-but-bogus "clause" whose literals are
+        // really other clauses' header/literal words, giving variables far
+        // beyond num_vars. Those fed the unchecked seen/trail indexing in the
+        // resolution loop (release UB). The reason path now fetches through
+        // the checked db.clause() + per-literal var-range check.
+        //
+        // Arena layout (num_vars = 3, so any var >= 3 is out of range):
+        //   cA (CRef 0): [hdr=2][pos0=0][pos1=2]
+        //   cBig (CRef 3): [hdr=6][0][0][0][0][0][0]
+        // Bogus reason CRef = 2 decodes hdr=2 (len 2) → literals = arena[3..5]
+        //   = [6, 0]; word 6 read as a Lit is variable 3 → out of range.
+        let mut db = ClauseDb::new();
+        let ca = db.add_clause(vec![Lit::pos(0), Lit::pos(1)]); // CRef 0 (conflict)
+        let _big = db.add_clause(vec![Lit::pos(0); 6]); // CRef 3
+
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.record_propagation(Lit::pos(1), 2); // x1=T, BOGUS reason CRef=2
+
+        let _ = analyze_conflict(&trail, &db, ca);
+    }
+
+    #[test]
+    #[should_panic(expected = "ran off the start of the trail")]
+    fn theory_explanation_reintroduces_later_current_level_literal_panics() {
+        // Finding B: the resolution loop's `trail_idx -= 1` was unguarded
+        // (round 2 guarded only the UIP scan). A theory explanation that
+        // introduces current-level literals positioned ABOVE the backward
+        // scan point — variables already passed — keeps num_at_current_level
+        // above 1 while the scan walks to the start. Var-range validation
+        // passes (all vars < num_vars); only a trail-position guard catches
+        // it, otherwise the decrement wraps in release → get_unchecked UB.
+        use crate::theory::{TheoryContext, TheoryResult};
+
+        struct LateExplain;
+        impl TheorySolver for LateExplain {
+            fn check(&mut self, _ctx: &TheoryContext<'_>) -> TheoryResult {
+                TheoryResult::Consistent
+            }
+            fn backtrack(&mut self, _new_level: u32) {}
+            fn explain(&mut self, _lit: Lit, key: u32) -> Vec<Lit> {
+                match key {
+                    // x1's reason: unit lemma (introduces nothing new).
+                    1 => vec![Lit::pos(1)],
+                    // x2's reason re-introduces x3 and x4 — both assigned
+                    // LATER than x2 on the trail (already scanned past).
+                    2 => vec![Lit::pos(2), Lit::neg(3), Lit::neg(4)],
+                    k => panic!("unexpected explain key {k}"),
+                }
+            }
+        }
+
+        let mut db = ClauseDb::new();
+        // Conflict clause {¬x1, ¬x2}: both current-level, both falsified.
+        let c = db.add_clause(vec![Lit::neg(1), Lit::neg(2)]);
+
+        let mut trail = Trail::new(5);
+        trail.new_decision(Lit::pos(0)); // idx0: x0=T, level 1 (never referenced)
+        trail.record_theory_propagation(Lit::pos(1), 1); // idx1: x1
+        trail.record_theory_propagation(Lit::pos(2), 2); // idx2: x2
+        trail.record_theory_propagation(Lit::pos(3), 3); // idx3: x3 (later than x2)
+        trail.record_theory_propagation(Lit::pos(4), 4); // idx4: x4 (later than x2)
+
+        let mut work = AnalyzeWork::new(5);
+        let _ = analyze_conflict_with_theory(&mut work, &trail, &db, c, &mut LateExplain);
     }
 
     #[test]

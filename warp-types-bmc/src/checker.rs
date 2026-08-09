@@ -48,7 +48,7 @@ pub fn check(sys: &TransitionSystem, max_depth: u32, conflict_budget: u64) -> Bm
             match result {
                 SolveResult::Sat(assignment) => {
                     // Counterexample found — extract trace
-                    let trace = unroll::extract_trace(&assignment, sys.num_state_vars, depth);
+                    let trace = unroll::extract_trace(&assignment, sys.num_state_vars(), depth);
                     let _cex = encoded.check_counterexample();
                     return BmcResult::CounterexampleFound { depth, trace };
                 }

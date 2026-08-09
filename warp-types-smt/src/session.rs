@@ -365,7 +365,12 @@ impl<'s> SmtSession<'s, Declared> {
 impl<'s> SmtSession<'s, Asserted> {
     /// Check satisfiability with EUF only. Consumes the session.
     ///
-    /// Bitvector operations (`BvOp`) are treated as uninterpreted.
+    /// Bitvector operations (`BvOp`) are treated as uninterpreted, and so are
+    /// `BvConst` terms: EUF sees distinct constants as ordinary distinct
+    /// terms and will merge them when equalities force it (`3 = 4` is
+    /// EUF-satisfiable). `Sat` is a complete verdict only in EUF semantics;
+    /// for formulas containing `BvConst`, use
+    /// [`check_sat_bv`](Self::check_sat_bv).
     pub fn check_sat(self) -> crate::solver::SmtResult {
         crate::solver::check_sat(self.env)
     }
