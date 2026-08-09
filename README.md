@@ -116,7 +116,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't shuffle, merge requires complements) | 11 compile-fail doctests | `cargo test --doc` |
+| Type safety (diverged warp can't shuffle, merge requires complements) | 14 compile-fail doctests | `cargo test --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on H200 SXM and RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
