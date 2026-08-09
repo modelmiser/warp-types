@@ -6,6 +6,22 @@
 //!    (shuffle → PerLane, ballot → Uniform, reduce → T)
 //! 2. **`Warp<All>`-restricted shuffles** — shuffle methods only on full warps
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
+//!
+//! # The `Warp<All>`-only restriction is structural, not checked (W3 wall)
+//!
+//! Full-mask `shuffle_xor` exists only on `Warp<All>`. On a diverged sub-warp the
+//! method is *absent* — not a runtime error, a compile error. This doctest locks
+//! that wall: it must fail to compile (moving `shuffle_xor` onto `impl<S> Warp<S>`
+//! would let a sub-warp shuffle with an implicit full membermask = UB).
+//!
+//! ```compile_fail
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (evens, odds) = warp.diverge_even_odd();
+//! let data = PerLane::new(1i32);
+//! let _ = evens.shuffle_xor(data, 1); // ERROR: no method `shuffle_xor` on `Warp<Even>`
+//! # drop(odds);
+//! ```
 
 use crate::active_set::{ActiveSet, All};
 use crate::data::{LaneId, PerLane, Uniform};
@@ -532,6 +548,81 @@ pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 64], _perm: P) -> [T; 64]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W3b fragility wall (see the INSIGHTS soundness fragility map): the sub-warp
+    /// `shuffle_xor_within` is safe ONLY because of this runtime predicate — it is
+    /// *computed*, not structural, with UB on the other side (a mask that escapes
+    /// the active set names an inactive lane in the PTX membermask). The mask space
+    /// is fully enumerable, so we pin it exhaustively against an independently
+    /// written oracle plus known answers.
+    #[test]
+    fn xor_mask_preserves_active_set_matches_oracle() {
+        use crate::active_set::{
+            Even, EvenHigh, EvenLow, HighHalf, Lane0, LowHalf, NotLane0, Odd, OddHigh, OddLow,
+        };
+
+        // Independent reference: XOR-by-`xor` is an involution on [0, ws), so the
+        // permutation preserves the active set iff every active lane maps to an
+        // active lane ("maps into" == "onto" for a bijection). Structurally
+        // different from the accumulate-and-compare implementation under test.
+        fn oracle(active_mask: u64, xor_mask: u32) -> bool {
+            let ws = crate::WARP_SIZE;
+            let xor = xor_mask & (ws - 1);
+            (0..ws)
+                .filter(|&i| active_mask & (1u64 << i) != 0)
+                .all(|i| active_mask & (1u64 << (i ^ xor)) != 0)
+        }
+
+        let ws = crate::WARP_SIZE;
+        let within_warp = if ws >= 64 { u64::MAX } else { (1u64 << ws) - 1 };
+
+        // (a) Exhaustive over every XOR mask × every active pattern on the low 8
+        //     lanes — 256 * ws comparisons, cheap and structurally varied.
+        for active8 in 0u64..256 {
+            for xor in 0u32..ws {
+                assert_eq!(
+                    xor_mask_preserves_active_set(active8, xor),
+                    oracle(active8, xor),
+                    "mismatch: active={active8:#x} xor={xor}"
+                );
+            }
+        }
+
+        // (b) Every real sealed active set × every XOR mask — the exact values
+        //     that flow in as S::MASK at the call sites.
+        let real_sets: &[(u64, &str)] = &[
+            (All::MASK, "All"),
+            (Even::MASK, "Even"),
+            (Odd::MASK, "Odd"),
+            (LowHalf::MASK, "LowHalf"),
+            (HighHalf::MASK, "HighHalf"),
+            (Lane0::MASK, "Lane0"),
+            (NotLane0::MASK, "NotLane0"),
+            (EvenLow::MASK, "EvenLow"),
+            (EvenHigh::MASK, "EvenHigh"),
+            (OddLow::MASK, "OddLow"),
+            (OddHigh::MASK, "OddHigh"),
+            (crate::active_set::Empty::MASK, "Empty"),
+        ];
+        for &(mask, name) in real_sets {
+            assert_eq!(mask & !within_warp, 0, "{name} mask escapes warp width");
+            for xor in 0u32..ws {
+                assert_eq!(
+                    xor_mask_preserves_active_set(mask, xor),
+                    oracle(mask, xor),
+                    "mismatch: set={name} mask={mask:#x} xor={xor}"
+                );
+            }
+        }
+
+        // (c) Known answers — pin the predicate's *meaning*, not just self-consistency.
+        assert!(xor_mask_preserves_active_set(All::MASK, 1)); // All: any XOR stays in All
+        assert!(xor_mask_preserves_active_set(Even::MASK, 2)); // even<->even (0<->2, 4<->6)
+        assert!(!xor_mask_preserves_active_set(Even::MASK, 1)); // even->odd escapes Even
+        assert!(xor_mask_preserves_active_set(Even::MASK, 0)); // identity always preserves
+        assert!(!xor_mask_preserves_active_set(Lane0::MASK, 1)); // {0} -> {1} != {0}
+        assert!(xor_mask_preserves_active_set(Lane0::MASK, 0)); // {0} identity
+    }
 
     #[test]
     fn test_ballot_result_empty_mask() {

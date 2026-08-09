@@ -19,6 +19,26 @@
 //!
 //! Note: `EvenLow` appears under both `Even` and `LowHalf` — same set,
 //! reached by different diverge paths. Path independence is a key property.
+//!
+//! # The hierarchy is sealed against downstream extension (W1 wall)
+//!
+//! `ActiveSet` (and `ComplementOf`) require the `pub(crate)` [`sealed::Sealed`]
+//! supertrait, whose only method returns a `pub(crate)` token no external crate
+//! can name. A downstream crate therefore cannot forge a new active set — even a
+//! `Copy + 'static` type with a valid-looking `MASK` and `NAME` fails to compile,
+//! because the `Sealed` bound is unsatisfiable outside this crate. Doctests
+//! compile as *external* crates, so this is an authentic downstream test of the
+//! seal (removing the seal would let an outside crate impl `ActiveSet` with a
+//! lying `MASK`, or forge a false `ComplementOf` pair — either is UB):
+//!
+//! ```compile_fail
+//! #[derive(Copy, Clone)]
+//! struct Rogue;
+//! impl warp_types::ActiveSet for Rogue { // ERROR: `Rogue: Sealed` is not satisfied
+//!     const MASK: u64 = 0xFFFF_FFFF;
+//!     const NAME: &'static str = "Rogue";
+//! }
+//! ```
 
 /// Sealed trait module — prevents external crates from implementing safety-critical traits.
 ///
