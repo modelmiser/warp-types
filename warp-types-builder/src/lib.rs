@@ -160,6 +160,16 @@ impl WarpBuilder {
             .arg("build-std=core")
             .current_dir(&kernel_dir);
 
+        // Pin the target dir explicitly. If the kernel crate is a member of
+        // the calling workspace, the inner cargo would otherwise resolve the
+        // workspace root and use the workspace target/ — deadlocking on the
+        // build lock the outer cargo holds while running this build script,
+        // and putting outputs where find_ptx_file never looks. An explicit
+        // --target-dir also overrides any inherited CARGO_TARGET_DIR, so the
+        // search path below is guaranteed to match where cargo wrote.
+        let inner_target_dir = kernel_dir.join("target");
+        cmd.arg("--target-dir").arg(&inner_target_dir);
+
         if self.release {
             cmd.arg("--release");
         }
@@ -185,6 +195,22 @@ impl WarpBuilder {
         // This is the same fix that spirv-builder uses.
         cmd.env("RUSTUP_TOOLCHAIN", &self.toolchain);
         cmd.env_remove("RUSTC");
+        // Same class of leak as RUSTC — cargo sets these in the build-script
+        // environment (or the user's shell may), and each silently changes
+        // what the inner cargo does:
+        // - CARGO_ENCODED_RUSTFLAGS takes precedence over RUSTFLAGS, so an
+        //   inherited value would drop `--cfg warp_kernel_build` set below.
+        // - CARGO_TARGET_DIR / CARGO_BUILD_TARGET_DIR would redirect output
+        //   away from the directory searched below (the explicit --target-dir
+        //   above already wins, but keep the invocation self-contained).
+        // - RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER wrap rustc with a binary
+        //   from the OUTER toolchain (e.g. clippy-driver under `cargo clippy`),
+        //   bypassing the nightly selection above.
+        cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+        cmd.env_remove("CARGO_TARGET_DIR");
+        cmd.env_remove("CARGO_BUILD_TARGET_DIR");
+        cmd.env_remove("RUSTC_WRAPPER");
+        cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
         cmd.env("RUSTFLAGS", "--cfg warp_kernel_build");
 
         let output = cmd
@@ -198,10 +224,7 @@ impl WarpBuilder {
 
         // Find the generated PTX/assembly file
         let profile = if self.release { "release" } else { "debug" };
-        let target_dir = kernel_dir
-            .join("target")
-            .join(self.target.triple())
-            .join(profile);
+        let target_dir = inner_target_dir.join(self.target.triple()).join(profile);
 
         let ptx_path = find_ptx_file(&target_dir, &kernel_dir)?;
 
@@ -459,30 +482,37 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         }
     }
 
-    // Fallback: search deps/ for .s files matching the crate name pattern
+    // Fallback: search deps/ for .s files matching the crate name pattern.
+    // Multiple crate_name-HASH.s artifacts accumulate across rebuilds with
+    // different flags, and read_dir order is arbitrary — collect all matches
+    // and pick the newest (see pick_newest) so a stale artifact is never
+    // silently selected.
     let deps = target_dir.join("deps");
     if let Ok(entries) = std::fs::read_dir(&deps) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().is_some_and(|e| e == "s") {
-                let fname = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                // Match crate_name-HASH.s pattern, skip core/compiler_builtins
-                if fname.starts_with(&crate_name)
-                    && !fname.starts_with("core-")
-                    && !fname.starts_with("compiler_builtins-")
-                {
-                    return Ok(p);
+        let matches: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "s") && {
+                    let fname = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    // Match crate_name-HASH.s pattern, skip core/compiler_builtins
+                    fname.starts_with(&crate_name)
+                        && !fname.starts_with("core-")
+                        && !fname.starts_with("compiler_builtins-")
                 }
-            }
+            })
+            .collect();
+        if let Some(p) = pick_newest(matches) {
+            return Ok(p);
         }
     }
 
-    // Last resort: any non-core .s file in deps/ (sorted for determinism)
+    // Last resort: any non-core .s file in deps/, newest first (same rationale)
     if let Ok(entries) = std::fs::read_dir(&deps) {
-        let mut candidates: Vec<PathBuf> = entries
+        let candidates: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
@@ -497,8 +527,7 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
                 }
             })
             .collect();
-        candidates.sort();
-        if let Some(p) = candidates.into_iter().next() {
+        if let Some(p) = pick_newest(candidates) {
             return Ok(p);
         }
     }
@@ -512,4 +541,159 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
             .map(|c| c.display().to_string())
             .collect::<Vec<_>>()
     )))
+}
+
+/// Pick the best artifact among several discovered candidates: the one with
+/// the newest modification time, so a stale artifact from an earlier build
+/// can never shadow the one just produced. Files whose mtime can't be read
+/// lose to files with a known mtime; if no mtimes are available (or they tie),
+/// fall back to the lexicographically first path so the choice is at least
+/// deterministic across read_dir orderings.
+fn pick_newest(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    let stamped = candidates
+        .into_iter()
+        .map(|p| {
+            let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+            (p, mtime)
+        })
+        .collect();
+    pick_newest_stamped(stamped)
+}
+
+/// Pure selection core of [`pick_newest`]: newest mtime wins; `None` mtimes
+/// lose to `Some`; ties (including all-`None`) resolve to sorted-name order.
+fn pick_newest_stamped(
+    mut stamped: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+) -> Option<PathBuf> {
+    // Deterministic base order regardless of read_dir ordering.
+    stamped.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut best: Option<(PathBuf, Option<std::time::SystemTime>)> = None;
+    for (path, mtime) in stamped {
+        match &best {
+            // Strict `>` keeps the earlier (sorted-name-first) path on ties.
+            Some((_, best_mtime)) if mtime <= *best_mtime => {}
+            _ => best = Some((path, mtime)),
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn t(secs: u64) -> Option<SystemTime> {
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    // --- pick_newest_stamped: stale-artifact selection (finding A) ---
+
+    #[test]
+    fn newest_mtime_wins_over_name_order() {
+        // The stale artifact sorts FIRST by name — pure name-sort would pick it.
+        let stale = PathBuf::from("deps/kernels-aaaa.s");
+        let fresh = PathBuf::from("deps/kernels-zzzz.s");
+        let picked = pick_newest_stamped(vec![(fresh.clone(), t(2_000)), (stale, t(1_000))]);
+        assert_eq!(picked, Some(fresh));
+    }
+
+    #[test]
+    fn result_is_independent_of_read_dir_order() {
+        let a = (PathBuf::from("deps/kernels-aaaa.s"), t(3_000));
+        let b = (PathBuf::from("deps/kernels-bbbb.s"), t(1_000));
+        let c = (PathBuf::from("deps/kernels-cccc.s"), t(2_000));
+        for perm in [
+            vec![a.clone(), b.clone(), c.clone()],
+            vec![c.clone(), a.clone(), b.clone()],
+            vec![b.clone(), c.clone(), a.clone()],
+        ] {
+            assert_eq!(pick_newest_stamped(perm), Some(a.0.clone()));
+        }
+    }
+
+    #[test]
+    fn missing_mtimes_fall_back_to_sorted_name() {
+        let picked = pick_newest_stamped(vec![
+            (PathBuf::from("deps/kernels-zzzz.s"), None),
+            (PathBuf::from("deps/kernels-aaaa.s"), None),
+        ]);
+        assert_eq!(picked, Some(PathBuf::from("deps/kernels-aaaa.s")));
+    }
+
+    #[test]
+    fn known_mtime_beats_unknown() {
+        let picked = pick_newest_stamped(vec![
+            (PathBuf::from("deps/kernels-aaaa.s"), None),
+            (PathBuf::from("deps/kernels-bbbb.s"), t(1)),
+        ]);
+        assert_eq!(picked, Some(PathBuf::from("deps/kernels-bbbb.s")));
+    }
+
+    #[test]
+    fn equal_mtimes_resolve_to_sorted_name() {
+        let picked = pick_newest_stamped(vec![
+            (PathBuf::from("deps/kernels-bbbb.s"), t(5)),
+            (PathBuf::from("deps/kernels-aaaa.s"), t(5)),
+        ]);
+        assert_eq!(picked, Some(PathBuf::from("deps/kernels-aaaa.s")));
+    }
+
+    #[test]
+    fn empty_candidates_give_none() {
+        assert_eq!(pick_newest_stamped(vec![]), None);
+    }
+
+    #[test]
+    fn pick_newest_uses_real_mtimes() {
+        // Filesystem-backed check: the file written LAST wins even though it
+        // sorts last by name (old first-hit / name-sort behavior would be
+        // order-dependent or pick the stale one).
+        let dir = std::env::temp_dir().join(format!(
+            "warp-types-builder-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join("kernels-aaaa.s");
+        let fresh = dir.join("kernels-zzzz.s");
+        std::fs::write(&stale, "stale").unwrap();
+        // Ensure a strictly newer mtime even on coarse-grained filesystems.
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&fresh, "fresh").unwrap();
+        let picked = pick_newest(vec![stale.clone(), fresh.clone()]);
+        assert_eq!(picked, Some(fresh));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- parse_kernel_entries: pure PTX parsing ---
+
+    #[test]
+    fn parses_visible_entries_only() {
+        let ptx = "\
+// Generated by LLVM
+.visible .entry butterfly_reduce(
+    .param .u64 p0
+)
+.visible .entry ballot_sync_kernel(
+.entry hidden_helper(
+.visible .entry (
+";
+        assert_eq!(
+            parse_kernel_entries(ptx),
+            vec!["butterfly_reduce", "ballot_sync_kernel"]
+        );
+    }
+
+    #[test]
+    fn parses_no_entries_from_empty_ptx() {
+        assert!(parse_kernel_entries("").is_empty());
+    }
 }

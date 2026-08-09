@@ -26,6 +26,14 @@
 //! assert!(pool.acquire(42).is_some());
 //! ```
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
+/// Global pool-identity counter. Each `ClausePool` draws a unique nonce at
+/// construction; tokens are stamped with it at acquire so `release` can verify
+/// a token is returned to the pool that issued it (cross-pool release would
+/// free a slot the pool never gave out, defeating the exclusivity invariant).
+static POOL_NONCE: AtomicU32 = AtomicU32::new(0);
+
 // ============================================================================
 // Clause token (affine — non-Copy, non-Clone)
 // ============================================================================
@@ -42,6 +50,8 @@
 #[must_use = "dropping a ClauseToken without releasing it leaks the clause reservation"]
 pub struct ClauseToken {
     index: usize,
+    /// Identity of the pool that issued this token (see `POOL_NONCE`).
+    pool_nonce: u32,
 }
 
 // Deliberately NOT deriving Copy or Clone.
@@ -75,6 +85,8 @@ pub struct ClausePool {
     /// Bitset tracking which clauses are currently acquired.
     /// True = acquired (unavailable), False = available.
     acquired: Vec<bool>,
+    /// Unique pool identity, stamped into every token this pool issues.
+    nonce: u32,
 }
 
 impl ClausePool {
@@ -82,6 +94,7 @@ impl ClausePool {
     pub fn new(num_clauses: usize) -> Self {
         ClausePool {
             acquired: vec![false; num_clauses],
+            nonce: POOL_NONCE.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -107,7 +120,10 @@ impl ClausePool {
             return None;
         }
         self.acquired[index] = true;
-        Some(ClauseToken { index })
+        Some(ClauseToken {
+            index,
+            pool_nonce: self.nonce,
+        })
     }
 
     /// Acquire the next available clause (lowest index). Returns `None` if
@@ -115,13 +131,26 @@ impl ClausePool {
     pub fn acquire_next(&mut self) -> Option<ClauseToken> {
         let index = self.acquired.iter().position(|&a| !a)?;
         self.acquired[index] = true;
-        Some(ClauseToken { index })
+        Some(ClauseToken {
+            index,
+            pool_nonce: self.nonce,
+        })
     }
 
     /// Release a clause token back to the pool.
     ///
     /// Consumes the token — the clause becomes available for re-acquisition.
+    ///
+    /// # Panics
+    /// Panics if the token was issued by a different pool. Releasing pool B's
+    /// token into pool A would free A's slot while A's own token is still
+    /// live, silently breaking the exclusivity invariant.
     pub fn release(&mut self, token: ClauseToken) {
+        assert_eq!(
+            token.pool_nonce, self.nonce,
+            "releasing clause token {} into a different pool than issued it",
+            token.index
+        );
         debug_assert!(
             self.acquired[token.index],
             "releasing clause {} that wasn't acquired",
@@ -188,6 +217,18 @@ mod tests {
         assert_eq!(pool.available(), 0);
         pool.release_batch(tokens);
         assert_eq!(pool.available(), 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "different pool")]
+    fn cross_pool_release_panics() {
+        // Releasing pool B's token into pool A would free A's slot 1 while
+        // A's own token for slot 1 is still live — exclusivity broken.
+        let mut a = ClausePool::new(4);
+        let mut b = ClausePool::new(4);
+        let _ta = a.acquire(1).unwrap();
+        let tb = b.acquire(1).unwrap();
+        a.release(tb);
     }
 
     #[test]

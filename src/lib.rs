@@ -62,6 +62,15 @@ pub const WARP_SIZE: u32 = 32;
 #[cfg(feature = "warp64")]
 pub const WARP_SIZE: u32 = 64;
 
+// A 64-lane build must not target 32-lane NVIDIA hardware: the stride-32
+// butterfly step would be an identity shuffle there, silently producing
+// half-warp (2x-wrong) reductions.
+#[cfg(all(feature = "warp64", target_arch = "nvptx64"))]
+compile_error!(
+    "feature `warp64` targets 64-lane hardware; nvptx64 warps are 32-lane — \
+     build without `warp64` for NVIDIA targets"
+);
+
 // ============================================================================
 // Core modules (public API)
 // ============================================================================

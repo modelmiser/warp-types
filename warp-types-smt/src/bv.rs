@@ -21,8 +21,9 @@ use crate::term::{BvOpKind, TermId, TermKind};
 // ============================================================================
 
 /// Mask for a `width`-bit unsigned value. Handles `width == 64` without
-/// the `1u64 << 64` panic trap.
-fn width_mask(width: u32) -> u64 {
+/// the `1u64 << 64` panic trap. Also used by the session's `bv_const` to
+/// mask constants to their declared width at construction.
+pub(crate) fn width_mask(width: u32) -> u64 {
     if width >= 64 {
         u64::MAX
     } else {
@@ -40,7 +41,9 @@ fn evaluate(op: BvOpKind, result_width: u32, args: &[(u32, u64)]) -> u64 {
     let out_mask = width_mask(result_width);
     let vals = || args.iter().map(|&(_, v)| v);
     let result = match op {
-        BvOpKind::Add => vals().sum::<u64>(),
+        // Wrapping fold: BV addition is modulo 2^width, and `.sum()` would
+        // panic on u64 overflow in debug builds.
+        BvOpKind::Add => vals().fold(0u64, |acc, v| acc.wrapping_add(v)),
         BvOpKind::And => vals().fold(out_mask, |a, b| a & b),
         BvOpKind::Or => vals().fold(0, |a, b| a | b),
         BvOpKind::Xor => vals().fold(0, |a, b| a ^ b),
@@ -119,6 +122,10 @@ pub struct BvSolver {
     value_to_terms: HashMap<(u32, u64), Vec<TermId>>,
     /// Active disequalities from the trail.
     disequalities: Vec<(TermId, TermId)>,
+    /// Conflict detected during equality notification: a trail equality
+    /// between two terms whose known values differ. Stored as the equality
+    /// premises for the conflict clause; reported by the next `propagate()`.
+    pending_conflict: Option<Vec<(TermId, TermId)>>,
     /// Whether re-evaluation is needed.
     dirty: bool,
     // ── Backtracking ──
@@ -160,6 +167,7 @@ impl BvSolver {
             bv_ops,
             value_to_terms,
             disequalities: Vec::new(),
+            pending_conflict: None,
             dirty: false,
             undo_stack: Vec::new(),
             level_marks: vec![0],
@@ -226,7 +234,19 @@ impl TheoryModule for BvSolver {
         let v1 = self.known_value[t1.index()];
         let v2 = self.known_value[t2.index()];
         match (v1, v2) {
-            (Some(_), Some(_)) => {} // Both known — combiner handles mismatches
+            (Some(val1), Some(val2)) => {
+                // Both known: a mismatch is a theory conflict. (Nothing else
+                // detects this — the equality premise chain plus this trail
+                // equality forms the conflict clause.)
+                if val1 != val2 && self.pending_conflict.is_none() {
+                    let mut eq_premises = vec![(t1, t2)];
+                    self.collect_premises(t1, &mut eq_premises);
+                    self.collect_premises(t2, &mut eq_premises);
+                    eq_premises.sort();
+                    eq_premises.dedup();
+                    self.pending_conflict = Some(eq_premises);
+                }
+            }
             (Some((w, val)), None) => {
                 self.set_value(t2, w, val, ValueReason::Equality(t2, t1));
             }
@@ -242,6 +262,15 @@ impl TheoryModule for BvSolver {
     }
 
     fn propagate(&mut self) -> ModuleResult {
+        // A mismatch recorded during equality notification takes priority
+        // (it does not set `dirty`, so check before the early return).
+        if let Some(eq_premises) = self.pending_conflict.take() {
+            return ModuleResult::Conflict {
+                eq_premises,
+                diseq_premises: Vec::new(),
+            };
+        }
+
         if !self.dirty {
             return ModuleResult::Consistent(Vec::new());
         }
@@ -250,9 +279,6 @@ impl TheoryModule for BvSolver {
         // Evaluate BvOp terms whose args are all known
         for i in 0..self.bv_ops.len() {
             let op_tid = self.bv_ops[i];
-            if self.known_value[op_tid.index()].is_some() {
-                continue;
-            }
             if let TermKind::BvOp {
                 op,
                 width,
@@ -263,7 +289,28 @@ impl TheoryModule for BvSolver {
                     args.iter().map(|&a| self.known_value[a.index()]).collect();
                 if let Some(pairs) = arg_pairs {
                     let result = evaluate(op, width, &pairs);
-                    self.set_value(op_tid, width, result, ValueReason::Evaluation);
+                    match self.known_value[op_tid.index()] {
+                        None => self.set_value(op_tid, width, result, ValueReason::Evaluation),
+                        Some(recorded) => {
+                            // The op already has a value (e.g. forced by a
+                            // trail equality). If ground evaluation disagrees,
+                            // that is a conflict — same class as the
+                            // notify_equality mismatch above.
+                            if recorded != (width, result) {
+                                let mut eq_premises = Vec::new();
+                                self.collect_premises(op_tid, &mut eq_premises);
+                                for &arg in args {
+                                    self.collect_premises(arg, &mut eq_premises);
+                                }
+                                eq_premises.sort();
+                                eq_premises.dedup();
+                                return ModuleResult::Conflict {
+                                    eq_premises,
+                                    diseq_premises: Vec::new(),
+                                };
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -337,6 +384,10 @@ impl TheoryModule for BvSolver {
             self.disequalities.truncate(dq_target);
             self.diseq_level_marks.truncate(target);
         }
+        // A pending conflict may depend on retracted assignments; drop it.
+        // The combiner re-notifies the surviving trail, so a still-valid
+        // conflict is rediscovered.
+        self.pending_conflict = None;
         self.dirty = true;
     }
 }
@@ -421,6 +472,48 @@ mod tests {
         bv.notify_disequality(TermId(3), TermId(4)); // bvadd(x,1) ≠ 4
         let result = bv.propagate();
         assert!(matches!(result, ModuleResult::Conflict { .. }));
+    }
+
+    // ── Finding B: equality between two terms with different known values ──
+
+    #[test]
+    fn conflicting_known_values_conflict() {
+        // x = bvconst(5,3) then x = bvconst(5,4): both sides known with
+        // different values — must surface as a module conflict, not be
+        // silently dropped.
+        let (_, kinds) = make_arena();
+        let mut bv = BvSolver::new(&kinds);
+        bv.notify_equality(TermId(0), TermId(1)); // x = 3
+        bv.notify_equality(TermId(0), TermId(4)); // x = 4 — contradiction
+        let result = bv.propagate();
+        match result {
+            ModuleResult::Conflict { eq_premises, .. } => {
+                // The clause must be built from the two trail equalities.
+                assert!(eq_premises.contains(&(TermId(0), TermId(4))));
+                assert!(eq_premises.contains(&(TermId(0), TermId(1))));
+            }
+            _ => panic!("expected Conflict for x = 3 ∧ x = 4"),
+        }
+    }
+
+    #[test]
+    fn forced_op_value_contradicts_evaluation() {
+        // Same bug class at the evaluation site: bvadd(x,1) = 3 forced by an
+        // equality, but x = 3 makes it evaluate to 4 — must conflict.
+        let (_, kinds) = make_arena();
+        let mut bv = BvSolver::new(&kinds);
+        bv.notify_equality(TermId(0), TermId(1)); // x = 3
+        bv.notify_equality(TermId(3), TermId(1)); // bvadd(x,1) = 3, but 3+1 = 4
+        let result = bv.propagate();
+        assert!(matches!(result, ModuleResult::Conflict { .. }));
+    }
+
+    // ── Finding G: bvadd must wrap, not panic, on u64 overflow ──
+
+    #[test]
+    fn evaluate_add_wraps_on_u64_overflow() {
+        // u64::MAX + 2 wraps to 1 — must not panic in debug builds.
+        assert_eq!(evaluate(BvOpKind::Add, 64, &[(64, u64::MAX), (64, 2)]), 1);
     }
 
     #[test]

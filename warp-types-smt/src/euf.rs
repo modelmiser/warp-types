@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use crate::formula::{AtomId, AtomMap};
-use crate::term::{FuncId, TermArena, TermId, TermKind};
+use crate::term::{BvOpKind, FuncId, TermArena, TermId, TermKind};
 
 use warp_types_sat::literal::Lit;
 use warp_types_sat::theory::{TheoryContext, TheoryProp, TheoryResult, TheorySolver};
@@ -54,10 +54,32 @@ struct UndoEntry {
     old_root_rank: u32,
 }
 
+/// Function-symbol label for congruence closure. Uninterpreted function
+/// applications and bitvector operations both participate: term.rs documents
+/// `BvOp` as "uninterpreted by EUF (congruence only, no evaluation)", so a
+/// BvOp's identity for congruence purposes is its op kind plus result width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FuncLabel {
+    /// Uninterpreted function application.
+    Uninterpreted(FuncId),
+    /// Bitvector operation: `(op, result width)`.
+    Bv(BvOpKind, u32),
+}
+
+/// If a term is a congruence-relevant application (`Apply` or `BvOp`),
+/// return its function label and argument list.
+fn congruent_parts(kind: &TermKind) -> Option<(FuncLabel, &[TermId])> {
+    match kind {
+        TermKind::Apply { func, args } => Some((FuncLabel::Uninterpreted(*func), args)),
+        TermKind::BvOp { op, width, args } => Some((FuncLabel::Bv(*op, *width), args)),
+        _ => None,
+    }
+}
+
 /// Canonical signature for the congruence table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Signature {
-    func: FuncId,
+    func: FuncLabel,
     arg_reprs: Vec<TermId>,
 }
 
@@ -93,11 +115,11 @@ pub struct EufSolver {
     /// Signature → representative term. When classes merge, re-signature
     /// function applications and check for new congruences.
     sig_table: HashMap<Signature, TermId>,
-    /// `use_list[term_id]`: function application TermIds that have `term_id`
-    /// as one of their arguments. Used to find terms that need re-signaturing
-    /// when a class changes representative.
+    /// `use_list[term_id]`: congruence-relevant TermIds (`Apply` or `BvOp`)
+    /// that have `term_id` as one of their arguments. Used to find terms that
+    /// need re-signaturing when a class changes representative.
     use_list: Vec<Vec<TermId>>,
-    /// All function application TermIds (for initial signature population).
+    /// All congruence-relevant TermIds (for initial signature population).
     func_apps: Vec<TermId>,
 
     // ── Backtracking ──
@@ -147,7 +169,7 @@ impl EufSolver {
         for i in 0..n {
             let entry = arena.get(TermId(i as u32));
             term_kinds.push(entry.kind.clone());
-            if let TermKind::Apply { args, .. } = &entry.kind {
+            if let Some((_, args)) = congruent_parts(&entry.kind) {
                 let tid = TermId(i as u32);
                 func_apps.push(tid);
                 for &arg in args {
@@ -159,10 +181,10 @@ impl EufSolver {
         // Populate initial signature table
         let mut sig_table = HashMap::new();
         for &tid in &func_apps {
-            if let TermKind::Apply { func, ref args } = term_kinds[tid.index()] {
+            if let Some((label, args)) = congruent_parts(&term_kinds[tid.index()]) {
                 let sig = Signature {
-                    func,
-                    arg_reprs: args.clone(), // initially, repr == self
+                    func: label,
+                    arg_reprs: args.to_vec(), // initially, repr == self
                 };
                 sig_table.insert(sig, tid);
             }
@@ -262,31 +284,21 @@ impl EufSolver {
         let mut pending_merges: Vec<(TermId, TermId)> = Vec::new();
 
         for &tid in &affected {
-            if let TermKind::Apply { func, ref args } = self.term_kinds[tid.index()] {
-                // Remove old signature
-                let old_sig = Signature {
-                    func,
-                    arg_reprs: args
-                        .iter()
-                        .map(|&a| {
-                            // What was the old representative? For args that aren't child,
-                            // their repr is unchanged. For child, old repr was child.
-                            let r = self.find(a);
-                            // find(a) now returns root if a was in child's class
-                            r
-                        })
-                        .collect(),
+            if let Some((label, args)) = congruent_parts(&self.term_kinds[tid.index()]) {
+                // Re-signature with the NEW representatives: find() now returns
+                // root for anything that was in child's class.
+                let new_sig = Signature {
+                    func: label,
+                    arg_reprs: args.iter().map(|&a| self.find(a)).collect(),
                 };
-                // The old signature was computed with child as repr for child's class.
-                // But now find() returns root. So old_sig already has the NEW reprs.
-                // We need to check if this signature was already in the table under
-                // a different term.
-                if let Some(&existing) = self.sig_table.get(&old_sig) {
+                // If this signature is already in the table under a different
+                // class, the two terms are congruent.
+                if let Some(&existing) = self.sig_table.get(&new_sig) {
                     if self.find(existing) != self.find(tid) {
                         pending_merges.push((tid, existing));
                     }
                 } else {
-                    self.sig_table.insert(old_sig, tid);
+                    self.sig_table.insert(new_sig, tid);
                 }
             }
         }
@@ -364,11 +376,10 @@ impl EufSolver {
                 atoms.push(*atom_id);
             }
             MergeReason::Congruence(fa, fb) => {
-                if let (
-                    TermKind::Apply { args: args_a, .. },
-                    TermKind::Apply { args: args_b, .. },
-                ) = (&self.term_kinds[fa.index()], &self.term_kinds[fb.index()])
-                {
+                if let (Some((_, args_a)), Some((_, args_b))) = (
+                    congruent_parts(&self.term_kinds[fa.index()]),
+                    congruent_parts(&self.term_kinds[fb.index()]),
+                ) {
                     for (&ai, &bi) in args_a.iter().zip(args_b.iter()) {
                         if ai != bi {
                             self.bfs_explain(ai, bi, atoms);
@@ -548,7 +559,7 @@ impl EufSolver {
 
         // Rebuild from term_kinds
         for &tid in &self.func_apps {
-            if let TermKind::Apply { func, ref args } = self.term_kinds[tid.index()] {
+            if let Some((label, args)) = congruent_parts(&self.term_kinds[tid.index()]) {
                 // Add to use-lists using CURRENT representatives
                 for &arg in args {
                     let repr = self.find(arg);
@@ -556,7 +567,7 @@ impl EufSolver {
                 }
                 // Add to signature table using CURRENT representatives
                 let sig = Signature {
-                    func,
+                    func: label,
                     arg_reprs: args.iter().map(|&a| self.find(a)).collect(),
                 };
                 self.sig_table.entry(sig).or_insert(tid);
@@ -705,5 +716,217 @@ mod tests {
         // Should contain both atoms
         assert!(explanation.contains(&AtomId(0)));
         assert!(explanation.contains(&AtomId(1)));
+    }
+
+    // ── Finding A: BvOp terms must participate in congruence closure ──
+
+    #[test]
+    fn bvop_congruence_propagation() {
+        use crate::term::BvOpKind;
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let a = arena.intern(
+            TermKind::Variable {
+                name: "a".into(),
+                sort: s,
+            },
+            s,
+        );
+        let b = arena.intern(
+            TermKind::Variable {
+                name: "b".into(),
+                sort: s,
+            },
+            s,
+        );
+        let c = arena.intern(
+            TermKind::Variable {
+                name: "c".into(),
+                sort: s,
+            },
+            s,
+        );
+        let add_ac = arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Add,
+                width: 5,
+                args: vec![a, c],
+            },
+            s,
+        );
+        let add_bc = arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Add,
+                width: 5,
+                args: vec![b, c],
+            },
+            s,
+        );
+
+        let mut euf = EufSolver::new(&arena, AtomMap::new());
+        assert_ne!(euf.find(add_ac), euf.find(add_bc));
+        // a = b must force bvadd(a,c) = bvadd(b,c) by congruence
+        euf.merge(a, b, MergeReason::Asserted(AtomId(0)));
+        assert_eq!(euf.find(add_ac), euf.find(add_bc));
+    }
+
+    // ── Findings D/E evidence: the merge-reason graph is a forest ──
+    //
+    // merge() adds an edge to merge_reasons only when the two classes are
+    // disjoint (both at the `ra == rb` early-return and at the congruence
+    // pending-merge check), so edge-graph components track union-find classes
+    // exactly: the graph is a forest and the path between any two terms is
+    // unique and never changes as later merges attach other components.
+    // These tests pin that down with the shapes the review flagged as cyclic.
+
+    /// Reviewer-suggested stress shape for the claimed infinite recursion:
+    /// a = f(a), b = f(b), then a long chain a = c1 = c2 = c3 = c4 = b.
+    /// No congruence edge is ever created (f(a) and f(b) are already
+    /// connected through the chain when they become congruent), and the
+    /// explanation of (a, b) is exactly the chain atoms.
+    #[test]
+    fn explanation_self_application_long_chain_terminates() {
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let f = FuncId(0);
+        let mk_var = |arena: &mut TermArena, name: &str| {
+            arena.intern(
+                TermKind::Variable {
+                    name: name.into(),
+                    sort: s,
+                },
+                s,
+            )
+        };
+        let a = mk_var(&mut arena, "a");
+        let b = mk_var(&mut arena, "b");
+        let c1 = mk_var(&mut arena, "c1");
+        let c2 = mk_var(&mut arena, "c2");
+        let c3 = mk_var(&mut arena, "c3");
+        let c4 = mk_var(&mut arena, "c4");
+        let fa = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![a],
+            },
+            s,
+        );
+        let fb = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![b],
+            },
+            s,
+        );
+
+        let mut atom_map = AtomMap::new();
+        let pairs = [
+            (a, fa),
+            (b, fb),
+            (a, c1),
+            (c1, c2),
+            (c2, c3),
+            (c3, c4),
+            (c4, b),
+        ];
+        for &(t1, t2) in &pairs {
+            atom_map.get_or_create(t1, t2); // AtomId 0..=6 in order
+        }
+        let mut euf = EufSolver::new(&arena, atom_map);
+        for (i, &(t1, t2)) in pairs.iter().enumerate() {
+            euf.merge(t1, t2, MergeReason::Asserted(AtomId(i as u32)));
+        }
+
+        // Must terminate (the review predicted stack overflow here) and
+        // return exactly the chain atoms — the unique forest path a→b.
+        let mut explanation = euf.explain_equality(a, b);
+        explanation.sort_by_key(|a| a.0);
+        assert_eq!(
+            explanation,
+            vec![AtomId(2), AtomId(3), AtomId(4), AtomId(5), AtomId(6)]
+        );
+
+        // f(a) ~ f(b) explanation routes through both self-application atoms
+        // plus the chain.
+        let mut explanation = euf.explain_equality(fa, fb);
+        explanation.sort_by_key(|a| a.0);
+        assert_eq!(explanation, (0..=6).map(AtomId).collect::<Vec<_>>());
+    }
+
+    /// A congruence edge that lies ON the queried path: a = b creates the
+    /// congruence edge (f(a), f(b)); then c = f(a) and d = f(b). The path
+    /// c → d crosses the congruence edge, whose recursive explanation must
+    /// surface the (a, b) atom — and must not revisit the congruence edge
+    /// (the a→b path predates it, forest-uniquely).
+    #[test]
+    fn explanation_through_congruence_edge_is_sound() {
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let f = FuncId(0);
+        let mk_var = |arena: &mut TermArena, name: &str| {
+            arena.intern(
+                TermKind::Variable {
+                    name: name.into(),
+                    sort: s,
+                },
+                s,
+            )
+        };
+        let a = mk_var(&mut arena, "a");
+        let b = mk_var(&mut arena, "b");
+        let c = mk_var(&mut arena, "c");
+        let d = mk_var(&mut arena, "d");
+        let fa = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![a],
+            },
+            s,
+        );
+        let fb = arena.intern(
+            TermKind::Apply {
+                func: f,
+                args: vec![b],
+            },
+            s,
+        );
+
+        let mut atom_map = AtomMap::new();
+        atom_map.get_or_create(a, b); // AtomId(0)
+        atom_map.get_or_create(c, fa); // AtomId(1)
+        atom_map.get_or_create(d, fb); // AtomId(2)
+        let mut euf = EufSolver::new(&arena, atom_map);
+
+        euf.merge(a, b, MergeReason::Asserted(AtomId(0))); // creates congruence edge (fa, fb)
+        assert_eq!(euf.find(fa), euf.find(fb));
+        euf.merge(c, fa, MergeReason::Asserted(AtomId(1)));
+        euf.merge(d, fb, MergeReason::Asserted(AtomId(2)));
+
+        let mut explanation = euf.explain_equality(c, d);
+        explanation.sort_by_key(|a| a.0);
+        explanation.dedup();
+        assert_eq!(explanation, vec![AtomId(0), AtomId(1), AtomId(2)]);
+    }
+
+    /// Finding E evidence: later merges do not change an earlier connection's
+    /// explanation — the forest path between already-connected terms is
+    /// invariant, so an explanation computed at conflict-analysis time equals
+    /// the one implied at propagation time.
+    #[test]
+    fn explanation_unchanged_by_later_merges() {
+        let (arena, a, b, c, _fa, _fb) = test_arena();
+        let mut atom_map = AtomMap::new();
+        atom_map.get_or_create(a, b); // AtomId(0)
+        atom_map.get_or_create(b, c); // AtomId(1)
+        let mut euf = EufSolver::new(&arena, atom_map);
+
+        euf.merge(a, b, MergeReason::Asserted(AtomId(0)));
+        let at_prop_time = euf.explain_equality(a, b);
+        assert_eq!(at_prop_time, vec![AtomId(0)]);
+
+        // Later assertions (including one that triggers congruence merges
+        // of f(a), f(b)) must not reroute the (a, b) explanation.
+        euf.merge(b, c, MergeReason::Asserted(AtomId(1)));
+        assert_eq!(euf.explain_equality(a, b), at_prop_time);
     }
 }

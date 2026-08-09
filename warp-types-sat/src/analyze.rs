@@ -187,18 +187,28 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     // Start with the conflict clause's literals.
     // Accumulate abstract_levels during resolution (eliminates a second pass
     // over the learned clause for the minimization filter).
-    // SAFETY: conflict_clause < db.len() (caller invariant).
+    // Bounds-checked clause access: `conflict_clause` is caller-supplied
+    // (all entry points are safe + pub), so validate it against the db here —
+    // one check per analysis, off the hot resolution path. Reason clauses in
+    // the resolution loop stay unchecked (their validity is a trail invariant
+    // maintained by the solver).
     // Reserve slot 0 for the asserting literal (filled after UIP is found).
     // This avoids the O(n) insert(0, lit) while preserving literal ordering
     // (push+swap would reorder, changing which literal wins second-watch ties).
+    let conflict_lits = db.clause(conflict_clause).literals;
     let mut learned = Vec::with_capacity(16);
     learned.push(Lit::pos(0)); // placeholder — overwritten below
     let mut num_at_current_level = 0;
     let mut abstract_levels = 0u64;
 
-    for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
+    for &lit in conflict_lits {
         let var = lit.var();
-        // SAFETY: var from clause DB, validated var < num_vars at startup.
+        // Caller-supplied clause: validate the variable before the unchecked
+        // seen/trail indexing below (release assert — once per conflict lit).
+        assert!(
+            (var as usize) < max_var,
+            "conflict clause literal references variable {var} out of range (num_vars {max_var})"
+        );
         if !unsafe { *work.seen.get_unchecked(var as usize) } {
             unsafe { work.mark_seen(var) };
             // SAFETY: var comes from clause DB, validated var < num_vars at startup.
@@ -223,6 +233,17 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
         }
     }
 
+    // 1-UIP precondition: the conflict clause must be falsified with at least
+    // one literal at the current decision level. A conflict whose literals all
+    // sit at earlier levels must be handled by the caller (backtrack to the
+    // clause's own maximum level first — see the theory-conflict path in
+    // solver.rs); analyzing it here would walk the UIP scan off the start of
+    // the trail.
+    assert!(
+        num_at_current_level > 0,
+        "conflict clause {conflict_clause} has no literal at the current decision level {current_level}"
+    );
+
     // Resolve backward through trail until 1 literal at current level remains.
     // After the loop, continue scanning to find the 1-UIP (avoids a full
     // trail rescan from the end).
@@ -231,9 +252,11 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
 
     // SAFETY for unchecked indexing throughout resolution:
     // - trail_idx starts at entries.len(), decrements, always finds a matching
-    //   entry before reaching 0 (the current-level decision guarantees this).
-    // - All var values come from clause literals, validated var < num_vars
-    //   at solver startup. work.seen.len() == num_vars.
+    //   entry before reaching 0 (the precondition assert above plus the
+    //   current-level decision guarantee this).
+    // - All var values come from clause literals: conflict-clause vars are
+    //   validated above; reason-clause vars are validated var < num_vars at
+    //   solver startup. work.seen.len() >= num_vars.
     while num_at_current_level > 1 {
         trail_idx -= 1;
         let entry = unsafe { entries.get_unchecked(trail_idx) };
@@ -307,6 +330,13 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     // resolution steps — it's at or below trail_idx, so scanning from there
     // avoids redundantly walking entries already processed.
     loop {
+        // Structural bound: the precondition assert guarantees a seen
+        // current-level literal exists on the trail, but never walk off the
+        // start — a wrapped index would be an out-of-bounds get_unchecked (UB).
+        assert!(
+            trail_idx > 0,
+            "1-UIP scan ran off the start of the trail (no seen literal at level {current_level})"
+        );
         trail_idx -= 1;
         let entry = unsafe { entries.get_unchecked(trail_idx) };
         if entry.level == current_level
@@ -317,30 +347,6 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
             learned[0] = entry.lit.complement();
             abstract_levels |= 1u64 << (current_level % 64);
             break;
-        }
-    }
-
-    // Select optimal second watch: the literal with the highest decision level
-    // among non-asserting literals. This ensures that after backtracking to
-    // backtrack_level, c[1] is still assigned (false) — making the clause
-    // immediately unit from BCP's perspective. MiniSat's standard technique.
-    if learned.len() >= 3 {
-        let mut best_pos = 1;
-        // SAFETY: all vars in learned come from the clause DB, validated var < num_vars.
-        let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
-            .map(|e| e.level)
-            .unwrap_or(0);
-        for i in 2..learned.len() {
-            let level = unsafe { trail.entry_for_var_unchecked(learned[i].var()) }
-                .map(|e| e.level)
-                .unwrap_or(0);
-            if level > best_level {
-                best_level = level;
-                best_pos = i;
-            }
-        }
-        if best_pos != 1 {
-            learned.swap(1, best_pos);
         }
     }
 
@@ -373,7 +379,36 @@ pub fn analyze_conflict_with_theory<T: TheorySolver>(
     work.min_to_clear.clear();
 
     let minimize_ns = t_minimize.elapsed().as_nanos() as u64;
-    let learned = minimized;
+    let mut learned = minimized;
+
+    // Select optimal second watch: the literal with the highest decision level
+    // among non-asserting literals. This ensures that after backtracking to
+    // backtrack_level, c[1] is still assigned (false) — making the clause
+    // immediately unit from BCP's perspective. MiniSat's standard technique.
+    //
+    // This MUST run after minimization (MiniSat order): minimization can
+    // delete any non-asserting literal, so a pre-minimization selection can
+    // leave an arbitrary literal in c[1], breaking the watched invariant.
+    if learned.len() >= 3 {
+        let mut best_pos = 1;
+        // SAFETY: all vars in learned come from the clause DB, validated var < num_vars.
+        let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
+            .map(|e| e.level)
+            .unwrap_or(0);
+        for i in 2..learned.len() {
+            let level = unsafe { trail.entry_for_var_unchecked(learned[i].var()) }
+                .map(|e| e.level)
+                .unwrap_or(0);
+            if level > best_level {
+                best_level = level;
+                best_pos = i;
+            }
+        }
+        if best_pos != 1 {
+            learned.swap(1, best_pos);
+        }
+    }
+    let learned = learned;
 
     // Backtrack level: highest level among learned clause literals,
     // excluding the asserting literal (which is at current_level).
@@ -438,8 +473,15 @@ pub fn analyze_conflict_instrumented(
     let mut num_at_current_level = 0;
     let mut resolution_chain = Vec::new();
 
-    for &lit in unsafe { db.clause_unchecked(conflict_clause) }.literals {
+    // Bounds-checked access + var validation for the caller-supplied conflict
+    // clause (same preconditions as analyze_conflict_with_theory).
+    let conflict_lits = db.clause(conflict_clause).literals;
+    for &lit in conflict_lits {
         let var = lit.var();
+        assert!(
+            (var as usize) < max_var,
+            "conflict clause literal references variable {var} out of range (num_vars {max_var})"
+        );
         if !work.seen[var as usize] {
             unsafe { work.mark_seen(var) };
             let entry = unsafe { trail.entry_for_var_unchecked(var) };
@@ -453,6 +495,12 @@ pub fn analyze_conflict_instrumented(
             }
         }
     }
+
+    // Same 1-UIP precondition as analyze_conflict_with_theory.
+    assert!(
+        num_at_current_level > 0,
+        "conflict clause {conflict_clause} has no literal at the current decision level {current_level}"
+    );
 
     let entries = trail.entries();
     let mut trail_idx = entries.len();
@@ -524,27 +572,6 @@ pub fn analyze_conflict_instrumented(
         .expect("1-UIP resolution must find an asserting literal at the current decision level");
     learned.insert(0, lit);
 
-    if learned.len() >= 3 {
-        let mut best_pos = 1;
-        let mut best_level = trail
-            .entry_for_var(learned[1].var())
-            .map(|e| e.level)
-            .unwrap_or(0);
-        for i in 2..learned.len() {
-            let level = trail
-                .entry_for_var(learned[i].var())
-                .map(|e| e.level)
-                .unwrap_or(0);
-            if level > best_level {
-                best_level = level;
-                best_pos = i;
-            }
-        }
-        if best_pos != 1 {
-            learned.swap(1, best_pos);
-        }
-    }
-
     let resolve_ns = t_resolve.elapsed().as_nanos() as u64;
 
     // Clause minimization (same as non-instrumented path)
@@ -578,7 +605,31 @@ pub fn analyze_conflict_instrumented(
     work.min_to_clear.clear();
 
     let minimize_ns = t_minimize.elapsed().as_nanos() as u64;
-    let learned = minimized;
+    let mut learned = minimized;
+
+    // Second-watch selection after minimization (MiniSat order — see
+    // analyze_conflict_with_theory for rationale).
+    if learned.len() >= 3 {
+        let mut best_pos = 1;
+        let mut best_level = trail
+            .entry_for_var(learned[1].var())
+            .map(|e| e.level)
+            .unwrap_or(0);
+        for i in 2..learned.len() {
+            let level = trail
+                .entry_for_var(learned[i].var())
+                .map(|e| e.level)
+                .unwrap_or(0);
+            if level > best_level {
+                best_level = level;
+                best_pos = i;
+            }
+        }
+        if best_pos != 1 {
+            learned.swap(1, best_pos);
+        }
+    }
+    let learned = learned;
 
     let backtrack_level = learned
         .iter()
@@ -1410,6 +1461,97 @@ mod tests {
         assert_eq!(result.learned[0], Lit::neg(1)); // asserting
         assert!(result.learned.contains(&Lit::neg(0)));
         assert_eq!(result.learned.len(), 2); // no minimization possible
+    }
+
+    #[test]
+    #[should_panic(expected = "no literal at the current decision level")]
+    fn conflict_without_current_level_literal_panics_cleanly() {
+        // A conflict clause whose literals were all assigned at EARLIER
+        // levels violates the 1-UIP precondition. Before the precondition
+        // assert, the UIP scan decremented trail_idx past 0 — an integer
+        // underflow feeding get_unchecked (UB in release). It must now be
+        // rejected with a clear panic; the solver handles this case by
+        // backtracking first (see the theory-conflict path in solver.rs).
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(0)]); // ¬x0, falsified at level 1
+
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0)); // level 1: x0=T
+        trail.new_decision(Lit::pos(1)); // level 2: x1=T (current level)
+
+        // Conflict clause has zero literals at level 2.
+        let _ = analyze_conflict(&trail, &db, c0);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn conflict_clause_var_out_of_range_panics_cleanly() {
+        // A conflict clause referencing a variable beyond the trail's
+        // num_vars previously fed unchecked trail/seen indexing (UB).
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::neg(5)]); // x5 >= num_vars
+
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0)); // level 1
+
+        let mut work = AnalyzeWork::new(6);
+        let _ = analyze_conflict_with(&mut work, &trail, &db, c0);
+    }
+
+    #[test]
+    fn second_watch_selected_after_minimization() {
+        // Regression: second-watch selection used to run BEFORE clause
+        // minimization. If minimization removed the selected max-level
+        // literal, learned[1] ended up holding an arbitrary literal,
+        // violating the invariant that c[1] has the highest decision level
+        // among non-asserting literals (missed propagations after later
+        // backtracks).
+        //
+        // Construction (trail built directly, like the other tests):
+        //   Level 1: decide x1=T
+        //   Level 2: decide x2=T; propagate x3=T from c1: (¬x2 ∨ x3)
+        //   Level 3: decide x6=T; propagate x4=T from c0: (¬x3 ∨ x4)
+        //   Level 4: decide x5=T
+        //   Conflict c_conf: (¬x3 ∨ ¬x1 ∨ ¬x4 ∨ ¬x5)
+        //
+        // 1-UIP: only x5 at level 4 → asserting ¬x5,
+        //   raw learned = {¬x5, ¬x3, ¬x1, ¬x4}.
+        // ¬x4 (level 3, the unique max-level non-asserting literal) is
+        // redundant: its reason (¬x3 ∨ x4) resolves to in-clause x3.
+        // Buggy order: swap ¬x4 into position 1, then delete it →
+        //   minimized = {¬x5, ¬x1, ¬x3} with learned[1]=¬x1 (level 1)
+        //   BELOW learned[2]=¬x3 (level 2) — invariant broken.
+        // Fixed order: minimize first → {¬x5, ¬x3, ¬x1}, then select →
+        //   learned[1]=¬x3 (level 2, the max).
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(3), Lit::pos(4)]); // ¬x3 ∨ x4
+        let c1 = db.add_clause(vec![Lit::neg(2), Lit::pos(3)]); // ¬x2 ∨ x3
+        let c_conf = db.add_clause(vec![Lit::neg(3), Lit::neg(1), Lit::neg(4), Lit::neg(5)]);
+
+        let mut trail = Trail::new(7);
+        trail.new_decision(Lit::pos(1)); // level 1: x1=T
+        trail.new_decision(Lit::pos(2)); // level 2: x2=T
+        trail.record_propagation(Lit::pos(3), c1); // x3=T @ level 2
+        trail.new_decision(Lit::pos(6)); // level 3: x6=T
+        trail.record_propagation(Lit::pos(4), c0); // x4=T @ level 3
+        trail.new_decision(Lit::pos(5)); // level 4: x5=T
+
+        let result = analyze_conflict(&trail, &db, c_conf);
+
+        assert_eq!(result.learned[0], Lit::neg(5), "asserting literal");
+        assert!(
+            !result.learned.contains(&Lit::neg(4)),
+            "¬x4 should be minimized away"
+        );
+        assert_eq!(result.learned.len(), 3, "learned = {{¬x5, ¬x3, ¬x1}}");
+        // The invariant under test: learned[1] holds the highest-level
+        // non-asserting literal of the MINIMIZED clause.
+        assert_eq!(
+            result.learned[1],
+            Lit::neg(3),
+            "second watch must be the max-level literal after minimization"
+        );
+        assert_eq!(result.backtrack_level, 2);
     }
 
     #[test]

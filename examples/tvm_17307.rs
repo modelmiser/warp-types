@@ -63,7 +63,7 @@ pub trait ActiveSet: Copy + 'static {
     const NAME: &'static str;
 }
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — narrowing consumes it.
 pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }

@@ -19,18 +19,20 @@ impl Lit {
     /// Create a positive literal for variable `v`.
     ///
     /// # Panics
-    /// Debug-panics if `v > u32::MAX / 2` (would overflow the `var * 2` encoding).
+    /// Panics if `v > u32::MAX / 2` — the `var * 2` encoding would overflow
+    /// and silently alias another variable in release builds.
     pub fn pos(v: Variable) -> Self {
-        debug_assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
+        assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
         Lit(v * 2)
     }
 
     /// Create a negative literal for variable `v`.
     ///
     /// # Panics
-    /// Debug-panics if `v > u32::MAX / 2` (would overflow the `var * 2 + 1` encoding).
+    /// Panics if `v > u32::MAX / 2` — the `var * 2 + 1` encoding would overflow
+    /// and silently alias another variable in release builds.
     pub fn neg(v: Variable) -> Self {
-        debug_assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
+        assert!(v <= u32::MAX / 2, "variable {v} overflows Lit encoding");
         Lit(v * 2 + 1)
     }
 
@@ -89,6 +91,20 @@ mod tests {
         assert!(n.is_negated());
         assert_eq!(p.complement(), n);
         assert_eq!(n.complement(), p);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflows Lit encoding")]
+    fn pos_overflow_panics() {
+        // v * 2 wraps for v > u32::MAX / 2, silently aliasing another
+        // variable in release builds before the release assert.
+        let _ = Lit::pos(u32::MAX / 2 + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflows Lit encoding")]
+    fn neg_overflow_panics() {
+        let _ = Lit::neg(u32::MAX / 2 + 1);
     }
 
     #[test]

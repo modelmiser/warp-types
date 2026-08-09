@@ -106,7 +106,17 @@ where
 /// step. This is correct because all `Warp<S>` are zero-sized phantom types —
 /// there is no runtime state to split. The `ComplementOf` bound ensures only
 /// valid complement pairs can be specified (sealed trait, no external impls).
-pub fn with_diverged<S1, S2, A, F1, F2>(
+///
+/// # Why this is not public
+///
+/// `pub(crate)`: exposing this would let external code forge warp handles.
+/// The closures receive `Warp<S1>`/`Warp<S2>` and the return type `A` is
+/// unconstrained, so a caller could leak the sub-warps (e.g. via
+/// `A = Option<Warp<S1>>`) while also receiving the fresh `Warp<All>`.
+/// Worse, the `All`/`Empty` complement pair lets `S1 = All, S2 = Empty`
+/// mint a `Warp<Empty>` and a duplicate `Warp<All>` from one warp.
+#[allow(dead_code)] // exercised only by tests; kept as the combinator-pattern reference
+pub(crate) fn with_diverged<S1, S2, A, F1, F2>(
     _warp: Warp<All>,
     then_fn: F1,
     else_fn: F2,

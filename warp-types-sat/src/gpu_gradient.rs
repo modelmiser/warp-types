@@ -476,10 +476,14 @@ pub fn gradient_search_simwarp(
             }
 
             // Periodically discretize and verify (Axis 2: simulated ballot).
+            // The ballot only covers the 3-literal clauses packed into the
+            // SoA (from_clause_db SKIPS other widths), so a SAT claim must
+            // additionally be verified against the FULL clause db — otherwise
+            // a violated skipped clause yields a false SAT.
             if l < 1.0 || iter % 10 == 0 {
                 let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
                 let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-                if all_sat {
+                if all_sat && crate::gradient::verify(db, &assign) {
                     result.assignment = Some(assign);
                     result.starts.push(StartOutcome {
                         best_loss: l,
@@ -519,7 +523,8 @@ pub fn gradient_search_simwarp(
         if !found {
             let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
             let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-            if all_sat {
+            // Full-db check: the SoA ballot ignores non-3-literal clauses.
+            if all_sat && crate::gradient::verify(db, &assign) {
                 result.assignment = Some(assign);
                 result.starts.push(StartOutcome {
                     best_loss,
@@ -675,10 +680,12 @@ pub fn gradient_search_gpu(
             }
 
             // Periodically discretize and verify (CPU — Axis 2 ballot not yet on GPU).
+            // Ballot covers only the 3-literal SoA subset — gate any SAT
+            // claim on the FULL clause db (skipped clauses included).
             if l < 1.0 || iter % 10 == 0 {
                 let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
                 let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-                if all_sat {
+                if all_sat && crate::gradient::verify(db, &assign) {
                     result.assignment = Some(assign);
                     result.starts.push(StartOutcome {
                         best_loss: l,
@@ -717,7 +724,8 @@ pub fn gradient_search_gpu(
         if !found {
             let assign: Vec<bool> = x.iter().map(|&v| v >= 0.5).collect();
             let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-            if all_sat {
+            // Full-db check: the SoA ballot ignores non-3-literal clauses.
+            if all_sat && crate::gradient::verify(db, &assign) {
                 result.assignment = Some(assign);
                 result.starts.push(StartOutcome {
                     best_loss,
@@ -817,11 +825,13 @@ pub fn gradient_search_gpu_resident(
             }
 
             // Periodically download x for verification (CPU — Axis 2 ballot not yet on GPU).
+            // Ballot covers only the 3-literal SoA subset — gate any SAT
+            // claim on the FULL clause db (skipped clauses included).
             if l < 1.0 || iter % 10 == 0 {
                 let x_host = ctx.download_x(&state).expect("x download failed");
                 let assign: Vec<bool> = x_host.iter().map(|&v| v >= 0.5).collect();
                 let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-                if all_sat {
+                if all_sat && crate::gradient::verify(db, &assign) {
                     result.assignment = Some(assign);
                     result.starts.push(StartOutcome {
                         best_loss: l,
@@ -849,7 +859,8 @@ pub fn gradient_search_gpu_resident(
             let x_host = ctx.download_x(&state).expect("x download failed");
             let assign: Vec<bool> = x_host.iter().map(|&v| v >= 0.5).collect();
             let (all_sat, _, _) = verify_simwarp(&soa, &assign);
-            if all_sat {
+            // Full-db check: the SoA ballot ignores non-3-literal clauses.
+            if all_sat && crate::gradient::verify(db, &assign) {
                 result.assignment = Some(assign);
                 result.starts.push(StartOutcome {
                     best_loss,
@@ -1467,6 +1478,62 @@ mod tests {
     }
 
     // ─── Hybrid solver: GPU kernel pipeline tests ────────────────────
+
+    #[test]
+    fn mixed_width_instance_no_false_sat() {
+        // Regression: from_clause_db silently skips clauses of width != 3,
+        // and verify_simwarp only checks the packed 3-literal subset. The
+        // 3-SAT subset here forces x0=true, while a skipped 2-literal clause
+        // requires x0=false — the instance is UNSAT. The search must not
+        // claim SAT from the subset alone.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(0), Lit::pos(0)]); // forces x0=T
+        db.add_clause(vec![Lit::neg(0), Lit::neg(0)]); // 2-lit, skipped by SoA
+
+        let r = gradient_search_simwarp(&db, 1, &gradient::GradientConfig::enhanced());
+        assert!(
+            r.assignment.is_none(),
+            "false SAT: {:?} ignores the skipped 2-literal clause",
+            r.assignment
+        );
+    }
+
+    #[test]
+    fn hybrid_simwarp_mixed_width_unsat() {
+        // Same shape through the hybrid pipeline: hybrid_solve_simwarp must
+        // return Unsat (CDCL sees the full db), not a false Sat from the
+        // 3-SAT-only gradient phase.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1), Lit::pos(2)]);
+        db.add_clause(vec![Lit::pos(0), Lit::pos(0), Lit::pos(0)]); // forces x0=T
+        db.add_clause(vec![Lit::neg(0), Lit::neg(0)]); // 2-lit: forces x0=F
+
+        match hybrid_solve_simwarp(db, 3, &gradient::GradientConfig::enhanced()) {
+            crate::solver::SolveResult::Unsat => {}
+            crate::solver::SolveResult::Sat(a) => {
+                panic!("false SAT on mixed-width UNSAT instance: {a:?}")
+            }
+            crate::solver::SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn hybrid_simwarp_mixed_width_sat() {
+        // Satisfiable mixed-width instance: (x0∨x0∨x0) ∧ (¬x0 ∨ x1) has the
+        // unique model x0=T, x1=T. The 2-literal clause is invisible to the
+        // SoA path, so any gradient-phase SAT claim must have passed the
+        // full-db gate, and otherwise CDCL must finish correctly.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(0), Lit::pos(0)]);
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]); // 2-lit, skipped by SoA
+
+        match hybrid_solve_simwarp(db, 2, &gradient::GradientConfig::enhanced()) {
+            crate::solver::SolveResult::Sat(a) => {
+                assert!(a[0] && a[1], "only model is x0=T, x1=T — got {a:?}");
+            }
+            other => panic!("expected SAT, got {other:?}"),
+        }
+    }
 
     #[test]
     fn hybrid_simwarp_solves_sat() {

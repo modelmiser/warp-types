@@ -165,7 +165,10 @@ pub fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32) -> i32 {
-    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
+    assert!(
+        width.is_power_of_two() && (4..=32).contains(&width),
+        "shfl_sync_bfly width {width} must be a power of two in 4..=32"
+    );
     let c = ((32 - width) << 8) | 0x1F;
     let result: i32;
     unsafe {
@@ -186,7 +189,10 @@ pub fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32)
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
-    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
+    assert!(
+        width.is_power_of_two() && (4..=32).contains(&width),
+        "shfl_sync_down width {width} must be a power of two in 4..=32"
+    );
     let c = ((32 - width) << 8) | (width - 1);
     let result: i32;
     unsafe {
@@ -207,7 +213,10 @@ pub fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> 
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
-    debug_assert!(width <= 32, "width {width} exceeds 32-lane shuffle limit");
+    assert!(
+        width.is_power_of_two() && (4..=32).contains(&width),
+        "shfl_sync_up width {width} must be a power of two in 4..=32"
+    );
     let c = (32 - width) << 8;
     let result: i32;
     unsafe {

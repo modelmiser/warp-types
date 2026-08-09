@@ -41,9 +41,24 @@ extract_func() {
     " "${ptx}" | sed -E "s/${name}[_a-zA-Z0-9]*/FUNC/g"
 }
 
+# Assert an extracted function body is non-empty and actually contains the
+# normalized function name. An empty or mismatched extraction would make the
+# diff below pass vacuously — fail loudly instead.
+assert_extracted() {
+    local file="$1"
+    local desc="$2"
+    if [ ! -s "${file}" ] || ! grep -q "FUNC" "${file}"; then
+        echo "ERROR: extraction of ${desc} failed (empty or missing function body: ${file})" >&2
+        echo "PTX symbol names or layout may have changed — inspect ${PTX}." >&2
+        exit 1
+    fi
+}
+
 echo "=== Butterfly: typed vs untyped ==="
 extract_func "butterfly_typed" "${PTX}" > /tmp/rust_ptx_typed.txt
 extract_func "butterfly_untyped" "${PTX}" > /tmp/rust_ptx_untyped.txt
+assert_extracted /tmp/rust_ptx_typed.txt "butterfly_typed"
+assert_extracted /tmp/rust_ptx_untyped.txt "butterfly_untyped"
 
 if diff -q /tmp/rust_ptx_typed.txt /tmp/rust_ptx_untyped.txt > /dev/null 2>&1; then
     echo "IDENTICAL PTX (butterfly)"
@@ -56,6 +71,8 @@ echo ""
 echo "=== Diverge/merge: typed vs untyped ==="
 extract_func "diverge_merge_typed" "${PTX}" > /tmp/rust_ptx_dm_typed.txt
 extract_func "diverge_merge_untyped" "${PTX}" > /tmp/rust_ptx_dm_untyped.txt
+assert_extracted /tmp/rust_ptx_dm_typed.txt "diverge_merge_typed"
+assert_extracted /tmp/rust_ptx_dm_untyped.txt "diverge_merge_untyped"
 
 if diff -q /tmp/rust_ptx_dm_typed.txt /tmp/rust_ptx_dm_untyped.txt > /dev/null 2>&1; then
     echo "IDENTICAL PTX (diverge/merge)"

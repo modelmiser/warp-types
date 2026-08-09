@@ -36,9 +36,30 @@ extract_func() {
     | sed -E "s/${mangled}[^ ]*/FUNC/g; s/${mangled}/FUNC/g"
 }
 
+# Assert an extracted function body is non-empty and actually contains the
+# normalized function name. An empty or mismatched extraction would make the
+# diff below pass vacuously — fail loudly instead.
+assert_extracted() {
+    local file="$1"
+    local desc="$2"
+    if [ ! -s "${file}" ] || ! grep -q "FUNC" "${file}"; then
+        echo "ERROR: extraction of ${desc} failed (empty or missing function body: ${file})" >&2
+        echo "PTX name mangling or layout may have changed — inspect ${PTX}." >&2
+        exit 1
+    fi
+}
+
 # Find the mangled names
 MANGLED_U=$(grep -oP '_Z\d+butterfly_untypedi' "${PTX}" | head -1)
 MANGLED_T=$(grep -oP '_Z\d+butterfly_typedi' "${PTX}" | head -1)
+
+if [ -z "${MANGLED_U}" ] || [ -z "${MANGLED_T}" ]; then
+    echo "ERROR: could not find mangled names in ${PTX}" >&2
+    echo "  untyped: '${MANGLED_U}'" >&2
+    echo "  typed:   '${MANGLED_T}'" >&2
+    echo "Name mangling may have changed — inspect ${PTX}." >&2
+    exit 1
+fi
 
 echo "=== Mangled names ==="
 echo "  untyped: ${MANGLED_U}"
@@ -48,6 +69,8 @@ echo ""
 echo "=== Extracting .func bodies ==="
 extract_func "${MANGLED_U}" "${PTX}" > /tmp/ptx_untyped.txt
 extract_func "${MANGLED_T}" "${PTX}" > /tmp/ptx_typed.txt
+assert_extracted /tmp/ptx_untyped.txt "butterfly_untyped"
+assert_extracted /tmp/ptx_typed.txt "butterfly_typed"
 
 LINES_U=$(wc -l < /tmp/ptx_untyped.txt)
 LINES_T=$(wc -l < /tmp/ptx_typed.txt)

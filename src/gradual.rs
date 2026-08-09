@@ -187,7 +187,11 @@ impl DynWarp {
 
     /// Promote this `DynWarp` to a compile-time typed `Warp<S>`.
     ///
-    /// Succeeds only if the runtime mask matches `S::MASK` exactly.
+    /// Succeeds only if the runtime mask matches `S::MASK` exactly AND the
+    /// warp's width matches this build's warp width (`full_mask == All::MASK`).
+    /// The width check matters: a 64-lane warp with only its lower 32 lanes
+    /// active has the same `active_mask` as a 32-lane `All`, but ascribing it
+    /// would forge a `Warp<All>` whose shuffle reads inactive lanes.
     /// This is the gradual typing boundary: the point where runtime
     /// evidence becomes compile-time proof.
     ///
@@ -203,15 +207,23 @@ impl DynWarp {
     /// assert!(dyn_warp.ascribe::<Even>().is_err());
     /// ```
     pub fn ascribe<S: ActiveSet>(self) -> Result<Warp<S>, AscribeError> {
-        if self.active_mask == S::MASK {
-            Ok(Warp::new())
-        } else {
-            Err(AscribeError {
+        if self.active_mask != S::MASK {
+            return Err(AscribeError {
                 expected_name: S::NAME,
                 expected_mask: S::MASK,
                 actual_mask: self.active_mask,
-            })
+            });
         }
+        // Width check: static Warp<S> types describe this build's warp width.
+        // Mirrors the full_mask comparisons in shuffle_xor_scalar/merge.
+        if self.full_mask != crate::active_set::All::MASK {
+            return Err(AscribeError {
+                expected_name: S::NAME,
+                expected_mask: crate::active_set::All::MASK,
+                actual_mask: self.full_mask,
+            });
+        }
+        Ok(Warp::new())
     }
 
     /// Current active lane mask.
@@ -466,6 +478,18 @@ mod tests {
         assert_eq!(err.expected_name, "Even");
         assert_eq!(err.expected_mask, Even::MASK);
         assert_eq!(err.actual_mask, All::MASK);
+    }
+
+    #[test]
+    #[cfg(not(feature = "warp64"))]
+    fn ascribe_rejects_width_mismatch() {
+        // 64-lane warp with only the lower 32 lanes active: active_mask
+        // coincides with All::MASK (32-lane build), but the warp is 64 lanes
+        // wide — shuffle_xor_scalar correctly rejects it, so ascribe must too.
+        let w = DynWarp::from_mask_64(0xFFFF_FFFF);
+        assert!(w.shuffle_xor_scalar(42, 1).is_err());
+        let err = w.ascribe::<All>().unwrap_err();
+        assert_eq!(err.actual_mask, 0xFFFFFFFFFFFFFFFF); // reports the full_mask
     }
 
     #[test]

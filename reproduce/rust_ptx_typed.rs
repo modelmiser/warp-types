@@ -42,7 +42,7 @@ trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 impl ComplementOf<Odd> for Even {}
 impl ComplementOf<Even> for Odd {}
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — diverge/merge consume it.
 struct Warp<S: ActiveSet> { _marker: PhantomData<S> }
 
 impl<S: ActiveSet> Warp<S> {
@@ -52,9 +52,9 @@ impl<S: ActiveSet> Warp<S> {
 impl Warp<All> {
     fn kernel_entry() -> Self { Warp::new() }
 
-    // Shuffle: only available on Warp<All>
+    // Shuffle: only available on Warp<All> (&self: shuffling doesn't change state)
     #[inline(always)]
-    fn shuffle_xor(self, data: i32, _mask: u32) -> i32 { data }
+    fn shuffle_xor(&self, data: i32, _mask: u32) -> i32 { data }
 
     fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) {
         (Warp::new(), Warp::new())

@@ -120,9 +120,10 @@ impl Trail {
     /// Record a new decision: increments the decision level and assigns.
     ///
     /// # Panics
-    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
+    /// Panics if the variable is already assigned (would create a zombie trail entry,
+    /// silently corrupting the trail in release builds if unchecked).
     pub fn new_decision(&mut self, lit: Lit) {
-        debug_assert!(
+        assert!(
             self.assignments[lit.var() as usize].is_none(),
             "new_decision on already-assigned variable {}",
             lit.var()
@@ -149,9 +150,9 @@ impl Trail {
     /// this key to lazily produce the explanation clause.
     ///
     /// # Panics
-    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
+    /// Panics if the variable is already assigned (would create a zombie trail entry).
     pub fn record_theory_propagation(&mut self, lit: Lit, key: u32) {
-        debug_assert!(
+        assert!(
             self.assignments[lit.var() as usize].is_none(),
             "record_theory_propagation on already-assigned variable {}",
             lit.var()
@@ -171,9 +172,9 @@ impl Trail {
     /// Record a propagated literal at the current decision level.
     ///
     /// # Panics
-    /// Debug-panics if the variable is already assigned (would create a zombie trail entry).
+    /// Panics if the variable is already assigned (would create a zombie trail entry).
     pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
-        debug_assert!(
+        assert!(
             self.assignments[lit.var() as usize].is_none(),
             "record_propagation on already-assigned variable {}",
             lit.var()
@@ -343,26 +344,36 @@ impl<'a> BcpTrail<'a> {
     /// Record a propagated literal. Writes to `assigns` (stable pointer)
     /// and pushes to `entries` (disjoint field).
     ///
-    /// Uses unchecked indexing for `assigns` and `var_position` since all
-    /// variables come from clauses validated at solver startup (var < num_vars).
+    /// Uses unchecked indexing for `assigns` and `var_position` after asserting
+    /// the bound. This is a release-mode assert (not debug-only): `bcp_split` is
+    /// public, so safe code can reach this method with an arbitrary literal —
+    /// a debug-only guard would make an out-of-bounds write UB in release.
+    /// Hot-path cost: two compares against values already in registers.
+    ///
+    /// # Panics
+    /// Panics if `lit.var() >= num_vars` or the variable is already assigned.
     #[inline]
     pub fn record_propagation(&mut self, lit: Lit, reason_clause: CRef) {
         let var = lit.var() as usize;
-        debug_assert!(
+        assert!(
             var < self.assigns.len(),
             "BcpTrail::record_propagation variable {} out of bounds (len {})",
             var,
             self.assigns.len()
         );
-        debug_assert!(
+        assert!(
             self.assigns[var].is_none(),
             "BcpTrail::record_propagation on already-assigned variable {}",
             lit.var()
         );
-        // SAFETY: var < assigns.len() — all literals come from clauses in the DB,
-        // and solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup.
-        // assigns.len() == num_vars, lit_values.len() == 2 * num_vars.
-        // lit.code() = 2*var + polarity <= 2*(num_vars-1) + 1 < 2*num_vars.
+        // Trail-internal invariant (Trail::new / ensure_capacity): documented here
+        // because the unchecked lit_values writes below rely on it.
+        debug_assert_eq!(self.lit_values.len(), 2 * self.assigns.len());
+        // SAFETY: var < assigns.len() — asserted above.
+        // lit_values.len() == 2 * assigns.len() (Trail-internal invariant),
+        // var_position.len() == assigns.len() (Trail-internal invariant).
+        // lit.code() = 2*var + polarity <= 2*(assigns.len()-1) + 1 < lit_values.len(),
+        // and code ^ 1 flips only the polarity bit, so it satisfies the same bound.
         let code = lit.code() as usize;
         unsafe {
             *self.assigns.get_unchecked_mut(var) = Some(!lit.is_negated());
@@ -471,6 +482,50 @@ mod tests {
         assert_eq!(trail.value(2), None);
         assert_eq!(trail.value(1), None);
         assert_eq!(trail.value(0), Some(true)); // level 0 survives
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn bcp_record_propagation_oob_var_panics() {
+        // bcp_split is public: safe code can reach record_propagation with an
+        // arbitrary literal. Before the release assert this was an OOB write
+        // (UB) in release builds.
+        let mut trail = Trail::new(2);
+        let mut bt = trail.bcp_split();
+        bt.record_propagation(Lit::pos(1000), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "already-assigned")]
+    fn bcp_record_propagation_double_assign_panics() {
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        let mut bt = trail.bcp_split();
+        bt.record_propagation(Lit::neg(0), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "already-assigned")]
+    fn new_decision_double_assign_panics() {
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        trail.new_decision(Lit::neg(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "already-assigned")]
+    fn record_propagation_double_assign_panics() {
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        trail.record_propagation(Lit::neg(0), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "already-assigned")]
+    fn record_theory_propagation_double_assign_panics() {
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(0));
+        trail.record_theory_propagation(Lit::neg(0), 7);
     }
 
     #[test]

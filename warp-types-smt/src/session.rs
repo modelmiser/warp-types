@@ -2,7 +2,9 @@
 //!
 //! `SmtSession<'s, P>` follows the pattern from `warp_types_sat::SolverSession`
 //! and `warp_types_bmc::BmcSession`:
-//! - `'s` is an invariant lifetime brand (prevents cross-session mixing)
+//! - `'s` is an invariant lifetime brand (prevents cross-session mixing of
+//!   *session values*; `TermId`/`SortId`/`FuncId` are unbranded — see
+//!   [`with_session`] for what is and is not caught)
 //! - `P: Phase` tracks the current SMT workflow phase
 //! - Transitions consume the session and produce a new phase
 //! - Terminal states (`Sat`, `Unsat`, `Unknown`) have no outgoing transitions
@@ -71,6 +73,24 @@ impl<'s, P: Phase> SmtSession<'s, P> {
     pub fn phase_name(&self) -> &'static str {
         P::NAME
     }
+
+    /// Bounds-check `TermId` arguments against this session's arena.
+    ///
+    /// Ids carry no lifetime brand (see [`with_session`]), so an id from a
+    /// different session is caught only when it is out of range — but then
+    /// it must fail loudly here rather than panic deep in the solver or
+    /// silently alias another term.
+    fn check_term_ids(&self, entry_point: &str, args: &[TermId]) {
+        for &t in args {
+            assert!(
+                t.index() < self.env.arena.len(),
+                "{entry_point}: TermId({}) out of range for this session's arena \
+                 (len {}) — TermIds must come from this session",
+                t.index(),
+                self.env.arena.len()
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -125,7 +145,19 @@ impl<'s> SmtSession<'s, Init> {
 
     /// Create a function application term in the arena.
     /// Returns the session and the term ID.
+    ///
+    /// # Panics
+    /// Panics if `func` or any of `args` is out of range for this session
+    /// (ids are unbranded — see [`with_session`]).
     pub fn apply(mut self, func: FuncId, args: &[TermId]) -> (SmtSession<'s, Init>, TermId) {
+        assert!(
+            (func.0 as usize) < self.env.func_decls.len(),
+            "apply: FuncId({}) out of range for this session's function table \
+             (len {}) — FuncIds must come from this session",
+            func.0,
+            self.env.func_decls.len()
+        );
+        self.check_term_ids("apply", args);
         let ret_sort = self.env.func_decls[func.0 as usize].ret_sort;
         let id = self.env.arena.intern(
             TermKind::Apply {
@@ -139,12 +171,25 @@ impl<'s> SmtSession<'s, Init> {
 
     /// Create a bitvector constant in the term arena.
     /// Returns the session and the term ID.
+    ///
+    /// `value` is masked to `width` bits, so `bv_const(5, 34)` and
+    /// `bv_const(5, 2)` intern the same term. (Unmasked constants would be
+    /// keyed by their raw value in the BV module while evaluated operations
+    /// are masked, silently missing equalities and conflicts.)
+    ///
+    /// # Panics
+    /// Panics if `width` is not in `1..=64` (values are `u64`-backed).
     pub fn bv_const(
         mut self,
         width: u32,
         value: u64,
         sort: SortId,
     ) -> (SmtSession<'s, Init>, TermId) {
+        assert!(
+            (1..=64).contains(&width),
+            "bv_const: width ({width}) must be in 1..=64"
+        );
+        let value = value & crate::bv::width_mask(width);
         let id = self
             .env
             .arena
@@ -154,6 +199,9 @@ impl<'s> SmtSession<'s, Init> {
 
     /// Create a bitvector operation term in the arena.
     /// Returns the session and the term ID.
+    ///
+    /// # Panics
+    /// Panics if any of `args` is out of range for this session.
     pub fn bv_op(
         mut self,
         op: BvOpKind,
@@ -161,6 +209,7 @@ impl<'s> SmtSession<'s, Init> {
         args: &[TermId],
         sort: SortId,
     ) -> (SmtSession<'s, Init>, TermId) {
+        self.check_term_ids("bv_op", args);
         let id = self.env.arena.intern(
             TermKind::BvOp {
                 op,
@@ -180,7 +229,9 @@ impl<'s> SmtSession<'s, Init> {
     /// the caller-supplied width).
     ///
     /// # Panics
-    /// Panics if `lo > hi`.
+    /// Panics if `lo > hi`, if `hi >= 64` (values are `u64`-backed, so the
+    /// evaluator shifts by `lo`, which must stay below 64), or if `t` is out
+    /// of range for this session.
     pub fn bv_extract(
         mut self,
         hi: u32,
@@ -189,6 +240,11 @@ impl<'s> SmtSession<'s, Init> {
         sort: SortId,
     ) -> (SmtSession<'s, Init>, TermId) {
         assert!(lo <= hi, "bv_extract: lo ({lo}) must be <= hi ({hi})");
+        assert!(
+            hi < 64,
+            "bv_extract: hi ({hi}) must be < 64 (values are u64-backed)"
+        );
+        self.check_term_ids("bv_extract", &[t]);
         let result_width = hi - lo + 1;
         let id = self.env.arena.intern(
             TermKind::BvOp {
@@ -207,7 +263,7 @@ impl<'s> SmtSession<'s, Init> {
     ///
     /// # Panics
     /// Panics if `hi_w + lo_w > 64` (this implementation uses `u64`
-    /// for values).
+    /// for values), or if either argument is out of range for this session.
     pub fn bv_concat(
         mut self,
         hi_arg: TermId,
@@ -216,6 +272,7 @@ impl<'s> SmtSession<'s, Init> {
         lo_w: u32,
         sort: SortId,
     ) -> (SmtSession<'s, Init>, TermId) {
+        self.check_term_ids("bv_concat", &[hi_arg, lo_arg]);
         let result_width = hi_w + lo_w;
         assert!(
             result_width <= 64,
@@ -290,9 +347,23 @@ impl<'s> SmtSession<'s, Asserted> {
 
 /// Create an SMT session with a fresh lifetime brand.
 ///
-/// The closure receives an `SmtSession<'s, Init>` with a unique lifetime
-/// brand. The brand prevents terms and sessions from different `with_session`
-/// calls from being mixed — a compile-time safety net.
+/// The closure receives an `SmtSession<'s, Init>` with a unique invariant
+/// lifetime brand. The brand prevents *session values* from different
+/// `with_session` calls from being mixed (e.g. smuggling one session into
+/// another call's closure) — that is a compile error.
+///
+/// # What the brand does NOT prevent
+///
+/// [`TermId`], [`SortId`], and [`FuncId`] are plain indices and carry no
+/// brand: the type system does not stop you from using an id created in one
+/// session inside another. Session entry points that index into the arena or
+/// the function table ([`apply`](SmtSession::apply),
+/// [`bv_op`](SmtSession::bv_op), [`bv_extract`](SmtSession::bv_extract),
+/// [`bv_concat`](SmtSession::bv_concat)) bounds-check their id arguments and
+/// panic with a descriptive message when an id is out of range. An id that
+/// happens to be in range for both sessions cannot be detected — it silently
+/// denotes whatever term the *current* session holds at that index. Do not
+/// move ids across sessions.
 ///
 /// # Example
 ///

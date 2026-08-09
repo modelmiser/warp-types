@@ -142,6 +142,12 @@ pub struct CombiningSolver<M: TheoryModule> {
     module: M,
     /// Trail entries already dispatched to the module.
     module_trail_pos: usize,
+    /// Decision level the module has been told about via `push_level`.
+    /// Kept in lockstep with the trail entries dispatched to the module so
+    /// that `backtrack` unwinds exactly the state recorded above the target
+    /// level — otherwise retracted values persist and the module emits
+    /// conflict/explanation clauses that are not currently falsified.
+    module_level: u32,
     /// Lazy-explanation records for module propagations.
     module_props: Vec<ModulePropRecord>,
 }
@@ -153,6 +159,7 @@ impl<M: TheoryModule> CombiningSolver<M> {
             euf,
             module,
             module_trail_pos: 0,
+            module_level: 0,
             module_props: Vec::new(),
         }
     }
@@ -163,6 +170,13 @@ impl<M: TheoryModule> CombiningSolver<M> {
         let trail_len = ctx.trail.len();
 
         for entry in entries.iter().take(trail_len).skip(self.module_trail_pos) {
+            // Push module levels so its undo marks mirror the trail's
+            // decision levels (entries arrive in nondecreasing level order).
+            while self.module_level < entry.level {
+                self.module.push_level();
+                self.module_level += 1;
+            }
+
             let var = entry.lit.var();
             let is_true = !entry.lit.is_negated();
 
@@ -292,6 +306,9 @@ impl<M: TheoryModule> TheorySolver for CombiningSolver<M> {
     fn backtrack(&mut self, new_level: u32) {
         self.euf.backtrack(new_level);
         self.module.backtrack(new_level);
+        if self.module_level > new_level {
+            self.module_level = new_level;
+        }
         self.module_trail_pos = 0;
     }
 
@@ -556,6 +573,94 @@ mod tests {
             assertions,
         };
         (env, kinds)
+    }
+
+    // ── Finding C: module state must unwind on backtrack ──
+
+    /// Drives the TheorySolver interface directly through a decision +
+    /// backtrack cycle. A value learned from a level-1 equality must be
+    /// retracted when the solver backtracks to level 0; otherwise the module
+    /// keeps proposing equalities whose premises are no longer on the trail
+    /// (conflict/explanation clauses that are not currently falsified —
+    /// a TheorySolver contract violation).
+    #[test]
+    fn module_state_unwinds_on_backtrack() {
+        use crate::formula::AtomMap;
+        use warp_types_sat::bcp::ClauseDb;
+        use warp_types_sat::trail::Trail;
+
+        let mut arena = TermArena::new();
+        let s = SortId(0);
+        let x = arena.intern(
+            TermKind::Variable {
+                name: "x".into(),
+                sort: s,
+            },
+            s,
+        );
+        let three = arena.intern(TermKind::BvConst { width: 5, value: 3 }, s);
+        let four = arena.intern(TermKind::BvConst { width: 5, value: 4 }, s);
+        let one = arena.intern(TermKind::BvConst { width: 5, value: 1 }, s);
+        let add = arena.intern(
+            TermKind::BvOp {
+                op: BvOpKind::Add,
+                width: 5,
+                args: vec![x, one],
+            },
+            s,
+        );
+        let kinds: Vec<TermKind> = (0..arena.len())
+            .map(|i| arena.get(TermId(i as u32)).kind.clone())
+            .collect();
+
+        let mut atom_map = AtomMap::new();
+        let (_, v_x_three) = atom_map.get_or_create(x, three); // var 0
+        let (_, _v_add_four) = atom_map.get_or_create(add, four); // var 1
+
+        let euf = EufSolver::new(&arena, atom_map);
+        let bv = BvSolver::new(&kinds);
+        let mut comb = CombiningSolver::new(euf, bv);
+
+        let db = ClauseDb::new();
+        let mut trail = Trail::new(2);
+
+        // Decision level 1: x = 3. BV evaluates bvadd(x,1) = 4 and proposes
+        // the equality (add, four).
+        trail.new_decision(Lit::pos(v_x_three));
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 2,
+        };
+        let r = comb.check(&ctx);
+        assert!(
+            matches!(r, TheoryResult::Propagate(_)),
+            "level-1 check should propagate (add = four)"
+        );
+
+        // Backtrack to level 0: the decision is retracted.
+        trail.backtrack_to(0);
+        comb.backtrack(0);
+
+        // With module state correctly unwound nothing is known any more:
+        // the check must be Consistent with no propagations. (Pre-fix, the
+        // stale x=3 / add=4 values survive and the module proposes x = three
+        // out of thin air.)
+        let ctx = TheoryContext {
+            trail: &trail,
+            db: &db,
+            num_vars: 2,
+        };
+        match comb.check(&ctx) {
+            TheoryResult::Consistent => {}
+            TheoryResult::Propagate(props) => panic!(
+                "spurious propagation after backtrack: {:?} — stale module state",
+                props.iter().map(|p| p.lit).collect::<Vec<_>>()
+            ),
+            TheoryResult::Conflict(c) => {
+                panic!("spurious conflict after backtrack: {c:?}")
+            }
+        }
     }
 
     #[test]

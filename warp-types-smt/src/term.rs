@@ -81,8 +81,10 @@ pub enum BvOpKind {
     /// Modular subtraction `a - b mod 2^width` (binary).
     Sub,
     /// Extract bits `[hi:lo]` inclusive from a single BV term.
-    /// Result width is `hi - lo + 1`. Requires `lo ≤ hi` and
-    /// `hi < source_width`; the session helper checks these.
+    /// Result width is `hi - lo + 1`. The session helper checks `lo ≤ hi`
+    /// and `hi < 64` (values are `u64`-backed); ensuring `hi < source_width`
+    /// is the caller's responsibility (the arena does not track BV widths
+    /// for `Variable` terms).
     Extract { hi: u32, lo: u32 },
     /// Concatenate two BV terms; the first arg becomes the high bits.
     /// Result width is the sum of arg widths (binary).

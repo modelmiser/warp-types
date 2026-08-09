@@ -193,11 +193,17 @@ int main() {
     printf("Lane 1: %d (odd lane, sentinel -1)\n", h_out[1]);
     printf("Lane 2: %d (xor partner lane 3 has val -1 sentinel)\n", h_out[2]);
     printf("Lane 62: %d (xor partner lane 63 has val -1 sentinel)\n", h_out[62]);
-    // If diverged shuffle reads from the inactive odd lane, it gets the
-    // sentinel value -1, NOT the even lane's original value
-    bool diverge_bug = (h_out[0] == -1 || h_out[0] != 0);
+    // Lane 0's XOR-1 partner is lane 1, which is inactive in this branch.
+    // Three distinguishable outcomes for h_out[0]:
+    //   1  (== 0 ^ 1) -> shuffle read the partner's pre-divergence value (swap semantics)
+    //   -1            -> shuffle read the inactive partner's else-branch sentinel
+    //   anything else -> unexpected (e.g. 0 = own value returned, or garbage)
+    bool got_partner_initial = (h_out[0] == (0 ^ 1));
+    bool got_sentinel = (h_out[0] == -1);
     printf("VERDICT: Even lanes got %s values — %s\n\n",
-        (h_out[0] == h_out[0] ^ 1) ? "swapped (correct)" : "unexpected (bug or sentinel)",
+        got_partner_initial ? "swapped (partner's pre-divergence value)"
+            : (got_sentinel ? "sentinel (-1) from the inactive partner"
+                            : "unexpected (bug or garbage)"),
         "warp-types: shuffle on Warp<Even> is a type error");
 
     // ========== Test 4: Diverged half (32 of 64 active) ==========

@@ -84,13 +84,16 @@ pub fn encode_bmc(sys: &TransitionSystem, depth: u32) -> (ClauseDb, u32) {
     let prop_offset = depth * n;
     let tseitin_base = num_state_sat_vars;
 
-    // Activation clause: at least one property clause must be violated
+    // Activation clause: at least one property clause must be violated.
+    //
+    // Empty property: P is the empty conjunction = `true`, so ¬P = `false`.
+    // Emit the empty clause to make the instance UNSAT at every depth —
+    // omitting it would leave the instance as I ∧ T^k (typically SAT) and
+    // report a false counterexample for a vacuously true property.
     let activation: Vec<Lit> = (0..num_tseitin)
         .map(|i| Lit::pos(tseitin_base + i))
         .collect();
-    if !activation.is_empty() {
-        db.add_clause(activation);
-    }
+    db.add_clause(activation);
 
     // Per-clause implications: tᵢ → all literals in cᵢ are false
     for (i, clause) in sys.property.iter().enumerate() {

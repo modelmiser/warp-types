@@ -61,7 +61,7 @@ pub trait ActiveSet: Copy + 'static {
 
 pub trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — diverge/merge consume it.
 pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }

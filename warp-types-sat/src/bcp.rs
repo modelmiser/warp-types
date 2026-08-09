@@ -335,14 +335,34 @@ impl ClauseDb {
     ///
     /// Reads the inline header for length, then returns a slice into the
     /// adjacent literal words. Single contiguous cache-line access.
+    ///
+    /// # Panics
+    /// Panics if `cref` is out of bounds, or if the word at `cref` is not a
+    /// valid header (i.e. its length field would run past the arena end — the
+    /// symptom of a CRef pointing into the middle of a clause). Without this
+    /// check a garbage CRef could yield a slice up to 2^20 words past the
+    /// arena in release builds (UB from safe code). Hot loops use
+    /// [`clause_unchecked`](Self::clause_unchecked) and skip both checks.
     pub fn clause(&self, cref: CRef) -> ClauseRef<'_> {
         let pos = cref as usize;
         let len = header_len(self.arena[pos]) as usize;
-        // SAFETY: Lit is #[repr(transparent)] over u32.
+        assert!(
+            pos + 1 + len <= self.arena.len(),
+            "clause({cref}): header length {len} overruns arena (len {}) — CRef does not point at a clause header",
+            self.arena.len()
+        );
+        // SAFETY: Lit is #[repr(transparent)] over u32; [pos+1, pos+1+len)
+        // is in bounds by the assert above.
         let literals = unsafe {
             std::slice::from_raw_parts(self.arena.as_ptr().add(pos + 1) as *const Lit, len)
         };
         ClauseRef { literals }
+    }
+
+    /// Total arena length in words. Used by `Watches` to bound-check that its
+    /// stored CRefs belong to this database.
+    pub(crate) fn arena_len(&self) -> usize {
+        self.arena.len()
     }
 
     /// Unchecked clause access for the BCP hot loop.
@@ -622,6 +642,26 @@ mod tests {
         let result = bcp_after_decision(&db, &mut trail);
 
         assert_eq!(result, BcpResult::Ok);
+    }
+
+    #[test]
+    #[should_panic(expected = "overruns arena")]
+    fn clause_rejects_cref_into_clause_body() {
+        // CRef 1 points at the literal word of clause 0, not a header.
+        // Lit::pos(100_000).code() = 200_000 read as a header gives
+        // len = 200_000, which would slice far past the arena end (UB in
+        // release before the validation assert).
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(100_000)]);
+        let _ = db.clause(1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn clause_rejects_out_of_bounds_cref() {
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
+        let _ = db.clause(1000);
     }
 
     #[test]

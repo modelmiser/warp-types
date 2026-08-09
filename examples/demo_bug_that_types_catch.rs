@@ -70,8 +70,8 @@ pub trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 impl ComplementOf<Odd> for Even {}
 impl ComplementOf<Even> for Odd {}
 
-/// A warp with typed active set
-#[derive(Copy, Clone)]
+/// A warp with typed active set.
+/// No Copy/Clone: the handle is linear — diverge/merge consume it.
 pub struct Warp<S: ActiveSet> {
     _marker: PhantomData<S>,
 }

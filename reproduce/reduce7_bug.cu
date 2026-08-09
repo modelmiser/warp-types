@@ -81,8 +81,12 @@ __global__ void reduce7_fixed(int *g_idata, int *g_odata, unsigned int n) {
 
     // Fixed warp reduction: use FULL mask, ALL lanes participate
     if (tid < 32) {
-        // Load into register, inactive lanes get 0
-        int myVal = (tid < blockDim.x) ? sdata[tid] : 0;
+        // The tree loop above stops at s > 32, so up to 64 partials remain
+        // live in sdata[0..63]. Load this lane's partial and, when the block
+        // had at least 64 threads, fold in the partner from the upper half
+        // (same shape as the reference reduce7 in cuda-samples).
+        int myVal = sdata[tid];
+        if (blockDim.x >= 64) myVal += sdata[tid + 32];
 
         // Full warp participates — all lanes have valid data
         myVal += __shfl_down_sync(0xFFFFFFFF, myVal, 16);

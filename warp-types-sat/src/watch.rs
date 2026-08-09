@@ -82,6 +82,10 @@ pub struct Watches {
     queue_head: usize,
     /// Whether the one-time unit/empty clause scan has been performed.
     initial_scan_done: bool,
+    /// Upper bound on stored CRefs: the source DB's arena length at build time
+    /// (kept current by `add_clause`). `run_bcp_watched` asserts this against
+    /// the DB it is given, catching watches built from a different/older DB.
+    cref_bound: usize,
 }
 
 impl Watches {
@@ -115,6 +119,7 @@ impl Watches {
             lists,
             queue_head: 0,
             initial_scan_done: false,
+            cref_bound: db.arena_len(),
         }
     }
 
@@ -123,6 +128,7 @@ impl Watches {
     /// Reads c[0] and c[1] as the watched pair (caller must ensure the
     /// asserting literal is at c[0] and the second watch is at c[1]).
     pub fn add_clause(&mut self, db: &ClauseDb, cref: CRef) {
+        self.cref_bound = self.cref_bound.max(db.arena_len());
         let lits = &db.clause(cref).literals;
         if lits.len() < 2 {
             return;
@@ -166,12 +172,49 @@ unsafe fn eval_lit_indexed(lit: Lit, lit_values: &[Option<bool>]) -> Option<bool
 /// swapped into the watched position via `swap_literal_unchecked`.
 ///
 /// Takes `&mut ClauseDb` for in-place literal swapping.
+///
+/// # Cross-argument invariants (asserted once per call)
+///
+/// The unchecked indexing in the hot loop relies on these invariants, which
+/// this function validates at entry (a mismatched call panics instead of
+/// causing undefined behavior):
+///
+/// - `db.max_variable() < trail.num_vars()` (unless the DB is empty) — every
+///   literal in the DB indexes within the trail's assignment arrays.
+/// - `watches` covers at least `2 * trail.num_vars()` literals — every literal
+///   on the trail indexes within the watch lists.
+/// - `watches` was built from (a prefix of) THIS `db` — asserted via the
+///   arena-length bound recorded at `Watches::new`/`add_clause` time. A
+///   same-length but *different* DB cannot be detected by this check; the
+///   caller must not mix watches across databases.
 pub fn run_bcp_watched(
     db: &mut ClauseDb,
     watches: &mut Watches,
     trail: &mut Trail,
     _phase: &crate::session::SolverSession<'_, Propagate>,
 ) -> BcpResult {
+    // ── Boundary checks: once per call, NOT in the propagation loop ──
+    let num_vars = trail.num_vars();
+    assert!(
+        db.is_empty() || (db.max_variable() as usize) < num_vars,
+        "run_bcp_watched: clause DB references variable {} but trail covers only {} variables",
+        db.max_variable(),
+        num_vars
+    );
+    assert!(
+        watches.lists.len() >= 2 * num_vars,
+        "run_bcp_watched: watch lists cover {} literal slots but trail requires {}",
+        watches.lists.len(),
+        2 * num_vars
+    );
+    assert!(
+        watches.cref_bound <= db.arena_len(),
+        "run_bcp_watched: watches reference clause offsets up to {} but DB arena has {} words \
+         (watches built from a different DB?)",
+        watches.cref_bound,
+        db.arena_len()
+    );
+
     // Split trail: bt.assigns is a &mut [Option<bool>] (stable pointer).
     // bt.record_propagation writes entries/var_position (disjoint fields),
     // so the compiler keeps the assigns pointer in a register across propagations.
@@ -483,6 +526,50 @@ mod tests {
         // Neither x1 nor x2 should be propagated (clause has 2 unresolved lits).
         assert_eq!(trail.value(1), None);
         assert_eq!(trail.value(2), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "references variable")]
+    fn mismatched_trail_panics() {
+        // DB references variable 6, but the trail only covers 2 variables.
+        // Before the boundary asserts this was UB in release (unchecked
+        // indexing into lit_values); now it panics at the call boundary.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(5), Lit::pos(6)]);
+        let mut w = Watches::new(&db, 7);
+        let mut trail = Trail::new(2);
+        trail.new_decision(Lit::pos(1));
+        bcp_after_decision(&mut db, &mut w, &mut trail);
+    }
+
+    #[test]
+    #[should_panic(expected = "watch lists")]
+    fn undersized_watches_panics() {
+        // Watches built for 2 variables, trail covers 5 — a decision on a
+        // high variable would index the watch lists out of bounds.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
+        let mut w = Watches::new(&db, 2);
+        let mut trail = Trail::new(5);
+        trail.new_decision(Lit::pos(0));
+        bcp_after_decision(&mut db, &mut w, &mut trail);
+    }
+
+    #[test]
+    #[should_panic(expected = "different DB")]
+    fn watches_from_bigger_db_panics() {
+        // Watches built from a larger DB hold CRefs past the end of the
+        // smaller DB's arena — previously UB via is_deleted_unchecked.
+        let mut big = ClauseDb::new();
+        big.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
+        big.add_clause(vec![Lit::neg(1), Lit::pos(2)]);
+        let mut w = Watches::new(&big, 3);
+
+        let mut small = ClauseDb::new();
+        small.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0));
+        bcp_after_decision(&mut small, &mut w, &mut trail);
     }
 
     #[test]

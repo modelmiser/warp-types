@@ -151,12 +151,16 @@ const DEFAULT_PIVOT_BUMP_SCALE: f64 = 0.5;
 /// phase saving + pivot-augmented bumps, Luby restart policy (base interval
 /// 100 conflicts).
 pub fn solve_watched(db: ClauseDb, num_vars: u32) -> SolveResult {
-    solve_cdcl_core(db, num_vars, Vsids::new(num_vars))
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    solve_cdcl_core(db, num_vars, vsids)
 }
 
 /// Solve with stats: returns both the result and performance counters.
 pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveStats) {
-    solve_cdcl_core_stats(db, num_vars, Vsids::new(num_vars))
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    solve_cdcl_core_stats(db, num_vars, vsids)
 }
 
 /// Internal CDCL solver with stats.
@@ -188,6 +192,7 @@ pub fn solve_watched_budget(
 ) -> (SolveResult, SolveStats) {
     let mut db = db;
     let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
     let mut stats = SolveStats::default();
     let result = solve_cdcl_core_inner(
         &mut db,
@@ -207,6 +212,11 @@ pub fn solve_watched_budget(
 ///
 /// Accepts a pre-configured `Vsids` so callers (e.g., hybrid solver) can
 /// warm-start activity scores and phase hints from external sources.
+///
+/// VSIDS initialization is the caller's responsibility: call
+/// `Vsids::initialize_from_clauses` exactly once before invoking this (the
+/// core does not initialize, so warm-started activities are never
+/// double-counted against clause-occurrence scores).
 pub(crate) fn solve_cdcl_core(mut db: ClauseDb, num_vars: u32, mut vsids: Vsids) -> SolveResult {
     solve_cdcl_core_inner(
         &mut db,
@@ -343,10 +353,12 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     let mut restart_pending = false;
     let mut analyze_work = AnalyzeWork::new(num_vars as usize);
 
-    // Warm-start VSIDS from clause occurrence counts. Variables appearing in
-    // more clauses are more constrained — decide them first. Adds to any
-    // pre-seeded activities (e.g., from gradient solver), then rebuilds heap.
-    vsids.initialize_from_clauses(db);
+    // NOTE: VSIDS initialization (initialize_from_clauses) is the CALLER's
+    // responsibility. The core deliberately does not initialize: entry points
+    // that warm-start activities (gradient hybrids, trail-gradient wrappers)
+    // already call initialize_from_clauses themselves, and a second call here
+    // would double-count occurrence scores and distort the documented
+    // gradient-confidence calibration.
 
     // LBD clause deletion with periodic compaction
     db.freeze_original();
@@ -382,8 +394,31 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                     match theory_result {
                         TheoryResult::Consistent => break,
                         TheoryResult::Propagate(props) => {
+                            // Guard against propagations of already-assigned
+                            // literals (standard DPLL(T) treatment): skip
+                            // already-true literals; an already-false literal
+                            // at level 0 means the theory's explanation clause
+                            // is falsified at level 0 → UNSAT.
+                            let trail_before = trail.len();
+                            let mut false_propagation = false;
                             for p in props {
-                                trail.record_theory_propagation(p.lit, p.key);
+                                match trail.value(p.lit.var()) {
+                                    None => trail.record_theory_propagation(p.lit, p.key),
+                                    Some(v) if v == !p.lit.is_negated() => {} // already true
+                                    Some(_) => {
+                                        false_propagation = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if false_propagation {
+                                let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                                return SolveResult::Unsat;
+                            }
+                            if trail.len() == trail_before {
+                                // All propagations already true — nothing new;
+                                // treat as consistent so the loop terminates.
+                                break;
                             }
                             initial_bcp =
                                 watch::run_bcp_watched(db, &mut watches, &mut trail, &propagate);
@@ -473,7 +508,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                         // ── Theory consistency check (DPLL(T) hook) ──
                         // After BCP fixpoint, ask the theory if the current
                         // partial assignment is consistent.
-                        let theory_result = {
+                        let mut theory_result = {
                             let ctx = TheoryContext {
                                 trail: &trail,
                                 db: &*db,
@@ -481,18 +516,34 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                             };
                             theory.check(&ctx)
                         };
-                        match theory_result {
-                            TheoryResult::Consistent => {
-                                idle = propagate.finish_no_conflict();
-                                break;
-                            }
-                            TheoryResult::Propagate(props) => {
-                                // Record theory-implied literals on the trail,
-                                // then re-run BCP to propagate consequences.
-                                let trail_before_theory = trail.len();
-                                for p in props {
-                                    trail.record_theory_propagation(p.lit, p.key);
+                        // Guard theory propagations against already-assigned
+                        // literals (standard DPLL(T) treatment):
+                        //   already true  → nothing to do, skip;
+                        //   already false → the theory's implication is
+                        //                   violated: convert to a theory
+                        //                   conflict via its explanation clause;
+                        //   unassigned    → record on the trail.
+                        if let TheoryResult::Propagate(props) = theory_result {
+                            let trail_before_theory = trail.len();
+                            let mut false_propagation = None;
+                            for p in props {
+                                match trail.value(p.lit.var()) {
+                                    None => trail.record_theory_propagation(p.lit, p.key),
+                                    Some(v) if v == !p.lit.is_negated() => {} // already true
+                                    Some(_) => {
+                                        false_propagation = Some(theory.explain(p.lit, p.key));
+                                        break;
+                                    }
                                 }
+                            }
+                            if let Some(lits) = false_propagation {
+                                theory_result = TheoryResult::Conflict(lits);
+                            } else if trail.len() == trail_before_theory {
+                                // All propagations already true — nothing new
+                                // on the trail. Treat as consistent so the
+                                // loop makes progress instead of re-asking.
+                                theory_result = TheoryResult::Consistent;
+                            } else {
                                 let t = Instant::now();
                                 bcp_result = watch::run_bcp_watched(
                                     db,
@@ -505,10 +556,71 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 // Continue inner loop: re-check theory after BCP
                                 continue;
                             }
-                            TheoryResult::Conflict(lits) => {
+                        }
+                        match theory_result {
+                            TheoryResult::Consistent => {
+                                idle = propagate.finish_no_conflict();
+                                break;
+                            }
+                            TheoryResult::Propagate(_) => {
+                                unreachable!("theory propagations handled above")
+                            }
+                            TheoryResult::Conflict(mut lits) => {
                                 // Theory found the current assignment inconsistent.
+                                //
+                                // The conflict clause may have NO literal at the
+                                // current decision level: a sound-but-late theory
+                                // can report a conflict among literals that were
+                                // all assigned earlier. Standard treatment:
+                                // backtrack to the highest decision level among
+                                // the clause's literals — the conflict is
+                                // evaluable there — then enter regular conflict
+                                // resolution. An empty clause, or one falsified
+                                // entirely at level 0, is UNSAT outright.
+                                if lits.is_empty() {
+                                    let _ =
+                                        propagate.finish_conflict().analyze().backtrack().unsat();
+                                    return SolveResult::Unsat;
+                                }
+                                debug_assert!(
+                                    lits.iter().all(|l| trail.value(l.var())
+                                        == Some(l.is_negated())),
+                                    "theory conflict clause must be falsified by the current assignment"
+                                );
+                                // Order by descending decision level so watched
+                                // positions 0 and 1 hold the literals that are
+                                // unassigned LAST when backtracking — otherwise
+                                // both watches could stay false across a
+                                // backtrack, breaking the watched-literal
+                                // invariant (missed propagations).
+                                lits.sort_by_key(|l| {
+                                    std::cmp::Reverse(
+                                        trail.entry_for_var(l.var()).map(|e| e.level).unwrap_or(0),
+                                    )
+                                });
+                                let max_level = trail
+                                    .entry_for_var(lits[0].var())
+                                    .map(|e| e.level)
+                                    .unwrap_or(0);
+                                if max_level == 0 {
+                                    let _ =
+                                        propagate.finish_conflict().analyze().backtrack().unsat();
+                                    return SolveResult::Unsat;
+                                }
+                                if max_level < trail.current_level() {
+                                    // Late conflict: back up to the clause's own
+                                    // level first (with the same phase-saving /
+                                    // heap bookkeeping as any other backtrack).
+                                    for entry in trail.entries_above(max_level) {
+                                        vsids.save_phase(entry.lit.var(), !entry.lit.is_negated());
+                                        vsids.notify_unassigned(entry.lit.var());
+                                    }
+                                    trail.backtrack_to(max_level);
+                                    theory.backtrack(max_level);
+                                    watches.notify_backtrack(trail.len());
+                                }
                                 // Add the theory conflict clause to the DB and
-                                // enter conflict resolution.
+                                // enter conflict resolution at its own level.
                                 let cref = db.add_clause(lits);
                                 watches.add_clause(db, cref);
                                 bcp_result = BcpResult::Conflict { clause: cref };
@@ -697,16 +809,42 @@ pub fn solve_with_theory_budget<T: TheorySolver>(
     (result, stats)
 }
 
+/// Sentinel CRef marking a learned clause that was deleted by
+/// `reduce_learned` and no longer exists in the (compacted) database.
+///
+/// Keeps `InstrumentedResult::learned_crefs` parallel to `profiles` without
+/// ever aliasing a live clause: after compaction, a stale CRef would point at
+/// whatever clause now occupies that arena offset.
+pub const DELETED_LEARNED_CREF: CRef = CRef::MAX;
+
 /// Result of an instrumented solve run.
 #[derive(Debug)]
 pub struct InstrumentedResult {
     pub result: SolveResult,
     /// Per-conflict profiles (Level 2).
     pub profiles: Vec<ConflictProfile>,
-    /// CRef of each learned clause, parallel to `profiles`.
+    /// CRef of each learned clause, parallel to `profiles`. Entries whose
+    /// clause was deleted during learned-clause reduction hold
+    /// [`DELETED_LEARNED_CREF`] — downstream analyses must not key on them.
     pub learned_crefs: Vec<CRef>,
     /// Final VSIDS activity scores per variable.
     pub vsids_activities: Vec<f64>,
+}
+
+/// Remap instrumentation `learned_crefs` after `ClauseDb::compact`.
+///
+/// `remap` holds `(old, new)` pairs for SURVIVING clauses only, sorted by
+/// `old`. Entries not present in `remap` were deleted by `reduce_learned`
+/// and are set to [`DELETED_LEARNED_CREF`]: keeping the stale value would
+/// alias whatever live clause lands on that arena offset after compaction,
+/// corrupting ProofDag/instrumentation analyses.
+fn remap_learned_crefs(learned_crefs: &mut [CRef], remap: &[(CRef, CRef)]) {
+    for lc in learned_crefs.iter_mut() {
+        match remap.binary_search_by_key(lc, |&(old, _)| old) {
+            Ok(idx) => *lc = remap[idx].1,
+            Err(_) => *lc = DELETED_LEARNED_CREF,
+        }
+    }
 }
 
 /// Solve with resolution chain instrumentation for proof DAG mining.
@@ -825,12 +963,9 @@ fn solve_instrumented_inner(
                     if !deleted.is_empty() {
                         let remap = db.compact();
                         trail.remap_reasons(&remap);
-                        // Remap learned_crefs to new positions
-                        for lc in &mut learned_crefs {
-                            if let Ok(idx) = remap.binary_search_by_key(lc, |&(old, _)| old) {
-                                *lc = remap[idx].1;
-                            }
-                        }
+                        // Remap learned_crefs to new positions; deleted
+                        // clauses get the sentinel (never alias live CRefs).
+                        remap_learned_crefs(&mut learned_crefs, &remap);
                         watches = watch::Watches::new(&db, num_vars);
                         watches.set_queue_head(trail.len());
                     }
@@ -2728,6 +2863,287 @@ p cnf 5 10
             SolveResult::Unsat => {}
             SolveResult::Sat(a) => panic!("expected UNSAT, got SAT: {:?}", a),
             SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    /// A deliberately "late" theory: x-`a` and x-`b` may not both be true,
+    /// but the check stays silent while the pair's maximum assignment level
+    /// equals the current level, and only reports the conflict once the
+    /// solver has decided PAST that level. The reported conflict clause then
+    /// has zero literals at the current decision level — the case that used
+    /// to drive the 1-UIP scan off the start of the trail.
+    struct LateExclusiveTheory {
+        var_a: u32,
+        var_b: u32,
+        late_reports: u32,
+    }
+
+    impl TheorySolver for LateExclusiveTheory {
+        fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
+            if ctx.trail.value(self.var_a) == Some(true)
+                && ctx.trail.value(self.var_b) == Some(true)
+            {
+                let la = ctx.trail.entry_for_var(self.var_a).unwrap().level;
+                let lb = ctx.trail.entry_for_var(self.var_b).unwrap().level;
+                let pair_level = la.max(lb);
+                if pair_level < ctx.trail.current_level() {
+                    // All conflict literals at earlier levels.
+                    self.late_reports += 1;
+                    return TheoryResult::Conflict(vec![
+                        Lit::neg(self.var_a),
+                        Lit::neg(self.var_b),
+                    ]);
+                }
+                if ctx.trail.all_assigned() {
+                    // Must not stay silent on a complete assignment.
+                    return TheoryResult::Conflict(vec![
+                        Lit::neg(self.var_a),
+                        Lit::neg(self.var_b),
+                    ]);
+                }
+                // Pretend not to notice yet (sound-but-late).
+                return TheoryResult::Consistent;
+            }
+            TheoryResult::Consistent
+        }
+
+        fn backtrack(&mut self, _new_level: u32) {}
+
+        fn explain(&mut self, _lit: Lit, _key: u32) -> Vec<Lit> {
+            unreachable!("LateExclusiveTheory never propagates")
+        }
+    }
+
+    #[test]
+    fn theory_late_conflict_all_level_zero_is_unsat() {
+        // Formula forces x0=T and x1=T at level 0; the theory forbids the
+        // pair but reports only after the solver decides at level 1. The
+        // conflict clause (¬x0 ∨ ¬x1) is then falsified entirely at level 0
+        // → must conclude UNSAT (previously: 1-UIP underflow panic/UB).
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]); // x0
+        db.add_clause(vec![Lit::pos(1)]); // x1
+        db.add_clause(vec![Lit::pos(2), Lit::pos(3)]); // free vars to decide on
+
+        let mut theory = LateExclusiveTheory {
+            var_a: 0,
+            var_b: 1,
+            late_reports: 0,
+        };
+
+        match solve_with_theory(db, 4, &mut theory) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(a) => panic!("expected UNSAT, got SAT: {:?}", a),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+        assert!(
+            theory.late_reports > 0,
+            "test did not exercise the late-conflict path"
+        );
+    }
+
+    #[test]
+    fn theory_late_conflict_backtracks_and_stays_sound() {
+        // The pair (x2, x3) becomes true via decisions at levels 1-2 (VSIDS
+        // tie-breaking decides higher-indexed vars first, default phase
+        // positive); the theory reports the conflict only after a later
+        // decision, so the conflict clause has zero current-level literals.
+        // The solver must backtrack to the clause's own level, resolve
+        // normally, and return a SAT assignment respecting the theory.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
+        db.add_clause(vec![Lit::pos(2), Lit::pos(3)]);
+
+        let mut theory = LateExclusiveTheory {
+            var_a: 2,
+            var_b: 3,
+            late_reports: 0,
+        };
+
+        match solve_with_theory(db, 4, &mut theory) {
+            SolveResult::Sat(a) => {
+                assert!(
+                    !(a[2] && a[3]),
+                    "theory violated: x2 and x3 both true in {:?}",
+                    a
+                );
+                assert!(a[0] || a[1], "clause (x0 ∨ x1) violated");
+                assert!(a[2] || a[3], "clause (x2 ∨ x3) violated");
+            }
+            SolveResult::Unsat => panic!("expected SAT"),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+        assert!(
+            theory.late_reports > 0,
+            "test did not exercise the late-conflict path"
+        );
+    }
+
+    /// Theory that (redundantly) propagates a literal that may already be
+    /// assigned. Emits the propagation whenever `trigger_var` is assigned.
+    struct RedundantPropTheory {
+        /// Literal to propagate.
+        prop_lit: Lit,
+        /// Only propagate once this variable is assigned (u32::MAX = always).
+        trigger_var: u32,
+    }
+
+    impl TheorySolver for RedundantPropTheory {
+        fn check(&mut self, ctx: &TheoryContext<'_>) -> TheoryResult {
+            let triggered =
+                self.trigger_var == u32::MAX || ctx.trail.value(self.trigger_var).is_some();
+            if triggered {
+                TheoryResult::Propagate(vec![TheoryProp {
+                    lit: self.prop_lit,
+                    key: 7,
+                }])
+            } else {
+                TheoryResult::Consistent
+            }
+        }
+
+        fn backtrack(&mut self, _new_level: u32) {}
+
+        fn explain(&mut self, lit: Lit, key: u32) -> Vec<Lit> {
+            assert_eq!(key, 7);
+            // Unit theory lemma: the propagated literal holds unconditionally.
+            vec![lit]
+        }
+    }
+
+    #[test]
+    fn theory_propagate_already_true_is_skipped() {
+        // x0 is forced true by a unit clause at level 0; the theory then
+        // (redundantly) propagates x0 on every check. Previously this hit
+        // the trail's already-assigned assert and panicked; now it must be
+        // skipped and the solve must complete.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]);
+        db.add_clause(vec![Lit::pos(1), Lit::pos(2)]);
+
+        let mut theory = RedundantPropTheory {
+            prop_lit: Lit::pos(0),
+            trigger_var: u32::MAX,
+        };
+
+        match solve_with_theory(db, 3, &mut theory) {
+            SolveResult::Sat(a) => {
+                assert!(a[0]);
+                assert!(a[1] || a[2]);
+            }
+            SolveResult::Unsat => panic!("expected SAT"),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn theory_propagate_already_true_above_level_zero() {
+        // Same as above but the redundant propagation first fires inside the
+        // main loop (after a decision assigns the trigger variable) rather
+        // than in the level-0 pre-loop.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0)]); // x0 true at level 0
+        db.add_clause(vec![Lit::pos(1), Lit::pos(2)]);
+
+        let mut theory = RedundantPropTheory {
+            prop_lit: Lit::pos(0),
+            trigger_var: 2, // fires only once x2 is assigned (level >= 1)
+        };
+
+        match solve_with_theory(db, 3, &mut theory) {
+            SolveResult::Sat(a) => {
+                assert!(a[0]);
+                assert!(a[1] || a[2]);
+            }
+            SolveResult::Unsat => panic!("expected SAT"),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn theory_propagate_already_false_is_conflict() {
+        // The formula forces x1=false at level 0, but the theory insists on
+        // propagating x1 (unit lemma "x1"). The lemma is falsified at level 0
+        // → UNSAT. Previously this panicked on the already-assigned assert.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(1)]); // ¬x1
+        db.add_clause(vec![Lit::pos(0), Lit::pos(2)]);
+
+        let mut theory = RedundantPropTheory {
+            prop_lit: Lit::pos(1),
+            trigger_var: u32::MAX,
+        };
+
+        match solve_with_theory(db, 3, &mut theory) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(a) => panic!("expected UNSAT, got SAT: {:?}", a),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    #[test]
+    fn theory_propagate_already_false_above_level_zero() {
+        // The false propagation first fires in the main loop (after a
+        // decision assigns the trigger var): it must be converted into a
+        // theory conflict via the explanation clause. The unit lemma "x1"
+        // contradicts the level-0 unit (¬x1) → UNSAT.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(1)]); // ¬x1 at level 0
+        db.add_clause(vec![Lit::pos(0), Lit::pos(2)]);
+
+        let mut theory = RedundantPropTheory {
+            prop_lit: Lit::pos(1),
+            trigger_var: 2, // fires only once x2 is assigned (level >= 1)
+        };
+
+        match solve_with_theory(db, 3, &mut theory) {
+            SolveResult::Unsat => {}
+            SolveResult::Sat(a) => panic!("expected UNSAT, got SAT: {:?}", a),
+            SolveResult::Unknown => panic!("unexpected Unknown"),
+        }
+    }
+
+    // ── learned_crefs remap (instrumentation) ──
+
+    #[test]
+    fn remap_learned_crefs_tombstones_deleted() {
+        // Surviving clauses are remapped; deleted ones must become the
+        // sentinel instead of silently keeping a stale CRef that can alias
+        // a live clause after compaction.
+        let remap: Vec<(CRef, CRef)> = vec![(0, 0), (5, 3), (9, 4)];
+        let mut learned = vec![5, 7, 9, DELETED_LEARNED_CREF];
+        remap_learned_crefs(&mut learned, &remap);
+        assert_eq!(
+            learned,
+            vec![3, DELETED_LEARNED_CREF, 4, DELETED_LEARNED_CREF]
+        );
+    }
+
+    #[test]
+    fn instrumented_learned_crefs_never_alias() {
+        // Learned clauses are appended in arena order and compaction
+        // preserves relative order, so surviving learned CRefs must be
+        // strictly increasing across profiles. A stale (unremapped) CRef
+        // breaks this invariant by colliding with or jumping over live ones.
+        use crate::bench::generate_k_sat;
+        let n = 200u32;
+        let num_clauses = ((n as f64) * 4.267).ceil() as usize;
+        let db = generate_k_sat(n, num_clauses, 3, 42);
+        let ir = solve_instrumented(db, n, 10_000);
+
+        let live: Vec<CRef> = ir
+            .learned_crefs
+            .iter()
+            .copied()
+            .filter(|&c| c != DELETED_LEARNED_CREF)
+            .collect();
+        for w in live.windows(2) {
+            assert!(
+                w[0] < w[1],
+                "learned CRefs not strictly increasing: {} then {} — stale remap",
+                w[0],
+                w[1]
+            );
         }
     }
 

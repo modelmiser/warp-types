@@ -37,7 +37,7 @@ trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 impl ComplementOf<NotLane0> for Lane0 {}
 impl ComplementOf<Lane0> for NotLane0 {}
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — extract/merge consume it.
 struct Warp<S: ActiveSet> { _p: PhantomData<S> }
 
 impl<S: ActiveSet> Warp<S> {

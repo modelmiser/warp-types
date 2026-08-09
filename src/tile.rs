@@ -36,13 +36,18 @@ use core::marker::PhantomData;
 /// All threads within a tile are guaranteed active — shuffle is always safe.
 /// Created by partitioning a `Warp<All>` via `warp.tile::<N>()`.
 ///
+/// The lifetime `'w` brands the tile with a borrow of the warp it was
+/// partitioned from (same pattern as `GlobalRegion<'r, S>`): the warp cannot
+/// be diverged (moved) while any of its tiles is live, so a tile can never
+/// shuffle while its warp is diverged.
+///
 /// # Supported Sizes
 ///
 /// 4, 8, 16, 32 — matching NVIDIA's cooperative groups API.
 /// Only power-of-two sizes that divide 32 are valid.
 #[must_use = "a Tile represents a partitioned warp — dropping it silently discards the partition"]
-pub struct Tile<const SIZE: usize> {
-    _phantom: PhantomData<()>,
+pub struct Tile<'w, const SIZE: usize> {
+    _phantom: PhantomData<&'w ()>,
 }
 
 /// Marker trait for valid tile sizes (powers of 2 that divide 32).
@@ -55,40 +60,40 @@ pub trait ValidTileSize: sealed::Sealed {
 }
 
 #[allow(private_interfaces)]
-impl sealed::Sealed for Tile<4> {
+impl sealed::Sealed for Tile<'_, 4> {
     fn _sealed() -> sealed::SealToken {
         sealed::SealToken
     }
 }
 #[allow(private_interfaces)]
-impl sealed::Sealed for Tile<8> {
+impl sealed::Sealed for Tile<'_, 8> {
     fn _sealed() -> sealed::SealToken {
         sealed::SealToken
     }
 }
 #[allow(private_interfaces)]
-impl sealed::Sealed for Tile<16> {
+impl sealed::Sealed for Tile<'_, 16> {
     fn _sealed() -> sealed::SealToken {
         sealed::SealToken
     }
 }
 #[allow(private_interfaces)]
-impl sealed::Sealed for Tile<32> {
+impl sealed::Sealed for Tile<'_, 32> {
     fn _sealed() -> sealed::SealToken {
         sealed::SealToken
     }
 }
 
-impl ValidTileSize for Tile<4> {
+impl ValidTileSize for Tile<'_, 4> {
     const TILE_MASK: u32 = 0xF; // 4 lanes
 }
-impl ValidTileSize for Tile<8> {
+impl ValidTileSize for Tile<'_, 8> {
     const TILE_MASK: u32 = 0xFF; // 8 lanes
 }
-impl ValidTileSize for Tile<16> {
+impl ValidTileSize for Tile<'_, 16> {
     const TILE_MASK: u32 = 0xFFFF; // 16 lanes
 }
-impl ValidTileSize for Tile<32> {
+impl ValidTileSize for Tile<'_, 32> {
     const TILE_MASK: u32 = 0xFFFFFFFF; // 32 lanes = full warp
 }
 
@@ -119,9 +124,20 @@ impl Warp<All> {
     /// let (evens, _odds) = warp.diverge_even_odd();
     /// let _tile: Tile<16> = evens.tile(); // ERROR: method not found
     /// ```
-    pub fn tile<const SIZE: usize>(&self) -> Tile<SIZE>
+    ///
+    /// A tile borrows its warp — the warp cannot be diverged (moved) while
+    /// a tile is still live, so a tile can never shuffle across a diverged warp:
+    ///
+    /// ```compile_fail
+    /// use warp_types::prelude::*;
+    /// let warp: Warp<All> = Warp::kernel_entry();
+    /// let tile: Tile<16> = warp.tile();
+    /// let (_evens, _odds) = warp.diverge_even_odd(); // ERROR: move of borrowed `warp`
+    /// let _ = tile.shuffle_xor(data::PerLane::new(42i32), 1);
+    /// ```
+    pub fn tile<'w, const SIZE: usize>(&'w self) -> Tile<'w, SIZE>
     where
-        Tile<SIZE>: ValidTileSize,
+        Tile<'w, SIZE>: ValidTileSize,
     {
         Tile {
             _phantom: PhantomData,
@@ -129,9 +145,9 @@ impl Warp<All> {
     }
 }
 
-impl<const SIZE: usize> Tile<SIZE>
+impl<'w, const SIZE: usize> Tile<'w, SIZE>
 where
-    Tile<SIZE>: ValidTileSize,
+    Tile<'w, SIZE>: ValidTileSize,
 {
     /// Shuffle XOR within the tile.
     ///
@@ -213,45 +229,45 @@ where
 // Sub-partitioning: Tile<N> → Tile<N/2>, Tile<N/4>, etc.
 // ============================================================================
 
-impl Tile<32> {
+impl<'w> Tile<'w, 32> {
     /// Sub-partition into tiles of 16.
-    pub fn partition_16(&self) -> Tile<16> {
+    pub fn partition_16(&self) -> Tile<'w, 16> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 8.
-    pub fn partition_8(&self) -> Tile<8> {
+    pub fn partition_8(&self) -> Tile<'w, 8> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> {
+    pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,
         }
     }
 }
 
-impl Tile<16> {
+impl<'w> Tile<'w, 16> {
     /// Sub-partition into tiles of 8.
-    pub fn partition_8(&self) -> Tile<8> {
+    pub fn partition_8(&self) -> Tile<'w, 8> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> {
+    pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,
         }
     }
 }
 
-impl Tile<8> {
+impl<'w> Tile<'w, 8> {
     /// Sub-partition into tiles of 4.
-    pub fn partition_4(&self) -> Tile<4> {
+    pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,
         }

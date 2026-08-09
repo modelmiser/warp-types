@@ -40,7 +40,7 @@ trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 impl ComplementOf<Odd> for Even {}
 impl ComplementOf<Even> for Odd {}
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — diverge/merge consume it.
 struct Warp<S: ActiveSet> { _p: PhantomData<S> }
 
 impl Warp<All> {

@@ -48,7 +48,7 @@ pub trait ActiveSet: Copy + 'static {
 
 pub trait ComplementOf<Other: ActiveSet>: ActiveSet {}
 
-#[derive(Copy, Clone)]
+// No Copy/Clone: the warp handle is linear — diverge/merge consume it.
 pub struct Warp<S: ActiveSet> {
     _phantom: PhantomData<S>,
 }
@@ -310,7 +310,7 @@ fn main() {
     let result_a = correct_final_reduce(warp, PerLane(sdata), 1);
     println!("Fix A (single-lane check): sum = {}", result_a);
 
-    let result_b = correct_reduce_with_identity(warp, PerLane(sdata), 0x1);
+    let result_b = correct_reduce_with_identity(Warp::new(), PerLane(sdata), 0x1);
     println!("Fix B (zero-inactive):     sum = {}", result_b);
 
     assert_eq!(result_a, 42);

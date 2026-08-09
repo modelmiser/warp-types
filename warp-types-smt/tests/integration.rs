@@ -422,6 +422,195 @@ fn bvextract_detects_conflict() {
     assert_eq!(result, SmtResult::Unsat);
 }
 
+// ============================================================================
+// Regression tests from cold review
+// ============================================================================
+
+// Finding A: BvOp terms participate in congruence closure (term.rs documents
+// them as "uninterpreted by EUF (congruence only)").
+
+#[test]
+fn bvop_congruence_unsat_bv() {
+    // a = b ∧ bvadd(a,c) ≠ bvadd(b,c) → UNSAT by congruence over the BV op
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, c) = session.var("c", s);
+        let (session, add_ac) = session.bv_op(BvOpKind::Add, 5, &[a, c], s);
+        let (session, add_bc) = session.bv_op(BvOpKind::Add, 5, &[b, c], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, b),
+                SmtFormula::Neq(add_ac, add_bc),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+fn bvop_congruence_unsat_euf_only() {
+    // Same formula under plain check_sat: congruence alone suffices.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, a) = session.var("a", s);
+        let (session, b) = session.var("b", s);
+        let (session, c) = session.var("c", s);
+        let (session, add_ac) = session.bv_op(BvOpKind::Add, 5, &[a, c], s);
+        let (session, add_bc) = session.bv_op(BvOpKind::Add, 5, &[b, c], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(a, b),
+                SmtFormula::Neq(add_ac, add_bc),
+            ]))
+            .finish_assertions();
+        asserted.check_sat()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// Finding B: equality chaining a term to two different constants must conflict.
+
+#[test]
+fn bv_conflicting_constants_unsat() {
+    // x = 3 ∧ x = 4 (5-bit) → UNSAT
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(x, four),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// Finding B (adjacent instance): a BvOp forced to a value contradicting its
+// ground evaluation must conflict.
+
+#[test]
+fn bv_forced_op_value_unsat() {
+    // x = 3 ∧ bvadd(x,1) = 3 → UNSAT (3 + 1 = 4 ≠ 3)
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, three),
+                SmtFormula::Eq(add, three),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+// Finding C: a solve path that requires a decision, a theory conflict, a
+// backjump, and subsequent theory reasoning on the other branch.
+
+#[test]
+fn bv_decision_backtrack_sat() {
+    // (x = 3 ∨ x = 4) ∧ bvadd(x,1) ≠ 4 → SAT (x = 4 works: 4+1 = 5 ≠ 4).
+    // The x = 3 branch conflicts (3+1 = 4), forcing a backjump; stale module
+    // state on the second branch previously produced non-falsified conflict
+    // clauses.
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, three) = session.bv_const(5, 3, s);
+        let (session, four) = session.bv_const(5, 4, s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, add) = session.bv_op(BvOpKind::Add, 5, &[x, one], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Or(vec![SmtFormula::Eq(x, three), SmtFormula::Eq(x, four)]),
+                SmtFormula::Neq(add, four),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Sat);
+}
+
+// Finding F: bv_const masks the value to the declared width.
+
+#[test]
+fn bv_const_masked_to_width_unsat() {
+    // 34 mod 2^5 = 2, so x = 1 ∧ bvadd(x,x) ≠ 34 is UNSAT (1+1 = 2 = 34 & 31).
+    let result = with_session(|session| {
+        let (session, s) = session.declare_sort("BV5");
+        let (session, x) = session.var("x", s);
+        let (session, one) = session.bv_const(5, 1, s);
+        let (session, big) = session.bv_const(5, 34, s);
+        let (session, add) = session.bv_op(BvOpKind::Add, 5, &[x, x], s);
+        let declared = session.finish_declarations();
+        let asserted = declared
+            .assert_formula(SmtFormula::And(vec![
+                SmtFormula::Eq(x, one),
+                SmtFormula::Neq(add, big),
+            ]))
+            .finish_assertions();
+        asserted.check_sat_bv()
+    });
+    assert_eq!(result, SmtResult::Unsat);
+}
+
+#[test]
+#[should_panic(expected = "bv_const: width")]
+fn bv_const_rejects_width_over_64() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (_session, _t) = session.bv_const(65, 0, s);
+    });
+}
+
+// Finding I: bv_extract validates hi < 64 (u64-backed values).
+
+#[test]
+#[should_panic(expected = "bv_extract: hi")]
+fn bv_extract_rejects_hi_64() {
+    with_session(|session| {
+        let (session, s) = session.declare_sort("BV");
+        let (session, x) = session.var("x", s);
+        let (_session, _t) = session.bv_extract(64, 0, x, s);
+    });
+}
+
+// Finding H: TermIds carry no brand — an out-of-range id from another
+// session must fail loudly at the consuming entry point, not silently alias.
+
+#[test]
+#[should_panic(expected = "apply: TermId")]
+fn cross_session_term_id_fails_loudly() {
+    let foreign = with_session(|session| {
+        let (session, s) = session.declare_sort("S");
+        let (session, _a) = session.var("a", s);
+        let (_session, b) = session.var("b", s);
+        b // TermId(1) — escapes the session (ids are unbranded indices)
+    });
+    with_session(|session| {
+        let (session, s) = session.declare_sort("S");
+        let (session, f) = session.declare_fun("f", &[s], s);
+        // This session's arena is empty: TermId(1) is out of range.
+        let (_session, _t) = session.apply(f, &[foreign]);
+    });
+}
+
 #[test]
 fn bvconcat_detects_conflict() {
     // a = 0b101 (3-bit), b = 0b010 (3-bit), concat(a, b) = 0b101_010 (6-bit)
