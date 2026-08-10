@@ -82,7 +82,7 @@ Our implementation includes sixteen compile-fail doctests covering shuffle on di
 
 ### Bug Pattern Coverage
 
-Our prototype includes 326 unit tests, 50 example tests across 8 worked bug examples, and 37 doc tests (16 compile-fail, 21 doc examples) covering the full type system (413 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
