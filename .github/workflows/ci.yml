@@ -27,6 +27,11 @@ jobs:
         run: cargo build --workspace --verbose
       - name: Tests (unit + integration)
         run: cargo test --workspace --tests --verbose
+      - name: Tests (warp64 feature)
+        # warp64 swaps the lane count to 64 (AMD wavefronts). Its cfg branches
+        # in active_set/shuffle/sort/cub/gradual are dead code in every other
+        # step, and two tests exist only under it.
+        run: cargo test -p warp-types --tests --features warp64 --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests
@@ -43,6 +48,8 @@ jobs:
           # nvptx64 target omitted — gpu feature needs CUDA, tested locally
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (warp64 feature)
+        run: cargo clippy -p warp-types --all-targets --features warp64 -- -D warnings
 
   toolchain-freshness:
     runs-on: ubuntu-latest
