@@ -29,14 +29,28 @@ word2num() {
 
 # --- Collect actual counts ---
 UNIT=$(cargo test --workspace --lib --quiet 2>&1 | grep "^test result:" | head -1 | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
-DOC=$(cargo test --doc --quiet 2>&1 | grep "^test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
+
+# Doc tests are counted WORKSPACE-WIDE, because that is what CI runs
+# (`cargo test --workspace --doc` in .github/workflows/ci.yml). An unscoped
+# `cargo test --doc` sees the root crate only (31) and would mark CI's real
+# number (37) as stale. One "test result:" line per crate, so sum them —
+# same shape as the EXAMPLE loop below. Only `passed` is counted; the 3
+# `ignore`d doctests are collected but never run, so they are not tests
+# that passed.
+DOC=0
+while IFS= read -r line; do
+    n=$(echo "$line" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
+    [ -n "$n" ] && DOC=$((DOC + n))
+done < <(cargo test --workspace --doc --quiet 2>&1 | grep "^test result:")
 
 # Compile-fail vs runnable ("doc examples") breakdown of the doc tests.
 # Classify each doctest rustdoc ACTUALLY collects (from its own inventory) by
 # reading the fence at the reported line. This is authoritative: a raw grep of
-# ```compile_fail over src/ overcounts — it includes research-module fences that
-# rustdoc does not collect (19 grep-hits vs 14 real). Uses `< <(...)` (not a
-# pipe) so the increment persists in this shell.
+# ```compile_fail across the workspace overcounts — it includes research-module
+# and example fences that rustdoc does not collect (29 grep-hits vs 16 real).
+# Workspace-scoped to match DOC above; rustdoc reports member-crate paths
+# relative to the workspace root, so the `-f` test resolves from here.
+# Uses `< <(...)` (not a pipe) so the increment persists in this shell.
 DOC_CF=0
 while IFS= read -r entry; do
     f=${entry%% - *}
@@ -44,7 +58,7 @@ while IFS= read -r entry; do
     [ -n "$f" ] && [ -n "$ln" ] && [ -f "$f" ] || continue
     fence=$(sed -n "${ln}p" "$f" | sed 's/^[[:space:]]*\/\/[/!][[:space:]]*//')
     case "$fence" in '```compile_fail'*) DOC_CF=$((DOC_CF + 1)) ;; esac
-done < <(cargo test --doc -- --list 2>/dev/null | grep -E '\(line [0-9]+\): test$')
+done < <(cargo test --workspace --doc -- --list 2>/dev/null | grep -E '\(line [0-9]+\): test$')
 DOC_EXAMPLES=$((DOC - DOC_CF))
 
 EXAMPLE=0

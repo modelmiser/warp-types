@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. 326 unit + 50 example + 31 doc tests (407 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
+**Status:** Research prototype with real GPU execution. 326 unit + 50 example + 37 doc tests (413 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 
@@ -67,7 +67,8 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 326 unit + 31 doc tests
+cargo test                                    # 326 unit tests (main crate)
+cargo test --workspace --doc                  # 37 doc tests (16 compile-fail)
 cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -116,7 +117,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't shuffle, merge requires complements) | 14 compile-fail doctests | `cargo test --doc` |
+| Type safety (diverged warp can't shuffle, merge requires complements) | 16 compile-fail doctests | `cargo test --workspace --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on H200 SXM and RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |

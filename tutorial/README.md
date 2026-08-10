@@ -276,7 +276,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 ## 8. What's Next
 
 ### For Users
-- Clone the repo and run `cargo test && cargo test --examples` (326 unit + 31 doc + 50 example = 407 main-crate tests; sibling crates add 195 more via `cargo test --workspace`)
+- Clone the repo and run `cargo test --workspace && cargo test --examples` — 326 unit + 37 doc + 50 example tests (413 total). The unit and example counts are the main crate's; the doc count is workspace-wide, and `cargo test --workspace` also runs the sibling crates' unit tests.
 - Try `bash reproduce/demo.sh` to see the cuda-samples #398 bug vs. type-safe fix
 - Write your own kernel in `examples/gpu-project/`
 - Read the paper in `paper/paper.md`

@@ -78,11 +78,11 @@ The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes fourteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, and method absence on sub-warps—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes sixteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Bug Pattern Coverage
 
-Our prototype includes 326 unit tests, 50 example tests across 8 worked bug examples, and 31 doc tests (14 compile-fail, 17 doc examples) covering the full type system (407 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
+Our prototype includes 326 unit tests, 50 example tests across 8 worked bug examples, and 37 doc tests (16 compile-fail, 21 doc examples) covering the full type system (413 total). Every test validates that the type system permits correct patterns and rejects incorrect ones.
 
 ## 7.2 Performance
 
@@ -170,7 +170,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
 | Real GPU execution | 4 typed kernels PASS on H200 SXM and RTX 4000 Ada (butterfly reduce, diverge/merge, reduce_n, bitonic sort) |
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
-| Type system tests | 326 unit + 50 example + 31 doc (407 total) |
+| Type system tests | 326 unit + 50 example + 37 doc (413 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | 16.7% of source lines contain type annotations (range: 11.3%–25.3% across 8 examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, etc.) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
