@@ -28,7 +28,9 @@ word2num() {
 }
 
 # --- Collect actual counts ---
-UNIT=$(cargo test --workspace --lib --quiet 2>&1 | grep "^test result:" | head -1 | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
+# Unit tests are counted MAIN-CRATE-ONLY (-p warp-types) by design: 326 is the
+# figure the docs assert. The workspace lib total is 608, which no doc claims.
+UNIT=$(cargo test -p warp-types --lib --quiet 2>&1 | grep "^test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
 
 # Doc tests are counted WORKSPACE-WIDE, because that is what CI runs
 # (`cargo test --workspace --doc` in .github/workflows/ci.yml). An unscoped
@@ -114,9 +116,12 @@ for file in $MD_FILES; do
         [ -n "$found" ] && [ "$found" != "$EXAMPLE" ] && echo "STALE: ${file}:${ln} — example tests: says ${found}, actual ${EXAMPLE}"
     done
 
-    # Pattern: "(N total)" — parenthesized total
-    grep -nE '\([0-9]+ total\)' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
-        found=$(echo "$rest" | grep -oE '[0-9]+ total' | head -1 | grep -oE '[0-9]+') || true
+    # Pattern: "(N total)" — parenthesized total — or the bare leading form
+    # "N tests (" (blog/post.md: "413 tests (326 unit + ...)"), which states the
+    # same total outside any parentheses and would otherwise drift silently.
+    grep -nE '\([0-9]+ total\)|[0-9]+ tests \(' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
+        found=$(echo "$rest" | grep -oE '\([0-9]+ total\)' | head -1 | grep -oE '[0-9]+') || true
+        [ -n "$found" ] || found=$(echo "$rest" | grep -oE '[0-9]+ tests \(' | head -1 | grep -oE '^[0-9]+') || true
         [ -n "$found" ] && [ "$found" != "$TOTAL" ] && echo "STALE: ${file}:${ln} — total tests: says ${found}, actual ${TOTAL}"
     done
 
@@ -136,9 +141,11 @@ for file in $MD_FILES; do
         [ -n "$num" ] && [ "$num" != "$DOC_EXAMPLES" ] && echo "STALE: ${file}:${ln} — doc examples: says '${tok}', actual ${DOC_EXAMPLES}"
     done
 
-    # Pattern: "N named theorem" (Lean theorem count)
-    grep -nE '[0-9]+ named theorem' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
-        found=$(echo "$rest" | grep -oE '[0-9]+ named' | head -1 | grep -oE '[0-9]+') || true
+    # Pattern: "N named theorem" / "N Lean 4 theorem" / "N Lean theorem".
+    # The prose form ("31 Lean 4 theorems") is how the blog states it, and it
+    # was invisible to the "named"-only pattern — and wrong.
+    grep -nE '[0-9]+ (named|Lean( 4)?) theorem' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
+        found=$(echo "$rest" | grep -oE '[0-9]+ (named|Lean( 4)?) theorem' | head -1 | grep -oE '^[0-9]+') || true
         [ -n "$found" ] && [ "$found" != "$THEOREMS" ] && echo "STALE: ${file}:${ln} — Lean theorems: says ${found}, actual ${THEOREMS}"
     done
 
