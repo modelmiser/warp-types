@@ -82,7 +82,13 @@ echo "doc-counts: ${UNIT} unit, ${EXAMPLE} example, ${DOC} doc = ${DOC_CF} compi
 # This avoids false positives from "21 documented bugs" matching "doc".
 
 STALE_FILE=$(mktemp)
-trap 'rm -f "$STALE_FILE"' EXIT
+# Per-line record of every number an existing pattern actually extracted:
+# "<file>\t<line>\t<number>". The unguarded lint below diffs count-vocabulary
+# numbers against this, so a pattern's silence becomes visible instead of
+# passing for approval. Words are recorded as their integer value, so
+# "sixteen" and "16" are the same fact.
+VALIDATED_FILE=$(mktemp)
+trap 'rm -f "$STALE_FILE" "$VALIDATED_FILE"' EXIT
 
 MD_FILES=$(find . -maxdepth 3 -name '*.md' \
     -not -path './.review/*' \
@@ -97,22 +103,26 @@ MD_FILES=$(find . -maxdepth 3 -name '*.md' \
         git check-ignore -q "$f" 2>/dev/null || printf '%s\n' "$f"
       done)
 
+{
 for file in $MD_FILES; do
     # Pattern: "N unit +" or "N unit test" or "N unit," (test summary contexts)
     grep -nE '[0-9]+ unit [+,t]' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ unit' | head -1 | grep -oE '[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$UNIT" ] && echo "STALE: ${file}:${ln} — unit tests: says ${found}, actual ${UNIT}"
     done
 
     # Pattern: "N doc test" or "N doc (" or "N doc)" (NOT "documented")
     grep -nE '[0-9]+ doc[ )(t]' "$file" 2>/dev/null | grep -v 'documented' | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ doc' | head -1 | grep -oE '[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$DOC" ] && echo "STALE: ${file}:${ln} — doc tests: says ${found}, actual ${DOC}"
     done
 
     # Pattern: "N example test" or "N example +" (NOT "8 worked examples" or "8 real-bug")
     grep -nE '[0-9]+ example [+t]' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ example' | head -1 | grep -oE '[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$EXAMPLE" ] && echo "STALE: ${file}:${ln} — example tests: says ${found}, actual ${EXAMPLE}"
     done
 
@@ -122,6 +132,7 @@ for file in $MD_FILES; do
     grep -nE '\([0-9]+ total\)|[0-9]+ tests \(' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '\([0-9]+ total\)' | head -1 | grep -oE '[0-9]+') || true
         [ -n "$found" ] || found=$(echo "$rest" | grep -oE '[0-9]+ tests \(' | head -1 | grep -oE '^[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$TOTAL" ] && echo "STALE: ${file}:${ln} — total tests: says ${found}, actual ${TOTAL}"
     done
 
@@ -130,6 +141,7 @@ for file in $MD_FILES; do
         tok=$(echo "$rest" | grep -oiE '([0-9]+|[a-z]+) compile-fail' | head -1 | grep -oiE '^[0-9a-z]+')
         [ -n "$tok" ] || continue
         if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
+        [ -n "$num" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
         [ -n "$num" ] && [ "$num" != "$DOC_CF" ] && echo "STALE: ${file}:${ln} — compile-fail doctests: says '${tok}', actual ${DOC_CF}"
     done
 
@@ -138,6 +150,7 @@ for file in $MD_FILES; do
         tok=$(echo "$rest" | grep -oiE '([0-9]+|[a-z]+) doc example' | head -1 | grep -oiE '^[0-9a-z]+')
         [ -n "$tok" ] || continue
         if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
+        [ -n "$num" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
         [ -n "$num" ] && [ "$num" != "$DOC_EXAMPLES" ] && echo "STALE: ${file}:${ln} — doc examples: says '${tok}', actual ${DOC_EXAMPLES}"
     done
 
@@ -146,19 +159,96 @@ for file in $MD_FILES; do
     # was invisible to the "named"-only pattern — and wrong.
     grep -nE '[0-9]+ (named|Lean( 4)?) theorem' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ (named|Lean( 4)?) theorem' | head -1 | grep -oE '^[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$THEOREMS" ] && echo "STALE: ${file}:${ln} — Lean theorems: says ${found}, actual ${THEOREMS}"
     done
 
-done 2>&1 | tee "$STALE_FILE"
+done
+
+# --- Unguarded count lint (deny-by-default over count vocabulary) ---
+# The patterns above can only fail on counts they already know how to read; a
+# count phrased any other way passes silently, and silence is indistinguishable
+# from approval. This pass inverts that for the vocabulary the guard owns:
+# every number sitting within three words of test/doctest/example(-as-test)/
+# compile-fail/theorem/total must have been extracted by some pattern above,
+# or be explicitly waived with "<!-- unguarded: <reason> -->" on the line.
+#
+# Deliberately NOT deny-by-default over all numerals: the corpus is full of
+# line counts, percentages, lane widths and section numbers, and flagging those
+# collapses into false positives. Three exclusions keep it honest rather than
+# noisy: hyphenated compounds ("three-domain", "16-tile") are adjectives, not
+# counts; "example(s)" only counts when test-adjacent ("N example tests",
+# "N doc examples"), so prose like "8 worked bug examples" is out of scope;
+# and identifier-position numerals are not quantities ("Lean 4" is a version --
+# which is why the theorem pattern above already spells it as a qualifier --
+# "Figure 7", percentages, "~170", and numerals inside `code spans`).
+awk -v VF="$VALIDATED_FILE" '
+function clean(s) { gsub(/^[^0-9A-Za-z]+/, "", s); gsub(/[^0-9A-Za-z-]+$/, "", s); return s }
+function low(s) { return tolower(clean(s)) }
+function num(t,   c) {
+    if (t ~ /[`%~]/) return -1
+    c = clean(t)
+    if (c ~ /-/) return -1
+    if (c ~ /^[0-9]+$/) return c + 0
+    c = tolower(c)
+    if (c in W) return W[c]
+    return -1
+}
+function counted(t) { return (t ~ /^(tests?|doctests?|theorems?|examples?|compile-fail)$/) }
+BEGIN {
+    split("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", A, " ")
+    for (i = 1; i <= 21; i++) W[A[i]] = i - 1
+    while ((getline l < VF) > 0) { split(l, f, "\t"); V[f[1] SUBSEP f[2] SUBSEP (f[3] + 0)] = 1 }
+}
+{
+    waived = 0; reason = ""
+    if (match($0, /<!-- unguarded:[^>]*-->/)) {
+        waived = 1
+        reason = substr($0, RSTART, RLENGTH)
+        sub(/^<!-- unguarded:[ \t]*/, "", reason)
+        sub(/[ \t]*-->$/, "", reason)
+    }
+    n = split($0, T, /[ \t]+/)
+    for (i = 1; i <= n; i++) {
+        v = num(T[i])
+        if (v < 0) continue
+        if (i > 1 && low(T[i-1]) ~ /^(lean|version|v|figure|fig|table|section|chapter|appendix|lemma|theorem)$/) continue
+        if ((FILENAME SUBSEP FNR SUBSEP v) in V) continue
+        for (j = i + 1; j <= i + 3 && j <= n; j++) {
+            if (num(T[j]) >= 0) break          # the next numeral heads its own phrase
+            t = low(T[j])
+            if (t == "example" || t == "examples") {
+                if (!(low(T[j-1]) == "doc" || low(T[j+1]) ~ /^tests?$/)) continue
+            } else if (t == "total") {
+                # "total" names no count of its own; what is being totalled must
+                # be guard vocabulary ("N total", "N doc tests total") and not
+                # something else that happens to be summed ("52 cells total").
+                ok = 1
+                for (k = i + 1; k < j; k++) if (!counted(low(T[k]))) ok = 0
+                if (!ok) continue
+            } else if (t !~ /^(tests?|doctests?|theorems?|compile-fail)$/) continue
+            phrase = ""
+            for (k = i; k <= j; k++) phrase = phrase (k > i ? " " : "") T[k]
+            if (waived) printf "WAIVED: %s:%d — \"%s\" — %s\n", FILENAME, FNR, phrase, reason
+            else printf "UNGUARDED: %s:%d — \"%s\" — no pattern validates this count; guard it or waive it\n", FILENAME, FNR, phrase
+            break
+        }
+    }
+}' $MD_FILES
+} 2>&1 | tee "$STALE_FILE"
 
 COUNT=$(grep -c "^STALE:" "$STALE_FILE" 2>/dev/null || true)
 COUNT=${COUNT:-0}
 # Strip any whitespace from wc output
 COUNT=$(echo "$COUNT" | tr -d '[:space:]')
 
-if [ "$COUNT" -gt 0 ]; then
+UNGUARDED_COUNT=$(grep -c "^UNGUARDED:" "$STALE_FILE" 2>/dev/null || true)
+UNGUARDED_COUNT=$(echo "${UNGUARDED_COUNT:-0}" | tr -d '[:space:]')
+
+if [ "$COUNT" -gt 0 ] || [ "$UNGUARDED_COUNT" -gt 0 ]; then
     echo ""
-    echo "FAIL: ${COUNT} stale doc count(s). Update docs before pushing."
+    [ "$COUNT" -gt 0 ] && echo "FAIL: ${COUNT} stale doc count(s). Update docs before pushing."
+    [ "$UNGUARDED_COUNT" -gt 0 ] && echo "FAIL: ${UNGUARDED_COUNT} unguarded count(s). Guard the phrasing or waive with '<!-- unguarded: <reason> -->'."
     exit 1
 else
     echo "OK: all doc counts match reality."

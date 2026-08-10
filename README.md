@@ -69,7 +69,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ```bash
 cargo test                                    # 326 unit tests (main crate)
 cargo test --workspace --doc                  # 37 doc tests (16 compile-fail)
-cargo test --examples                         # 50 tests across 8 examples (7 real-bug + 1 synthetic)
+cargo test --examples                         # 50 example tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
 
@@ -125,11 +125,11 @@ fn main() {
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
 | Soundness (progress + preservation) | Full Lean 4 mechanization (32 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
-| CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` |
-| Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` |
+| CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` | <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+| Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` | <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
-| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (32 tests) | `cargo test gradual` |
-| Main-crate claims | Main-crate test suite (404 tests) | `cargo test && cargo test --examples` |
+| Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (33 tests) | `cargo test gradual` | <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+| Main-crate claims | Main-crate test suite (407 tests) | `cargo test && cargo test --examples` | <!-- unguarded: no main-crate-scoped DOC actual exists; see TODO -->
 
 ## Project Structure
 
@@ -150,7 +150,7 @@ warp-types/
 │   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
 │   ├── fence.rs            # Fence-divergence type-state machine
 │   ├── block.rs            # Block-level shared memory + reductions
-│   ├── proof.rs            # Executable soundness sketch (3 theorems, 3 lemmas)
+│   ├── proof.rs            # Executable soundness sketch (progress, preservation, type safety)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
 │   ├── gradual.rs          # DynWarp ↔ Warp<S> gradual typing bridge
 │   ├── simwarp.rs           # Multi-lane warp simulator (real shuffle semantics for testing)
