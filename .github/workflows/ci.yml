@@ -27,8 +27,8 @@ jobs:
         run: cargo build --workspace --verbose
       - name: Unit tests
         run: cargo test --workspace --lib --verbose
-      - name: Unit tests (no GPU — gpu feature requires CUDA)
-        run: cargo test --workspace --lib --verbose
+      - name: Integration tests
+        run: cargo test --workspace --tests --verbose
       - name: Doc tests
         run: cargo test --doc --verbose
       - name: Example tests
