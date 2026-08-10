@@ -33,9 +33,9 @@ jobs:
         # step, and two tests exist only under it.
         run: cargo test -p warp-types --tests --features warp64 --verbose
       - name: Doc tests
-        run: cargo test --doc --verbose
+        run: cargo test --workspace --doc --verbose
       - name: Example tests
-        run: cargo test --examples --verbose
+        run: cargo test --workspace --examples --verbose
 
   clippy:
     runs-on: ubuntu-latest
