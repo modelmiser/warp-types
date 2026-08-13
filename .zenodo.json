@@ -29,5 +29,5 @@
       "identifier": "https://github.com/modelmiser/warp-types"
     }
   ],
-  "notes": "Includes: Rust implementation (317 unit + 50 example + 28 doc = 395 tests), SimWarp multi-lane simulator, Lean 4 formalization (31 theorems, zero sorry, zero axioms — progress, preservation, all four §5.1 loop rules, nested merge, letPair), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), C++20 interop header (include/warp_types.h), CUB-equivalent typed warp primitives, and 8 worked bug examples covering 21 documented bugs across 16 real-world projects."
+  "notes": "Includes: Rust implementation (326 unit + 50 example + 37 doc = 413 tests), SimWarp multi-lane simulator, Lean 4 formalization (32 theorems, zero sorry, zero axioms — progress, preservation, all four §5.1 loop rules, nested merge, letPair), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), C++20 interop header (include/warp_types.h), CUB-equivalent typed warp primitives, and 8 worked bug examples drawn from a survey of 21 documented instances (19 bugs + 2 spec/vendor signals) across 16 real-world projects."
 }

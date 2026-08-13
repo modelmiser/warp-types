@@ -2,7 +2,7 @@
 
 There's a class of GPU bug that compiles cleanly, passes most tests, and produces undefined behavior. Not crashes. Not obvious failures. Silent, spec-violating operations that hardware may or may not mask. The kind of bug that a plasma physics simulation runs with for months — undetected because pre-Volta GPUs enforced convergence that the spec never guaranteed.
 
-This post is about that bug, and a type system that makes it impossible.
+This post is about that bug, and a type system that makes it inexpressible — for code that speaks the system's divergence vocabulary (`diverge`/`merge`; the honest boundary is at the end of the post).
 
 ## The Setup
 
@@ -32,7 +32,7 @@ The result: your reduction produces 17 instead of 32. Your sort puts elements in
 
 ## This Bug Is Everywhere
 
-We surveyed 21 documented instances across 16 real-world projects:
+We surveyed 21 documented instances across 16 real-world projects — 19 bugs plus two corroborating signals (a spec-level exclusion in WebGPU and a CUDA API deprecation):
 
 - **NVIDIA cuda-samples #398** — their own reference reduction. Wrong results for certain input sizes.
 - **NVIDIA CUB (CCCL#854)** — the standard GPU primitives library. Warp-level scan (WarpScanShfl) suspected of wrong mask in sub-warp configurations.
@@ -91,7 +91,7 @@ bash reproduce/demo.sh  # See it for yourself
 
 ## Real GPU Kernels
 
-This isn't a paper prototype. You can write real GPU kernels today:
+The repo is a working research prototype — you can write and run real GPU kernels today:
 
 ```rust
 #[warp_kernel]
@@ -134,18 +134,22 @@ AMD GPUs use 64-lane wavefronts — twice NVIDIA's width. We verified mask corre
 5-stage butterfly (NVIDIA):   sum = 496   ✗ (only reduces within 32-lane halves)
 ```
 
-The NVIDIA-style 5-stage reduce silently produces half-sums on AMD. No crash, no error — just wrong answers. Our type system catches this: `Warp<All>` on AMD requires 6 stages, and the `warp64` feature flag switches the active set masks from 32-bit to 64-bit.
+The NVIDIA-style 5-stage reduce silently produces half-sums on AMD. No crash, no error — just wrong answers. What prevents this is our width-parameterized primitives (a stage-count logic bug is outside the active-set type guarantee): the `warp64` feature switches masks to 64-bit and the library's reduction is written against the platform width, so the 5-stage version simply isn't what you get.
 
 Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined). Wrong either way. The type system catches both.
 
 ## The Artifact
 
 - 413 tests (326 unit + 50 example tests in the main crate, 37 doc tests workspace-wide), all passing
-- 32 Lean 4 theorems (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`)
-- 21 documented bugs across 16 real-world projects
+- 32 Lean 4 theorems mechanizing the core calculus (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`; set-preserving shuffle and the collective exit predicate are not modeled)
+- 21 documented instances across 16 real-world projects (19 bugs + 2 corroborating spec/vendor signals)
 - Real GPU execution on NVIDIA H200 SXM (Hopper) and RTX 4000 Ada: 4 typed kernels PASS, zero-overhead PTX confirmed on both; AMD MI300X mask-correctness verified via HIP
 - Cargo-integrated pipeline: `cargo run` from source to GPU
 - `--features warp64`: full 64-lane AMD wavefront support
+
+## The Honest Boundary
+
+The guarantee is conditional, and the condition matters: it holds for code that expresses divergence through the system's `diverge`/`merge` combinators. A raw data-dependent branch around a shuffle is ordinary Rust — it type-checks and is exactly the bug on hardware. Also real: `kernel_entry()` can mint a fresh `Warp<All>` after a diverge (the witness is not unforgeable — call it once, at entry); a `Warp` can be dropped without merging (Rust is affine; `#[must_use]` warns but does not error); AMD is mask-correctness-verified only, with the full execution path untested. The paper's §6.9 and §7.4 discuss all of these.
 
 The code is at [github.com/modelmiser/warp-types](https://github.com/modelmiser/warp-types).
 

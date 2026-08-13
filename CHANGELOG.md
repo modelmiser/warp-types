@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.2] — 2026-04-18
+
+*(Entry added retroactively 2026-08-13 — the tag/Cargo/CITATION/Zenodo release
+shipped without a CHANGELOG entry.)*
+
+- Release corresponding to tag `v0.3.2` and Zenodo DOI 10.5281/zenodo.19040615.
+- **Erratum (deposit metadata):** the v0.3.2 Zenodo deposit's notes say "31
+  theorems"; the tagged tree contains 32 (`grep -c '^theorem'` over
+  Basic.lean + Metatheory.lean), as the tagged README correctly stated. The
+  deposit's test counts (317/50/28) describe the tagged tree and are correct
+  for the deposit; `.zenodo.json` at HEAD now carries current counts for the
+  next deposit.
+
 ## [0.3.1] — 2026-03-29
 
 ### Fixed

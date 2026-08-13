@@ -19,7 +19,7 @@ if (participate) {
 
 This compiles without warnings, may appear to work, and fails silently. NVIDIA's own cuda-samples contains this bug ([#398](https://github.com/NVIDIA/cuda-samples/issues/398)). Their core library CUB contains a variant ([CCCL#854](https://github.com/NVIDIA/cccl/issues/854); the reporter later noted it may have been a false positive, but the source-level pattern is ill-typed in our system regardless). The PIConGPU plasma physics simulation ran for months with undefined behavior in a divergent branch, undetected because pre-Volta hardware masked the violation ([#2514](https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514)). NVIDIA deprecated the entire `__shfl` API family in CUDA 9.0 to address the bug class.
 
-We survey 21 documented bugs across 16 real-world projects. State-of-the-art persistent thread programs (e.g., the [Hazy megakernel](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles)) avoid the problem by maintaining warp-uniform execution.
+We survey 21 documented instances across 16 real-world projects (19 bugs plus a spec-level exclusion and a vendor deprecation). State-of-the-art persistent thread programs (e.g., the [Hazy megakernel](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles)) avoid the problem by maintaining warp-uniform execution.
 
 ## The Solution
 
@@ -58,7 +58,7 @@ Untyped (buggy): sum = 1   ← silent wrong answer
 Typed (fixed):   sum = 32  ← correct, AND the bug is a compile error
 ```
 
-The buggy pattern literally cannot be expressed. `Warp<Lane0>` has no `shfl_down` method.
+Written this way — divergence expressed through `diverge`/`merge` — the buggy pattern cannot be expressed: `Warp<Lane0>` has no `shfl_down` method. (The guarantee is conditional on using the combinators; see Limitations.)
 
 ```bash
 bash reproduce/demo.sh  # The entire pitch in one terminal
@@ -124,7 +124,7 @@ fn main() {
 | Shuffle semantics | Verified on H200 (sm_90), RTX 4000 Ada (sm_89), MI300X (gfx942) | `bash reproduce/runpod-h200.sh` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | Full Lean 4 mechanization (32 named theorems), zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Core calculus mechanized in Lean 4 (32 named theorems in Basic+Metatheory), zero sorry, zero axioms | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` | <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` | <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
@@ -186,6 +186,8 @@ warp-types/
 
 - **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
 - **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0, Hopper) and RTX 4000 Ada (compute 8.9, Ada Lovelace): shuffle semantics, zero-overhead PTX, and typed kernel execution (4/4 kernels PASS on both GPUs).
+- **The guarantee covers the typed fragment.** A raw data-dependent branch around a warp intrinsic (`if tid < 16 { warp.shuffle_xor(...) }`) is ordinary Rust: it type-checks and is exactly the unsafe pattern on hardware. The safety claim holds for programs that express divergence exclusively via `diverge`/`merge`.
+- **`kernel_entry()` is callable anywhere.** The `Warp<All>` witness is not unforgeable: a fresh handle can be constructed after a diverge, bypassing the typestate discipline. The discipline requires calling it exactly once at kernel entry; nothing enforces that yet.
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 
 ## License
