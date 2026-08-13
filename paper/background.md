@@ -87,7 +87,7 @@ The bug class arises whenever warp primitives are used inside divergent code: th
 
 Session types [Honda 1993] are a type discipline for communication protocols, extended to multiparty sessions (MPST) by Honda, Yoshida, and Carbone [2008]. A session type describes a protocol's structure—sends, receives, branches, and recursion—as a type, ensuring *communication safety*: well-typed programs follow their protocols and never deadlock. In MPST, each of *n* participants holds a *local type* projected from a global protocol, guaranteeing safety (no stuck states), progress (eventual completion), and fidelity (adherence to the prescribed protocol).
 
-### Our Extension: Quiescence
+### Quiescence: What Session Types Do Not Capture
 
 Traditional session types assume all participants remain active throughout the session. GPU divergence introduces a different pattern: some participants *go quiescent*. They don't leave the session or fail—they temporarily stop participating, then rejoin at reconvergence. This is not a failure mode; it's the normal execution model.
 

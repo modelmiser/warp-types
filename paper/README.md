@@ -31,7 +31,7 @@ We prove our type system sound (progress and preservation via Lean 4 mechanizati
 
 1. **Novel type system for GPU divergence** — First to type active lane masks, preventing undefined behavior from reading inactive lanes.
 
-2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks, enforced by Rust's move semantics and sealed traits. (Not session types proper — see §3 and §6.1 for the distinction.)
+2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks, enforced by Rust's move semantics and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
 
 3. **Soundness proof** — Progress and preservation theorems ensure well-typed programs never read from inactive lanes.
 

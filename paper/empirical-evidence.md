@@ -163,8 +163,10 @@ The evidence supports the "third path" framing:
 > still relies on runtime masks that can be wrong.
 
 > State-of-the-art persistent thread programs avoid the problem by prohibiting
-> lane-level divergence entirely (Evidence 7). Our type system is the first to
-> make lane-level divergence *safe* rather than *forbidden*.
+> lane-level divergence entirely (Evidence 7). Our type system is, to our
+> knowledge, the first *compile-time type discipline* to make lane-level
+> divergence safe rather than forbidden (runtime and hardware mechanisms make
+> particular forms safe by other means — see the paper's §7.5 and §8).
 
 ---
 

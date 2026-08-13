@@ -116,9 +116,9 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [8] Caires, L. and Pfenning, F. "Session Types as Intuitionistic Linear Propositions." CONCUR, 2010. https://doi.org/10.1007/978-3-642-15375-4_16
 
-[9] Chen, R., Balzer, S., and Bhatt Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
+[9] Chen, R., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
 
-[10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Sber, M., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
+[10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen, H., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
 
 [11] Dardha, O., Giachino, E., and Sangiorgi, D. "Session Types Revisited." Information and Computation 256, 2017. https://doi.org/10.1016/j.ic.2017.06.002
 
@@ -142,7 +142,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [21] Khronos Group. "SYCL 2020 Specification." 2020. https://www.khronos.org/sycl/
 
-[22] Kopcke, B., Bischof, S., and Steffen, S. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
+[22] Kopcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
 
 [23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2016. https://doi.org/10.1007/978-3-662-49630-5_25
 

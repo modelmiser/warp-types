@@ -179,7 +179,7 @@ The bug class arises whenever warp primitives are used inside divergent code: th
 
 Session types [Honda 1993] are a type discipline for communication protocols, extended to multiparty sessions (MPST) by Honda, Yoshida, and Carbone [2008]. A session type describes a protocol's structure—sends, receives, branches, and recursion—as a type, ensuring *communication safety*: well-typed programs follow their protocols and never deadlock. In MPST, each of *n* participants holds a *local type* projected from a global protocol, guaranteeing safety (no stuck states), progress (eventual completion), and fidelity (adherence to the prescribed protocol).
 
-### Our Extension: Quiescence
+### Quiescence: What Session Types Do Not Capture
 
 Traditional session types assume all participants remain active throughout the session. GPU divergence introduces a different pattern: some participants *go quiescent*. They don't leave the session or fail—they temporarily stop participating, then rejoin at reconvergence. This is not a failure mode; it's the normal execution model.
 
@@ -1502,7 +1502,7 @@ We evaluate warp typestate on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
+We surveyed 21 documented shuffle-from-inactive-lane instances across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
 
 **Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes below).
 
@@ -1648,7 +1648,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 ## 7.4 Threats to Validity
 
-**Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence bugs across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of 21 bugs, 14 are fully caught by the type system.
+**Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence instances across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of the 21, 14 are fully caught by the type system.
 
 **GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents on both sm_89 (Ada) and sm_90 (Hopper). We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on both H200 SXM and RTX 4000 Ada via cudarc, producing correct results (32, 496, 32, and a fully sorted sequence respectively). The `diverge_merge_reduce` kernel is particularly significant: it diverges into `Warp<Even>` and `Warp<Odd>`, merges back to `Warp<All>`, then reduces—the type system prevented shuffle during divergence, and the merge produces PTX identical to the non-diverging butterfly. The ballot codepath uses a `setp`/`selp` workaround for Rust's missing `pred` register class in the nvptx64 backend (declaring `.reg .pred` inside the asm block and converting to/from `u32`), but has not yet been exercised in a GPU kernel.
 
@@ -1665,7 +1665,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
 | Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 37 doc tests (413 total) |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
-| Annotation burden | 16.7% of source lines contain type annotations (range: 11.3%–25.3% across 8 examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, etc.) |
+| Annotation burden | ≈16% of source lines aggregate across the 8 examples (varies ~2.5× between examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, and similar — indicative, no counting script ships with the artifact; see §10) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
@@ -1953,9 +1953,9 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [8] Caires, L. and Pfenning, F. "Session Types as Intuitionistic Linear Propositions." CONCUR, 2010. https://doi.org/10.1007/978-3-642-15375-4_16
 
-[9] Chen, R., Balzer, S., and Bhatt Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
+[9] Chen, R., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
 
-[10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Sber, M., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
+[10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen, H., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
 
 [11] Dardha, O., Giachino, E., and Sangiorgi, D. "Session Types Revisited." Information and Computation 256, 2017. https://doi.org/10.1016/j.ic.2017.06.002
 
@@ -1979,7 +1979,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [21] Khronos Group. "SYCL 2020 Specification." 2020. https://www.khronos.org/sycl/
 
-[22] Kopcke, B., Bischof, S., and Steffen, S. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
+[22] Kopcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
 
 [23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2016. https://doi.org/10.1007/978-3-662-49630-5_25
 
