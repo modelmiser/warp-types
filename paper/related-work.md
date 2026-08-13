@@ -6,7 +6,7 @@ Warp typestate draws on and differs from work in GPU verification, session types
 
 ### Descend (PLDI 2024)
 
-Descend [Kopcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming, preventing data races and use-after-free in GPU code.
+Descend [Köpcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming, preventing data races and use-after-free in GPU code.
 
 **Relationship to our work**: Descend and warp typestate are *orthogonal* and *composable*:
 - Descend: memory safety (ownership, borrowing, lifetimes)
@@ -55,7 +55,7 @@ Gradual session types [Igarashi et al. 2017] allow mixing static and dynamic typ
 
 ### Fault-Tolerant Multiparty Session Types
 
-Recent work extends MPST to handle participant failures: crash-stop failures [Adameit et al. 2022] and fault-tolerant event-driven programming [Viering et al. 2021].
+Recent work extends MPST to handle participant failures: crash-stop failures [Barwell et al. 2022] and fault-tolerant event-driven programming [Viering et al. 2021].
 
 **Relationship to our work**: Fault-tolerant MPST models *permanent* failure (crash-stop). GPU divergence involves *temporary* quiescence—lanes go inactive and resume at merge. Crash-stop requires protocol recovery; quiescence requires complement proof. The two extensions are complementary.
 
@@ -99,7 +99,7 @@ Linear logic [Girard 1987] provides the foundation for both session types [Caire
 
 ## 8.5 GPU Programming Models
 
-CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
+CUDA [NVIDIA 2007], OpenCL [Khronos 2008], SYCL [Khronos 2021], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
 
 ### AMD DPP and Intel Subgroup Operations
 
@@ -129,13 +129,13 @@ NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level 
 
 Halide [Ragan-Kelley et al., PLDI 2013] and TVM [Chen et al., OSDI 2018] separate algorithm from execution schedule, generating GPU code from high-level specifications. Both have encountered the shuffle-divergence bug in generated code (TVM#17307 is Bug 15 in our survey). Their scheduling model could in principle avoid generating divergent shuffles — a design-level alternative to type-checking them. We cite these as evidence that the bug class affects compiler-generated code, not just hand-written kernels.
 
-### Recent SIMT Verification (2023)
+### Formal SIMT Execution Semantics
 
-Gu et al. [OOPSLA 2023] present lockstep execution semantics for SIMT programs and verify safety properties including convergence requirements. Their approach models the hardware execution semantics directly, while ours abstracts it into a type system. The two approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they require a separate verification pass; ours integrates with the compiler via trait resolution).
+Habermaier and Knapp [ESOP 2012] formalize the SIMT execution model — lockstep execution with stack-based reconvergence — as an operational semantics and prove its correctness by constructing a simulation against a standard interleaved multithreaded semantics. The GPUVerify line [Betts et al. 2012, 2015] rests on a related lock-step semantics, proved equivalent to an interleaving semantics for terminating kernels, and uses it to verify kernels by transformation to sequential predicated programs. Both model the hardware execution semantics directly, while ours abstracts it into a type system. The approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they operate as metatheory or a separate verification pass; ours integrates with the compiler via trait resolution).
 
 ### Hazy Megakernel (2025)
 
-The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
+The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
 
 ## 8.6 Summary
 
@@ -152,7 +152,7 @@ The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persiste
 | AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |
 | synccheck | Runtime detection | We prevent at compile time |
 | Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
-| Gu et al. (OOPSLA 2023) | Lockstep verification | We integrate with the compiler via traits |
+| Habermaier & Knapp (ESOP 2012) | Lockstep semantics correctness | We integrate with the compiler via traits |
 | Hazy megakernel | Prohibit divergence | We make divergence safe |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |

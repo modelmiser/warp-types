@@ -235,7 +235,7 @@ The same principles apply at every width: shuffle requires all group lanes activ
 
 ## 5.5 Memory Safety Integration
 
-Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Kopcke et al. 2024]. The two systems address independent concerns:
+Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Köpcke et al. 2024]. The two systems address independent concerns:
 
 - **Descend** prevents data races and use-after-free via ownership/borrowing for GPU memory
 - **Warp typestate** prevents reads from inactive lanes via active-set tracking

@@ -100,7 +100,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 ## References
 
-[1] Adameit, M., Viering, M., Peters, K., and Eugster, P. "Fault-Tolerant Multiparty Session Types." OOPSLA, 2022. https://doi.org/10.1145/3527316
+[1] Barwell, A. D., Scalas, A., Yoshida, N., and Zhou, F. "Generalised Multiparty Session Types with Crash-Stop Failures." CONCUR, 2022. https://doi.org/10.4230/LIPIcs.CONCUR.2022.35
 
 [2] AMD. "HIP: C++ Heterogeneous-Compute Interface for Portability." 2016. https://github.com/ROCm/HIP
 
@@ -108,7 +108,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [4] Betts, A., Chong, N., Donaldson, A., Qadeer, S., and Thomson, P. "GPUVerify: A Verifier for GPU Kernels." OOPSLA, 2012. https://doi.org/10.1145/2384616.2384625
 
-[5] Betts, A., Chong, N., Donaldson, A., Kettlewell, J., Qadeer, S., Thomson, P., and Sherrer, J. "The Design and Implementation of a Verification Technique for GPU Kernels." TOPLAS 37(3), 2015. https://doi.org/10.1145/2743013
+[5] Betts, A., Chong, N., Donaldson, A. F., Ketema, J., Qadeer, S., Thomson, P., and Wickerson, J. "The Design and Implementation of a Verification Technique for GPU Kernels." TOPLAS 37(3), 2015. https://doi.org/10.1145/2743017
 
 [6] Bocchino, R. L., Adve, V. S., Dig, D., Adve, S. V., Heumann, S., Komuravelli, R., Overbey, J., Simmons, P., Sung, H., and Vakilian, M. "A Type and Effect System for Deterministic Parallel Java." OOPSLA, 2009. https://doi.org/10.1145/1640089.1640097
 
@@ -116,7 +116,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [8] Caires, L. and Pfenning, F. "Session Types as Intuitionistic Linear Propositions." CONCUR, 2010. https://doi.org/10.1007/978-3-642-15375-4_16
 
-[9] Chen, R., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
+[9] Chen, R. F., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ECOOP, 2022. https://doi.org/10.4230/LIPIcs.ECOOP.2022.22
 
 [10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen, H., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
 
@@ -126,9 +126,9 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [13] Girard, J.-Y. "Linear Logic." Theoretical Computer Science 50(1), 1987. https://doi.org/10.1016/0304-3975(87)90045-4
 
-[14] Gu, Y., Lezama, J. P., Qi, S., Giannakou, A., and Donaldson, A. F. "Lockstep Execution Semantics for Modelling GPU Programs." OOPSLA, 2023. https://doi.org/10.1145/3622811
+[14] Habermaier, A. and Knapp, A. "On the Correctness of the SIMT Execution Model of GPUs." ESOP, 2012. https://doi.org/10.1007/978-3-642-28869-2_16
 
-[15] Hazy Research (Stanford). "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B." Stanford AI Lab Blog, 2025. https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles
+[15] Hazy Research (Stanford). "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B." Hazy Research Blog, 2025. https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles
 
 [16] Henriksen, T., Serup, N. G. W., Elsman, M., Henglein, F., and Oancea, C. E. "Futhark: Purely Functional GPU-Programming with Nested Parallelism and In-Place Array Updates." PLDI, 2017. https://doi.org/10.1145/3062341.3062354
 
@@ -138,19 +138,19 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [19] Igarashi, A., Thiemann, P., Vasconcelos, V. T., and Wadler, P. "Gradual Session Types." ICFP, 2017. https://doi.org/10.1145/3110282
 
-[20] Khronos Group. "The OpenCL Specification, Version 1.0." 2009. https://www.khronos.org/opencl/
+[20] Khronos Group. "The OpenCL Specification, Version 1.0." 2008. https://www.khronos.org/opencl/
 
-[21] Khronos Group. "SYCL 2020 Specification." 2020. https://www.khronos.org/sycl/
+[21] Khronos Group. "SYCL 2020 Specification." 2021. https://www.khronos.org/sycl/
 
-[22] Kopcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
+[22] Köpcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656411
 
-[23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2016. https://doi.org/10.1007/978-3-662-49630-5_25
+[23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2017. https://doi.org/10.1007/978-3-662-54458-7_26
 
 [24] Matsakis, N. D. and Klock, F. S. "The Rust Language." ACM SIGAda Ada Letters 34(3), 2014. https://doi.org/10.1145/2692956.2663188
 
 [25] NVIDIA. "CUDA C Programming Guide." 2007 (updated annually). https://docs.nvidia.com/cuda/cuda-c-programming-guide/
 
-[26] NVIDIA. "Cooperative Groups: Flexible CUDA Thread Programming." GTC, 2017. https://developer.nvidia.com/blog/cooperative-groups/
+[26] Harris, M. and Perelygin, K. "Cooperative Groups: Flexible CUDA Thread Programming." NVIDIA Developer Blog, 2017. https://developer.nvidia.com/blog/cooperative-groups/
 
 [27] NVIDIA. "CUDA C Programming Guide, §10.22: Warp Shuffle Functions." 2017. Deprecation notice for `__shfl`, `__shfl_up`, `__shfl_down`, `__shfl_xor` in CUDA 9.0.
 
@@ -158,15 +158,15 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [29] NVIDIA. "CUDA Toolkit: compute-sanitizer." https://docs.nvidia.com/compute-sanitizer/
 
-[30] Peng, Y., Grover, V., and Leis, J. "CURD: A Dynamic CUDA Race Detector." PLDI, 2018. https://doi.org/10.1145/3296979.3192368
+[30] Peng, Y., Grover, V., and Devietti, J. "CURD: A Dynamic CUDA Race Detector." PLDI, 2018. https://doi.org/10.1145/3296979.3192368
 
 [31] Pharr, M. and Mark, W. R. "ispc: A SPMD Compiler for High-Performance CPU Programming." InPar, 2012. https://doi.org/10.1109/InPar.2012.6339601
 
 [32] Ragan-Kelley, J., Barnes, C., Adams, A., Paris, S., Durand, F., and Amarasinghe, S. "Halide: A Language and Compiler for Optimizing Parallelism, Locality, and Recomputation in Image Processing Pipelines." PLDI, 2013. https://doi.org/10.1145/2491956.2462176
 
-[33] Stork, S., Marques, P., and Aldrich, J. "Concurrency by Default: Using Permissions to Express Dataflow in Stateful Programs." OOPSLA, 2014. https://doi.org/10.1145/2660193.2660205
+[33] Stork, S., Naden, K., Sunshine, J., Mohr, M., Fonseca, A., Marques, P., and Aldrich, J. "Æminium: A Permission-Based Concurrent-by-Default Programming Language Approach." TOPLAS 36(1), 2014. https://doi.org/10.1145/2543920
 
-[34] Viering, M., Hu, R., Eugster, P., and Ziarek, L. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming." OOPSLA, 2021. https://doi.org/10.1145/3485484
+[34] Viering, M., Hu, R., Eugster, P., and Ziarek, L. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming." OOPSLA, 2021. https://doi.org/10.1145/3485501
 
 [35] Wadler, P. "Propositions as Sessions." ICFP, 2012. https://doi.org/10.1145/2364527.2364568
 

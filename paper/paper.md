@@ -808,7 +808,7 @@ A mask `m` preserves set `S`, written `preserves(m, S)`, if:
 
 ### Decidability
 
-Type checking in our system is decidable. The active-set lattice is finite (at most 2^W elements for warp width W), trait resolution is type-directed (one rule per constructor, no ambiguity), and complement checking is a constant-time bitwise operation. This contrasts with session types in general, where asynchronous subtyping is undecidable even for two participants [Lange and Yoshida 2016]. Our system avoids this obstacle because SIMT execution is synchronous—there is no message buffering between lanes, so subtyping questions reduce to set containment on finite bitmasks.
+Type checking in our system is decidable. The active-set lattice is finite (at most 2^W elements for warp width W), trait resolution is type-directed (one rule per constructor, no ambiguity), and complement checking is a constant-time bitwise operation. This contrasts with session types in general, where asynchronous subtyping is undecidable even for two participants [Lange and Yoshida 2017]. Our system avoids this obstacle because SIMT execution is synchronous—there is no message buffering between lanes, so subtyping questions reduce to set containment on finite bitmasks.
 
 ### Limitations
 
@@ -1107,7 +1107,7 @@ The same principles apply at every width: shuffle requires all group lanes activ
 
 ## 5.5 Memory Safety Integration
 
-Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Kopcke et al. 2024]. The two systems address independent concerns:
+Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Köpcke et al. 2024]. The two systems address independent concerns:
 
 - **Descend** prevents data races and use-after-free via ownership/borrowing for GPU memory
 - **Warp typestate** prevents reads from inactive lanes via active-set tracking
@@ -1610,7 +1610,7 @@ Within the typed fragment, our approach provides broader coverage at lower cost;
 
 ### The Hazy Argument
 
-The most sophisticated published persistent thread program as of 2025—the Hazy megakernel [Stanford 2025]—prohibits lane-level divergence by design. Their on-GPU interpreter dispatches at warp granularity: all 32 lanes execute the same operation, and every shuffle uses `MASK_ALL = 0xFFFFFFFF`. They never allow different lanes to run different ops. This is *architectural avoidance*: state-of-the-art practitioners treat lane-level divergence as too dangerous to manage, even with `__shfl_sync`, and prohibit it entirely.
+The most sophisticated published persistent thread program as of 2025—the Hazy megakernel [Hazy Research 2025]—prohibits lane-level divergence by design. Their on-GPU interpreter dispatches at warp granularity: all 32 lanes execute the same operation, and every shuffle uses `MASK_ALL = 0xFFFFFFFF`. They never allow different lanes to run different ops. This is *architectural avoidance*: state-of-the-art practitioners treat lane-level divergence as too dangerous to manage, even with `__shfl_sync`, and prohibit it entirely.
 
 In our type system, Hazy-style programs type-check trivially: every warp is `Warp<All>`, every shuffle is permitted, and no diverge/merge annotations are needed. The type system is invisible for uniform programs.
 
@@ -1682,7 +1682,7 @@ Warp typestate draws on and differs from work in GPU verification, session types
 
 ### Descend (PLDI 2024)
 
-Descend [Kopcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming, preventing data races and use-after-free in GPU code.
+Descend [Köpcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming, preventing data races and use-after-free in GPU code.
 
 **Relationship to our work**: Descend and warp typestate are *orthogonal* and *composable*:
 - Descend: memory safety (ownership, borrowing, lifetimes)
@@ -1731,7 +1731,7 @@ Gradual session types [Igarashi et al. 2017] allow mixing static and dynamic typ
 
 ### Fault-Tolerant Multiparty Session Types
 
-Recent work extends MPST to handle participant failures: crash-stop failures [Adameit et al. 2022] and fault-tolerant event-driven programming [Viering et al. 2021].
+Recent work extends MPST to handle participant failures: crash-stop failures [Barwell et al. 2022] and fault-tolerant event-driven programming [Viering et al. 2021].
 
 **Relationship to our work**: Fault-tolerant MPST models *permanent* failure (crash-stop). GPU divergence involves *temporary* quiescence—lanes go inactive and resume at merge. Crash-stop requires protocol recovery; quiescence requires complement proof. The two extensions are complementary.
 
@@ -1775,7 +1775,7 @@ Linear logic [Girard 1987] provides the foundation for both session types [Caire
 
 ## 8.5 GPU Programming Models
 
-CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
+CUDA [NVIDIA 2007], OpenCL [Khronos 2008], SYCL [Khronos 2021], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
 
 ### AMD DPP and Intel Subgroup Operations
 
@@ -1805,13 +1805,13 @@ NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level 
 
 Halide [Ragan-Kelley et al., PLDI 2013] and TVM [Chen et al., OSDI 2018] separate algorithm from execution schedule, generating GPU code from high-level specifications. Both have encountered the shuffle-divergence bug in generated code (TVM#17307 is Bug 15 in our survey). Their scheduling model could in principle avoid generating divergent shuffles — a design-level alternative to type-checking them. We cite these as evidence that the bug class affects compiler-generated code, not just hand-written kernels.
 
-### Recent SIMT Verification (2023)
+### Formal SIMT Execution Semantics
 
-Gu et al. [OOPSLA 2023] present lockstep execution semantics for SIMT programs and verify safety properties including convergence requirements. Their approach models the hardware execution semantics directly, while ours abstracts it into a type system. The two approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they require a separate verification pass; ours integrates with the compiler via trait resolution).
+Habermaier and Knapp [ESOP 2012] formalize the SIMT execution model — lockstep execution with stack-based reconvergence — as an operational semantics and prove its correctness by constructing a simulation against a standard interleaved multithreaded semantics. The GPUVerify line [Betts et al. 2012, 2015] rests on a related lock-step semantics, proved equivalent to an interleaving semantics for terminating kernels, and uses it to verify kernels by transformation to sequential predicated programs. Both model the hardware execution semantics directly, while ours abstracts it into a type system. The approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they operate as metatheory or a separate verification pass; ours integrates with the compiler via trait resolution).
 
 ### Hazy Megakernel (2025)
 
-The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
+The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
 
 ## 8.6 Summary
 
@@ -1828,7 +1828,7 @@ The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persiste
 | AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |
 | synccheck | Runtime detection | We prevent at compile time |
 | Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
-| Gu et al. (OOPSLA 2023) | Lockstep verification | We integrate with the compiler via traits |
+| Habermaier & Knapp (ESOP 2012) | Lockstep semantics correctness | We integrate with the compiler via traits |
 | Hazy megakernel | Prohibit divergence | We make divergence safe |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |
@@ -1937,7 +1937,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 ## References
 
-[1] Adameit, M., Viering, M., Peters, K., and Eugster, P. "Fault-Tolerant Multiparty Session Types." OOPSLA, 2022. https://doi.org/10.1145/3527316
+[1] Barwell, A. D., Scalas, A., Yoshida, N., and Zhou, F. "Generalised Multiparty Session Types with Crash-Stop Failures." CONCUR, 2022. https://doi.org/10.4230/LIPIcs.CONCUR.2022.35
 
 [2] AMD. "HIP: C++ Heterogeneous-Compute Interface for Portability." 2016. https://github.com/ROCm/HIP
 
@@ -1945,7 +1945,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [4] Betts, A., Chong, N., Donaldson, A., Qadeer, S., and Thomson, P. "GPUVerify: A Verifier for GPU Kernels." OOPSLA, 2012. https://doi.org/10.1145/2384616.2384625
 
-[5] Betts, A., Chong, N., Donaldson, A., Kettlewell, J., Qadeer, S., Thomson, P., and Sherrer, J. "The Design and Implementation of a Verification Technique for GPU Kernels." TOPLAS 37(3), 2015. https://doi.org/10.1145/2743013
+[5] Betts, A., Chong, N., Donaldson, A. F., Ketema, J., Qadeer, S., Thomson, P., and Wickerson, J. "The Design and Implementation of a Verification Technique for GPU Kernels." TOPLAS 37(3), 2015. https://doi.org/10.1145/2743017
 
 [6] Bocchino, R. L., Adve, V. S., Dig, D., Adve, S. V., Heumann, S., Komuravelli, R., Overbey, J., Simmons, P., Sung, H., and Vakilian, M. "A Type and Effect System for Deterministic Parallel Java." OOPSLA, 2009. https://doi.org/10.1145/1640089.1640097
 
@@ -1953,7 +1953,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [8] Caires, L. and Pfenning, F. "Session Types as Intuitionistic Linear Propositions." CONCUR, 2010. https://doi.org/10.1007/978-3-642-15375-4_16
 
-[9] Chen, R., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
+[9] Chen, R. F., Balzer, S., and Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ECOOP, 2022. https://doi.org/10.4230/LIPIcs.ECOOP.2022.22
 
 [10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen, H., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
 
@@ -1963,9 +1963,9 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [13] Girard, J.-Y. "Linear Logic." Theoretical Computer Science 50(1), 1987. https://doi.org/10.1016/0304-3975(87)90045-4
 
-[14] Gu, Y., Lezama, J. P., Qi, S., Giannakou, A., and Donaldson, A. F. "Lockstep Execution Semantics for Modelling GPU Programs." OOPSLA, 2023. https://doi.org/10.1145/3622811
+[14] Habermaier, A. and Knapp, A. "On the Correctness of the SIMT Execution Model of GPUs." ESOP, 2012. https://doi.org/10.1007/978-3-642-28869-2_16
 
-[15] Hazy Research (Stanford). "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B." Stanford AI Lab Blog, 2025. https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles
+[15] Hazy Research (Stanford). "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B." Hazy Research Blog, 2025. https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles
 
 [16] Henriksen, T., Serup, N. G. W., Elsman, M., Henglein, F., and Oancea, C. E. "Futhark: Purely Functional GPU-Programming with Nested Parallelism and In-Place Array Updates." PLDI, 2017. https://doi.org/10.1145/3062341.3062354
 
@@ -1975,19 +1975,19 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [19] Igarashi, A., Thiemann, P., Vasconcelos, V. T., and Wadler, P. "Gradual Session Types." ICFP, 2017. https://doi.org/10.1145/3110282
 
-[20] Khronos Group. "The OpenCL Specification, Version 1.0." 2009. https://www.khronos.org/opencl/
+[20] Khronos Group. "The OpenCL Specification, Version 1.0." 2008. https://www.khronos.org/opencl/
 
-[21] Khronos Group. "SYCL 2020 Specification." 2020. https://www.khronos.org/sycl/
+[21] Khronos Group. "SYCL 2020 Specification." 2021. https://www.khronos.org/sycl/
 
-[22] Kopcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
+[22] Köpcke, B., Gorlatch, S., and Steuwer, M. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656411
 
-[23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2016. https://doi.org/10.1007/978-3-662-49630-5_25
+[23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2017. https://doi.org/10.1007/978-3-662-54458-7_26
 
 [24] Matsakis, N. D. and Klock, F. S. "The Rust Language." ACM SIGAda Ada Letters 34(3), 2014. https://doi.org/10.1145/2692956.2663188
 
 [25] NVIDIA. "CUDA C Programming Guide." 2007 (updated annually). https://docs.nvidia.com/cuda/cuda-c-programming-guide/
 
-[26] NVIDIA. "Cooperative Groups: Flexible CUDA Thread Programming." GTC, 2017. https://developer.nvidia.com/blog/cooperative-groups/
+[26] Harris, M. and Perelygin, K. "Cooperative Groups: Flexible CUDA Thread Programming." NVIDIA Developer Blog, 2017. https://developer.nvidia.com/blog/cooperative-groups/
 
 [27] NVIDIA. "CUDA C Programming Guide, §10.22: Warp Shuffle Functions." 2017. Deprecation notice for `__shfl`, `__shfl_up`, `__shfl_down`, `__shfl_xor` in CUDA 9.0.
 
@@ -1995,15 +1995,15 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [29] NVIDIA. "CUDA Toolkit: compute-sanitizer." https://docs.nvidia.com/compute-sanitizer/
 
-[30] Peng, Y., Grover, V., and Leis, J. "CURD: A Dynamic CUDA Race Detector." PLDI, 2018. https://doi.org/10.1145/3296979.3192368
+[30] Peng, Y., Grover, V., and Devietti, J. "CURD: A Dynamic CUDA Race Detector." PLDI, 2018. https://doi.org/10.1145/3296979.3192368
 
 [31] Pharr, M. and Mark, W. R. "ispc: A SPMD Compiler for High-Performance CPU Programming." InPar, 2012. https://doi.org/10.1109/InPar.2012.6339601
 
 [32] Ragan-Kelley, J., Barnes, C., Adams, A., Paris, S., Durand, F., and Amarasinghe, S. "Halide: A Language and Compiler for Optimizing Parallelism, Locality, and Recomputation in Image Processing Pipelines." PLDI, 2013. https://doi.org/10.1145/2491956.2462176
 
-[33] Stork, S., Marques, P., and Aldrich, J. "Concurrency by Default: Using Permissions to Express Dataflow in Stateful Programs." OOPSLA, 2014. https://doi.org/10.1145/2660193.2660205
+[33] Stork, S., Naden, K., Sunshine, J., Mohr, M., Fonseca, A., Marques, P., and Aldrich, J. "Æminium: A Permission-Based Concurrent-by-Default Programming Language Approach." TOPLAS 36(1), 2014. https://doi.org/10.1145/2543920
 
-[34] Viering, M., Hu, R., Eugster, P., and Ziarek, L. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming." OOPSLA, 2021. https://doi.org/10.1145/3485484
+[34] Viering, M., Hu, R., Eugster, P., and Ziarek, L. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming." OOPSLA, 2021. https://doi.org/10.1145/3485501
 
 [35] Wadler, P. "Propositions as Sessions." ICFP, 2012. https://doi.org/10.1145/2364527.2364568
 
