@@ -10,6 +10,7 @@ INSIGHTS.md
 INSIGHTS/
 scripts/*
 !scripts/check-doc-counts.sh
+!scripts/check-paper-sync.sh
 # ^^^ scripts/ is LOCAL tooling by default (the scripts/* ignore stays — it has
 # been re-added by accident multiple times). check-doc-counts.sh is the ONE
 # tracked exception: the pre-push doc-count guard, versioned 2026-08-09 so fresh

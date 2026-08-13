@@ -25,7 +25,9 @@ A future `#[warp_typed]` proc macro could further optimize this pattern by autom
 
 ## 9.2 Formal Mechanization
 
-Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Nested divergence (`IsComplement s1 s2 parent`) and all four loop typing rules (§5.1: LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) are mechanized with full progress, preservation, and substitution coverage. Remaining future work:
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
+- Mechanize set-preserving shuffle (§4.6)
+- Model `loopConvergent`'s collective-predicate requirement (currently uses fuel bound)
 - Verified Rust implementation via Aeneas translation
 - Leverage prior Lean-based GPU verification work (MCL framework)
 
@@ -47,7 +49,7 @@ Remaining future work:
 
 ## 9.4 Beyond SIMT
 
-The core idea—session types with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
+The core idea—linear typestate with quiescent participants—may apply beyond GPUs. We grade each potential transfer by mechanism fidelity: does the target domain share the same failure mode (reading from an inactive participant produces silent corruption), or merely a structural resemblance?
 
 **FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.5). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
 
@@ -68,6 +70,8 @@ Several limitations remain:
 - Compilation overhead at scale (untested on large codebases)
 - Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
 
+---
+
 # 10. Conclusion
 
 GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with undefined behavior undetected on pre-Volta hardware. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs maintain warp-uniform execution rather than manage divergence.
@@ -84,9 +88,9 @@ We presented **warp typestate**, a linear type system that makes lane-level dive
 
 The concept of tracking which lanes are active is not new. ISPC manages it via compiler-emitted masks, Cooperative Groups expose it as runtime objects, LLVM's uniformity analysis infers it during compilation, and NVIDIA's synccheck detects violations post-execution. What we add is a *type-level* encoding: the active lane mask is a type parameter (`Warp<S>`) on a Boolean lattice, reconvergence is verified by sealed complement traits, and operations requiring all lanes are structurally absent (not checked — absent) on sub-warps. This is the first system that makes shuffle-from-inactive-lane a *missing-method error* rather than a runtime fault, an API documentation warning, or a post-hoc sanitizer finding.
 
-Our implementation in Rust has **zero runtime overhead** — types are erased at compile time. For uniform programs (the dominant style, including state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The annotation burden is modest: 16.7% of source lines on average across our 8 examples (range 11.3%–25.3%).
+Our implementation's static core has **zero runtime overhead** — those types are erased at compile time (verified by PTX comparison); the gradual/dynamic layers (§5) trade runtime checks for expressiveness, by design. For uniform programs (the dominant style, including state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The annotation burden is modest: roughly one line in six across our 8 examples (aggregate ≈16%; per-example figures vary by a factor of ~2.5 — no counting script ships with this artifact, so treat the figure as indicative).
 
-**The takeaway**: The gap between "the compiler knows the active set" (ISPC, LLVM) and "the type system enforces active-set safety" (this work) is the difference between a tool that *could* catch the bug and a type that *cannot express* the bug. We close that gap.
+**The takeaway**: The gap between "the compiler knows the active set" (ISPC, LLVM) and "the type system enforces active-set safety" (this work) is the difference between a tool that *could* catch the bug and a type that *cannot express* the bug — for code written in the typed fragment. We close that gap.
 
 ---
 

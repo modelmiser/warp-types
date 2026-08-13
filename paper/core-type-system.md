@@ -44,14 +44,14 @@ A `Uniform<T>` can be converted to `PerLane<T>` (broadcasting), but the reverse 
 
 ### SingleLane<T, n>
 
-`SingleLane<T, n>` represents a value that exists only in lane `n`. A single-lane-output reduction (e.g., `__reduce_add_sync` which returns in lane 0 only) would return `SingleLane<T, 0>`:
+`SingleLane<T, n>` represents a value that exists only in lane `n`. A tree reduction to a single lane would produce this type:
 
 ```rust
-let sum: SingleLane<i32, 0> = reduce_lane0(data);  // Result in lane 0
-let broadcast: Uniform<i32> = sum.broadcast();      // Share with all lanes
+let sum: SingleLane<i32, 0> = tree_reduce(data);  // Result in lane 0 only
+let broadcast: Uniform<i32> = sum.broadcast();     // Share with all lanes
 ```
 
-**Implementation note:** Our `reduce_sum` uses a butterfly pattern where all lanes receive the result, so it returns `Uniform<T>` directly — a simplification that skips the `SingleLane` → `broadcast` step.
+Note: Our implementation's `reduce_sum` uses a butterfly pattern where all lanes receive the result, so it returns `Uniform<T>` directly (skipping the broadcast step). `SingleLane` is used for asymmetric reductions where only one lane holds the result.
 
 ## 3.2 Active Sets
 
@@ -218,7 +218,7 @@ The predicate `preserves_set(mask, S)` holds when XORing any lane in `S` with `m
 
 ### BALLOT
 
-Ballot operations require a fully-active warp (same as shuffle):
+Ballot operations produce uniform results:
 
 ```
 Γ ⊢ w : Warp<All>    Γ ⊢ pred : PerLane<bool>
@@ -226,7 +226,9 @@ Ballot operations require a fully-active warp (same as shuffle):
 Γ ⊢ ballot(w, pred) : BallotResult    (wraps Uniform<u64>)
 ```
 
-The result is uniform because all lanes participate in the vote. While a ballot on a sub-warp is semantically meaningful (returning the votes of active lanes only), the implementation restricts ballot to `Warp<All>` for consistency with the GPU intrinsic `__ballot_sync(0xFFFFFFFF, pred)` which requires a full-warp mask. Relaxing this to `Warp<S>` is future work.
+The implementation uses `BallotResult` (a newtype around `Uniform<u64>`) rather than `Uniform<u32>` to accommodate AMD 64-lane wavefronts. A `.mask_u32()` accessor provides NVIDIA-compatible 32-bit access.
+
+The result is uniform because all (active) lanes see the same bitmask.
 
 ### LINEAR WARP USAGE
 
@@ -279,7 +281,7 @@ This is not a "type error" in the traditional sense—it's a *method resolution 
 
 2. **Clear errors:** The error message says exactly what's wrong: "method not found for `Warp<Even>`."
 
-3. **Unforgeable:** You cannot "cast" a `Warp<Even>` to `Warp<All>`—there's no way to bypass the type system.
+3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The one bypass is constructing a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
 
 4. **Composable:** Library authors can add methods for specific active sets without modifying the core types.
 
@@ -396,3 +398,4 @@ Our type system provides safety through three mechanisms:
 3. **Method availability** restricts operations to types where they are safe—`shuffle_xor` only exists on `Warp<All>`.
 
 The result: shuffle-from-inactive-lane bugs become compile errors. The fix is explicit (merge before shuffle) and verified by the type checker.
+

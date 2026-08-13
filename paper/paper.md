@@ -68,7 +68,7 @@ The fix is to merge back to `Warp<All>` before shuffling—the type system guide
 
 ## 1.2 Contributions
 
-We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
+We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design). We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
 
 This paper makes the following contributions:
 
@@ -183,7 +183,7 @@ Session types [Honda 1993] are a type discipline for communication protocols, ex
 
 Traditional session types assume all participants remain active throughout the session. GPU divergence introduces a different pattern: some participants *go quiescent*. They don't leave the session or fail—they temporarily stop participating, then rejoin at reconvergence. This is not a failure mode; it's the normal execution model.
 
-We extend session types with:
+Our departure from session types — the phenomena they do not capture, which our system must:
 
 - **Active sets**: Which participants are currently active
 - **Quiescence**: A participant may become inactive (not failed, not departed—just paused)
@@ -476,7 +476,7 @@ This is not a "type error" in the traditional sense—it's a *method resolution 
 
 2. **Clear errors:** The error message says exactly what's wrong: "method not found for `Warp<Even>`."
 
-3. **Unforgeable:** You cannot "cast" a `Warp<Even>` to `Warp<All>`—there's no way to bypass the type system.
+3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The one bypass is constructing a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
 
 4. **Composable:** Library authors can add methods for specific active sets without modifying the core types.
 
@@ -825,7 +825,7 @@ We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/Wa
 
 ### Scope
 
-The mechanization covers two files totaling 1329 lines of Lean:
+The mechanization covers two files totaling 1337 lines of Lean:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
@@ -851,9 +851,22 @@ Each factors through `shuffle_diverged_untypable`: if the active set after diver
 
 Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, directly encoding Rust's move semantics. The mechanization has no trusted assumptions beyond Lean's kernel.
 
+### What Is Mechanized
+
+The following are fully mechanized with zero sorry, zero axioms:
+
+- **Core type system** (§3–4): diverge, merge, shuffle, letBind, letPair, fst/snd, pairs — with progress, preservation, and substitution.
+- **Extension typing rules** (§5.1): all four loop typing rules — LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — with full progress, preservation, and substitution coverage.
+- **Nested merge**: `HasType.merge` uses `IsComplement s1 s2 parent` (parameterized by a general parent set, not restricted to `All`). `Step.mergeVal` produces `s1 ||| s2`. Concrete instance: `evenLow_evenHigh_complement_within_even`.
+- **Five untypability proofs**: real GPU bugs (cuda-samples #398, CUB/CCCL #854, PIConGPU #2514, LLVM #155682, demo) proved unreachable in the type system.
+
 ### What Is Not Mechanized
 
-The operational semantics for `shuffle_within` (§4.6, set-preserving masks) are not mechanized; the Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`). The `loopConvergent` rule (§5.1) is mechanized with a fuel bound rather than the paper's collective-predicate requirement; the Lean proof verifies termination and warp preservation but does not model the collective nature of the exit predicate. The nested divergence lemmas (§4.5) follow from `diverge_partition` by instantiation but are not stated as separate Lean theorems. Standalone linearity theorems (Lemmas 4.8, 4.9) are enforced by the linear context mechanism but not stated as explicit Lean theorems.
+- The operational semantics for `shuffle_within` (§4.6, set-preserving masks). The Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`); the Lean model does not include this construct.
+- **LOOP-CONVERGENT modeling note**: The Lean `loopConvergent` uses fuel (`Nat` bound) rather than modeling the paper's collective-predicate exit condition (`p : Warp<S> → Bool` where `p` uses ballot/all/any). The typing rule is structurally identical to `loopUniform` — body preserves active set `S`. This proves type safety regardless of when the loop exits (a strictly stronger guarantee), but does not model the collective-predicate requirement that distinguishes LOOP-CONVERGENT from LOOP-UNIFORM in the paper.
+- **Linearity**: Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) are enforced by the linear context threading mechanism (`letBind` checks freshness and consumption), but are not stated as standalone Lean theorems. The mechanism is sound; the explicit theorem statements are future work.
+
+We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
 
 ---
 
@@ -1461,7 +1474,7 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
 
-2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.2, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
+2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.1, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
@@ -1489,7 +1502,7 @@ We evaluate warp typestate on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. The full table of all 21 bugs with per-issue caveats is available in the supplementary material.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
 
 **Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes below).
 
@@ -1591,7 +1604,7 @@ The alternative to compile-time safety is runtime mask checking—verifying at e
 | Runtime sanitizer | Significant | Executed paths only | At test time |
 | Our type system | 0% | All paths | At compile time |
 
-Our approach provides strictly more coverage at strictly less cost.
+Within the typed fragment, our approach provides broader coverage at lower cost; the comparison is not total — a runtime sanitizer also covers code the type system cannot see (legacy CUDA, raw branches), so the two are complementary (§8).
 
 ## 7.3 Expressiveness
 
@@ -1639,7 +1652,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 **GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents on both sm_89 (Ada) and sm_90 (Hopper). We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on both H200 SXM and RTX 4000 Ada via cudarc, producing correct results (32, 496, 32, and a fully sorted sequence respectively). The `diverge_merge_reduce` kernel is particularly significant: it diverges into `Warp<Even>` and `Warp<Odd>`, merges back to `Warp<All>`, then reduces—the type system prevented shuffle during divergence, and the merge produces PTX identical to the non-diverging butterfly. The ballot codepath uses a `setp`/`selp` workaround for Rust's missing `pred` register class in the nvptx64 backend (declaring `.reg .pred` inside the asm block and converting to/from `u32`), but has not yet been exercised in a GPU kernel.
 
-**Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). We are not aware of shuffle-from-inactive-lane bugs that our type system would fail to catch at the source level.
+**Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). Among the surveyed instances, none is fully outside the system's reach at the source level, though five are only partially caught (the residue in each case is a data-dependent mask or logic component beyond active-set typing).
 
 ## 7.5 Summary
 
@@ -1657,7 +1670,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
-We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is the first approach that makes lane-level divergence *safe* rather than *forbidden*.
+We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is, to our knowledge, the first *compile-time type discipline* that makes lane-level divergence safe rather than forbidden (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means; §8).
 
 ---
 
@@ -1744,7 +1757,7 @@ Our approach is complementary: we *embrace* divergence and make it safe. This al
 
 ISPC [Pharr and Mark 2012] implements SPMD programming on CPU SIMD hardware with `uniform` and `varying` type qualifiers—a `uniform` variable holds a single value shared across all instances in a gang (analogous to our `Uniform<T>`), while `varying` (the default) holds per-instance values (analogous to our `PerLane<T>`). ISPC also provides `foreach_active` and cross-lane operations whose mask correctness is guaranteed by compiler-emitted mask instructions.
 
-**Relationship to our work**: ISPC is the closest existing system in its language-level awareness of divergence. The key difference is *what* the type system tracks: ISPC encodes *value uniformity* (whether all instances hold the same value) but not *which instances are active*. The execution mask is a runtime value managed by the compiler; there is no type-level active set. Our `Warp<S>` types encode the active set itself, making `shuffle_xor` *absent from the type* when lanes are inactive. This distinction matters on GPU hardware, where the execution mask is managed by hardware and the programmer passes masks manually—exactly where the bug class arises.
+**Relationship to our work**: ISPC is the closest existing system in its language-level awareness of divergence. ISPC's compiler manages the execution mask and provides `foreach_active` to iterate over active instances — so ISPC *knows* the active set at runtime and exposes it through language constructs. The key difference is *where* the active set lives: in ISPC the compiler emits mask-management code at compile time, but the active set itself is a runtime value those masks track; our `Warp<S>` types encode the active set in the type itself (the parameter `S`), so it is a compile-time object. In ISPC, cross-lane operations are safe because the compiler generates correct masks. In GPU programming, the programmer passes masks manually via `__shfl_sync(mask, ...)` — exactly where the bug class arises. Our type system makes `shuffle_xor` *absent from the type* when lanes are inactive, preventing the mask error at compile time rather than relying on runtime mask management.
 
 ### DPJ, Æminium, and Data-Race-Free Type Systems
 
@@ -1762,13 +1775,39 @@ Linear logic [Girard 1987] provides the foundation for both session types [Caire
 
 ## 8.5 GPU Programming Models
 
-CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit but still allow shuffling on groups where threads have diverged—we provide the missing types.
+CUDA [NVIDIA 2007], OpenCL [Khronos 2009], SYCL [Khronos 2020], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
+
+### AMD DPP and Intel Subgroup Operations
+
+AMD's Data Parallel Primitives (DPP) instructions (`v_mov_b32_dpp`, `ds_swizzle_b32`) enable cross-lane communication within 64-lane wavefronts on RDNA/CDNA architectures. Unlike NVIDIA's explicit mask parameter, AMD's DPP operations are implicitly masked by the hardware execution mask — the programmer does not pass a mask, but the operation only executes for active lanes. The divergence risk is different: not a wrong mask, but an unexpected execution mask due to unstructured control flow. Our `u64` active-set masks and `GpuWarp64` platform abstraction are designed to support AMD wavefronts, though the GPU backend is not yet implemented.
+
+Intel's subgroup operations in SYCL/oneAPI (`sub_group::shuffle`, `sub_group::reduce`) and OpenCL (`sub_group_shuffle`) require that "all work-items in the sub-group execute the same call" — the same convergence requirement as NVIDIA's shuffle. Intel's subgroup size varies (8, 16, 32, or 64 depending on hardware), adding a portability dimension to the bug class. Our `Platform` trait and parameterized warp width address this through type-level abstraction.
+
+### Vulkan/SPIR-V Subgroup Operations
+
+Vulkan 1.1 (2018) introduced subgroup operations (`subgroupShuffle`, `subgroupBallot`, `subgroupBroadcast`) in SPIR-V/GLSL — the most widely deployed cross-vendor subgroup API. The GLSL specification explicitly states that subgroup operations have "undefined results if invocations are not converged." The WebGPU specification excluded indexed subgroup shuffles entirely due to this safety concern (Bug 21 in our survey). Our type system would prevent the undefined-results cases that the Vulkan specification warns about — the shuffle method is absent on diverged warps, not merely documented as "undefined."
 
 ### NVIDIA's `__shfl_sync` Migration (CUDA 9.0)
 
 NVIDIA deprecated the original `__shfl` family in CUDA 9.0, replacing it with `__shfl_sync` which requires an explicit mask parameter [CUDA Programming Guide §10.22]. This was a vendor acknowledgment that the bug class is severe enough to warrant a breaking API change across the ecosystem. However, the mask remains a runtime value—programmers can still pass the wrong mask, as documented bugs in NVIDIA's own cuda-samples and CUB demonstrate.
 
 **Relationship to our work**: `__shfl_sync` addresses the problem at the API level (require a mask). We address it at the type level (prove the mask correct). The approaches are complementary: `__shfl_sync` prevents *forgetting* the mask; our types prevent *getting it wrong*.
+
+### NVIDIA Cooperative Groups
+
+NVIDIA Cooperative Groups [2017] introduce `thread_block_tile<N>` for statically-sized sub-warp groups and `coalesced_threads()` for dynamically obtaining the set of converged threads — a runtime active-set mechanism. The `sync()` method enforces convergence before cross-lane operations. This is the closest vendor-provided abstraction to our type-level active sets. The key difference: Cooperative Groups track convergence at runtime (the group object is a runtime value), while our `Warp<S>` tracks it at compile time (the active set is a type parameter). A `thread_block_tile<16>` can call `shfl` and the hardware confines it to the tile — safe by construction. But `coalesced_threads()` returns a runtime group whose membership can change at each reconvergence point, and the programmer must ensure the group is still valid when cross-lane operations execute. Our type system would prevent using a stale group handle.
+
+### NVIDIA compute-sanitizer `synccheck`
+
+NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level synchronization errors at runtime, including mismatched masks in `__shfl_sync` calls. This is the closest dynamic analysis tool to our static approach. `synccheck` catches bugs post-compilation via instrumented execution; our types prevent them pre-compilation. The approaches are complementary: `synccheck` catches bugs in code that cannot be rewritten in our type system (legacy CUDA, inline PTX), while our types prevent the entire bug class at compile time for new code.
+
+### Scheduling Languages: Halide and TVM
+
+Halide [Ragan-Kelley et al., PLDI 2013] and TVM [Chen et al., OSDI 2018] separate algorithm from execution schedule, generating GPU code from high-level specifications. Both have encountered the shuffle-divergence bug in generated code (TVM#17307 is Bug 15 in our survey). Their scheduling model could in principle avoid generating divergent shuffles — a design-level alternative to type-checking them. We cite these as evidence that the bug class affects compiler-generated code, not just hand-written kernels.
+
+### Recent SIMT Verification (2023)
+
+Gu et al. [OOPSLA 2023] present lockstep execution semantics for SIMT programs and verify safety properties including convergence requirements. Their approach models the hardware execution semantics directly, while ours abstracts it into a type system. The two approaches differ in expressiveness (they model the full SIMT execution model; we model only the active-set fragment) and usability (they require a separate verification pass; ours integrates with the compiler via trait resolution).
 
 ### Hazy Megakernel (2025)
 
@@ -1781,14 +1820,20 @@ The Hazy megakernel [Stanford 2025] fuses ~100 operations into a single persiste
 | Descend | Memory safety | We do divergence safety |
 | GPUVerify | External verification | We use types |
 | MPST | All parties active | We model quiescence |
-| ISPC | uniform/varying (value uniformity) | We track active sets (which lanes), not just uniformity |
+| ISPC | uniform/varying + runtime active set | We track active sets at compile time, not runtime |
 | Futhark | Avoids divergence | We embrace + type it |
 | `__shfl_sync` | Require mask (runtime) | We prove mask correct (compile-time) |
+| Cooperative Groups | Runtime group objects | We use compile-time type parameters |
+| Vulkan/SPIR-V subgroups | "Undefined if not converged" | We make diverged shuffle absent from the type |
+| AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |
+| synccheck | Runtime detection | We prevent at compile time |
+| Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
+| Gu et al. (OOPSLA 2023) | Lockstep verification | We integrate with the compiler via traits |
 | Hazy megakernel | Prohibit divergence | We make divergence safe |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |
 
-**Our unique contribution**: Linear typestate for active lane masks, with a complement lattice ensuring safe divergence and reconvergence. No prior work types the active lane mask. The structural analogy to session type branching motivates the design; the technical mechanism is typestate over a Boolean lattice, not session types.
+**Positioning**: The concept of tracking which lanes are active is not new — ISPC's compiler emits mask-management code (the active set itself being a runtime value), Cooperative Groups expose it at runtime via group objects, and LLVM's uniformity analysis infers it during compilation. What is new is embedding the active lane mask *in the type system* with a *complement lattice* that makes reconvergence statically verifiable and shuffle *absent from the type* (not checked, not documented as unsafe — absent). No prior work provides this compile-time guarantee. The structural analogy to session type branching motivated the design; the technical mechanism is linear typestate over a Boolean lattice of bitmasks.
 
 ---
 
@@ -1878,11 +1923,11 @@ We presented **warp typestate**, a linear type system that makes lane-level dive
 
 4. **Shuffles require all lanes active**. The `shuffle_xor` method exists only on `Warp<All>`. Calling it on a diverged warp is not a runtime error—it is *unrepresentable*.
 
-The key insight is that GPU divergence has the *shape* of multiparty session type branching: diverging splits participants, reconverging requires a complement proof, and quiescence (temporarily inactive participants) is a phenomenon not captured by existing type disciplines. We formalize this as linear typestate over a Boolean lattice of active sets—not session types proper (there are no channels or protocol sequences), but motivated by the structural analogy. The analogy guided the design; the Boolean lattice and linear resource discipline provide the guarantees.
+The concept of tracking which lanes are active is not new. ISPC manages it via compiler-emitted masks, Cooperative Groups expose it as runtime objects, LLVM's uniformity analysis infers it during compilation, and NVIDIA's synccheck detects violations post-execution. What we add is a *type-level* encoding: the active lane mask is a type parameter (`Warp<S>`) on a Boolean lattice, reconvergence is verified by sealed complement traits, and operations requiring all lanes are structurally absent (not checked — absent) on sub-warps. This is the first system that makes shuffle-from-inactive-lane a *missing-method error* rather than a runtime fault, an API documentation warning, or a post-hoc sanitizer finding.
 
-Our implementation in Rust has **zero runtime overhead**—guaranteed by construction, not measured. Types are erased at compile time. For uniform programs (the style used by state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The result is strictly more permissive than the divergence-prohibition approach while being strictly safer than CUDA's `__shfl_sync`.
+Our implementation's static core has **zero runtime overhead** — those types are erased at compile time (verified by PTX comparison); the gradual/dynamic layers (§5) trade runtime checks for expressiveness, by design. For uniform programs (the dominant style, including state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The annotation burden is modest: roughly one line in six across our 8 examples (aggregate ≈16%; per-example figures vary by a factor of ~2.5 — no counting script ships with this artifact, so treat the figure as indicative).
 
-**The takeaway**: Divergence bugs are type errors. Types exist to make certain classes of bugs impossible. Now shuffle-from-inactive-lane is one of them.
+**The takeaway**: The gap between "the compiler knows the active set" (ISPC, LLVM) and "the type system enforces active-set safety" (this work) is the difference between a tool that *could* catch the bug and a type that *cannot express* the bug — for code written in the typed fragment. We close that gap.
 
 ---
 
@@ -1892,23 +1937,86 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 ## References
 
-[References would be formatted according to venue style. Key citations include:]
+[1] Adameit, M., Viering, M., Peters, K., and Eugster, P. "Fault-Tolerant Multiparty Session Types." OOPSLA, 2022. https://doi.org/10.1145/3527316
 
-- Betts et al. 2012. "GPUVerify: A Verifier for GPU Kernels" (OOPSLA)
-- Bocchino et al. 2009. "A Type and Effect System for Deterministic Parallel Java" (OOPSLA)
-- Caires and Pfenning 2010. "Session Types as Intuitionistic Linear Propositions" (CONCUR)
-- Hazy Research 2025. "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B" (Stanford Blog)
-- Honda 1993. "Types for Dyadic Interaction" (CONCUR)
-- Honda, Yoshida, Carbone 2008. "Multiparty Asynchronous Session Types" (POPL)
-- Henriksen et al. 2017. "Futhark: Purely Functional GPU-Programming" (PLDI)
-- NVIDIA 2017. "Cooperative Groups: Flexible Thread Synchronization" (GTC)
-- NVIDIA 2017. CUDA Programming Guide §10.22: Warp Shuffle Functions (deprecation notice)
-- NVIDIA 2017. Tesla V100 Architecture Whitepaper: Independent Thread Scheduling
-- NVIDIA cuda-samples#398: Wrong ballot mask in reference reduction
-- NVIDIA CCCL#854: Compiler predicates off mask initialization in CUB WarpScanShfl
-- PIConGPU#2514: Hardcoded full mask in divergent branch
-- LLVM#155682: shfl_sync causes branch elimination
-- Kopcke et al. 2024. "Descend: A Safe GPU Systems Programming Language" (PLDI)
-- Wadler 2012. "Propositions as Sessions" (ICFP)
-- Wright and Felleisen 1994. "A Syntactic Approach to Type Soundness" (IC)
-- Anthropic. (2026). Claude Opus 4.6 [Large language model]. https://www.anthropic.com
+[2] AMD. "HIP: C++ Heterogeneous-Compute Interface for Portability." 2016. https://github.com/ROCm/HIP
+
+[3] Anthropic. Claude Opus 4.6 [Large language model]. 2026. https://www.anthropic.com
+
+[4] Betts, A., Chong, N., Donaldson, A., Qadeer, S., and Thomson, P. "GPUVerify: A Verifier for GPU Kernels." OOPSLA, 2012. https://doi.org/10.1145/2384616.2384625
+
+[5] Betts, A., Chong, N., Donaldson, A., Kettlewell, J., Qadeer, S., Thomson, P., and Sherrer, J. "The Design and Implementation of a Verification Technique for GPU Kernels." TOPLAS 37(3), 2015. https://doi.org/10.1145/2743013
+
+[6] Bocchino, R. L., Adve, V. S., Dig, D., Adve, S. V., Heumann, S., Komuravelli, R., Overbey, J., Simmons, P., Sung, H., and Vakilian, M. "A Type and Effect System for Deterministic Parallel Java." OOPSLA, 2009. https://doi.org/10.1145/1640089.1640097
+
+[7] Boyapati, C., Lee, R., and Rinard, M. "Ownership Types for Safe Programming: Preventing Data Races and Deadlocks." OOPSLA, 2002. https://doi.org/10.1145/582419.582440
+
+[8] Caires, L. and Pfenning, F. "Session Types as Intuitionistic Linear Propositions." CONCUR, 2010. https://doi.org/10.1007/978-3-642-15375-4_16
+
+[9] Chen, R., Balzer, S., and Bhatt Toninho, B. "Ferrite: A Judgmental Embedding of Session Types in Rust." ICFP, 2022. https://doi.org/10.1145/3547635
+
+[10] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Sber, M., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A. "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning." OSDI, 2018. https://www.usenix.org/conference/osdi18/presentation/chen
+
+[11] Dardha, O., Giachino, E., and Sangiorgi, D. "Session Types Revisited." Information and Computation 256, 2017. https://doi.org/10.1016/j.ic.2017.06.002
+
+[12] Flanagan, C. and Freund, S. N. "Type-Based Race Detection for Java." PLDI, 2000. https://doi.org/10.1145/349299.349328
+
+[13] Girard, J.-Y. "Linear Logic." Theoretical Computer Science 50(1), 1987. https://doi.org/10.1016/0304-3975(87)90045-4
+
+[14] Gu, Y., Lezama, J. P., Qi, S., Giannakou, A., and Donaldson, A. F. "Lockstep Execution Semantics for Modelling GPU Programs." OOPSLA, 2023. https://doi.org/10.1145/3622811
+
+[15] Hazy Research (Stanford). "Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B." Stanford AI Lab Blog, 2025. https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles
+
+[16] Henriksen, T., Serup, N. G. W., Elsman, M., Henglein, F., and Oancea, C. E. "Futhark: Purely Functional GPU-Programming with Nested Parallelism and In-Place Array Updates." PLDI, 2017. https://doi.org/10.1145/3062341.3062354
+
+[17] Honda, K. "Types for Dyadic Interaction." CONCUR, 1993. https://doi.org/10.1007/3-540-57208-2_35
+
+[18] Honda, K., Yoshida, N., and Carbone, M. "Multiparty Asynchronous Session Types." POPL, 2008. https://doi.org/10.1145/1328438.1328472
+
+[19] Igarashi, A., Thiemann, P., Vasconcelos, V. T., and Wadler, P. "Gradual Session Types." ICFP, 2017. https://doi.org/10.1145/3110282
+
+[20] Khronos Group. "The OpenCL Specification, Version 1.0." 2009. https://www.khronos.org/opencl/
+
+[21] Khronos Group. "SYCL 2020 Specification." 2020. https://www.khronos.org/sycl/
+
+[22] Kopcke, B., Bischof, S., and Steffen, S. "Descend: A Safe GPU Systems Programming Language." PLDI, 2024. https://doi.org/10.1145/3656401
+
+[23] Lange, J. and Yoshida, N. "On the Undecidability of Asynchronous Session Subtyping." FoSSaCS, 2016. https://doi.org/10.1007/978-3-662-49630-5_25
+
+[24] Matsakis, N. D. and Klock, F. S. "The Rust Language." ACM SIGAda Ada Letters 34(3), 2014. https://doi.org/10.1145/2692956.2663188
+
+[25] NVIDIA. "CUDA C Programming Guide." 2007 (updated annually). https://docs.nvidia.com/cuda/cuda-c-programming-guide/
+
+[26] NVIDIA. "Cooperative Groups: Flexible CUDA Thread Programming." GTC, 2017. https://developer.nvidia.com/blog/cooperative-groups/
+
+[27] NVIDIA. "CUDA C Programming Guide, §10.22: Warp Shuffle Functions." 2017. Deprecation notice for `__shfl`, `__shfl_up`, `__shfl_down`, `__shfl_xor` in CUDA 9.0.
+
+[28] NVIDIA. "NVIDIA Tesla V100 GPU Architecture: The World's Most Advanced Data Center GPU." Architecture Whitepaper, 2017. §Independent Thread Scheduling.
+
+[29] NVIDIA. "CUDA Toolkit: compute-sanitizer." https://docs.nvidia.com/compute-sanitizer/
+
+[30] Peng, Y., Grover, V., and Leis, J. "CURD: A Dynamic CUDA Race Detector." PLDI, 2018. https://doi.org/10.1145/3296979.3192368
+
+[31] Pharr, M. and Mark, W. R. "ispc: A SPMD Compiler for High-Performance CPU Programming." InPar, 2012. https://doi.org/10.1109/InPar.2012.6339601
+
+[32] Ragan-Kelley, J., Barnes, C., Adams, A., Paris, S., Durand, F., and Amarasinghe, S. "Halide: A Language and Compiler for Optimizing Parallelism, Locality, and Recomputation in Image Processing Pipelines." PLDI, 2013. https://doi.org/10.1145/2491956.2462176
+
+[33] Stork, S., Marques, P., and Aldrich, J. "Concurrency by Default: Using Permissions to Express Dataflow in Stateful Programs." OOPSLA, 2014. https://doi.org/10.1145/2660193.2660205
+
+[34] Viering, M., Hu, R., Eugster, P., and Ziarek, L. "A Multiparty Session Typing Discipline for Fault-Tolerant Event-Driven Distributed Programming." OOPSLA, 2021. https://doi.org/10.1145/3485484
+
+[35] Wadler, P. "Propositions as Sessions." ICFP, 2012. https://doi.org/10.1145/2364527.2364568
+
+[36] Wright, A. K. and Felleisen, M. "A Syntactic Approach to Type Soundness." Information and Computation 115(1), 1994. https://doi.org/10.1006/inco.1994.1093
+
+[37] Zheng, M., Ravi, V. T., Qin, F., and Agrawal, G. "GMRace: Detecting Data Races in GPU Programs via a Low-Overhead Scheme." IEEE TPDS 25(1), 2014. https://doi.org/10.1109/TPDS.2013.44
+
+### Bug Reports Cited
+
+[B1] NVIDIA cuda-samples#398: Wrong ballot mask in reference reduction. https://github.com/NVIDIA/cuda-samples/issues/398
+
+[B2] NVIDIA CCCL#854: Compiler predicates off mask initialization in CUB WarpScanShfl. https://github.com/NVIDIA/cccl/issues/854
+
+[B3] PIConGPU#2514: Hardcoded full mask in divergent branch. https://github.com/ComputationalRadiationPhysics/picongpu/issues/2514
+
+[B4] LLVM#155682: shfl_sync causes branch elimination. https://github.com/llvm/llvm-project/issues/155682

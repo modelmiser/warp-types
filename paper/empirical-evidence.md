@@ -6,7 +6,7 @@
 
 The paper's contribution statement is:
 
-> We present warp typestate, a linear type system that tracks which lanes are
+> (paraphrasing §1.2) A linear typestate system that tracks which lanes are
 > active at each program point and statically eliminates diverged shuffle and
 > ballot operations. Well-typed programs cannot perform unsafe warp operations
 > on inactive lanes. The guarantee is zero-overhead — enforcement is purely

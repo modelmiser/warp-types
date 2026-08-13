@@ -227,7 +227,7 @@ We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/Wa
 
 ### Scope
 
-The mechanization covers two files totaling 1329 lines of Lean:
+The mechanization covers two files totaling 1337 lines of Lean:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
@@ -269,3 +269,4 @@ The following are fully mechanized with zero sorry, zero axioms:
 - **Linearity**: Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) are enforced by the linear context threading mechanism (`letBind` checks freshness and consumption), but are not stated as standalone Lean theorems. The mechanism is sound; the explicit theorem statements are future work.
 
 We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
+

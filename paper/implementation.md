@@ -309,7 +309,7 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
 
-2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.2, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
+2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.1, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
@@ -323,3 +323,4 @@ Our Rust implementation demonstrates that warp typestate can be embedded in an e
 - **Platform portability**: Same algorithms run on CPU and GPU via the `Platform` trait
 
 The key insight: Rust's type system is expressive enough to encode our safety properties without runtime cost. The `Platform` abstraction further demonstrates that the type discipline is not GPU-specific — it applies uniformly to any SIMT-like execution model.
+

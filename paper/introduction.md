@@ -68,7 +68,7 @@ The fix is to merge back to `Warp<All>` before shuffling—the type system guide
 
 ## 1.2 Contributions
 
-We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs cannot perform unsafe warp operations on inactive lanes. The guarantee is zero-overhead—enforcement is purely compile-time. We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
+We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design). We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
 
 This paper makes the following contributions:
 
@@ -87,3 +87,4 @@ This paper makes the following contributions:
 Warp typestate is one instance of a broader pattern: *participatory computation* where the set of active participants changes during execution. The transfer fidelity varies by domain: we have demonstrated a working prototype for FPGA crossbar protocols (§9.5), where the bug class is isomorphic; identified a partial transfer to distributed systems, where quiescence complements fault-tolerant session types; and noted structural similarity to database predicate filtering and proof case splits, though without actionable type-system transfer. We return to this in §9.
 
 The paper proceeds through background (§2), core type system (§3), soundness proof (§4), extensions (§5), implementation (§6), evaluation (§7), related work (§8), and future directions (§9–10).
+

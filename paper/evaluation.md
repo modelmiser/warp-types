@@ -9,7 +9,7 @@ We evaluate warp typestate on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of 21 bugs, 14 are fully caught by our type system, 5 partially, 1 (WebGPU's decision to exclude indexed subgroup shuffles) serves as design-level motivation, and 1 (CUDA 9.0 API deprecation) is a vendor response to the bug class. The full table of all 21 bugs with per-issue caveats is available in the supplementary material.
+We surveyed 21 documented shuffle-from-inactive-lane bugs across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
 
 **Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes below).
 
@@ -111,7 +111,7 @@ The alternative to compile-time safety is runtime mask checking—verifying at e
 | Runtime sanitizer | Significant | Executed paths only | At test time |
 | Our type system | 0% | All paths | At compile time |
 
-Our approach provides strictly more coverage at strictly less cost.
+Within the typed fragment, our approach provides broader coverage at lower cost; the comparison is not total — a runtime sanitizer also covers code the type system cannot see (legacy CUDA, raw branches), so the two are complementary (§8).
 
 ## 7.3 Expressiveness
 
@@ -159,7 +159,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 **GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents on both sm_89 (Ada) and sm_90 (Hopper). We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on both H200 SXM and RTX 4000 Ada via cudarc, producing correct results (32, 496, 32, and a fully sorted sequence respectively). The `diverge_merge_reduce` kernel is particularly significant: it diverges into `Warp<Even>` and `Warp<Odd>`, merges back to `Warp<All>`, then reduces—the type system prevented shuffle during divergence, and the merge produces PTX identical to the non-diverging butterfly. The ballot codepath uses a `setp`/`selp` workaround for Rust's missing `pred` register class in the nvptx64 backend (declaring `.reg .pred` inside the asm block and converting to/from `u32`), but has not yet been exercised in a GPU kernel.
 
-**Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). We are not aware of shuffle-from-inactive-lane bugs that our type system would fail to catch at the source level.
+**Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). Among the surveyed instances, none is fully outside the system's reach at the source level, though five are only partially caught (the residue in each case is a data-dependent mask or logic component beyond active-set typing).
 
 ## 7.5 Summary
 
@@ -177,4 +177,5 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
-We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is the first approach that makes lane-level divergence *safe* rather than *forbidden*.
+We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is, to our knowledge, the first *compile-time type discipline* that makes lane-level divergence safe rather than forbidden (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means; §8).
+

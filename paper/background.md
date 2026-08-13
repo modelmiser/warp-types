@@ -91,10 +91,11 @@ Session types [Honda 1993] are a type discipline for communication protocols, ex
 
 Traditional session types assume all participants remain active throughout the session. GPU divergence introduces a different pattern: some participants *go quiescent*. They don't leave the session or fail—they temporarily stop participating, then rejoin at reconvergence. This is not a failure mode; it's the normal execution model.
 
-We extend session types with:
+Our departure from session types — the phenomena they do not capture, which our system must:
 
 - **Active sets**: Which participants are currently active
 - **Quiescence**: A participant may become inactive (not failed, not departed—just paused)
 - **Reconvergence**: Quiescent participants rejoin
 
 This models GPU divergence naturally: diverging is branching where one branch is "go quiescent," and reconverging is joining where quiescent participants resume. Our contribution is recognizing this correspondence and building a type system that exploits it to prevent bugs.
+
