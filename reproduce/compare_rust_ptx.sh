@@ -8,18 +8,28 @@
 # Unlike the CUDA comparison (compare_ptx.sh), this compiles ACTUAL
 # Rust type system machinery to PTX, not just comments.
 #
-# Requires: rustc nightly with nvptx64-nvidia-cuda target
-# Install:  rustup target add nvptx64-nvidia-cuda --toolchain nightly
+# Requires: the nightly pinned in ../rust-toolchain.toml, with the
+#           nvptx64-nvidia-cuda target.
+# Install:  rustup target add nvptx64-nvidia-cuda
+#
+# NOTE: do NOT reintroduce `+nightly` here. An explicit +toolchain overrides
+# rust-toolchain.toml, so the script would silently compile with whatever
+# floating nightly happens to be installed rather than the pinned one.
 #
 # Usage: bash reproduce/compare_rust_ptx.sh
 
 set -e
 cd "$(dirname "$0")"
 
+# Non-zero on any mismatch. Without this the script printed "DIFFERENT PTX --
+# unexpected" and still exited 0, so a broken zero-overhead result was
+# indistinguishable from a passing one to any automated caller.
+FAILURES=0
+
 # Ensure nvptx64-nvidia-cuda target is installed
-if ! rustup +nightly target list --installed | grep -q nvptx64-nvidia-cuda; then
+if ! rustup target list --installed | grep -q nvptx64-nvidia-cuda; then
     echo "Installing nvptx64-nvidia-cuda target..."
-    rustup target add nvptx64-nvidia-cuda --toolchain nightly
+    rustup target add nvptx64-nvidia-cuda
 fi
 
 SRC="rust_ptx_typed.rs"
@@ -29,7 +39,7 @@ echo "=== Compiling Rust to PTX (nvptx64-nvidia-cuda, -O) ==="
 # Check rustc's exit status BEFORE filtering its output: a
 # `rustc ... | grep -v warning || true` pipeline would swallow a compile
 # failure and let the script "compare" a stale checked-in ${PTX}.
-if ! COMPILE_LOG=$(rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O "${SRC}" -o "${PTX}" 2>&1); then
+if ! COMPILE_LOG=$(rustc --target nvptx64-nvidia-cuda --emit=asm -O "${SRC}" -o "${PTX}" 2>&1); then
     echo "ERROR: rustc failed to compile ${SRC}:" >&2
     echo "${COMPILE_LOG}" >&2
     exit 1
@@ -72,6 +82,7 @@ if diff -q /tmp/rust_ptx_typed.txt /tmp/rust_ptx_untyped.txt > /dev/null 2>&1; t
     echo "IDENTICAL PTX (butterfly)"
 else
     echo "DIFFERENT PTX (butterfly) — unexpected"
+    FAILURES=$((FAILURES + 1))
     diff /tmp/rust_ptx_typed.txt /tmp/rust_ptx_untyped.txt || true
 fi
 
@@ -86,6 +97,7 @@ if diff -q /tmp/rust_ptx_dm_typed.txt /tmp/rust_ptx_dm_untyped.txt > /dev/null 2
     echo "IDENTICAL PTX (diverge/merge)"
 else
     echo "DIFFERENT PTX (diverge/merge) — unexpected"
+    FAILURES=$((FAILURES + 1))
     diff /tmp/rust_ptx_dm_typed.txt /tmp/rust_ptx_dm_untyped.txt || true
 fi
 
@@ -95,3 +107,12 @@ awk '/^\.visible.*butterfly_typed/,/^}/' "${PTX}"
 echo ""
 echo "=== Full PTX for diverge_merge_typed ==="
 awk '/^\.visible.*diverge_merge_typed/,/^}/' "${PTX}"
+
+if [ "${FAILURES}" -ne 0 ]; then
+    echo ""
+    echo "FAIL: ${FAILURES} PTX comparison(s) differed — zero-overhead claim NOT reproduced."
+    exit 1
+fi
+
+echo ""
+echo "PASS: all PTX comparisons identical."
