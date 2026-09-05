@@ -1,6 +1,8 @@
 //! Rust-to-PTX zero-overhead proof.
 //!
-//! Compiles to PTX via: rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O
+//! Compiles to PTX via: rustc --target nvptx64-nvidia-cuda --emit=asm -O
+//! (no `+nightly` — see the note in compare_rust_ptx.sh: an explicit
+//! +toolchain overrides rust-toolchain.toml and silently unpins the build.)
 //!
 //! Contains two functions:
 //!   butterfly_untyped: raw data passing (no type system)

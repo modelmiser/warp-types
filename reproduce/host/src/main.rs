@@ -9,8 +9,13 @@
 //!
 //! Prerequisites:
 //!   - NVIDIA GPU with CUDA driver
-//!   - PTX compiled via: rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O \
+//!   - PTX compiled via: rustc --target nvptx64-nvidia-cuda --emit=asm -O \
 //!       --edition 2021 ../typed_butterfly_kernel.rs -o ../typed_butterfly_kernel.ptx
+//!     (no `+nightly` — an explicit +toolchain overrides rust-toolchain.toml.
+//!      NOTE: the committed ../typed_butterfly_kernel.ptx and ../reduce7_typed.ptx
+//!      are ISA 6.0 from an unrecorded toolchain; the pin now emits 7.0. They are
+//!      kept as the artifact the H200/RTX-4000 runs actually loaded — regenerate
+//!      only together with a re-run on hardware. See TODO.)
 
 #![allow(deprecated, unused_imports)]
 

@@ -5,8 +5,12 @@
 //!   2. reduce7_typed   — Warp-types: the buggy pattern is a COMPILE ERROR
 //!   3. reduce7_fixed   — Warp-types: correct fix, all lanes participate → CORRECT
 //!
-//! Compile: rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O \
+//! Compile: rustc --target nvptx64-nvidia-cuda --emit=asm -O \
 //!          --edition 2021 reproduce/reduce7_typed.rs -o reproduce/reduce7_typed.ptx
+//!
+//! No `+nightly`: rust-toolchain.toml pins the nightly, and a `+`-qualified
+//! invocation silently bypasses that pin — which is how two committed .ptx
+//! files ended up at an ISA version no pin reproduces.
 
 #![no_std]
 #![no_main]

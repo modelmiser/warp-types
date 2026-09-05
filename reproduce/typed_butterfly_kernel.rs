@@ -4,9 +4,13 @@
 //! The type system (Warp<All>, ActiveSet, ComplementOf) is fully erased;
 //! only the shuffle intrinsics remain in the generated PTX.
 //!
-//! Compile: rustc +nightly --target nvptx64-nvidia-cuda --emit=asm -O \
+//! Compile: rustc --target nvptx64-nvidia-cuda --emit=asm -O \
 //!          --edition 2021 reproduce/typed_butterfly_kernel.rs \
 //!          -o reproduce/typed_butterfly_kernel.ptx
+//!
+//! No `+nightly`: rust-toolchain.toml pins the nightly, and a `+`-qualified
+//! invocation silently bypasses that pin — which is how two committed .ptx
+//! files ended up at an ISA version no pin reproduces.
 //!
 //! Requires: #![feature(abi_ptx, asm_experimental_arch)]
 
