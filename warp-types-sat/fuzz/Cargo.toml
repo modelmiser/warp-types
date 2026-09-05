@@ -1,0 +1,34 @@
+[package]
+name = "warp-types-sat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Detached from the parent workspace on purpose: fuzz targets build with
+# libfuzzer's sanitizer flags, which should not leak into normal `cargo build
+# --workspace` runs.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.warp-types-sat]
+path = ".."
+
+[[bin]]
+name = "dimacs"
+path = "fuzz_targets/dimacs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "solver_differential"
+path = "fuzz_targets/solver_differential.rs"
+test = false
+doc = false
+bench = false
