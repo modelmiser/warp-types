@@ -1,6 +1,8 @@
 name: Doc Counts
 
-# Runs the doc-count freshness guard (scripts/check-doc-counts.sh) in CI.
+# Runs the repo's doc-integrity guards in CI: the doc-count freshness guard
+# (scripts/check-doc-counts.sh) and the paper-sync guard
+# (scripts/check-paper-sync.sh).
 #
 # Deliberately has NO paths-ignore: unlike ci.yml (which skips *.md / paper /
 # blog), this guard's entire purpose is to compare doc claims against the real
@@ -21,6 +23,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Before the toolchain install: this guard is pure python3 and needs no
+      # cargo, so a paper fork reports in seconds rather than after a build.
+      # It was written at the 2026-08-13 gate — which found the assembled,
+      # DOI'd paper carrying contradictory verdicts and placeholder references
+      # against its section files — but was never wired to anything, so it had
+      # never run outside a manual invocation.
+      - name: Paper sync guard (section files == paper.md spans)
+        run: bash scripts/check-paper-sync.sh
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-01
