@@ -1573,7 +1573,7 @@ The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block
 
 Our implementation includes sixteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
-### Bug Pattern Coverage
+### Test Inventory
 
 Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
