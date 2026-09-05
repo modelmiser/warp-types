@@ -141,7 +141,14 @@ jobs:
       # cold runner, and a slow job gets deleted rather than fixed. Third-party
       # action, accepted deliberately — same trust class as the toolchain action
       # already used above.
-      - uses: taiki-e/install-action@cargo-fuzz
+      #
+      # Use the explicit `tool:` input, NOT the `@cargo-fuzz` tag shorthand: that
+      # tag resolves and the step reports SUCCESS in ~20ms having installed
+      # nothing, so the failure surfaces later as "no such command: `fuzz`" in a
+      # step that looks unrelated.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
       # The deterministic half, and the reason the seed corpus is committed:
       # `-runs=0` executes every seed exactly once and exits, so this is a fixed
       # regression gate rather than a coin flip. Both corpora were verified to
