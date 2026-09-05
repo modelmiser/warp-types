@@ -112,8 +112,22 @@ impl<T: Copy, P: AccessPattern> WarpPtr<T, P> {
     ///
     /// # Safety
     ///
-    /// Caller must ensure `base` is valid for the declared access pattern
-    /// and that the pointer remains valid for the lifetime of the `WarpPtr`.
+    /// `base` must remain valid for the lifetime of the `WarpPtr`, and must
+    /// be readable for the whole span the declared pattern `P` reaches —
+    /// which is quantified, not vague:
+    ///
+    /// - `Uniform`: `base` alone (1 element).
+    /// - `Consecutive`: `base .. base + WARP_SIZE` (32 elements).
+    /// - `Strided<S>`: `base + lane * S` for `lane` in `0..WARP_SIZE`.
+    /// - `Random`: nothing is assumed — reads go through the `unsafe`
+    ///   [`load::generic`], whose caller supplies and vouches for the indices.
+    ///
+    /// This is load-bearing: the pattern is fixed at construction (no safe
+    /// conversion exists — `WorstOf` is type-level only), and `load`/`store`
+    /// are SAFE functions. `load::consecutive` on a `WarpPtr` built over a
+    /// one-element allocation is an out-of-bounds read with no `unsafe` at
+    /// the call site, so the span belongs in this contract rather than in
+    /// the reader's head.
     pub unsafe fn new(base: *const T) -> Self {
         WarpPtr {
             base,
@@ -145,8 +159,10 @@ impl<T: Copy, P: AccessPattern> WarpPtrMut<T, P> {
     ///
     /// # Safety
     ///
-    /// Caller must ensure `base` is valid for the declared access pattern
-    /// and that the pointer remains valid for the lifetime of the `WarpPtrMut`.
+    /// Same span contract as [`WarpPtr::new`], but the span must be valid
+    /// for WRITES and must not alias any other live reference or `WarpPtrMut`
+    /// — `store::consecutive` writes all `WARP_SIZE` elements through a safe
+    /// function.
     pub unsafe fn new(base: *mut T) -> Self {
         WarpPtrMut {
             base,
