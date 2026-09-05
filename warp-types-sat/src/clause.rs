@@ -32,7 +32,32 @@ use core::sync::atomic::{AtomicU32, Ordering};
 /// construction; tokens are stamped with it at acquire so `release` can verify
 /// a token is returned to the pool that issued it (cross-pool release would
 /// free a slot the pool never gave out, defeating the exclusivity invariant).
+///
+/// Drawn through [`next_nonce`], never `fetch_add` — uniqueness is the whole
+/// point of this counter, and a wrapping `fetch_add` would quietly reissue
+/// nonce 0 and make `release`'s cross-pool check pass on a foreign token.
 static POOL_NONCE: AtomicU32 = AtomicU32::new(0);
+
+/// Draw the next pool identity, or panic rather than repeat one.
+///
+/// Returns the pre-increment value, so identities run `0 ..= u32::MAX - 1`.
+/// On exhaustion the counter saturates at `u32::MAX` and every later call
+/// panics too — a wrapping counter would hand the 2^32-nd pool the identity
+/// the first pool is still using, and `release` would then accept that pool's
+/// token and free a slot whose owner is still live. Silent exclusivity loss
+/// is exactly what `ClauseToken` exists to prevent, so this fails loudly.
+///
+/// Split out from `ClausePool::new` so the exhaustion path is reachable in a
+/// test without allocating 2^32 pools.
+fn next_nonce(counter: &AtomicU32) -> u32 {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .expect(
+            "ClausePool: pool-identity counter exhausted (2^32 pools created) — \
+             the next identity would repeat one already in use and release() \
+             would accept a foreign token",
+        )
+}
 
 // ============================================================================
 // Clause token (affine — non-Copy, non-Clone)
@@ -94,7 +119,7 @@ impl ClausePool {
     pub fn new(num_clauses: usize) -> Self {
         ClausePool {
             acquired: vec![false; num_clauses],
-            nonce: POOL_NONCE.fetch_add(1, Ordering::Relaxed),
+            nonce: next_nonce(&POOL_NONCE),
         }
     }
 
@@ -229,6 +254,44 @@ mod tests {
         let _ta = a.acquire(1).unwrap();
         let tb = b.acquire(1).unwrap();
         a.release(tb);
+    }
+
+    #[test]
+    fn nonces_are_distinct_and_monotonic() {
+        let c = AtomicU32::new(0);
+        assert_eq!(next_nonce(&c), 0);
+        assert_eq!(next_nonce(&c), 1);
+        assert_eq!(next_nonce(&c), 2);
+    }
+
+    #[test]
+    fn last_nonce_before_exhaustion_is_still_issued() {
+        let c = AtomicU32::new(u32::MAX - 1);
+        assert_eq!(next_nonce(&c), u32::MAX - 1);
+        assert_eq!(c.load(Ordering::Relaxed), u32::MAX, "counter must saturate");
+    }
+
+    #[test]
+    #[should_panic(expected = "counter exhausted")]
+    fn exhausted_nonce_counter_panics_rather_than_wrapping() {
+        // With `fetch_add` this returned u32::MAX and wrapped the counter to
+        // 0, so the next pool created would share pool 0's identity and
+        // release() would accept its tokens.
+        let c = AtomicU32::new(u32::MAX);
+        let _ = next_nonce(&c);
+    }
+
+    #[test]
+    fn exhaustion_stays_exhausted() {
+        let c = AtomicU32::new(u32::MAX);
+        assert!(std::panic::catch_unwind(|| next_nonce(&c)).is_err());
+        assert_eq!(
+            c.load(Ordering::Relaxed),
+            u32::MAX,
+            "a failed draw must not advance the counter — otherwise the panic \
+             just delays the collision by one pool"
+        );
+        assert!(std::panic::catch_unwind(|| next_nonce(&c)).is_err());
     }
 
     #[test]
