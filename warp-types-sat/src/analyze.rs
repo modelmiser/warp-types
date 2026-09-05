@@ -219,10 +219,16 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
     // Cross-argument boundary (same pattern as run_bcp_watched): every DB
     // literal must index within the trail's per-var arrays. The resolution
-    // loop below reads reason clauses via clause_unchecked and feeds their
-    // variables to unchecked seen/trail indexing — without this check, a
-    // caller-supplied db/trail mismatch is release UB, not a panic.
-    // Once per call, off the hot resolution path.
+    // loop below feeds reason-clause variables to unchecked seen/trail
+    // indexing — without this check, a caller-supplied db/trail mismatch is
+    // release UB, not a panic. Once per call, off the hot resolution path.
+    //
+    // The reason clauses themselves are fetched through `reason_clause_lits`
+    // (bounds-checked `clause()` plus a per-literal range check), never
+    // `clause_unchecked` — this file calls that nowhere. The two checks are
+    // not redundant: this one covers the variables reachable from the DB at
+    // all, `reason_clause_lits` covers a CRef that points into a clause body
+    // and decodes a plausible-but-wrong clause.
     assert!(
         db.is_empty() || (db.max_variable() as usize) < max_var,
         "analyze: clause DB references variable {} out of range (trail num_vars {max_var})",
