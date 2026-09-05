@@ -30,9 +30,20 @@ echo "=== warp-types H200 SXM Verification ===" | tee "$RESULTS"
 echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$RESULTS"
 echo "" | tee -a "$RESULTS"
 
+# --- Step 0a: PATH ---
+# The stock RunPod `*-cuda*-devel` images ship nvcc at /usr/local/cuda/bin but do
+# not put it on PATH, in login OR non-login shells. Steps 4 and 5 call nvcc
+# directly, so without this the script dies on a machine that has a perfectly
+# good CUDA toolkit. Verified on a pytorch:2.4.0-cuda12.4.1-devel H200 pod,
+# 2026-09-05.
+if ! command -v nvcc &>/dev/null && [ -x /usr/local/cuda/bin/nvcc ]; then
+    export PATH="/usr/local/cuda/bin:$PATH"
+fi
+
 # --- Step 0: GPU Info ---
 echo "=== Step 0: GPU Info ===" | tee -a "$RESULTS"
 nvidia-smi --query-gpu=name,compute_cap,driver_version,memory.total --format=csv,noheader | tee -a "$RESULTS"
+nvcc --version | tail -2 | tee -a "$RESULTS"
 echo "" | tee -a "$RESULTS"
 
 # --- Step 1: Install Rust nightly ---
