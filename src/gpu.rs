@@ -72,6 +72,23 @@ pub fn block_dim_x() -> u32 {
 
 /// Atomic add for f64 in global memory.
 /// PTX: `atom.global.add.f64` (native since sm_60).
+///
+/// # Safety
+///
+/// `addr` must point into **global** memory — the instruction is
+/// `atom.global.add.f64`, so a generic, shared, or local address is undefined
+/// rather than merely slow. It must be 8-byte aligned and valid for both read
+/// and write for the duration of the call. Concurrent access is defined only
+/// through this same global-atomic path: a plain load or store to `addr`
+/// racing with this call is a data race, not a resolved contention. Requires
+/// sm_60 or later, where the f64 form is native.
+///
+/// Callers establish the bound, not this function. The in-tree caller
+/// (`sat-kernels`' gradient accumulation, `warp-types-sat/sat-kernels/src/lib.rs`)
+/// indexes `grad` by clause variable id, and the host side checks every such id
+/// against `ClauseDataSoA::num_vars` before launch — see the asserts in
+/// `warp-types-sat/src/gpu_launcher.rs`. An unchecked variable id here writes
+/// outside the gradient allocation with no diagnostic.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {

@@ -42,7 +42,11 @@
 
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
-#![cfg_attr(target_arch = "nvptx64", feature(abi_ptx, asm_experimental_arch))]
+// `abi_ptx` is deliberately NOT listed: this crate declares no
+// `extern "ptx-kernel"` entry point. The ABI is emitted by
+// `warp-types-kernel`'s macro into the *user's* crate, which declares the
+// feature itself (see `examples/gpu-project/my-kernels/src/lib.rs`).
+#![cfg_attr(target_arch = "nvptx64", feature(asm_experimental_arch))]
 // dead_code is allowed only in the research module (experimental prototypes).
 // Core modules should not have dead code — if it's unused, remove it or
 // mark it #[allow(dead_code)] individually with a justification comment.
