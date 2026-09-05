@@ -68,8 +68,9 @@ impl GpuTarget {
 pub struct WarpBuilder {
     /// Path to the kernel crate (relative to the manifest dir).
     kernel_crate: PathBuf,
-    /// Rust toolchain to use (default: "nightly").
-    toolchain: String,
+    /// Rust toolchain to use. `None` (the default) means: discover the pin from
+    /// the kernel crate's own `rust-toolchain.toml`, falling back to `"nightly"`.
+    toolchain: Option<String>,
     /// Release mode (default: true).
     release: bool,
     /// Feature flags to pass to the kernel crate.
@@ -93,7 +94,7 @@ impl WarpBuilder {
     pub fn new(kernel_crate_path: impl Into<PathBuf>) -> Self {
         WarpBuilder {
             kernel_crate: kernel_crate_path.into(),
-            toolchain: "nightly".to_string(),
+            toolchain: None,
             release: true,
             features: Vec::new(),
             target: GpuTarget::Nvidia,
@@ -101,10 +102,47 @@ impl WarpBuilder {
         }
     }
 
-    /// Set the Rust toolchain (default: "nightly").
+    /// Set the Rust toolchain explicitly, overriding pin discovery.
     pub fn toolchain(mut self, toolchain: impl Into<String>) -> Self {
-        self.toolchain = toolchain.into();
+        self.toolchain = Some(toolchain.into());
         self
+    }
+
+    /// The toolchain the inner cargo will run under.
+    ///
+    /// `RUSTUP_TOOLCHAIN` takes precedence over `rust-toolchain.toml`, so
+    /// hardcoding a floating `"nightly"` here silently unpinned every kernel
+    /// build — including in a repo whose toolchain file exists precisely to make
+    /// GPU artifacts reproducible. Discover the pin instead: walk up from the
+    /// kernel crate for a `rust-toolchain.toml` and use its channel.
+    ///
+    /// Only a NIGHTLY channel is adopted. `-Z build-std` needs nightly, so a
+    /// crate pinned to stable must not drag the kernel build down with it —
+    /// that would turn a working build into a confusing `-Z` error. In that case
+    /// fall back to plain `"nightly"`, which is the old behaviour.
+    fn resolve_toolchain(&self, kernel_dir: &Path) -> String {
+        if let Some(explicit) = &self.toolchain {
+            return explicit.clone();
+        }
+        let mut dir = Some(kernel_dir);
+        while let Some(d) = dir {
+            for name in ["rust-toolchain.toml", "rust-toolchain"] {
+                if let Ok(text) = std::fs::read_to_string(d.join(name)) {
+                    if let Some(chan) = text
+                        .lines()
+                        .find_map(|l| l.trim().strip_prefix("channel"))
+                        .and_then(|r| r.trim().strip_prefix('='))
+                        .map(|r| r.trim().trim_matches('"').trim_matches('\'').to_string())
+                    {
+                        if chan.starts_with("nightly") {
+                            return chan;
+                        }
+                    }
+                }
+            }
+            dir = d.parent();
+        }
+        "nightly".to_string()
     }
 
     /// Disable release mode (compile in debug mode).
@@ -209,12 +247,16 @@ impl WarpBuilder {
             .arg("-C")
             .arg(format!("target-cpu={}", self.sm_arch));
 
-        // Select nightly toolchain via env var (works inside build scripts).
+        // Select the toolchain via env var (works inside build scripts). This is
+        // the kernel crate's own pin when it has one — see `resolve_toolchain`;
+        // RUSTUP_TOOLCHAIN outranks rust-toolchain.toml, so a hardcoded
+        // "nightly" here would override the very pin that makes the artifact
+        // reproducible.
         // CRITICAL: remove RUSTC — the parent cargo sets it to the absolute path
         // of its own rustc (e.g., stable's rustc), which the inner cargo would
         // inherit and use directly, bypassing toolchain selection entirely.
         // This is the same fix that spirv-builder uses.
-        cmd.env("RUSTUP_TOOLCHAIN", &self.toolchain);
+        cmd.env("RUSTUP_TOOLCHAIN", self.resolve_toolchain(&kernel_dir));
         cmd.env_remove("RUSTC");
         // Same class of leak as RUSTC — cargo sets these in the build-script
         // environment (or the user's shell may), and each silently changes
@@ -739,5 +781,77 @@ mod tests {
     #[test]
     fn parses_no_entries_from_empty_ptx() {
         assert!(parse_kernel_entries("").is_empty());
+    }
+
+    /// Scratch dir with a `rust-toolchain.toml` two levels up from the "crate",
+    /// so the walk-up is exercised rather than a same-directory hit.
+    fn scratch(tag: &str, channel: Option<&str>) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "wtb-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let crate_dir = root.join("workspace").join("kernels");
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        if let Some(c) = channel {
+            std::fs::write(
+                root.join("workspace").join("rust-toolchain.toml"),
+                format!("[toolchain]\nchannel = \"{c}\"\n"),
+            )
+            .unwrap();
+        }
+        crate_dir
+    }
+
+    #[test]
+    fn adopts_a_nightly_pin_found_by_walking_up() {
+        let dir = scratch("pin", Some("nightly-2026-07-01"));
+        let b = WarpBuilder::new(".");
+        assert_eq!(b.resolve_toolchain(&dir), "nightly-2026-07-01");
+    }
+
+    #[test]
+    fn ignores_a_stable_pin_because_build_std_needs_nightly() {
+        // A kernel crate under a stable-pinned project must not drag the GPU
+        // build to stable: `-Z build-std` would fail with a confusing error.
+        let dir = scratch("stable", Some("1.90.0"));
+        let b = WarpBuilder::new(".");
+        assert_eq!(b.resolve_toolchain(&dir), "nightly");
+    }
+
+    #[test]
+    fn falls_back_to_nightly_when_no_pin_exists() {
+        let dir = scratch("nopin", None);
+        let b = WarpBuilder::new(".");
+        assert_eq!(b.resolve_toolchain(&dir), "nightly");
+    }
+
+    #[test]
+    fn explicit_toolchain_overrides_discovery() {
+        let dir = scratch("explicit", Some("nightly-2026-07-01"));
+        let b = WarpBuilder::new(".").toolchain("nightly-2026-01-01");
+        assert_eq!(b.resolve_toolchain(&dir), "nightly-2026-01-01");
+    }
+
+    #[test]
+    fn discovers_this_repos_own_pin_from_sat_kernels() {
+        // The case that motivated the fix: an in-tree kernel crate must build
+        // under the repo pin, not a floating nightly.
+        let sat_kernels = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("warp-types-sat/sat-kernels");
+        if !sat_kernels.is_dir() {
+            return; // vendored/partial checkout
+        }
+        let resolved = WarpBuilder::new(".").resolve_toolchain(&sat_kernels);
+        assert!(
+            resolved.starts_with("nightly-"),
+            "expected the repo's dated pin, got {resolved}"
+        );
     }
 }

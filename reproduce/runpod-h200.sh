@@ -51,10 +51,11 @@ fi
 # 2026-09-05) but it installed an unused toolchain and made $RESULTS name the
 # wrong one, which for a provenance run is the whole point.
 #
-# Generic `nightly` still needs rust-src: WarpBuilder defaults to
-# `toolchain: "nightly"` (warp-types-builder/src/*.rs) and shells out to
-# `cargo +nightly`, which bypasses the pin from inside the library. That is a
-# real gap, tracked separately — do not "fix" it by pinning here.
+# rust-src is still added to generic `nightly` as a fallback: WarpBuilder now
+# discovers the kernel crate's pin (fixed 2026-09-05 — it used to hardcode
+# RUSTUP_TOOLCHAIN="nightly", which outranks rust-toolchain.toml and unpinned
+# every kernel build), but falls back to plain `nightly` for crates with no pin.
+# The pinned toolchain gets its components from the toolchain file itself.
 rustup component add rust-src --toolchain nightly 2>/dev/null || true
 echo "" | tee -a "$RESULTS"
 echo "--- toolchains (recorded so results cannot misattribute) ---" | tee -a "$RESULTS"
