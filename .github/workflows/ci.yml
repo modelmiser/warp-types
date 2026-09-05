@@ -20,7 +20,8 @@ jobs:
         with:
           toolchain: nightly-2026-07-01
           components: rustfmt
-          # nvptx64 target omitted — gpu feature needs CUDA, tested locally
+          # Host target only. The device side is covered by the `nvptx` job;
+          # the `gpu` FEATURE (CUDA runtime, real hardware) is still local-only.
       - name: Format check
         run: cargo fmt --check
       - name: Build
@@ -69,6 +70,38 @@ jobs:
       - name: Miri (Stacked Borrows + Tree Borrows)
         run: tools/miri.sh
 
+  nvptx:
+    runs-on: ubuntu-latest
+    # Type-checks the DEVICE side, which every other job structurally cannot see.
+    # `src/gpu.rs` is entirely `#[cfg(target_arch = "nvptx64")]`, so a host build
+    # removes the items outright: no build, no clippy, no test, and Miri cannot
+    # reach them either. That was 33 unsafe constructs verified only by local
+    # sm_89 runs. Compiling for the device target needs no GPU — just the target's
+    # core, which rust-toolchain.toml already requests.
+    #
+    # Adding this found four real defects on the first run: a `pub unsafe fn`
+    # taking a raw pointer with no `# Safety` section, a dead `abi_ptx` feature
+    # gate, a vestigial bounds parameter, and `missing_safety_doc` firing on every
+    # macro-generated kernel in every downstream crate.
+    #
+    # Lib-only, NOT `--all-targets`: the device target is `no_std` and has no
+    # `test` crate, so building test targets fails with 165 errors about `std`.
+    # The three crates are checked separately because `sat-kernels` and the worked
+    # example each declare their own `[workspace]`, so nothing above compiles them.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-01
+          targets: nvptx64-nvidia-cuda
+          components: clippy
+      - name: Clippy (device target — root lib)
+        run: cargo clippy -p warp-types --target nvptx64-nvidia-cuda -- -D warnings
+      - name: Clippy (device target — sat-kernels)
+        run: cargo clippy --manifest-path warp-types-sat/sat-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
+      - name: Clippy (device target — worked example)
+        run: cargo clippy --manifest-path examples/gpu-project/my-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -77,7 +110,7 @@ jobs:
         with:
           toolchain: nightly-2026-07-01
           components: clippy, rustfmt
-          # nvptx64 target omitted — gpu feature needs CUDA, tested locally
+          # Host target only — see the `nvptx` job for the device side.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Clippy (warp64 feature)
