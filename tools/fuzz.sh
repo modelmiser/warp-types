@@ -28,17 +28,26 @@
 # on a cold runner, and a slow job gets deleted rather than fixed. See TODO.md
 # for the open decision (prebuilt-binary action vs. accepting the cost).
 #
-# COVERAGE NOTE: corpus/ and artifacts/ are gitignored by cargo-fuzz's own
-# template, so each run starts cold. A 90 s dimacs run reached ~1079 edges with
-# 210 of 944 corpus entries parsing successfully — i.e. it does get past the
-# error path into the solver. Check that ratio before trusting a clean run.
+# SEEDS: cargo-fuzz gitignores its own corpus/, so a fresh clone would start
+# cold every time. `seeds/<target>/` is committed and passed as a second corpus
+# directory — libFuzzer reads it and writes new finds to corpus/, so the seeds
+# stay a fixed regression set rather than growing without review.
+#
+# COVERAGE NOTE: a 90 s dimacs run reached ~1079 edges with 210 of 944 corpus
+# entries parsing successfully — i.e. it does get past the error path into the
+# solver. Check that ratio before trusting a clean run: a parser target that
+# never produces valid input is clean for the wrong reason.
+#
+# CI runs `cargo check` on this crate (see ci.yml) but does not fuzz. Compile-rot
+# is the failure that happens silently; not fuzzing for a week is not.
 set -u
 cd "$(dirname "$0")/../warp-types-sat/fuzz" || exit 2
 T=${1:-60}
 rc=0
 for target in dimacs solver_differential; do
   echo "== $target (${T}s) =="
-  cargo +nightly fuzz run "$target" -- -max_total_time="$T" || rc=1
+  cargo +nightly fuzz run "$target" "corpus/$target" "seeds/$target" \
+    -- -max_total_time="$T" || rc=1
   echo
 done
 exit $rc

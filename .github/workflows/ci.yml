@@ -36,6 +36,14 @@ jobs:
         run: cargo test --workspace --doc --verbose
       - name: Example tests
         run: cargo test --workspace --examples --verbose
+      # The fuzz crate is detached from the workspace, so nothing above compiles
+      # it and its targets can silently stop building against a changed API —
+      # which is the way fuzzing actually rots, long before anyone notices they
+      # have stopped running it. A plain `cargo check` catches that in seconds
+      # and needs no cargo-fuzz install (a multi-minute cold-runner build, which
+      # is why the fuzzing itself stays manual — see tools/fuzz.sh).
+      - name: Fuzz targets still compile
+        run: cargo check --manifest-path warp-types-sat/fuzz/Cargo.toml
 
   miri:
     runs-on: ubuntu-latest
