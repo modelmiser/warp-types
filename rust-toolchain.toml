@@ -6,5 +6,6 @@ targets = ["nvptx64-nvidia-cuda"]
 # The type system itself works on stable Rust (1.75+).
 # Pin nightly for reproducible artifact evaluation.
 # Note: pred register class still missing for nvptx64; warp-types-kernel uses
-# a setp/selp workaround for ballot_sync that is runtime-verified on sm_89.
+# a setp-based workaround for ballot_sync that is runtime-verified on sm_89
+# (no selp: vote.sync.ballot.b32 already writes a .b32 register).
 # UPDATE POLICY: refresh pin at least quarterly. See .github/workflows/ci.yml.

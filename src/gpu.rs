@@ -122,12 +122,32 @@ pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
 ///
 /// # Safety
 ///
-/// `mask` (the PTX membermask) must name the executing lane, and every lane
-/// named in `mask` must be converged and executing this same instruction —
-/// naming a lane that does not execute it is undefined behavior (PTX
-/// `shfl.sync`). Data read from a source lane not named in `mask` is
-/// undefined. The typed wrappers (`Warp<All>`, `Tile`, `shuffle_xor_within`)
-/// establish this contract; call this directly only with a proven mask.
+/// `mask` is the PTX membermask. Behavior is undefined if the executing lane
+/// is not named in `mask`.
+///
+/// The instruction WAITS: it blocks until every *non-exited* lane named in
+/// `mask` has executed a `shfl.sync` with the same qualifiers and the same
+/// mask. Two consequences the previous wording got wrong. Naming a live lane
+/// that never arrives HANGS — it is not undefined behavior. Naming a lane that
+/// has already exited is fine; exited lanes are excluded from the wait.
+///
+/// Prior convergence is therefore sufficient but not required on sm_70+. The
+/// ISA's "all threads in `membermask` must execute the same instruction in
+/// convergence" rule is scoped to `.target sm_6x` and below; this crate is
+/// built and verified for sm_89/sm_90, so the instruction reconverges the
+/// named non-exited lanes itself.
+///
+/// `d` is undefined if this lane sources from a lane that is inactive,
+/// predicated off, or not named in `mask` — note INACTIVE, which the earlier
+/// wording omitted by talking only about lanes whose mask bit is clear.
+///
+/// An out-of-range computed source is DEFINED, not UB: the lane reads its own
+/// `a`. The in-range predicate that reports this is not returned by this
+/// wrapper. Per-mode source arithmetic and what "out of range" means differ —
+/// see each function.
+///
+/// The typed wrappers (`Warp<All>`, `Tile`, `shuffle_xor_within`) establish the
+/// mask; call this directly only with a proven one.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_bfly_i32(mask: u32, val: i32, lane_mask: u32) -> i32 {
@@ -149,8 +169,13 @@ pub unsafe fn shfl_sync_bfly_i32(mask: u32, val: i32, lane_mask: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `lane + delta`, with `delta` taken as 5 bits. If that exceeds the
+/// segment's `maxLane` (31 on a full warp) the lane reads its OWN `a` — defined,
+/// not UB. So the top `delta` lanes keep their value rather than wrapping.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_down_i32(mask: u32, val: i32, delta: u32) -> i32 {
@@ -172,8 +197,14 @@ pub unsafe fn shfl_sync_down_i32(mask: u32, val: i32, delta: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `lane - delta`, with `delta` taken as 5 bits. Below the segment
+/// floor the lane reads its OWN `a` — defined, not UB. So the bottom `delta`
+/// lanes keep their value. (`c = 0` here, not 31: `.up` compares against the
+/// floor, and 31 would be wrong.)
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_up_i32(mask: u32, val: i32, delta: u32) -> i32 {
@@ -195,8 +226,14 @@ pub unsafe fn shfl_sync_up_i32(mask: u32, val: i32, delta: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `src_lane` taken as 5 bits — this WRAPS (`src_lane & 31` on a full
+/// warp), it does not clamp to self like `.up`/`.down`. An arbitrary `src_lane`
+/// therefore always names some lane, so the binding constraint is the one above:
+/// if that lane is inactive or unnamed in `mask`, `d` is undefined.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
@@ -221,8 +258,14 @@ pub unsafe fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `lane ^ lane_mask` (5 bits). Crossing the segment boundary
+/// encoded in `c` returns the lane's OWN `a` — defined. `width` is checked by a
+/// release `assert!`, so a bad width panics rather than emitting a malformed
+/// `c`; the accepted set {4,8,16,32} is narrower than CUDA's {1,2,4,8,16,32}.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, width: u32) -> i32 {
@@ -250,8 +293,14 @@ pub unsafe fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, widt
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `lane + delta` (5 bits), clamped to the segment's `maxLane`, past
+/// which the lane reads its OWN `a`. Note `c`'s clamp field is `width - 1` here
+/// rather than `0x1F`; for power-of-two widths those agree, and `width` is
+/// restricted to {4,8,16,32} by a release `assert!`.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
@@ -279,8 +328,13 @@ pub unsafe fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u
 ///
 /// # Safety
 ///
-/// Same membermask contract as [`shfl_sync_bfly_i32`]: `mask` must name the
-/// executing lane and only lanes converged on this instruction.
+/// Membermask contract as in [`shfl_sync_bfly_i32`] (executing lane named;
+/// the instruction waits for non-exited named lanes; a source that is
+/// inactive or unnamed yields an undefined `d`).
+///
+/// Source is `lane - delta` (5 bits); below the segment floor the lane reads
+/// its OWN `a`. `c` carries no clamp bits, matching `.up`'s floor comparison.
+/// `width` is restricted to {4,8,16,32} by a release `assert!`.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32) -> i32 {
@@ -306,17 +360,26 @@ pub unsafe fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32
 /// Ballot: each thread votes, returns bitmask of votes.
 /// PTX: `vote.sync.ballot.b32`
 ///
-/// Uses the setp/selp workaround for Rust's missing `pred` register class:
-/// declare `.reg .pred` inside the asm block, convert to/from u32 via setp,
-/// pass everything through reg32. Same pattern as Rust-CUDA's `cuda_std`.
+/// Works around Rust's missing `pred` register class by declaring `.reg .pred`
+/// inside the asm block and building the predicate with `setp`. Everything
+/// crossing the asm boundary goes through `reg32`. Same pattern as Rust-CUDA's
+/// `cuda_std`.
+///
+/// This was described as a "setp/selp workaround" in five places; there is no
+/// `selp`. Only the inbound direction needs converting — `vote.sync.ballot.b32`
+/// already writes a `.b32` register, so nothing converts back.
 ///
 /// # Safety
 ///
-/// `mask` (the PTX membermask) must name the executing lane, and every lane
-/// named in `mask` must be converged and executing this same instruction —
-/// otherwise behavior is undefined (PTX `vote.sync`). `Warp<All>::ballot`
-/// establishes this by requiring a full-warp witness before passing
-/// `0xFFFFFFFF`.
+/// `mask` is the PTX membermask, with the same rules as [`shfl_sync_bfly_i32`]:
+/// undefined if the executing lane is not named, and the instruction waits for
+/// every non-exited named lane. Prior convergence is sufficient but not
+/// required on sm_70+; the "same instruction in convergence" rule is scoped to
+/// `.target sm_6x` and below.
+///
+/// Unlike shuffle, an unnamed lane is not a data hazard here: lanes not named
+/// in `mask` contribute 0 to the ballot, which is defined. `Warp<All>::ballot`
+/// supplies `0xFFFFFFFF` behind a full-warp witness.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn ballot_sync(mask: u32, predicate: bool) -> u32 {
