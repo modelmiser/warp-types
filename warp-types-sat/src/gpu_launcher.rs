@@ -45,6 +45,15 @@ pub struct GpuClauseData {
     output: CudaSlice<f64>,
     num_clauses: u32,
     num_batches: u32,
+    /// One past the highest variable index referenced by this clause data.
+    ///
+    /// The kernels index the caller's `x` (and gradient) buffers at
+    /// `vars[i]` for every literal slot, INCLUDING padding clauses (their
+    /// weight is 0, but the load still happens). Every entry point that
+    /// accepts an `x` slice checks it against this bound: a short `x` is a
+    /// device-side out-of-bounds access, which the launch `unsafe` block
+    /// cannot detect and CUDA reports, at best, as a later async fault.
+    num_vars: usize,
 }
 
 /// Errors from GPU operations.
@@ -89,6 +98,7 @@ impl GpuContext {
         let negs2_u32: Vec<u32> = soa.negs[2].iter().map(|&b| b as u32).collect();
 
         let num_batches = soa.num_batches() as u32;
+        let num_vars = soa.num_vars();
 
         Ok(GpuClauseData {
             vars0: s.clone_htod(&soa.vars[0])?,
@@ -101,6 +111,7 @@ impl GpuContext {
             output: s.clone_htod(&vec![0.0f64; num_batches as usize])?,
             num_clauses: soa.num_clauses as u32,
             num_batches,
+            num_vars,
         })
     }
 
@@ -119,7 +130,18 @@ impl GpuContext {
     /// Uploads variable values, launches kernel, downloads + sums partial results.
     /// The kernel result is identical to `total_loss_simwarp()` — same butterfly
     /// reduce, same operation order, same floating-point result.
+    ///
+    /// # Panics
+    /// Panics if `x` is shorter than the clause data's variable count — the
+    /// kernel would read `x[var]` out of bounds on the device.
     pub fn total_loss(&self, gpu_data: &GpuClauseData, x: &[f64]) -> Result<f64, GpuError> {
+        assert!(
+            x.len() >= gpu_data.num_vars,
+            "total_loss: x has {} entries but the clause data references {} variables — \
+             the kernel would index x out of bounds on the device",
+            x.len(),
+            gpu_data.num_vars
+        );
         let s = &self.stream;
 
         // Upload current variable values (changes each iteration)
@@ -155,12 +177,32 @@ impl GpuContext {
     /// Returns `(total_loss, gradient_vec)`. The gradient is accumulated via
     /// f64 atomicAdd — non-deterministic reduction order means results match
     /// CPU to ~1e-10 but are not bit-identical.
+    ///
+    /// # Panics
+    /// Panics if `x` or the `num_vars`-sized gradient buffer is smaller than
+    /// the clause data's variable count. The kernel reads `x[var]` and
+    /// atomically accumulates into `grad[var]` for every literal, so both
+    /// buffers must cover every variable the clause data mentions.
     pub fn total_loss_and_grad(
         &self,
         gpu_data: &GpuClauseData,
         x: &[f64],
         num_vars: usize,
     ) -> Result<(f64, Vec<f64>), GpuError> {
+        assert!(
+            x.len() >= gpu_data.num_vars,
+            "total_loss_and_grad: x has {} entries but the clause data references {} \
+             variables — the kernel would index x out of bounds on the device",
+            x.len(),
+            gpu_data.num_vars
+        );
+        assert!(
+            num_vars >= gpu_data.num_vars,
+            "total_loss_and_grad: gradient buffer sized for {num_vars} variables but the \
+             clause data references {} — the kernel's atomicAdd would write out of bounds \
+             on the device",
+            gpu_data.num_vars
+        );
         let s = &self.stream;
 
         let dev_x = s.clone_htod(x)?;
@@ -232,6 +274,14 @@ impl GpuContext {
         lr: f64,
         momentum: f64,
     ) -> Result<(f64, f64), GpuError> {
+        assert!(
+            state.num_vars as usize >= gpu_data.num_vars,
+            "gpu_iteration: iteration state covers {} variables but the clause data \
+             references {} — the kernels would index dev_x/dev_grad out of bounds \
+             on the device",
+            state.num_vars,
+            gpu_data.num_vars
+        );
         let s = &self.stream;
 
         // Zero grad accumulator for this iteration
@@ -308,7 +358,21 @@ impl GpuContext {
     }
 
     /// Re-upload x values to device (e.g., after host-side random init for a new start).
+    ///
+    /// # Panics
+    /// Panics if `x` does not have exactly `state.num_vars` entries. The
+    /// device buffers are replaced with ones sized from `x`, but the kernels
+    /// are still launched over `state.num_vars` — a short `x` would leave
+    /// `variable_update` writing past the end of `dev_x` on the device.
     pub fn upload_x(&self, state: &mut GpuIterState, x: &[f64]) -> Result<(), GpuError> {
+        assert_eq!(
+            x.len(),
+            state.num_vars as usize,
+            "upload_x: x has {} entries but the iteration state is launched over {} \
+             variables",
+            x.len(),
+            state.num_vars
+        );
         state.dev_x = self.stream.clone_htod(x)?;
         state.dev_velocity = self.stream.clone_htod(&vec![0.0f64; x.len()])?;
         Ok(())

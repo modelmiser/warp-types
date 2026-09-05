@@ -122,6 +122,27 @@ impl ClauseDataSoA {
         self.padded_len / WARP_SIZE
     }
 
+    /// One past the highest variable index this SoA references, i.e. the
+    /// smallest `x` length the kernels can be launched against.
+    ///
+    /// The kernels load `x[vars[slot][i]]` for every literal slot of every
+    /// batch entry, padding clauses included — padding contributes zero loss
+    /// via `weight = 0.0`, but the load happens before the multiply. So the
+    /// bound is the max over all three slots with no padding exemption.
+    ///
+    /// Host-side (not gpu-gated), same reason as `has_batches`: the bound
+    /// that `GpuContext`'s launch entry points assert is testable without
+    /// hardware. A short `x` is a device-side out-of-bounds read, which the
+    /// launch `unsafe` block cannot detect and CUDA surfaces, at best, as a
+    /// later asynchronous fault.
+    pub fn num_vars(&self) -> usize {
+        self.vars
+            .iter()
+            .flat_map(|v| v.iter().copied())
+            .max()
+            .map_or(0, |m| m as usize + 1)
+    }
+
     /// True when the SoA contains at least one warp batch of packed
     /// 3-literal clauses.
     ///
@@ -974,6 +995,57 @@ mod tests {
                 0.05 + raw * 0.9
             })
             .collect()
+    }
+
+    #[test]
+    fn num_vars_bounds_every_variable_the_kernels_index() {
+        let db = generate_3sat_phase_transition(20, 42);
+        let weights = vec![1.0; db.len()];
+        let (soa, _) = ClauseDataSoA::from_clause_db(&db, &weights);
+
+        // The launch entry points assert `x.len() >= soa.num_vars()`. That
+        // check is only worth anything if the bound really covers every index
+        // the kernels compute — padding slots included.
+        let n = soa.num_vars();
+        assert!(
+            n > 0,
+            "20-variable instance packed to a zero-variable bound"
+        );
+        for slot in &soa.vars {
+            for &v in slot {
+                assert!(
+                    (v as usize) < n,
+                    "variable {v} is indexed by the kernel but sits outside num_vars {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn num_vars_is_one_past_the_max_not_a_count_of_distinct_vars() {
+        // A sparse SoA: the highest index is 9, but only three variables are
+        // mentioned. Returning 3 here would size `x` to 3 and every launch
+        // would read x[9] out of bounds on the device.
+        let soa = ClauseDataSoA {
+            vars: [vec![0, 4], vec![4, 9], vec![0, 0]],
+            negs: [vec![false; 2], vec![false; 2], vec![false; 2]],
+            weights: vec![1.0; 2],
+            num_clauses: 2,
+            padded_len: 2,
+        };
+        assert_eq!(soa.num_vars(), 10);
+    }
+
+    #[test]
+    fn num_vars_of_empty_soa_is_zero() {
+        let soa = ClauseDataSoA {
+            vars: [vec![], vec![], vec![]],
+            negs: [vec![], vec![], vec![]],
+            weights: vec![],
+            num_clauses: 0,
+            padded_len: 0,
+        };
+        assert_eq!(soa.num_vars(), 0);
     }
 
     #[test]
