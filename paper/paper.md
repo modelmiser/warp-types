@@ -1569,6 +1569,10 @@ We reproduced the cuda-samples#398 bug on NVIDIA H200 SXM (compute 9.0, Hopper) 
 
 The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block_size=1024` produces the correct result, where all 32 lanes vote true and the ballot mask is `0xFFFFFFFF`. The fixed version (all lanes participate with zeroed inactive data) produces correct results at all block sizes. The reproduction code is in `reproduce/reduce7_bug.cu`.
 
+**The standard dynamic tooling does not detect this bug.** We ran NVIDIA's `compute-sanitizer` (version 2024.1.1.0) on an H200 against `reproduce/host`, which executes the untyped `reduce7` kernel and the typed fix in the same process. The untyped kernel returned `1` instead of `32`, and all four tools—`memcheck`, `synccheck`, `initcheck`, and `racecheck`—reported zero errors.
+
+This is not a deficiency in the sanitizer. `shfl.sync` sourcing a register from a lane outside the membermask yields undefined *data*; it is not an invalid barrier, an out-of-bounds access, or a read of uninitialized memory, so none of these tools has anything to observe. The failure mode is a silently wrong answer produced by a well-formed program, which is precisely the class that dynamic checking cannot reach and a type discipline can. To confirm the null result was meaningful rather than an artifact of the tool not running, we planted an out-of-bounds device atomic in an unrelated kernel; `memcheck` reported `Invalid __global__ atomic of size 8 bytes ... out of bounds` on the first launch.
+
 ### Compile-Fail Tests as Proof Artifacts
 
 Our implementation includes sixteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
