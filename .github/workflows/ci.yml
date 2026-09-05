@@ -101,6 +101,29 @@ jobs:
         run: cargo clippy --manifest-path warp-types-sat/sat-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
       - name: Clippy (device target — worked example)
         run: cargo clippy --manifest-path examples/gpu-project/my-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
+      # reproduce/*.rs are standalone no_std files with no manifest at all —
+      # nothing in the workspace compiles them, so their 16 unsafe constructs have
+      # never been built by CI. They are the paper's bug-repro artifacts, so a
+      # compile check is the right scope: NOT -D warnings, because dead_code is
+      # expected in demo files carrying unused helpers.
+      #
+      # buggy_pattern.rs is deliberately excluded: it INTENTIONALLY does not
+      # compile (that is the demonstration), and reproduce/demo.sh already asserts
+      # it fails with the specific E0599.
+      #
+      # Output goes to a temp dir on purpose. The committed .ptx files are
+      # historical artifacts — two are still ISA 6.0 from an unrecorded toolchain
+      # while this pin emits 7.0, and reproduce/host loads them on real hardware.
+      # Overwriting them here would silently break the link between the committed
+      # PTX and the H200 results the paper cites. See TODO.
+      - name: Compile the repro kernels (device target)
+        run: |
+          out=$(mktemp -d)
+          for f in rust_ptx_typed typed_butterfly_kernel reduce7_typed; do
+            echo "--- $f"
+            rustc --target nvptx64-nvidia-cuda --emit=asm -O --edition 2021 \
+              "reproduce/$f.rs" -o "$out/$f.ptx"
+          done
 
   clippy:
     runs-on: ubuntu-latest
