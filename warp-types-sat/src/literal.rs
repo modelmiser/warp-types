@@ -56,6 +56,22 @@ impl Lit {
         self.0
     }
 
+    /// Inverse of [`Lit::code`]. Total, and safe: `Lit` is a
+    /// `#[repr(transparent)]` newtype over `u32` with no niche and no validity
+    /// invariant, so every `u32` denotes some literal. Exists so branchless
+    /// selection over `code()` values does not need a `transmute` — see the
+    /// partner select in `watch.rs`. Unlike `pos`/`neg` it cannot overflow the
+    /// encoding, because it does not perform one.
+    ///
+    /// `#[inline]` is load-bearing, not decoration: without it the partner
+    /// select in BCP's hot loop measured ~2.5% slower at random_3sat n=50 than
+    /// the `transmute` it replaced, because a non-inlined call sat in the
+    /// middle of a branchless sequence.
+    #[inline]
+    pub fn from_code(code: u32) -> Self {
+        Lit(code)
+    }
+
     /// Evaluate this literal given a variable assignment.
     /// `assign[var]`: Some(true) = true, Some(false) = false, None = unassigned.
     pub fn eval(self, assign: &[Option<bool>]) -> Option<bool> {

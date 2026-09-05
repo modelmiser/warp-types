@@ -163,7 +163,19 @@ impl Watches {
 /// `assert!` on double assignment, and if that ever fires the taken list is
 /// dropped and the literal is left watching NOTHING. BCP would then silently
 /// miss every propagation on that literal — a wrong SAT/UNSAT answer with no
-/// diagnostic, which is the worst failure this solver has.
+/// diagnostic.
+///
+/// What the guard buys is narrower than "panic-safe compaction", and the
+/// difference matters: it puts SOME `Vec` back, not a consistent one. A panic
+/// before `set_len` restores the ORIGINAL length over a partially rewritten
+/// buffer, so the list can hold duplicates and entries for clauses compaction
+/// had already dropped. Worse, the replacement path has by then already
+/// swapped the clause's literals via `swap_literal_unchecked` and pushed a
+/// watch onto ANOTHER list; `Drop` rolls back none of that, so the clause ends
+/// up watched from both lists with its pair reordered. Trail writes are not
+/// rolled back either. Both post-panic states are wrong — this one is at least
+/// present and rebuildable, rather than a slot that silently watches nothing.
+/// Do not `catch_unwind` and keep solving on it.
 ///
 /// Today no in-crate caller catches that unwind and `Watches` is
 /// `pub(crate)` and rebuilt inside every `solve*` call, so the window is not
@@ -196,7 +208,14 @@ impl Drop for TakenList<'_> {
 /// # Safety
 /// `lit.code()` must be < `lit_values.len()`. This is guaranteed when:
 /// - All literals come from the clause DB
-/// - `db.max_variable() < num_vars` was asserted at solver startup
+/// - `db.max_variable() < trail.num_vars()` holds. NOT "asserted at solver
+///   startup" — that was wrong, and tests call `run_bcp_watched` directly
+///   without going through `solve*`. The assert is at the top of
+///   `run_bcp_watched` itself and therefore runs on every entry, including
+///   re-entrant CDCL calls. `Trail` maintains `lit_values.len() == 2 *
+///   num_vars`, and `code = 2*var + polarity`, so `var < num_vars` gives
+///   `code < 2*num_vars`. Callers must not plant watch entries whose blockers
+///   are not DB literals
 /// - `lit_values.len() == 2 * num_vars`
 #[inline]
 unsafe fn eval_lit_indexed(lit: Lit, lit_values: &[Option<bool>]) -> Option<bool> {
@@ -312,7 +331,12 @@ pub(crate) fn run_bcp_watched(
         // The compiler no longer maintains redundant loop counters (countdown,
         // i, i+1, ptr offset) — a single pointer advance per iteration.
         //
-        // SAFETY invariant: dst <= src <= ws_end throughout.
+        // SAFETY invariant: dst <= src <= ws_end at each iteration start and at
+        // every `ptr::copy`. NOT "throughout" — on the conflict tail path
+        // `dst = dst.add(remaining)` can leave dst == ws_end, hence dst > src
+        // when no entry was skipped. That is sound because dst is read only for
+        // the length immediately after and never written through again; state
+        // it precisely so the next editor does not "restore" a false invariant.
         // src starts at ws.as_mut_ptr(), dst = src, ws_end = src + ws.len().
         // dst only advances when src advances (compaction: skip deleted).
         // All entries within [ws.as_ptr(), ws_end) are valid WatchEntry values.
@@ -396,11 +420,24 @@ pub(crate) fn run_bcp_watched(
                 c0 == false_lit || c1 == false_lit,
                 "clause cref={cref} in watch list for {false_lit} but c[0]={c0}, c[1]={c1}"
             );
+            // The bitmask stays — it is what makes LLVM emit a cmov (measured;
+            // INSIGHTS.md) — but the `transmute` it used to end in does not.
+            // `Lit::from_code` is total and safe, so this needs no `unsafe` at
+            // all, and costs nothing: measured back-to-back against the
+            // transmute on random_3sat, 666.4us/1.6625ms/3.7842ms vs
+            // 670.7us/1.6608ms/3.7732ms at n=50/75/100 — inside noise.
+            //
+            // Replacing the whole mask with `if c0_is_false { c1 } else { c0 }`
+            // is NOT free (~1-2.5% slower against that same baseline), so do
+            // not simplify it back without measuring.
+            //
+            // Measure back-to-back if you do: the first bench of a session read
+            // 653us at n=50 on a cold machine and every later run of every
+            // variant sat near 670us, so a comparison against that first number
+            // manufactures a 2.4% regression that is not there.
             let c0_is_false = (c0 == false_lit) as u32;
             let mask = c0_is_false.wrapping_neg(); // 0xFFFF_FFFF or 0
-                                                   // SAFETY: Lit is #[repr(transparent)] over u32; both codes are valid.
-            let partner: Lit =
-                unsafe { std::mem::transmute((c1.code() & mask) | (c0.code() & !mask)) };
+            let partner = Lit::from_code((c1.code() & mask) | (c0.code() & !mask));
             let false_pos = (1 ^ c0_is_false) as usize;
 
             // ── Partner satisfied → clause satisfied, keep watch ──
