@@ -11,11 +11,15 @@
 //!   - NVIDIA GPU with CUDA driver
 //!   - PTX compiled via: rustc --target nvptx64-nvidia-cuda --emit=asm -O \
 //!       --edition 2021 ../typed_butterfly_kernel.rs -o ../typed_butterfly_kernel.ptx
-//!     (no `+nightly` — an explicit +toolchain overrides rust-toolchain.toml.
-//!      NOTE: the committed ../typed_butterfly_kernel.ptx and ../reduce7_typed.ptx
-//!      are ISA 6.0 from an unrecorded toolchain; the pin now emits 7.0. They are
-//!      kept as the artifact the H200/RTX-4000 runs actually loaded — regenerate
-//!      only together with a re-run on hardware. See TODO.)
+//!     (no `+nightly` — an explicit +toolchain overrides rust-toolchain.toml.)
+//!
+//!   - The committed .ptx files ARE the artifact these tests ran. Regenerated
+//!     under the repo pin and re-executed on an H200 (compute 9.0, driver
+//!     580.178.04) on 2026-09-05, all three tests PASS; the regenerated files
+//!     were byte-identical to a local rebuild under the same pin, on different
+//!     hardware. They were previously ISA 6.0 from an unrecorded toolchain.
+//!     Keep it that way: regenerate ONLY together with a hardware re-run, and
+//!     commit both or neither.
 
 #![allow(deprecated, unused_imports)]
 
