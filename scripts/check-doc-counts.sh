@@ -75,6 +75,12 @@ THEOREMS_BASIC=$(grep -c "^theorem" lean/WarpTypes/Basic.lean 2>/dev/null || ech
 THEOREMS_META=$(grep -c "^theorem" lean/WarpTypes/Metatheory.lean 2>/dev/null || echo 0)
 THEOREMS=$((THEOREMS_BASIC + THEOREMS_META))
 
+# Bug untypability proofs: theorems named `bugN_...` in the Lean sources. This
+# is the only unambiguous definition in the repo — a grep for "untypable" in
+# theorem names returns 6, and they are a DIFFERENT set (Fence/Reduce/Csp domain
+# rules), so counting those would guard the wrong number and look like a guard.
+BUG_PROOFS=$(grep -rhE '^theorem bug[0-9]+_' lean/WarpTypes/*.lean 2>/dev/null | wc -l | tr -d '[:space:]')
+
 echo "doc-counts: ${UNIT} unit, ${EXAMPLE} example, ${DOC} doc = ${DOC_CF} compile-fail + ${DOC_EXAMPLES} examples (${TOTAL} total), ${THEOREMS} Lean theorems"
 
 # --- Check .md files for stale counts ---
@@ -155,6 +161,18 @@ for file in $MD_FILES; do
         [ -n "$num" ] && [ "$num" != "$DOC_EXAMPLES" ] && echo "STALE: ${file}:${ln} — doc examples: says '${tok}', actual ${DOC_EXAMPLES}"
     done
 
+    # Pattern: "N bug proofs" / "N (bug|mechanized) untypability proofs".
+    # The modifiers are enumerated, not wildcarded, so prose like "zero extra
+    # proof" and "Zero new proofs" stays out of scope rather than being counted
+    # as an inventory claim it never was.
+    grep -niE '([0-9]+|[a-z]+) (bug|mechanized) (untypability )?proofs?|([0-9]+|[a-z]+) untypability proofs?' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
+        tok=$(echo "$rest" | grep -oiE '([0-9]+|[a-z]+) (bug|mechanized) (untypability )?proofs?|([0-9]+|[a-z]+) untypability proofs?' | head -1 | grep -oiE '^[0-9a-z]+')
+        [ -n "$tok" ] || continue
+        if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
+        [ -n "$num" ] && printf '%s\t%s\t%s\tproof\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
+        [ -n "$num" ] && [ "$num" != "$BUG_PROOFS" ] && echo "STALE: ${file}:${ln} — bug untypability proofs: says '${tok}', actual ${BUG_PROOFS}"
+    done
+
     # Pattern: "N named theorem" / "N Lean 4 theorem" / "N Lean theorem".
     # The prose form ("31 Lean 4 theorems") is how the blog states it, and it
     # was invisible to the "named"-only pattern — and wrong.
@@ -192,6 +210,7 @@ function clean(s) { gsub(/^[^0-9A-Za-z]+/, "", s); gsub(/[^0-9A-Za-z-]+$/, "", s
 function low(s) { return tolower(clean(s)) }
 function num(t,   c) {
     if (t ~ /[`%~]/) return -1
+    if (index(t, "§") > 0) return -1        # "(§3)" is a cross-reference, not a count
     c = clean(t)
     if (c ~ /-/) return -1
     if (c ~ /^[0-9]+$/) return c + 0
@@ -199,7 +218,7 @@ function num(t,   c) {
     if (c in W) return W[c]
     return -1
 }
-function counted(t) { return (t ~ /^(tests?|doctests?|theorems?|examples?|compile-fail)$/) }
+function counted(t) { return (t ~ /^(tests?|doctests?|theorems?|examples?|proofs?|compile-fail)$/) }
 # Canonical vocabulary term, so a validated count is keyed to WHAT it counts and
 # not just to its value. Without this, "37 doc tests and 37 theorems" needed only
 # one of the two validated: the key was (file, line, value), so approving either
@@ -245,9 +264,13 @@ BEGIN {
         else sub(/^[ \t]*(\xe2\x80\x94|--|-|:)[ \t]*/, "", reason)
     }
     n = split(scan, T, /[ \t]+/)
+    ft = 0
+    for (q = 1; q <= n; q++) if (T[q] != "") { ft = q; break }
     for (i = 1; i <= n; i++) {
         v = num(T[i])
         if (v < 0) continue
+        if (T[i] ~ /:$/) continue                          # a label: "Tier 1: ...", "Bug 4: ..."
+        if (i == ft && T[i] ~ /^[0-9]+[.)]$/) continue     # an ordered-list marker: "2. **A soundness proof**"
         if (i > 1 && low(T[i-1]) ~ /^(lean|version|v|figure|fig|table|section|chapter|appendix|lemma|theorem)$/) continue
         for (j = i + 1; j <= i + 3 && j <= n; j++) {
             if (num(T[j]) >= 0) break          # the next numeral heads its own phrase
@@ -261,7 +284,7 @@ BEGIN {
                 ok = 1
                 for (k = i + 1; k < j; k++) if (!counted(low(T[k]))) ok = 0
                 if (!ok) continue
-            } else if (t !~ /^(tests?|doctests?|theorems?|compile-fail)$/) continue
+            } else if (t !~ /^(tests?|doctests?|theorems?|proofs?|compile-fail)$/) continue
             if ((FILENAME SUBSEP FNR SUBSEP v SUBSEP canon(t)) in V) break
             phrase = ""
             for (k = i; k <= j; k++) phrase = phrase (k > i ? " " : "") T[k]
