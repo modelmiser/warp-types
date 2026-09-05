@@ -37,6 +37,30 @@ jobs:
       - name: Example tests
         run: cargo test --workspace --examples --verbose
 
+  miri:
+    runs-on: ubuntu-latest
+    env:
+      # Overrides rust-toolchain.toml. The pin exists for reproducible GPU
+      # artifact evaluation; the `miri` component is not published for every
+      # nightly date, so pinning it here would break the job on a date the
+      # component happens to be missing. Miri does not touch the nvptx path,
+      # so the pin buys nothing on this job.
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      # Covers the host-side unsafe only: warp-types-sat's pointer-based BCP
+      # loop and unchecked arena/trail accessors, plus the root crate's
+      # research::coalescing raw-pointer derefs. src/gpu.rs is entirely
+      # `#[cfg(target_arch = "nvptx64")]` and reproduce/ is outside the
+      # workspace, so Miri cannot reach either — see tools/miri.sh for the
+      # full scope note and why two tests are skipped.
+      - name: Miri (Stacked Borrows + Tree Borrows)
+        run: tools/miri.sh
+
   clippy:
     runs-on: ubuntu-latest
     steps:
