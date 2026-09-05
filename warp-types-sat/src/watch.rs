@@ -651,9 +651,36 @@ mod tests {
     // `record_propagation`'s release assert, which is why that one is a
     // latent hazard rather than a live bug. The guard's correctness does not
     // depend on which panic unwinds through it.
+    //
+    // NOT "intact" — the earlier name overclaimed what is asserted here, and a
+    // test name is documentation. What this guarantees is that the SLOT IS
+    // REPOPULATED, not that the watch invariant is restored.
+    //
+    // `set_len` is reached only on the conflict/normal exits, so a mid-loop
+    // panic leaves the Vec at its ORIGINAL length while `[0, dst)` holds the
+    // compacted survivors and `[dst, src)` still holds their stale originals
+    // (copying forward with `dst < src` does not erase the source). The
+    // restored list can therefore hold duplicates, and entries for deleted
+    // clauses that the compaction had already dropped come back with them.
+    //
+    // Worse, and the reason not to call the result merely "redundant": the
+    // replacement path below has ALREADY swapped the clause's literals in the
+    // DB and pushed a watch into the new literal's list before `continue`.
+    // Removal from THIS list is only realised by `set_len`. Unwind in that
+    // window therefore leaves the clause watched from both lists with its
+    // literals already reordered — an inconsistent watch structure, not extra
+    // work.
+    //
+    // So both post-panic states are wrong; the guard trades a guaranteed
+    // silent miss (an empty slot means every propagation on this literal is
+    // lost, i.e. a wrong SAT/UNSAT answer with no diagnostic) for a structure
+    // that is at least present and rebuildable. That is only adequate because
+    // nothing here catches the panic and reuses `Watches` — the whole solve
+    // unwinds and the structure is rebuilt. An incremental or panic-recovering
+    // caller MUST poison and rebuild rather than trust this list; see TODO.
     #[cfg(debug_assertions)]
     #[test]
-    fn unwind_mid_compaction_leaves_the_watch_list_intact() {
+    fn unwind_mid_compaction_leaves_the_watch_slot_populated() {
         use std::panic::{catch_unwind, AssertUnwindSafe};
 
         let mut db = ClauseDb::new();
@@ -686,6 +713,10 @@ mod tests {
             !w.lists[slot].is_empty(),
             "unwind dropped the watch list for {false_lit}"
         );
+        // Deliberately not `assert_eq!(w.lists[slot].len(), before)`: see the
+        // note above — a mid-loop unwind may leave duplicates, so the list is
+        // populated but not necessarily the same length it was taken at.
+        let _ = before;
     }
 
     #[test]
