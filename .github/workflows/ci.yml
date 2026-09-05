@@ -125,6 +125,52 @@ jobs:
               "reproduce/$f.rs" -o "$out/$f.ptx"
           done
 
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      # cargo-fuzz needs nightly (libfuzzer-sys + sanitizer flags). Same
+      # reasoning as the miri job: the artifact-evaluation pin exists for
+      # reproducible GPU builds and buys nothing here.
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      # Prebuilt binary. `cargo install cargo-fuzz` is a multi-minute build on a
+      # cold runner, and a slow job gets deleted rather than fixed. Third-party
+      # action, accepted deliberately — same trust class as the toolchain action
+      # already used above.
+      - uses: taiki-e/install-action@cargo-fuzz
+      # The deterministic half, and the reason the seed corpus is committed:
+      # `-runs=0` executes every seed exactly once and exits, so this is a fixed
+      # regression gate rather than a coin flip. Both corpora were verified to
+      # FAIL on a planted regression (2026-09-05): a panic at the solver entry
+      # trips the dimacs replay, and a `solve_watched` that always answers Unsat
+      # trips the differential agreement assert. A replay that cannot fail would
+      # be 50 files being read and nothing else.
+      - name: Replay the committed seed corpus
+        run: |
+          cd warp-types-sat/fuzz
+          for target in dimacs solver_differential; do
+            echo "== replay $target"
+            cargo fuzz run "$target" "seeds/$target" -- -runs=0
+          done
+      # The exploratory half. Short on purpose; this is regression pressure, not
+      # a campaign. A red job here is either a regression (replay above) or a
+      # genuine new finding — both are worth stopping for.
+      - name: Short fuzz run
+        run: tools/fuzz.sh 60
+      # Without this a CI-only finding is unreproducible: cargo-fuzz writes the
+      # crashing input to artifacts/<target>/ and the runner is then discarded.
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: warp-types-sat/fuzz/artifacts/
+          if-no-files-found: ignore
+
   clippy:
     runs-on: ubuntu-latest
     steps:

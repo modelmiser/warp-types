@@ -24,9 +24,12 @@
 # inverting the model-check polarity trips the model assert. A fuzz target whose
 # oracle cannot fire reports "N million runs, no findings" forever.
 #
-# NOT IN CI, deliberately — `cargo install cargo-fuzz` is a multi-minute build
-# on a cold runner, and a slow job gets deleted rather than fixed. See TODO.md
-# for the open decision (prebuilt-binary action vs. accepting the cost).
+# IN CI since 2026-09-05 (ci.yml `fuzz` job), via `taiki-e/install-action@cargo-fuzz`
+# — a prebuilt binary, because `cargo install cargo-fuzz` is a multi-minute build
+# on a cold runner and a slow job gets deleted rather than fixed. CI runs the
+# deterministic seed replay (`-runs=0`) as a hard gate, then this script at 60s
+# per target, and uploads artifacts/ on failure so a CI-only finding stays
+# reproducible.
 #
 # SEEDS: cargo-fuzz gitignores its own corpus/, so a fresh clone would start
 # cold every time. `seeds/<target>/` is committed and passed as a second corpus
@@ -38,8 +41,9 @@
 # solver. Check that ratio before trusting a clean run: a parser target that
 # never produces valid input is clean for the wrong reason.
 #
-# CI runs `cargo check` on this crate (see ci.yml) but does not fuzz. Compile-rot
-# is the failure that happens silently; not fuzzing for a week is not.
+# CI also runs `cargo check` on this crate (see ci.yml). That step stays even
+# though the fuzz job compiles the targets too: `cargo check` is seconds and runs
+# on every push, so compile-rot is still caught the cheap way.
 set -u
 cd "$(dirname "$0")/../warp-types-sat/fuzz" || exit 2
 T=${1:-60}
