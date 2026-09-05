@@ -477,10 +477,7 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
     for &l in &learned[1..] {
         if lit_redundant_with(work, trail, db, l, abstract_levels) {
-            // SAFETY: l is a learned-clause literal, and every var reaching
-            // `learned` was range-checked on THIS call (entry assert, conflict
-            // literals, `reason_clause_lits`, theory explanations).
-            unsafe { *work.seen.get_unchecked_mut(l.var() as usize) = false };
+            work.seen[l.var() as usize] = false;
         } else {
             minimized.push(l);
         }
@@ -489,7 +486,7 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     // Clean up DFS marks from successful redundancy proofs
     for &var in &work.min_to_clear {
         // SAFETY: var was pushed from clause DB vars, all < num_vars.
-        unsafe { *work.seen.get_unchecked_mut(var as usize) = false };
+        work.seen[var as usize] = false;
     }
     work.min_to_clear.clear();
 
@@ -506,13 +503,13 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     // leave an arbitrary literal in c[1], breaking the watched invariant.
     if learned.len() >= 3 {
         let mut best_pos = 1;
-        // SAFETY: every var in `learned` was range-checked on this call — not
-        // all come from the clause DB, theory explanations included.
-        let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
+        let mut best_level = trail
+            .entry_for_var(learned[1].var())
             .map(|e| e.level)
             .unwrap_or(0);
         for i in 2..learned.len() {
-            let level = unsafe { trail.entry_for_var_unchecked(learned[i].var()) }
+            let level = trail
+                .entry_for_var(learned[i].var())
                 .map(|e| e.level)
                 .unwrap_or(0);
             if level > best_level {
@@ -528,25 +525,21 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
     // Backtrack level: highest level among learned clause literals,
     // excluding the asserting literal (which is at current_level).
-    // SAFETY: every var here was range-checked on this call — not all come
-    // from the clause DB, theory explanations included.
     let backtrack_level = learned
         .iter()
         .skip(1) // skip asserting literal
-        .filter_map(|lit| unsafe { trail.entry_for_var_unchecked(lit.var()) }.map(|e| e.level))
+        .filter_map(|lit| trail.entry_for_var(lit.var()).map(|e| e.level))
         .max()
         .unwrap_or(0);
 
     // LBD: count distinct decision levels in the learned clause.
-    // SAFETY: every var here was range-checked on this call — not all come
-    // from the clause DB, theory explanations included.
     let lbd = {
         let level_count = current_level as usize + 1;
         work.levels_seen.clear();
         work.levels_seen.resize(level_count, false);
         let mut count = 0u32;
         for lit in &learned {
-            if let Some(e) = unsafe { trail.entry_for_var_unchecked(lit.var()) } {
+            if let Some(e) = trail.entry_for_var(lit.var()) {
                 let lv = e.level as usize;
                 if lv < level_count && !work.levels_seen[lv] {
                     work.levels_seen[lv] = true;
