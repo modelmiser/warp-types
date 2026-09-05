@@ -80,6 +80,13 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Preserve outer attributes (doc comments, #[cfg], etc.)
     let expanded = quote! {
         #(#attrs)*
+        // `extern "ptx-kernel"` entry points are invoked by the GPU driver at
+        // launch, never by Rust code, so `missing_safety_doc` asks the author to
+        // document a contract for a caller that cannot exist. The `unsafe` here
+        // is ABI-mandated, not a caller precondition. Emitted by the macro so
+        // that downstream crates are clippy-clean under `-D warnings` without
+        // every kernel author rediscovering this.
+        #[allow(clippy::missing_safety_doc)]
         #[no_mangle]
         #vis unsafe extern "ptx-kernel" fn #name(#params) #body
     };
