@@ -53,9 +53,10 @@ else
     echo "rustup already installed" | tee -a "$RESULTS"
 fi
 # Pin matches rust-toolchain.toml in the repo.
-rustup install nightly-2026-04-03
-rustup default nightly-2026-04-03
-rustup component add rustfmt clippy --toolchain nightly-2026-04-03
+# No explicit pin: `rust-toolchain.toml` governs and declares its own
+# components. This used to force nightly-2026-04-03, three months behind the
+# repo's pin — ineffective inside the clone but it named the wrong toolchain in
+# the results. Same fix as runpod-h200.sh (2026-09-05).
 rustc --version | tee -a "$RESULTS"
 echo "" | tee -a "$RESULTS"
 
