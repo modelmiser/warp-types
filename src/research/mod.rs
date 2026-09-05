@@ -1,8 +1,15 @@
-//! Research explorations — compiled but not part of the public API.
+//! Research explorations — prototypes, not production API.
 //!
 //! These modules contain prototypes, proofs-of-concept, and explorations
 //! from the development of the warp type system. They are preserved for
-//! reference but are not re-exported from the crate root.
+//! reference and are not re-exported from the crate root.
+//!
+//! They ARE public, though: this said "not part of the public API" until a
+//! 2026-09-05 review pointed out that is false. Under the non-default
+//! `research` feature any downstream crate can reach
+//! `warp_types::research::coalescing::*`, unsafe constructors included, so
+//! the safety contracts here are load-bearing for people outside this repo.
+//! Not re-exported at the root is not the same as not public.
 //!
 //! Note: Many research modules define their own local `Warp<S>`, `ActiveSet`,
 //! etc. rather than importing the core types. These local definitions may have

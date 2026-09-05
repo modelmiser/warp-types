@@ -112,15 +112,34 @@ impl<T: Copy, P: AccessPattern> WarpPtr<T, P> {
     ///
     /// # Safety
     ///
-    /// `base` must remain valid for the lifetime of the `WarpPtr`, and must
-    /// be readable for the whole span the declared pattern `P` reaches —
-    /// which is quantified, not vague:
+    /// For every offset a safe API may use for the declared pattern `P`,
+    /// `base.add(offset)` must be within ONE allocated object, aligned, and
+    /// point to an initialized `T` that stays valid — and unaliased by any
+    /// live `&mut` — for the lifetime of this value. Same-allocation and
+    /// provenance are requirements of `pointer::add` itself, not just
+    /// readability.
     ///
-    /// - `Uniform`: `base` alone (1 element).
-    /// - `Consecutive`: `base .. base + WARP_SIZE` (32 elements).
-    /// - `Strided<S>`: `base + lane * S` for `lane` in `0..WARP_SIZE`.
-    /// - `Random`: nothing is assumed — reads go through the `unsafe`
-    ///   [`load::generic`], whose caller supplies and vouches for the indices.
+    /// The offsets, per pattern:
+    ///
+    /// - `Uniform`: offset 0 only (1 element).
+    /// - `Consecutive`: `0..WARP_SIZE`. **`WARP_SIZE` elements, not 32** —
+    ///   it is 64 under the `warp64` feature (`lib.rs`), and `load::consecutive`
+    ///   iterates `0..WARP_SIZE`. An allocation sized for the literal 32 is a
+    ///   64-element read on a `warp64` build, through a SAFE function. This
+    ///   said "32 elements" until a 2026-09-05 review; a caller who satisfied
+    ///   it exactly and enabled the feature had UB.
+    /// - `Strided<S>`: **no span is required, because nothing reads one.** No
+    ///   `load`/`store` in this module indexes `base + lane * S`. Do not
+    ///   promise that span until such a function exists — and when it does,
+    ///   note `S` is an unbounded `usize` (`0` included), so `lane * S` and
+    ///   `lane * S * size_of::<T>()` must also be shown to fit `isize` and
+    ///   stay in-allocation.
+    /// - `Random`: construction and holding require nothing of `base` — no
+    ///   safe deref is typed at `Random`, so a dangling base is sound to HOLD.
+    ///   That is narrower than it used to read: the only deref is the `unsafe`
+    ///   [`load::generic`], which needs `base` to carry real provenance (even
+    ///   `add(0)` does) and each caller-supplied index to be a valid `add`
+    ///   from it.
     ///
     /// This is load-bearing: the pattern is fixed at construction (no safe
     /// conversion exists — `WorstOf` is type-level only), and `load`/`store`
@@ -160,9 +179,11 @@ impl<T: Copy, P: AccessPattern> WarpPtrMut<T, P> {
     /// # Safety
     ///
     /// Same span contract as [`WarpPtr::new`], but the span must be valid
-    /// for WRITES and must not alias any other live reference or `WarpPtrMut`
-    /// — `store::consecutive` writes all `WARP_SIZE` elements through a safe
-    /// function.
+    /// for WRITES and must not alias any other live reference, `WarpPtrMut`,
+    /// **or `WarpPtr`** — a shared `WarpPtr` over the same address is read
+    /// through safe `load::*` while this writes, which is a data race just as
+    /// surely as two `WarpPtrMut`s. `store::consecutive` writes all
+    /// `WARP_SIZE` elements through a safe function.
     pub unsafe fn new(base: *mut T) -> Self {
         WarpPtrMut {
             base,
@@ -242,8 +263,12 @@ pub mod load {
     /// Uniform load: all lanes get same value.
     ///
     /// Safety relies on `WarpPtr::new`'s contract: the pointer must remain
-    /// valid for the lifetime of the `WarpPtr`. This is the standard Rust
-    /// "unsafe constructor, safe usage" pattern (cf. `Vec::from_raw_parts`).
+    /// valid for the lifetime of the `WarpPtr`. This is an "unsafe
+    /// constructor, safe usage" split — but NOT the `Vec::from_raw_parts`
+    /// one it used to cite. `Vec` OWNS its allocation and its safe methods
+    /// cannot reach past the capacity you promised; `WarpPtr` owns nothing,
+    /// carries no lifetime tying it to the allocation, and `P` is a tag the
+    /// caller chose rather than anything derived from the pointer.
     pub fn uniform<T: Copy>(ptr: &WarpPtr<T, Uniform>) -> T {
         unsafe { *ptr.base() }
     }
@@ -288,8 +313,13 @@ pub mod store {
     use super::*;
 
     /// Uniform store: all lanes write same value to same address.
-    /// Takes `&mut` to satisfy Rust's aliasing rules — writing through
-    /// a `*mut T` requires exclusive access to the pointer wrapper.
+    ///
+    /// `&mut` uniquely borrows THIS WRAPPER; it does not make the pointee
+    /// unique and buys no aliasing guarantee — `base(&self)` hands out a
+    /// `*mut T` from a shared borrow, and a second `WarpPtrMut` over the same
+    /// address can be constructed. What it does prevent is two stores through
+    /// the same value at once. Exclusivity of the span is an obligation of
+    /// `WarpPtrMut::new`, not of this signature.
     pub fn uniform<T: Copy>(ptr: &mut WarpPtrMut<T, Uniform>, value: T) {
         unsafe {
             *ptr.base() = value;
@@ -297,7 +327,7 @@ pub mod store {
     }
 
     /// Consecutive store: lane i writes to base[i].
-    /// Takes `&mut` to satisfy Rust's aliasing rules.
+    /// See `store::uniform` on what `&mut` here does and does not buy.
     pub fn consecutive<T: Copy>(
         ptr: &mut WarpPtrMut<T, Consecutive>,
         values: &[T; WARP_SIZE as usize],
