@@ -17,7 +17,9 @@
 
 #![no_std]
 #![no_main]
-#![feature(abi_ptx, asm_experimental_arch)]
+// Only `abi_ptx` is needed: the inline PTX lives in `warp-types`
+// (`warp_types::gpu`), not in this crate.
+#![feature(abi_ptx)]
 
 use core::panic::PanicInfo;
 
@@ -49,7 +51,7 @@ use warp_types::*;
 /// - `weights`: Per-clause weights (f64)
 /// - `x`: Variable values in [0, 1] (f64)
 /// - `output`: Per-warp-batch partial sums (one f64 per block)
-/// - `num_clauses`: Number of real clauses (padding clauses have weight 0)
+/// - `_num_clauses`: unused in this kernel — see the note on the parameter
 #[warp_kernel]
 pub fn clause_loss_reduce(
     vars0: *const u32,
@@ -61,7 +63,18 @@ pub fn clause_loss_reduce(
     weights: *const f64,
     x: *const f64,
     output: *mut f64,
-    num_clauses: u32,
+    // Unused here, and deliberately so — kept for ABI symmetry with
+    // `clause_loss_grad_fused`, which the host launches with the same arg pack.
+    // Bounds come from PADDING, not from a guard: `ClauseDataSoA` pads to a
+    // multiple of 32 with `var = 0, weight = 0.0`, so every lane's loads are
+    // in-bounds and padding contributes exactly zero to the sum.
+    //
+    // A guard is not merely unnecessary here, it is unavailable: this kernel's
+    // only write is behind `reduce_sum`, and `if ci >= num_clauses { return; }`
+    // would retire a subset of lanes before that warp-wide collective — the
+    // shuffle-from-inactive-lane bug this crate's type system exists to reject.
+    // Kernel 2 can use the bound only because its guard sits AFTER the reduce.
+    _num_clauses: u32,
 ) {
     let warp: Warp<All> = Warp::kernel_entry();
 
@@ -221,14 +234,10 @@ pub fn variable_update(
 
         let x_old = *x.add(vi as usize);
         let x_new = x_old - lr * v_new;
-        // Clamp to [0, 1]
-        let x_clamped = if x_new < 0.0 {
-            0.0
-        } else if x_new > 1.0 {
-            1.0
-        } else {
-            x_new
-        };
+        // Clamp to [0, 1]. `f64::clamp` is in `core`, so it is available on
+        // this `no_std` device target, and it matches the hand-rolled form on
+        // NaN (both propagate: every comparison against NaN is false).
+        let x_clamped = x_new.clamp(0.0, 1.0);
         *x.add(vi as usize) = x_clamped;
     }
 }

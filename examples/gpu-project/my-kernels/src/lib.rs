@@ -5,7 +5,8 @@
 
 #![no_std]
 #![no_main]
-#![feature(abi_ptx, asm_experimental_arch)]
+// Only `abi_ptx` is needed: the inline PTX lives in `warp-types`.
+#![feature(abi_ptx)]
 
 use core::panic::PanicInfo;
 
