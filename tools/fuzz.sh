@@ -60,6 +60,10 @@ TRIPLE=$(rustc -vV | sed -n 's|^host: ||p')
 rc=0
 for target in dimacs solver_differential; do
   echo "== $target (${T}s, $TRIPLE) =="
+  # libFuzzer requires every corpus directory on the command line to exist, and
+  # corpus/ is gitignored by cargo-fuzz's own template — so a fresh clone (i.e.
+  # every CI run) has none. Only long-lived local checkouts hide this.
+  mkdir -p "corpus/$target"
   cargo +nightly fuzz run --target "$TRIPLE" "$target" "corpus/$target" "seeds/$target" \
     -- -max_total_time="$T" || rc=1
   echo
