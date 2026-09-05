@@ -159,9 +159,13 @@ jobs:
       - name: Replay the committed seed corpus
         run: |
           cd warp-types-sat/fuzz
+          # See tools/fuzz.sh: the prebuilt cargo-fuzz is musl-linked and would
+          # otherwise build for its own musl triple, which needs a C++ toolchain
+          # the runner does not have.
+          TRIPLE=$(rustc -vV | sed -n 's|^host: ||p')
           for target in dimacs solver_differential; do
-            echo "== replay $target"
-            cargo fuzz run "$target" "seeds/$target" -- -runs=0
+            echo "== replay $target ($TRIPLE)"
+            cargo fuzz run --target "$TRIPLE" "$target" "seeds/$target" -- -runs=0
           done
       # The exploratory half. Short on purpose; this is regression pressure, not
       # a campaign. A red job here is either a regression (replay above) or a

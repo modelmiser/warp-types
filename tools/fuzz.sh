@@ -47,10 +47,20 @@
 set -u
 cd "$(dirname "$0")/../warp-types-sat/fuzz" || exit 2
 T=${1:-60}
+
+# Take the triple from rustc, not from cargo-fuzz's own default. cargo-fuzz
+# defaults --target to the triple IT was built for, and a prebuilt binary (the
+# CI install action ships one) is musl-linked — so it tries to build the targets
+# for x86_64-unknown-linux-musl and dies in cc-rs looking for
+# x86_64-linux-musl-g++, which is not on a stock runner. rustc's host triple is
+# the one whose toolchain actually exists here.
+TRIPLE=$(rustc -vV | sed -n 's|^host: ||p')
+[ -n "$TRIPLE" ] || { echo "fuzz.sh: could not determine host triple from rustc" >&2; exit 2; }
+
 rc=0
 for target in dimacs solver_differential; do
-  echo "== $target (${T}s) =="
-  cargo +nightly fuzz run "$target" "corpus/$target" "seeds/$target" \
+  echo "== $target (${T}s, $TRIPLE) =="
+  cargo +nightly fuzz run --target "$TRIPLE" "$target" "corpus/$target" "seeds/$target" \
     -- -max_total_time="$T" || rc=1
   echo
 done
