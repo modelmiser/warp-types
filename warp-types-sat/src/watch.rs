@@ -152,6 +152,44 @@ impl Watches {
     }
 }
 
+/// A watch list lifted out of `Watches::lists` for pointer-based compaction,
+/// with its slot restored on every exit path — including an unwind.
+///
+/// BCP compacts a literal's watch list in place through raw `src`/`dst`
+/// pointers while also pushing onto *other* literals' lists, so the list
+/// being compacted has to leave the outer `Vec` for the duration. Restoring
+/// it by hand at the end of the loop is correct only if the loop always
+/// reaches the end: `BcpTrail::record_propagation` carries a release
+/// `assert!` on double assignment, and if that ever fires the taken list is
+/// dropped and the literal is left watching NOTHING. BCP would then silently
+/// miss every propagation on that literal — a wrong SAT/UNSAT answer with no
+/// diagnostic, which is the worst failure this solver has.
+///
+/// Today no in-crate caller catches that unwind and `Watches` is
+/// `pub(crate)` and rebuilt inside every `solve*` call, so the window is not
+/// reachable from outside. It becomes reachable the moment an incremental
+/// API keeps a `Watches` across a fallible call. Structure it so that
+/// question never has to be asked again.
+///
+/// Access to the other lists goes through `self.lists` — `ws` and `lists`
+/// are disjoint fields, so the compaction pointers into `ws` stay valid
+/// across pushes to the rest.
+struct TakenList<'a> {
+    lists: &'a mut Vec<Vec<WatchEntry>>,
+    idx: usize,
+    ws: Vec<WatchEntry>,
+}
+
+impl Drop for TakenList<'_> {
+    fn drop(&mut self) {
+        // `get_mut`, not indexing: a panic here during an unwind would abort,
+        // and turning a recoverable assert into an abort is not an upgrade.
+        if let Some(slot) = self.lists.get_mut(self.idx) {
+            *slot = std::mem::take(&mut self.ws);
+        }
+    }
+}
+
 /// Evaluate a literal using the literal-indexed assignment array.
 /// Single array lookup — no polarity branch.
 ///
@@ -259,8 +297,15 @@ pub(crate) fn run_bcp_watched(
         // false_lit and new_watch are literals from clauses in the DB.
         // All literals satisfy lit.code() < 2*num_vars (validated at solver startup).
         // watches.lists.len() == 2*num_vars (from Watches::new).
-        let ws_slot = unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) };
-        let mut ws = std::mem::take(ws_slot);
+        let idx = false_lit.code() as usize;
+        let taken = std::mem::take(unsafe { watches.lists.get_unchecked_mut(idx) });
+        // Restores `lists[idx]` on every exit from this iteration, unwind
+        // included — see `TakenList`.
+        let mut ws = TakenList {
+            lists: &mut watches.lists,
+            idx,
+            ws: taken,
+        };
 
         // Pointer-based iteration (MiniSat's pattern): src/dst/end instead
         // of i/j/ws.len(). Three pointer registers vs 4-5 index registers.
@@ -271,8 +316,8 @@ pub(crate) fn run_bcp_watched(
         // src starts at ws.as_mut_ptr(), dst = src, ws_end = src + ws.len().
         // dst only advances when src advances (compaction: skip deleted).
         // All entries within [ws.as_ptr(), ws_end) are valid WatchEntry values.
-        let ws_base = ws.as_mut_ptr();
-        let ws_end = unsafe { ws_base.add(ws.len()) };
+        let ws_base = ws.ws.as_mut_ptr();
+        let ws_end = unsafe { ws_base.add(ws.ws.len()) };
         let mut src = ws_base;
         let mut dst = ws_base;
 
@@ -319,8 +364,8 @@ pub(crate) fn run_bcp_watched(
                     unsafe { std::ptr::copy(src, dst, remaining) };
                     dst = unsafe { dst.add(remaining) };
                     let new_len = unsafe { dst.offset_from(ws_base) } as usize;
-                    unsafe { ws.set_len(new_len) };
-                    *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
+                    unsafe { ws.ws.set_len(new_len) };
+                    // `ws` restores lists[idx] as it drops on this return.
                     return BcpResult::Conflict { clause: cref };
                 }
                 // blocker_val is None → propagate partner
@@ -388,7 +433,7 @@ pub(crate) fn run_bcp_watched(
                 unsafe { db.swap_literal_unchecked(cref, false_pos, k) };
                 // Add watch for the new literal (long clause, not binary)
                 // SAFETY: new_watch.code() < 2*num_vars
-                unsafe { watches.lists.get_unchecked_mut(new_watch.code() as usize) }
+                unsafe { ws.lists.get_unchecked_mut(new_watch.code() as usize) }
                     .push(WatchEntry::new(cref, partner, false));
                 // Entry removed from false_lit's list (not copied to dst)
                 continue;
@@ -408,9 +453,8 @@ pub(crate) fn run_bcp_watched(
                 unsafe { std::ptr::copy(src, dst, remaining) };
                 dst = unsafe { dst.add(remaining) };
                 let new_len = unsafe { dst.offset_from(ws_base) } as usize;
-                unsafe { ws.set_len(new_len) };
-                // SAFETY: false_lit.code() < 2*num_vars
-                *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
+                unsafe { ws.ws.set_len(new_len) };
+                // `ws` restores lists[idx] as it drops on this return.
                 return BcpResult::Conflict { clause: cref };
             } else if partner_val.is_none() {
                 // Partner unassigned → unit clause, propagate partner
@@ -420,9 +464,8 @@ pub(crate) fn run_bcp_watched(
         }
 
         let new_len = unsafe { dst.offset_from(ws_base) } as usize;
-        unsafe { ws.set_len(new_len) };
-        // SAFETY: false_lit.code() < 2*num_vars
-        *unsafe { watches.lists.get_unchecked_mut(false_lit.code() as usize) } = ws;
+        unsafe { ws.ws.set_len(new_len) };
+        // `ws` restores lists[idx] as it drops at the end of this iteration.
     }
 
     BcpResult::Ok
@@ -570,6 +613,79 @@ mod tests {
         let mut trail = Trail::new(3);
         trail.new_decision(Lit::pos(0));
         bcp_after_decision(&mut small, &mut w, &mut trail);
+    }
+
+    #[test]
+    fn conflict_return_restores_the_watch_list() {
+        // The binary-clause conflict path returns from the middle of the
+        // compaction loop. The list it was compacting is put back by
+        // `TakenList`'s Drop, not by a statement on that path — if the guard
+        // were wired wrong, x0's watch list would come back empty and every
+        // later BCP would miss both clauses.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1)]);
+        db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);
+
+        let mut w = Watches::new(&db, 2);
+        let mut trail = Trail::new(2);
+        let false_lit = Lit::pos(0).complement();
+        let before = w.lists[false_lit.code() as usize].len();
+        assert_eq!(before, 2, "both clauses should watch this literal");
+
+        trail.new_decision(Lit::pos(0));
+        match bcp_after_decision(&mut db, &mut w, &mut trail) {
+            BcpResult::Conflict { .. } => {}
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        assert_eq!(
+            w.lists[false_lit.code() as usize].len(),
+            before,
+            "conflict return dropped the watch list it had taken"
+        );
+    }
+
+    // Only in debug: the panic this provokes is a `debug_assert!` on the
+    // inline-watch invariant. It is the one panic reachable inside the
+    // compaction window from a constructible state — BCP's own value checks
+    // filter out the double-propagation that would trip
+    // `record_propagation`'s release assert, which is why that one is a
+    // latent hazard rather than a live bug. The guard's correctness does not
+    // depend on which panic unwinds through it.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn unwind_mid_compaction_leaves_the_watch_list_intact() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::neg(0), Lit::pos(1), Lit::pos(2)]); // cref 0
+        let cref_b = db.add_clause(vec![Lit::pos(3), Lit::pos(4), Lit::pos(5)]);
+
+        let mut w = Watches::new(&db, 6);
+        let false_lit = Lit::pos(0).complement();
+        let slot = false_lit.code() as usize;
+
+        // Clause B is watched by x3/x4, not by ¬x0. Filing it under ¬x0
+        // breaks the inline-watch invariant that the branchless
+        // partner/false_pos selection depends on.
+        w.lists[slot].push(WatchEntry::new(cref_b, Lit::pos(3), false));
+        let before = w.lists[slot].len();
+        assert_eq!(before, 2);
+
+        let mut trail = Trail::new(6);
+        trail.new_decision(Lit::pos(0));
+
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            bcp_after_decision(&mut db, &mut w, &mut trail)
+        }));
+        assert!(r.is_err(), "expected the broken watch invariant to panic");
+
+        // Before the guard, the taken list was dropped during the unwind and
+        // ¬x0 was left watching nothing — BCP would then silently miss every
+        // propagation on x0, which is a wrong answer with no diagnostic.
+        assert!(
+            !w.lists[slot].is_empty(),
+            "unwind dropped the watch list for {false_lit}"
+        );
     }
 
     #[test]
