@@ -82,22 +82,29 @@ cmd_up() {
       | python3 -c '
 import json, sys
 p = json.load(sys.stdin)
-s = p.get("ssh", {})
-print(f"\npod {p[\"id\"]}  ${p.get(\"costPerHr\",\"?\")}/hr")
-print(f"ssh: {s.get(\"ssh_command\",\"(not ready)\")}")
-print("\nnvcc is NOT on PATH in these images — export PATH=/usr/local/cuda/bin:$PATH")
+s = p.get("ssh") or {}
+pid = p.get("id", "?")
+cost = p.get("costPerHr", "?")
+cmd = s.get("ssh_command", "(not ready)")
+print("")
+print("pod " + str(pid) + "  $" + str(cost) + "/hr")
+print("ssh: " + str(cmd))
+print("")
+print("nvcc is NOT on PATH in these images - export PATH=/usr/local/cuda/bin:$PATH")
 print("REMEMBER: tools/gpu-session.sh down")
 '
 }
 
 cmd_run() {
     local gpu="${1:-$GPU_DEFAULT}"
-    cmd_up "$gpu" || die "pod creation failed"
+    # Trap FIRST, before anything can create a pod. Learned the hard way
+    # 2026-09-05: `cmd_up || die` ran before the trap was armed, so a create that
+    # succeeded-then-failed-to-print left a pod running while reporting failure —
+    # the exact leak the trap exists to stop. Arm it, then create.
+    trap cmd_down EXIT
+    cmd_up "$gpu" || die "pod creation failed (pod terminated by trap if one was made)"
     local ssh_cmd; ssh_cmd=$(pods_json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["ssh"]["ssh_command"])')
     echo "=== running verification ==="
-    # trap, not && — the pod must die even if the verification fails, which is
-    # exactly when a human forgets.
-    trap cmd_down EXIT
     $ssh_cmd -o StrictHostKeyChecking=accept-new \
         'export PATH=/usr/local/cuda/bin:$HOME/.cargo/bin:$PATH
          cd /tmp && git clone -q https://github.com/modelmiser/warp-types.git 2>/dev/null

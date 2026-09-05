@@ -1,0 +1,40 @@
+#!/bin/bash
+# Pre-push hook: mirrors GitHub CI checks (ci.yml)
+# Catches fmt + clippy + test failures before they hit remote.
+
+set -e
+
+echo "pre-push: cargo fmt --check"
+cargo fmt --check
+
+echo "pre-push: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-push: cargo test --workspace --lib"
+cargo test --workspace --lib --quiet
+
+echo "pre-push: cargo test --workspace --doc"
+cargo test --workspace --doc --quiet
+
+# The `gpu` feature is the one non-default feature CI cannot build — no CUDA
+# runner. That gap is a DECISION (see TODO), but it means the CUDA path can
+# compile-rot between hardware sessions with nothing reporting it, which is
+# exactly the failure the fuzz-target `cargo check` step exists to catch in CI.
+#
+# Closing it here costs ~7s and needs no GPU at runtime, only the CUDA headers
+# that cudarc links against. Skipped automatically on a machine without them, so
+# the hook stays portable — a fresh clone elsewhere is not blocked by this.
+if [ -d /usr/local/cuda ] || command -v nvcc &>/dev/null; then
+    echo "pre-push: cargo check -p warp-types-sat --features gpu (CUDA path)"
+    cargo check -p warp-types-sat --features gpu --quiet
+else
+    echo "pre-push: skipping gpu-feature check (no CUDA toolkit on this host)"
+fi
+
+echo "pre-push: paper sync (section files == paper.md spans)"
+bash scripts/check-paper-sync.sh
+
+echo "pre-push: doc count freshness"
+bash scripts/check-doc-counts.sh
+
+echo "pre-push: all checks passed"
