@@ -75,18 +75,33 @@ pub fn block_dim_x() -> u32 {
 ///
 /// # Safety
 ///
-/// `addr` must point into **global** memory — the instruction is
-/// `atom.global.add.f64`, so a generic, shared, or local address is undefined
-/// rather than merely slow. It must be 8-byte aligned and valid for both read
-/// and write for the duration of the call. Concurrent access is defined only
-/// through this same global-atomic path: a plain load or store to `addr`
-/// racing with this call is a data race, not a resolved contention. Requires
-/// sm_60 or later, where the f64 form is native.
+/// `addr` must name a location in **global** memory, be naturally 8-byte
+/// aligned, and be valid for an 8-byte read-modify-write for the duration of
+/// the call — i.e. inside a live device allocation, not null, dangling, freed,
+/// or a host pointer.
+///
+/// A *generic* pointer is fine, and is the normal case: a device `*mut f64`
+/// from `cudaMalloc` is generic and refers to global memory, which PTX permits
+/// (`atom` accepts generic addressing "where the address points to `.global`
+/// or `.shared` space"). What is undefined is a location in the wrong state
+/// space — `.local`, `.shared`, `.const`, or `.param` — reached through such a
+/// pointer, since this instruction is `.global`-qualified.
+///
+/// Concurrent *non-atomic* loads or stores to `addr` are a data race, not
+/// resolved contention. Concurrent atomics are defined, but only when their
+/// scopes are mutually inclusive: this form carries the default `.gpu` scope,
+/// so a `.cta`-scoped or cross-device atomic on the same location is **not**
+/// atomic with respect to it. This function is not a private coherence domain —
+/// CUDA's `atomicAdd` on `double` over the same address is well defined
+/// alongside it.
+///
+/// Requires sm_60 or later, where the f64 form is native.
 ///
 /// Callers establish the bound, not this function. The in-tree caller
 /// (`sat-kernels`' gradient accumulation, `warp-types-sat/sat-kernels/src/lib.rs`)
-/// indexes `grad` by clause variable id, and the host side checks every such id
-/// against `ClauseDataSoA::num_vars` before launch — see the asserts in
+/// indexes `grad` by clause variable id, and the host side bounds every such id
+/// against `ClauseDataSoA::num_vars` before launch (as `len >= max + 1`, not by
+/// scanning each id) — see the asserts in
 /// `warp-types-sat/src/gpu_launcher.rs`. An unchecked variable id here writes
 /// outside the gradient allocation with no diagnostic.
 #[cfg(target_arch = "nvptx64")]

@@ -66,14 +66,22 @@ pub fn clause_loss_reduce(
     // Unused here, and deliberately so — kept for ABI symmetry with
     // `clause_loss_grad_fused`, which the host launches with the same arg pack.
     // Bounds come from PADDING, not from a guard: `ClauseDataSoA` pads to a
-    // multiple of 32 with `var = 0, weight = 0.0`, so every lane's loads are
-    // in-bounds and padding contributes exactly zero to the sum.
+    // multiple of 32 with `var = 0, weight = 0.0`, and the launcher sets
+    // `grid_dim = padded_len / 32`, so every `ci` is in range and padding lanes
+    // load `x[0]`, which exists whenever any clause does. Padding contributes
+    // zero to the sum for FINITE `x`; nothing asserts that, and `0.0 * NaN` is
+    // NaN, so a non-finite `x[0]` poisons the whole batch through the padding
+    // lanes. Note the bound is the grid, not this parameter — an oversized grid
+    // reads past `padded_len` and padding does not save it.
     //
-    // A guard is not merely unnecessary here, it is unavailable: this kernel's
-    // only write is behind `reduce_sum`, and `if ci >= num_clauses { return; }`
-    // would retire a subset of lanes before that warp-wide collective — the
+    // What is forbidden here is retiring lanes, NOT bounds checking.
+    // `if ci >= num_clauses { return; }` before `reduce_sum` would leave a
+    // subset of lanes at a `shfl.sync` whose membermask still names them — the
     // shuffle-from-inactive-lane bug this crate's type system exists to reject.
-    // Kernel 2 can use the bound only because its guard sits AFTER the reduce.
+    // A masked guard is legal and available: predicate the VALUE and reconverge,
+    // exactly as `grad_norm_reduce` does below (`if vi < num_vars { .. } else
+    // { 0.0 }` and then reduce). Kernel 2's guard sits after the reduce, which
+    // is one sufficient pattern rather than the only legal slot.
     _num_clauses: u32,
 ) {
     let warp: Warp<All> = Warp::kernel_entry();
