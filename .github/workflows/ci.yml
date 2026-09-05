@@ -15,7 +15,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-01
@@ -47,7 +47,7 @@ jobs:
       # so the pin buys nothing on this job.
       RUSTUP_TOOLCHAIN: nightly
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -64,7 +64,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-01
@@ -78,7 +78,7 @@ jobs:
   toolchain-freshness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check toolchain pin is less than 90 days old
         run: |
           PIN=$(grep '^channel' rust-toolchain.toml | grep -oP '\d{4}-\d{2}-\d{2}' || true)
