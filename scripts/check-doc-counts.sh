@@ -71,6 +71,20 @@ done < <(cargo test --examples --quiet 2>&1 | grep "^test result:")
 
 TOTAL=$((UNIT + DOC + EXAMPLE))
 
+# Main-crate doc tests, as distinct from the workspace-wide DOC above. The docs
+# quote both: 37 workspace-wide, of which 31 are the main crate's. Without an
+# actual for the 31 it was an unguarded numeral sitting next to guarded ones,
+# which is the shape that drifts.
+DOC_MAIN=$(cargo test -p warp-types --doc --quiet 2>&1 | grep "^test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
+DOC_MAIN=${DOC_MAIN:-0}
+
+# The main-crate-only figure a reader can actually reproduce with one command
+# (`cargo test -p warp-types --lib --doc --examples`). TOTAL mixes scopes —
+# main-crate unit+example plus WORKSPACE doc — so it is a real sum of stated
+# parts but is not any single invocation's output. Publishing both is what makes
+# the composite reconcilable instead of merely disclosed.
+TOTAL_MAIN=$((UNIT + DOC_MAIN + EXAMPLE))
+
 THEOREMS_BASIC=$(grep -c "^theorem" lean/WarpTypes/Basic.lean 2>/dev/null || echo 0)
 THEOREMS_META=$(grep -c "^theorem" lean/WarpTypes/Metatheory.lean 2>/dev/null || echo 0)
 THEOREMS=$((THEOREMS_BASIC + THEOREMS_META))
@@ -171,6 +185,21 @@ for file in $MD_FILES; do
         if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
         [ -n "$num" ] && printf '%s\t%s\t%s\tproof\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
         [ -n "$num" ] && [ "$num" != "$BUG_PROOFS" ] && echo "STALE: ${file}:${ln} — bug untypability proofs: says '${tok}', actual ${BUG_PROOFS}"
+    done
+
+    # Pattern: "the N in the main crate" — the main-crate share of the
+    # workspace doc-test count, quoted alongside it in the paper.
+    grep -nE 'the [0-9]+ in the main crate' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
+        found=$(echo "$rest" | grep -oE 'the [0-9]+ in the main crate' | head -1 | grep -oE '[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttest\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && [ "$found" != "$DOC_MAIN" ] && echo "STALE: ${file}:${ln} — main-crate doc tests: says ${found}, actual ${DOC_MAIN}"
+    done
+
+    # Pattern: "N main-crate total" — the one-command reproducible figure.
+    grep -nE '[0-9]+ main-crate total' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
+        found=$(echo "$rest" | grep -oE '[0-9]+ main-crate total' | head -1 | grep -oE '^[0-9]+') || true
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttotal\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && [ "$found" != "$TOTAL_MAIN" ] && echo "STALE: ${file}:${ln} — main-crate total: says ${found}, actual ${TOTAL_MAIN}"
     done
 
     # Pattern: "N named theorem" / "N Lean 4 theorem" / "N Lean theorem".
