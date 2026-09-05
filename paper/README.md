@@ -71,6 +71,6 @@ let partner = active.shuffle_xor(data, 1);
 
 ## Related Files
 
-- [../src/proof.rs](../src/proof.rs) — Executable proof sketch (11 tests) <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+- [../src/proof.rs](../src/proof.rs) — Executable proof sketch (11 tests) <!-- unguarded: 11 — module-scoped test count; the guard computes no per-module actual -->
 - [../lean/](../lean/) — Lean 4 formalization (32 named theorems, zero sorry, zero axioms)
 

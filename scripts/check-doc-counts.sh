@@ -108,21 +108,21 @@ for file in $MD_FILES; do
     # Pattern: "N unit +" or "N unit test" or "N unit," (test summary contexts)
     grep -nE '[0-9]+ unit [+,t]' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ unit' | head -1 | grep -oE '[0-9]+') || true
-        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttest\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$UNIT" ] && echo "STALE: ${file}:${ln} — unit tests: says ${found}, actual ${UNIT}"
     done
 
     # Pattern: "N doc test" or "N doc (" or "N doc)" (NOT "documented")
     grep -nE '[0-9]+ doc[ )(t]' "$file" 2>/dev/null | grep -v 'documented' | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ doc' | head -1 | grep -oE '[0-9]+') || true
-        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttest\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$DOC" ] && echo "STALE: ${file}:${ln} — doc tests: says ${found}, actual ${DOC}"
     done
 
     # Pattern: "N example test" or "N example +" (NOT "8 worked examples" or "8 real-bug")
     grep -nE '[0-9]+ example [+t]' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ example' | head -1 | grep -oE '[0-9]+') || true
-        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\texample\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$EXAMPLE" ] && echo "STALE: ${file}:${ln} — example tests: says ${found}, actual ${EXAMPLE}"
     done
 
@@ -132,7 +132,8 @@ for file in $MD_FILES; do
     grep -nE '\([0-9]+ total\)|[0-9]+ tests \(' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '\([0-9]+ total\)' | head -1 | grep -oE '[0-9]+') || true
         [ -n "$found" ] || found=$(echo "$rest" | grep -oE '[0-9]+ tests \(' | head -1 | grep -oE '^[0-9]+') || true
-        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttotal\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttest\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$TOTAL" ] && echo "STALE: ${file}:${ln} — total tests: says ${found}, actual ${TOTAL}"
     done
 
@@ -141,7 +142,7 @@ for file in $MD_FILES; do
         tok=$(echo "$rest" | grep -oiE '([0-9]+|[a-z]+) compile-fail' | head -1 | grep -oiE '^[0-9a-z]+')
         [ -n "$tok" ] || continue
         if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
-        [ -n "$num" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
+        [ -n "$num" ] && printf '%s\t%s\t%s\tcompile-fail\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
         [ -n "$num" ] && [ "$num" != "$DOC_CF" ] && echo "STALE: ${file}:${ln} — compile-fail doctests: says '${tok}', actual ${DOC_CF}"
     done
 
@@ -150,7 +151,7 @@ for file in $MD_FILES; do
         tok=$(echo "$rest" | grep -oiE '([0-9]+|[a-z]+) doc example' | head -1 | grep -oiE '^[0-9a-z]+')
         [ -n "$tok" ] || continue
         if echo "$tok" | grep -qE '^[0-9]+$'; then num=$tok; else num=$(word2num "$tok") || continue; fi
-        [ -n "$num" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
+        [ -n "$num" ] && printf '%s\t%s\t%s\texample\n' "$file" "$ln" "$num" >> "$VALIDATED_FILE"
         [ -n "$num" ] && [ "$num" != "$DOC_EXAMPLES" ] && echo "STALE: ${file}:${ln} — doc examples: says '${tok}', actual ${DOC_EXAMPLES}"
     done
 
@@ -159,7 +160,7 @@ for file in $MD_FILES; do
     # was invisible to the "named"-only pattern — and wrong.
     grep -nE '[0-9]+ (named|Lean( 4)?) theorem' "$file" 2>/dev/null | while IFS=: read -r ln rest; do
         found=$(echo "$rest" | grep -oE '[0-9]+ (named|Lean( 4)?) theorem' | head -1 | grep -oE '^[0-9]+') || true
-        [ -n "$found" ] && printf '%s\t%s\t%s\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
+        [ -n "$found" ] && printf '%s\t%s\t%s\ttheorem\n' "$file" "$ln" "$found" >> "$VALIDATED_FILE"
         [ -n "$found" ] && [ "$found" != "$THEOREMS" ] && echo "STALE: ${file}:${ln} — Lean theorems: says ${found}, actual ${THEOREMS}"
     done
 
@@ -171,7 +172,11 @@ done
 # from approval. This pass inverts that for the vocabulary the guard owns:
 # every number sitting within three words of test/doctest/example(-as-test)/
 # compile-fail/theorem/total must have been extracted by some pattern above,
-# or be explicitly waived with "<!-- unguarded: <reason> -->" on the line.
+# or be explicitly waived with "<!-- unguarded: <count> — <reason> -->".
+# The waiver must NAME the count it covers (digits or a number-word, comma
+# separated for several). A waiver that names none covers the whole line,
+# so a number added to that line later inherits an unrelated reason and is
+# never checked again — that is now a hard failure (WAIVER-UNSCOPED).
 #
 # Deliberately NOT deny-by-default over all numerals: the corpus is full of
 # line counts, percentages, lane widths and section numbers, and flagging those
@@ -195,25 +200,55 @@ function num(t,   c) {
     return -1
 }
 function counted(t) { return (t ~ /^(tests?|doctests?|theorems?|examples?|compile-fail)$/) }
+# Canonical vocabulary term, so a validated count is keyed to WHAT it counts and
+# not just to its value. Without this, "37 doc tests and 37 theorems" needed only
+# one of the two validated: the key was (file, line, value), so approving either
+# 37 approved both. Singular/plural and doctest/test collapse to one term.
+function canon(s) { sub(/s$/, "", s); if (s == "doctest") s = "test"; return s }
 BEGIN {
     split("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", A, " ")
     for (i = 1; i <= 21; i++) W[A[i]] = i - 1
-    while ((getline l < VF) > 0) { split(l, f, "\t"); V[f[1] SUBSEP f[2] SUBSEP (f[3] + 0)] = 1 }
+    while ((getline l < VF) > 0) { split(l, f, "\t"); V[f[1] SUBSEP f[2] SUBSEP (f[3] + 0) SUBSEP f[4]] = 1 }
 }
 {
-    waived = 0; reason = ""
+    waived = 0; unscoped = 0; reason = ""
+    split("", WV)
+    scan = $0
     if (match($0, /<!-- unguarded:[^>]*-->/)) {
         waived = 1
-        reason = substr($0, RSTART, RLENGTH)
+        ws = RSTART; wl = RLENGTH
+        reason = substr($0, ws, wl)
+        # The waiver comment is metadata, not prose: drop it from the text that
+        # gets scanned. Otherwise the count named in the waiver is itself read as
+        # a claim ("unguarded: 14 — module-scoped test count" parses as "14 test"),
+        # and the guard reports numbers it invented.
+        scan = substr($0, 1, ws - 1) " " substr($0, ws + wl)
         sub(/^<!-- unguarded:[ \t]*/, "", reason)
         sub(/[ \t]*-->$/, "", reason)
+        # A waiver must NAME the counts it covers. Leading numerals (digits or
+        # number-words, comma separated) are its scope; the rest is the reason.
+        # Without this the waiver covered the whole LINE, so a count added later
+        # to an already-waived line inherited a stale, unrelated reason and was
+        # never checked again — a hole that widens silently and looks like a
+        # clean run. An unscoped waiver is now a failure, not a pass.
+        nscope = 0
+        while (match(reason, /^[ \t]*([0-9]+|[A-Za-z]+)[ \t]*,?/)) {
+            tok = substr(reason, RSTART, RLENGTH)
+            gsub(/[ \t,]/, "", tok)
+            wv = num(tok)
+            if (wv < 0) break
+            WV[wv] = 1
+            nscope++
+            reason = substr(reason, RSTART + RLENGTH)
+        }
+        if (nscope == 0) unscoped = 1
+        else sub(/^[ \t]*(\xe2\x80\x94|--|-|:)[ \t]*/, "", reason)
     }
-    n = split($0, T, /[ \t]+/)
+    n = split(scan, T, /[ \t]+/)
     for (i = 1; i <= n; i++) {
         v = num(T[i])
         if (v < 0) continue
         if (i > 1 && low(T[i-1]) ~ /^(lean|version|v|figure|fig|table|section|chapter|appendix|lemma|theorem)$/) continue
-        if ((FILENAME SUBSEP FNR SUBSEP v) in V) continue
         for (j = i + 1; j <= i + 3 && j <= n; j++) {
             if (num(T[j]) >= 0) break          # the next numeral heads its own phrase
             t = low(T[j])
@@ -227,9 +262,11 @@ BEGIN {
                 for (k = i + 1; k < j; k++) if (!counted(low(T[k]))) ok = 0
                 if (!ok) continue
             } else if (t !~ /^(tests?|doctests?|theorems?|compile-fail)$/) continue
+            if ((FILENAME SUBSEP FNR SUBSEP v SUBSEP canon(t)) in V) break
             phrase = ""
             for (k = i; k <= j; k++) phrase = phrase (k > i ? " " : "") T[k]
-            if (waived) printf "WAIVED: %s:%d — \"%s\" — %s\n", FILENAME, FNR, phrase, reason
+            if (waived && unscoped) printf "WAIVER-UNSCOPED: %s:%d — \"%s\" — waiver names no count; write \"<!-- unguarded: %s — <reason> -->\"\n", FILENAME, FNR, phrase, clean(T[i])
+            else if (waived && (v in WV)) printf "WAIVED: %s:%d — \"%s\" — %s\n", FILENAME, FNR, phrase, reason
             else printf "UNGUARDED: %s:%d — \"%s\" — no pattern validates this count; guard it or waive it\n", FILENAME, FNR, phrase
             break
         }
@@ -245,10 +282,16 @@ COUNT=$(echo "$COUNT" | tr -d '[:space:]')
 UNGUARDED_COUNT=$(grep -c "^UNGUARDED:" "$STALE_FILE" 2>/dev/null || true)
 UNGUARDED_COUNT=$(echo "${UNGUARDED_COUNT:-0}" | tr -d '[:space:]')
 
-if [ "$COUNT" -gt 0 ] || [ "$UNGUARDED_COUNT" -gt 0 ]; then
+# An unscoped waiver is a failure, not a pass. It is the shape that rots: it
+# covers every count on its line, including ones written long after the reason.
+UNSCOPED_COUNT=$(grep -c "^WAIVER-UNSCOPED:" "$STALE_FILE" 2>/dev/null || true)
+UNSCOPED_COUNT=$(echo "${UNSCOPED_COUNT:-0}" | tr -d '[:space:]')
+
+if [ "$COUNT" -gt 0 ] || [ "$UNGUARDED_COUNT" -gt 0 ] || [ "$UNSCOPED_COUNT" -gt 0 ]; then
     echo ""
     [ "$COUNT" -gt 0 ] && echo "FAIL: ${COUNT} stale doc count(s). Update docs before pushing."
-    [ "$UNGUARDED_COUNT" -gt 0 ] && echo "FAIL: ${UNGUARDED_COUNT} unguarded count(s). Guard the phrasing or waive with '<!-- unguarded: <reason> -->'."
+    [ "$UNGUARDED_COUNT" -gt 0 ] && echo "FAIL: ${UNGUARDED_COUNT} unguarded count(s). Guard the phrasing or waive with '<!-- unguarded: <count> — <reason> -->'."
+    [ "$UNSCOPED_COUNT" -gt 0 ] && echo "FAIL: ${UNSCOPED_COUNT} waiver(s) name no count. A waiver must say WHICH number it covers: '<!-- unguarded: 407 — <reason> -->'."
     exit 1
 else
     echo "OK: all doc counts match reality."

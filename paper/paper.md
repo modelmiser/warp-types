@@ -1575,7 +1575,7 @@ Our implementation includes sixteen compile-fail doctests covering shuffle on di
 
 ### Bug Pattern Coverage
 
-Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). <!-- unguarded: no main-crate-scoped DOC actual exists; see TODO -->
+Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
 ## 7.2 Performance
 
@@ -1872,9 +1872,9 @@ Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservatio
 
 ## 9.3 Protocol Inference and Gradual Typing
 
-Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`). <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`). <!-- unguarded: 14 — module-scoped test count; the guard computes no per-module actual -->
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path: <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path: <!-- unguarded: 30 — module-scoped test count; the guard computes no per-module actual -->
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -1898,7 +1898,7 @@ The core idea—linear typestate with quiescent participants—may apply beyond 
 
 ## 9.5 Hardware Crossbar Protocols
 
-We have prototyped typestate crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type. <!-- unguarded: module-scoped test count; the guard computes no per-module actual -->
+We have prototyped typestate crossbar communication (`src/research/crossbar_protocol.rs`, 12 tests) modeling a 16-tile pipelined crossbar. The mapping is direct: `TileGroup<S>` mirrors `Warp<S>`, tile sets mirror active sets, and `TileComplement` mirrors `ComplementOf`. Crossbar collectives (ring pass, butterfly exchange, scatter, gather) exist only on `TileGroup<AllTiles>` — after `diverge_halves()`, the methods vanish from the type. <!-- unguarded: 12 — module-scoped test count; the guard computes no per-module actual -->
 
 The hardware bug class is real: when a tile diverges and doesn't SEND, its pipeline register retains data from the previous cycle. Other tiles reading from that channel get stale data with no hardware error — silent corruption identical to shuffle-from-inactive-lane. Our prototype's `stale_data_bug_demonstration` test reproduces this failure mode and shows how warp typestate prevents it.
 
