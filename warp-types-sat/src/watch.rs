@@ -304,7 +304,9 @@ pub(crate) fn run_bcp_watched(
     //
     // SAFETY of unchecked indexing throughout this loop:
     // - All literals come from clauses in the DB (c[0], c[1], c[k])
-    // - solve_cdcl_core_inner asserts db.max_variable() < num_vars at startup
+    // - The bound is established PER CALL by the assert at the top of
+    //   `run_bcp_watched`, not at solver startup: tests call this directly and
+    //   re-entrant CDCL does not re-run `solve_cdcl_core_inner`'s assert.
     // - bt.assigns.len() == num_vars (from Trail::new)
     // - Therefore lit.var() < bt.assigns.len() for every literal encountered
     while watches.queue_head < bt.len() {
@@ -314,7 +316,8 @@ pub(crate) fn run_bcp_watched(
 
         // SAFETY for watches.lists unchecked accesses:
         // false_lit and new_watch are literals from clauses in the DB.
-        // All literals satisfy lit.code() < 2*num_vars (validated at solver startup).
+        // All literals satisfy lit.code() < 2*num_vars — established by this
+        // call's entry assert (see above), NOT at solver startup.
         // watches.lists.len() == 2*num_vars (from Watches::new).
         let idx = false_lit.code() as usize;
         let taken = std::mem::take(unsafe { watches.lists.get_unchecked_mut(idx) });

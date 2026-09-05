@@ -238,12 +238,46 @@ impl Trail {
     /// and one on `entries[pos]`. Returns None if the variable is unassigned.
     ///
     /// # Safety
-    /// `var` must be < `self.num_vars()`. This is guaranteed for all variables
-    /// from the clause DB (validated at solver startup: `max_variable() < num_vars`).
+    ///
+    /// TWO preconditions, not one — there are two `get_unchecked`s here:
+    /// 1. `var < self.num_vars()`, bounding `var_position[var]`.
+    /// 2. If `var_position[var] == Some(pos)` then `pos < self.entries.len()`.
+    ///    This is a structural invariant of `Trail`, not something a caller can
+    ///    check: assignment writes the position before pushing the entry
+    ///    (`record_*`), and `backtrack_to` clears `var_position` BEFORE
+    ///    truncating `entries`, so no window leaves a live position past the end.
+    ///
+    /// (1) is NOT established "at solver startup" — that was the previous
+    /// wording and it is wrong. Tests call analysis and BCP directly without
+    /// going through `solve*`, and re-entrant CDCL does not re-run the startup
+    /// assert. The bound is established per call, by the entry assert in
+    /// `analyze_conflict*` / `run_bcp_watched` and the per-literal checks in
+    /// `reason_clause_lits` and the theory-explanation path.
+    ///
+    /// Memory safety does not require `entries[pos].lit.var() == var`, but
+    /// returning another variable's entry is how a wrong learned clause ships,
+    /// so the debug build checks it too.
     #[inline]
     pub(crate) unsafe fn entry_for_var_unchecked(&self, var: u32) -> Option<&TrailEntry> {
+        debug_assert!(
+            (var as usize) < self.var_position.len(),
+            "entry_for_var_unchecked: var {var} >= num_vars {}",
+            self.var_position.len()
+        );
         match *self.var_position.get_unchecked(var as usize) {
-            Some(pos) => Some(self.entries.get_unchecked(pos)),
+            Some(pos) => {
+                debug_assert!(
+                    pos < self.entries.len(),
+                    "entry_for_var_unchecked: var {var} maps to position {pos} but entries.len() is {}",
+                    self.entries.len()
+                );
+                debug_assert_eq!(
+                    self.entries.get_unchecked(pos).lit.var(),
+                    var,
+                    "entry_for_var_unchecked: var {var} maps to position {pos}, which holds a different variable"
+                );
+                Some(self.entries.get_unchecked(pos))
+            }
             None => None,
         }
     }

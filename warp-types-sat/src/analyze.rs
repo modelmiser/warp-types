@@ -142,7 +142,8 @@ impl AnalyzeWork {
 /// [`ClauseDb::clause`] plus a variable-range check on every literal.
 ///
 /// Reason CRefs come from trail entries, and `Trail::record_propagation` is
-/// safe + pub and accepts ANY CRef — so a caller-built trail can carry a
+/// safe and `pub(crate)`, and accepts ANY CRef — so an in-crate caller (these
+/// tests included) can build a trail carrying a
 /// bogus reason. `db.clause` rejects CRefs whose decoded length overruns the
 /// arena, but a CRef pointing INTO a clause body can decode a small in-bounds
 /// length whose "literals" are really header/literal words of other clauses —
@@ -263,7 +264,9 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
         );
         if !unsafe { *work.seen.get_unchecked(var as usize) } {
             unsafe { work.mark_seen(var) };
-            // SAFETY: var comes from clause DB, validated var < num_vars at startup.
+            // SAFETY: var was range-checked against max_var by the release assert
+            // immediately above — per conflict literal, on this call. NOT a
+            // solver-startup check: the clause here is caller-supplied.
             let entry = unsafe { trail.entry_for_var_unchecked(var) };
             debug_assert!(
                 entry.is_some(),
@@ -363,11 +366,25 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
                         reason_lits_owned = theory.explain(entry.lit, key);
                         // Theory explanations are produced by external safe
                         // code at resolution time — unlike DB reason clauses,
-                        // their variables were never validated at startup, and
-                        // they feed the same unchecked seen/trail indexing
+                        // whose variables the entry assert already bounded —
+                        // and they feed the same unchecked seen/trail indexing
                         // below (plus minimization and watch selection later).
                         // Validate once per explanation clause, at the point
                         // it enters resolution.
+                        //
+                        // Range is checked for MEMORY safety. Assignedness is
+                        // checked for ANSWER safety, and it is the sharper of
+                        // the two: an in-range but unassigned literal has no
+                        // trail entry, so the resolution arm below still pushes
+                        // it into `learned` while the backjump computation's
+                        // `filter_map` silently drops it. The backjump level
+                        // then comes out too low, the "asserting" literal is
+                        // not actually asserting after backtracking, and the
+                        // solver records a propagation that nothing implies —
+                        // a wrong assignment with no diagnostic, reachable from
+                        // entirely safe `TheorySolver` code. `check()`
+                        // conflicts are already validated this way at the
+                        // solver boundary; `explain()` was not.
                         for l in &reason_lits_owned {
                             assert!(
                                 (l.var() as usize) < max_var,
@@ -375,6 +392,16 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
                                  range (num_vars {max_var}) — explanation clauses must only \
                                  mention problem variables",
                                 l.var()
+                            );
+                            assert!(
+                                trail.value(l.var()).is_some(),
+                                "TheorySolver::explain returned unassigned literal {l} — an \
+                                 explanation must be a clause over CURRENTLY ASSIGNED literals \
+                                 (it explains why `{}` was propagated). An unassigned literal \
+                                 has no trail entry, so it survives into the learned clause but \
+                                 is dropped from the backjump-level computation, producing a \
+                                 wrong assignment rather than a crash",
+                                entry.lit
                             );
                         }
                         &reason_lits_owned
@@ -450,7 +477,9 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
     for &l in &learned[1..] {
         if lit_redundant_with(work, trail, db, l, abstract_levels) {
-            // SAFETY: l.var() from clause DB, validated < num_vars.
+            // SAFETY: l is a learned-clause literal, and every var reaching
+            // `learned` was range-checked on THIS call (entry assert, conflict
+            // literals, `reason_clause_lits`, theory explanations).
             unsafe { *work.seen.get_unchecked_mut(l.var() as usize) = false };
         } else {
             minimized.push(l);
@@ -477,7 +506,8 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     // leave an arbitrary literal in c[1], breaking the watched invariant.
     if learned.len() >= 3 {
         let mut best_pos = 1;
-        // SAFETY: all vars in learned come from the clause DB, validated var < num_vars.
+        // SAFETY: every var in `learned` was range-checked on this call — not
+        // all come from the clause DB, theory explanations included.
         let mut best_level = unsafe { trail.entry_for_var_unchecked(learned[1].var()) }
             .map(|e| e.level)
             .unwrap_or(0);
@@ -498,7 +528,8 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
     // Backtrack level: highest level among learned clause literals,
     // excluding the asserting literal (which is at current_level).
-    // SAFETY: all vars from clause DB, validated var < num_vars.
+    // SAFETY: every var here was range-checked on this call — not all come
+    // from the clause DB, theory explanations included.
     let backtrack_level = learned
         .iter()
         .skip(1) // skip asserting literal
@@ -507,7 +538,8 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
         .unwrap_or(0);
 
     // LBD: count distinct decision levels in the learned clause.
-    // SAFETY: all vars from clause DB, validated var < num_vars.
+    // SAFETY: every var here was range-checked on this call — not all come
+    // from the clause DB, theory explanations included.
     let lbd = {
         let level_count = current_level as usize + 1;
         work.levels_seen.clear();
@@ -556,7 +588,9 @@ pub(crate) fn analyze_conflict_instrumented(
     work.ensure_capacity(max_var);
 
     // Same cross-argument boundary as analyze_conflict_with_theory: reason
-    // clauses below are read unchecked, so a db/trail mismatch must panic
+    // clauses below go through `reason_clause_lits` (checked accessor plus a
+    // per-literal var check), but the seen/trail indexing is unchecked, so a
+    // db/trail mismatch must panic
     // here instead of being release UB.
     assert!(
         db.is_empty() || (db.max_variable() as usize) < max_var,
@@ -1676,6 +1710,46 @@ mod tests {
 
         let mut work = AnalyzeWork::new(2);
         let _ = analyze_conflict_with_theory(&mut work, &trail, &db, c0, &mut BadExplainTheory);
+    }
+
+    #[test]
+    #[should_panic(expected = "returned unassigned literal")]
+    fn theory_explanation_unassigned_literal_panics_cleanly() {
+        // An explain() that returns an IN-RANGE but UNASSIGNED literal. This
+        // passes the range check and is not a memory-safety problem, which is
+        // exactly why it is dangerous: the literal has no trail entry, so the
+        // resolution arm still pushes it into `learned` while the backjump
+        // computation's `filter_map` drops it. The backjump level then comes
+        // out too low, the asserting literal is not asserting after
+        // backtracking, and the solver records a propagation nothing implies —
+        // a wrong assignment, no crash, reachable from entirely safe code.
+        //
+        // Found by cross-vendor review 2026-09-05; the range check alone had
+        // been treated as sufficient validation of explain() output.
+        use crate::theory::{TheoryContext, TheoryResult};
+
+        struct UnassignedExplainTheory;
+        impl TheorySolver for UnassignedExplainTheory {
+            fn check(&mut self, _ctx: &TheoryContext<'_>) -> TheoryResult {
+                TheoryResult::Consistent
+            }
+            fn backtrack(&mut self, _new_level: u32) {}
+            fn explain(&mut self, lit: Lit, _key: u32) -> Vec<Lit> {
+                // x2 is in range for num_vars = 3, but never assigned.
+                vec![lit, Lit::neg(2)]
+            }
+        }
+
+        let mut db = ClauseDb::new();
+        let c0 = db.add_clause(vec![Lit::neg(0), Lit::neg(1)]);
+
+        let mut trail = Trail::new(3);
+        trail.new_decision(Lit::pos(0));
+        trail.record_theory_propagation(Lit::pos(1), 0);
+
+        let mut work = AnalyzeWork::new(3);
+        let _ =
+            analyze_conflict_with_theory(&mut work, &trail, &db, c0, &mut UnassignedExplainTheory);
     }
 
     #[test]
