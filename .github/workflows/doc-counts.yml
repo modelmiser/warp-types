@@ -33,7 +33,7 @@ jobs:
         run: bash scripts/check-paper-sync.sh
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-07-01
+          toolchain: nightly-2026-09-15
           # Same pin as ci.yml. The guard compiles the workspace to count
           # unit/doc/example tests; no rustfmt/clippy components needed.
       - name: Doc-count freshness guard
