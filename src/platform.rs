@@ -1,3 +1,8 @@
+// Lane-indexed loops are intentional, as in `simwarp.rs`: the index is the
+// lane, used for arithmetic (`i + delta`, `i ^ mask`, `1 << i`), not just for
+// array access.
+#![allow(clippy::needless_range_loop)]
+
 //! Platform abstraction for CPU/GPU unified targeting
 //!
 //! This module defines the `Platform` trait that allows the same algorithm

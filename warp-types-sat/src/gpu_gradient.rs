@@ -1,3 +1,8 @@
+// Index loops are intentional, as in warp-types' `simwarp.rs`: in the SoA
+// layout the clause index and literal position are data (stored as `(ci, pos)`,
+// named in assertion messages), not just array subscripts.
+#![allow(clippy::needless_range_loop)]
+
 //! GPU kernel for clause-parallel gradient SAT (Axis 1).
 //!
 //! Maps the inner loop of `gradient_search` onto warp-level parallelism:

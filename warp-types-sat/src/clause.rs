@@ -49,6 +49,11 @@ static POOL_NONCE: AtomicU32 = AtomicU32::new(0);
 ///
 /// Split out from `ClausePool::new` so the exhaustion path is reachable in a
 /// test without allocating 2^32 pools.
+// `fetch_update` is deprecated on recent nightlies in favour of `try_update`, a
+// pure rename. `try_update` does not exist on older stable toolchains (it fails
+// to compile on 1.85), and this crate declares `rust-version = "1.75"`, so the
+// old name stays until the MSRV moves past the rename.
+#[allow(deprecated)]
 fn next_nonce(counter: &AtomicU32) -> u32 {
     counter
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
