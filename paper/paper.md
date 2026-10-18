@@ -1906,6 +1906,8 @@ The core idea—linear typestate with quiescent participants—may apply beyond 
 
 **FPGA crossbar protocols** (strong transfer): We have demonstrated this direction with a working prototype (§9.5). The mapping is direct: `TileGroup<S>` ↔ `Warp<S>`, tile sets ↔ active sets, `TileComplement` ↔ `ComplementOf`. The bug class is isomorphic: when a tile doesn't SEND, its pipeline register retains stale data—silent corruption identical to shuffle-from-inactive-lane. Mechanism, scale, and coupling all match.
 
+**GA144 port rules** (partial transfer): GreenArrays' F18A nodes communicate through blocking ports, and one read can wait on several ports at once, taking a word from whichever neighbour writes. The F18A Technology Reference states two design rules for such multiport operations: "When a node is doing a multiport read, only one of the selected ports may be written by another node at any given time", and for a multiport write, "every node that intends to read the value written must already be doing so and suspended" [GreenArrays 2022, DB001 §3.3.1]. The write rule is the closer analogue of ours: a presence obligation over a set of participants (the manual does not say what a late reader observes). The read rule has our symptom but the opposite cause. In AN009's keyboard buffer, whose flawed design reads two neighbours with one multiport read [Mauerhofer 2012, AN009 §3.6], the reading node "may read garbage and the behavior is undefined", because those neighbours, one serving the keyboard and one the consumer, write independently (§3.3). Too many active writers, not a read from an inactive one. Nothing orders the writers, so a blocking multiport read cannot be made safe by the reader's state alone. Either the writers must be mutually exclusive across nodes, or the reader must give up the multiport read and arbitrate locally. AN009 takes the second route: "The only way to solve this is to poll both sides continuously", reading one port at a time and paying in energy and in half its buffer. The note hoped a future chip would remove the problem, but the 2022 Technology Reference still states the rule. GreenArrays' Ganglia routing layer adds a liveness rule outside this section's criterion: only one path may occupy a node at a time, and paths that "cross more than once" can deadlock [GreenArrays 2013, AN011 §3]. On this evidence, a participant-set discipline for these chips would need cross-node exclusivity for multiport reads and reader presence for multiport writes, or a typed account of reader-side arbitration, not only complement within one node.
+
 **Distributed systems** (partial transfer): Node quiescence maps to lane inactivity, but the domains differ: distributed systems have genuine failure modes, non-deterministic failures, and no guarantee of reconvergence. Our quiescence model complements fault-tolerant MPST (§8.2) but is not a direct replacement.
 
 **Database queries and proof search** (structural similarity only): Database predicate filtering and proof case splits share the abstract shape of active subset selection but lack the inter-participant communication that makes the type discipline actionable.
@@ -2038,6 +2040,12 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 [43] Le Guernic, P., Gautier, T., Le Borgne, M., and Le Maire, C. "Programming Real-Time Applications with SIGNAL." Proceedings of the IEEE 79(9), 1991, pp. 1321–1336. https://doi.org/10.1109/5.97301
 
 [44] Cohen, A., Duranton, M., Eisenbeis, C., Pagetti, C., Plateau, F., and Pouzet, M. "N-Synchronous Kahn Networks." POPL, 2006, pp. 180–193. https://doi.org/10.1145/1111037.1111054
+
+[45] GreenArrays, Inc. "F18A Technology Reference." Product Data Book DB001, revised 11/13/22. https://www.greenarraychips.com
+
+[46] Mauerhofer, S. (GreenArrays, Inc.) "AN009: Attaching a PS/2 Keyboard." Application Note, revised 9/12/12. https://www.greenarraychips.com
+
+[47] GreenArrays, Inc. "AN011: Ganglia Mark 1: A Dynamic Message Routing Surface." Application Note, revised 6/08/13. https://www.greenarraychips.com
 
 ### Bug Reports Cited
 
