@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased] — 0.4.3
+
+- **`DynWarp` scalar collectives do the work.** `shuffle_xor_scalar`, `shuffle_down_scalar`, `reduce_sum_scalar` and
+  `broadcast_scalar` performed the all-active check and then returned their input (`reduce_sum_scalar`: `value × width`)
+  — a prototype that was a silent wrong result on the device, behind an `Ok`. They now issue the full-warp
+  `shfl.sync` after the check (CPU: identity, as for `Warp<All>`). `examples/gpu-project` Test 7 runs
+  `shuffle_xor_scalar` on hardware. (0.4.1 panel, Opus "not asked" #2.)
+
 ## [0.4.2] — 2026-10-18
 
 - Release corresponding to tag `v0.4.2`, Zenodo DOI 10.5281/zenodo.23457435 (concept DOI 10.5281/zenodo.19040615); crates.io `warp-types 0.4.2`, `warp-types-builder 0.3.3`.

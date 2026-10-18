@@ -94,6 +94,10 @@ pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
     // gradual: DynWarp round trip
     let d = DynWarp::from_mask_32(0xFFFF_FFFF);
     acc ^= d.population() ^ d.active_mask() as u32;
+    acc ^= d.shuffle_xor_scalar(tid as i32, 1).unwrap_or(0) as u32;
+    acc ^= d.shuffle_down_scalar(tid as i32, 1).unwrap_or(0) as u32;
+    acc ^= d.reduce_sum_scalar(1).unwrap_or(0) as u32;
+    acc ^= d.broadcast_scalar(tid as i32).unwrap_or(0) as u32;
     let w3: Warp<All> = d.ascribe::<All>().unwrap();
     acc ^= w3.shuffle_down(data::PerLane::new(tid as i32), 1).get() as u32;
     // direct primitives

@@ -238,3 +238,17 @@ pub fn shuffle_within_even(out: *mut i32) {
     let v = evens.shuffle_xor_within(data::PerLane::new(tid as i32), 2).get();
     *out.add(tid as usize) = v;
 }
+
+// ============================================================================
+// Kernel 7: DynWarp scalar shuffle on the device. The gradual API checks the
+// mask at run time, then issues the real full-warp shuffle (0.4.3; before that
+// it returned its input). Expected: lane tid gets tid ^ 1.
+// ============================================================================
+
+#[warp_kernel]
+pub fn dyn_shuffle_xor(out: *mut i32) {
+    let tid = warp_types::gpu::thread_id_x();
+    let w = DynWarp::from_mask_32(0xFFFF_FFFF);
+    let v = w.shuffle_xor_scalar(tid as i32, 1).unwrap_or(-1);
+    *out.add(tid as usize) = v;
+}

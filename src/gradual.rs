@@ -43,6 +43,7 @@
 //! ```
 
 use crate::active_set::ActiveSet;
+use crate::gpu::GpuShuffle;
 use crate::warp::Warp;
 
 /// Error when a runtime warp operation violates a safety invariant.
@@ -251,79 +252,72 @@ impl DynWarp {
     // Operations that require All lanes (runtime-checked)
     // ========================================================================
 
-    /// Shuffle XOR on a single scalar — runtime check for all-active.
-    ///
-    /// The `Warp<S>` equivalent only exists on `Warp<All>`.
-    /// `DynWarp` checks at runtime instead.
-    ///
-    /// **Prototype:** the check is real, but on success this returns `value`
-    /// unchanged; it does not yet read the partner lane.
+    /// The all-active check every collective below performs. On success it is
+    /// the same witness `Warp<All>` carries statically: this handle claims every
+    /// lane of the warp is converged and executing the call. It is a *claim*
+    /// (`DynWarp` is a trusted entry point, see `Warp::kernel_entry`), so the
+    /// full-warp membermask the collectives then use is only as sound as the
+    /// caller's mask.
     #[inline]
-    pub fn shuffle_xor_scalar(&self, value: i32, _xor_mask: u32) -> Result<i32, WarpError> {
+    fn require_all(&self, operation: &'static str) -> Result<(), WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
             return Err(WarpError {
-                operation: "shuffle_xor",
+                operation,
                 expected_mask: full,
                 actual_mask: self.active_mask,
             });
         }
-        // In a real implementation: __shfl_xor_sync(0xFFFFFFFF, value, xor_mask)
-        // For the type system prototype, we model the XOR partner selection:
-        Ok(value) // placeholder — real shuffle reads from partner lane
+        Ok(())
     }
 
-    /// Shuffle down on a single scalar — runtime check for all-active.
+    /// Shuffle XOR on a single scalar — runtime check for all-active, then the
+    /// full-warp `shfl.sync.bfly` (on the CPU: identity, as for `Warp<All>`).
     ///
-    /// **Prototype:** on success this returns `value` unchanged.
+    /// The `Warp<S>` equivalent only exists on `Warp<All>`; `DynWarp` checks at
+    /// runtime instead. Until 0.4.3 this returned `value` unchanged on success
+    /// (a prototype that was wrong on the device).
     #[inline]
-    pub fn shuffle_down_scalar(&self, value: i32, _delta: u32) -> Result<i32, WarpError> {
-        let full = self.full_mask;
-        if self.active_mask != full {
-            return Err(WarpError {
-                operation: "shuffle_down",
-                expected_mask: full,
-                actual_mask: self.active_mask,
-            });
-        }
-        Ok(value) // placeholder — real shuffle reads from partner lane
+    pub fn shuffle_xor_scalar(&self, value: i32, xor_mask: u32) -> Result<i32, WarpError> {
+        self.require_all("shuffle_xor")?;
+        // SAFETY: `require_all` passed — this handle claims all lanes converged and
+        // executing, the `GpuShuffle` contract (a trusted claim; see above).
+        Ok(unsafe { value.gpu_shfl_xor(xor_mask) })
     }
 
-    /// Sum reduction — runtime check for all-active.
-    ///
-    /// **CPU model:** on success returns `value * warp_width` (every lane
-    /// holding `value`); it does not read other lanes.
+    /// Shuffle down on a single scalar — runtime check for all-active, then the
+    /// full-warp `shfl.sync.down` (CPU: identity). Lanes past the top keep their
+    /// own value, as the instruction defines.
+    #[inline]
+    pub fn shuffle_down_scalar(&self, value: i32, delta: u32) -> Result<i32, WarpError> {
+        self.require_all("shuffle_down")?;
+        // SAFETY: as in `shuffle_xor_scalar`.
+        Ok(unsafe { value.gpu_shfl_down(delta) })
+    }
+
+    /// Sum reduction — runtime check for all-active, then a butterfly over the
+    /// warp width (`log2(width)` XOR stages). On the CPU the identity shuffle
+    /// makes this `value * warp_width`, as `Warp<All>::reduce_add`; it uses
+    /// standard `+` (debug overflow panics) like that method.
     #[inline]
     pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
-        let full = self.full_mask;
-        if self.active_mask != full {
-            return Err(WarpError {
-                operation: "reduce_sum",
-                expected_mask: full,
-                actual_mask: self.active_mask,
-            });
+        self.require_all("reduce_sum")?;
+        let stages = self.full_mask.count_ones().trailing_zeros();
+        let mut v = value;
+        for i in 0..stages {
+            // SAFETY: as in `shuffle_xor_scalar`.
+            v += unsafe { v.gpu_shfl_xor(1 << i) };
         }
-        // CPU single-thread: butterfly doubling gives value * warp_width.
-        // Uses standard `*` (panics on debug overflow) to match Warp<All>::reduce_sum.
-        // GPU hardware wraps — for GPU-faithful wrapping, use wrapping arithmetic.
-        let warp_width = full.count_ones() as i32;
-        Ok(value * warp_width)
+        Ok(v)
     }
 
-    /// Broadcast — runtime check for all-active.
-    ///
-    /// **CPU model:** on success returns `value`.
+    /// Broadcast lane 0's value — runtime check for all-active, then the
+    /// full-warp `shfl.sync.idx` from lane 0 (CPU: identity).
     #[inline]
     pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
-        let full = self.full_mask;
-        if self.active_mask != full {
-            return Err(WarpError {
-                operation: "broadcast",
-                expected_mask: full,
-                actual_mask: self.active_mask,
-            });
-        }
-        Ok(value)
+        self.require_all("broadcast")?;
+        // SAFETY: as in `shuffle_xor_scalar`.
+        Ok(unsafe { value.gpu_shfl_idx(0) })
     }
 
     /// Ballot — runtime check for all-active.
