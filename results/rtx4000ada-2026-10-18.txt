@@ -1,7 +1,8 @@
-# examples/gpu-project on the local workstation, 2026-10-18T16:27Z
-# tree: 8dce2c9f0 + uncommitted Arc A (shuffle_xor_within lane guard, builder find_ptx_file fix, kernel 6)
+# examples/gpu-project on the local workstation, 2026-10-18T17:06Z
+# tree: e846588fa (committed; clean: 0 dirty paths under examples/gpu-project+src)
 # rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 # driver: 580.173.02 cuda: 12.0, V12.0.140
+# Test 6 checks the FIXED semantics of shuffle_xor_within (odd lanes return their input); the pre-0.4.1 behaviour was undefined and is not witnessed by a value test.
 
 ╔══════════════════════════════════════════════════════════╗
 ║  warp-types: cargo-integrated GPU kernel demo           ║
@@ -41,9 +42,13 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
   uniform:   true (all 32 lanes wrote the same value)
   Result:    PASS
 
-=== Test 6: shuffle_within_even (sub-warp membermask, no branch) ===
+=== Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===
   Even lanes: tid ^ 2 (partner within Even); odd lanes: own tid
   Result:    PASS
 
 All kernels compiled from cargo, type-checked at build time,
 and executed on real GPU hardware with correct results.
+
+--- compute-sanitizer --tool memcheck ---
+
+--- compute-sanitizer --tool synccheck ---
