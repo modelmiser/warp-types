@@ -2,6 +2,7 @@
 
 ## [0.4.1] — 2026-10-18
 
+- Release corresponding to tag `v0.4.1`, Zenodo DOI 10.5281/zenodo.23456256 (concept DOI 10.5281/zenodo.19040615); crates.io `warp-types 0.4.1`, `warp-types-builder 0.3.2`.
 - **Soundness: `shuffle_xor_within` now guards its own execution.** `diverge_*` emits no branch, so after
   `diverge_even_odd()` every lane still runs the code that follows. The method issued `shfl.sync` with membermask
   `S::MASK` on all 32 lanes, so lanes outside `S` executed an instruction whose membermask did not name them, which
