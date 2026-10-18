@@ -1,6 +1,6 @@
 {
   "title": "warp-types: Type-Safe GPU Warp Programming via Linear Typestate",
-  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps cannot call a full-warp shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada (6 typed kernels via cudarc: 4 PASS on both, ballot and sub-warp shuffle PASS on the Ada); AMD MI300X mask-correctness verified via HIP.",
+  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps cannot call a full-warp shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada (6 typed kernels via cudarc PASS on both, incl. ballot and the guarded sub-warp shuffle; compute-sanitizer clean on the H200); AMD MI300X mask-correctness verified via HIP.",
   "creators": [
     {
       "name": "Aldreda, Chad"

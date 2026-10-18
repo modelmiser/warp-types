@@ -1,0 +1,375 @@
+Warning: Permanently added '[103.196.86.60]:20757' (ED25519) to the list of known hosts.
+=== warp-types H200 SXM Verification ===
+Date: 2026-10-18T17:11:36Z
+
+=== Step 0: GPU Info ===
+NVIDIA H200, 9.0, 595.91.07, 143771 MiB
+Cuda compilation tools, release 12.4, V12.4.131
+Build cuda_12.4.r12.4/compiler.34097967_0
+
+=== Step 1: Installing Rust ===
+info: downloading installer
+info: profile set to default
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-18 for version 1.101.0-nightly (8006091eb 2026-10-17)
+info: downloading 6 components
+
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (8006091eb 2026-10-17)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
+
+--- toolchains (recorded so results cannot misattribute) ---
+rustup default : nightly-x86_64-unknown-linux-gnu (default)
+
+=== Step 2: Clone ===
+Already up to date.
+Commit: 3bbbe92
+repo pin      : channel = "nightly-2026-09-15"
+info: syncing channel updates for nightly-2026-09-15-x86_64-unknown-linux-gnu
+info: latest update on 2026-09-15 for version 1.100.0-nightly (574ff7d98 2026-09-14)
+info: downloading 8 components
+warn: the missing active toolchain `nightly-2026-09-15-x86_64-unknown-linux-gnu` has been auto-installed
+warn: this might cause rustup commands to take longer time to finish than expected
+info: you may opt out with `RUSTUP_AUTO_INSTALL=0` or `rustup set auto-install disable`
+rustc in repo : rustc 1.100.0-nightly (574ff7d98 2026-09-14)
+
+=== Step 3: Rust Tests (CPU) ===
+test result: ok. 334 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 27.76s
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+=== Step 4: GPU Shuffle Semantics ===
+Compiling for sm_90...
+=== GPU Semantics Verification (warp-types) ===
+GPU: NVIDIA H200, Compute 9.0
+
+TEST 1: reduce_sum overflow (INT32_MAX * 32 lanes)
+  Result: -32 (0xFFFFFFE0)
+  Expected if wrap: -32 (0xFFFFFFE0) [low 32 bits of 68719476704]
+  VERDICT: WRAPS (two's complement, no trap)
+
+TEST 2: shuffle_down clamp behavior
+  Lane 31, delta=1:  3100 (expect 3100 if clamp, 0 if wrap)
+  Lane 31, delta=16: 3100 (expect 3100 if clamp)
+  Lane 31, delta=31: 3100 (expect 3100 if clamp)
+  Lane 31, delta=32: 3100 (expect 3100 if clamp)
+  Lane 0,  delta=31: 3100 (expect 3100 — reads from lane 31)
+  VERDICT: CLAMPS (OOB lanes read own value)
+
+TEST 3: shuffle_idx with src_lane >= 32
+  src=5:  6 (expect 6)
+  src=32: 1 (=lane 0 value = 1; wrap mod 32 and clamp-to-self agree — src=33 disambiguates)
+  src=33: 2 (=lane 1 value → wraps mod 32)
+  src=63: 32 (=lane 31 value → wraps mod 32)
+  VERDICT: WRAPS mod 32 (src_lane & 0x1F)
+
+TEST 4: shuffle_up clamp behavior
+  Lane 0,  delta=1:  0 (expect 0 if clamp)
+  Lane 0,  delta=16: 0 (expect 0 if clamp)
+  Lane 15, delta=16: 1500 (expect 1500 if clamp)
+  Lane 16, delta=16: 0 (expect 0 — reads from lane 0)
+  VERDICT: CLAMPS (underflow lanes read own value)
+
+=== Done ===
+
+=== Step 5: Zero-Overhead PTX ===
+=== Compiling to PTX (nvcc -ptx -arch=sm_90 -O2) ===
+Generated: typed_vs_untyped.ptx
+
+=== Mangled names ===
+  untyped: _Z17butterfly_untypedi
+  typed:   _Z15butterfly_typedi
+
+=== Extracting .func bodies ===
+  butterfly_untyped: 30 PTX lines
+  butterfly_typed:   30 PTX lines
+
+=== Comparing ===
+IDENTICAL PTX
+
+The typestate annotations produce zero additional PTX instructions.
+Type system overhead: 0 instructions, 0 registers, 0 bytes.
+
+=== Full PTX for butterfly_untyped ===
+.func  (.param .b32 func_retval0) _Z17butterfly_untypedi(
+	.param .b32 _Z17butterfly_untypedi_param_0
+)
+{
+	.reg .pred 	%p<6>;
+	.reg .b32 	%r<19>;
+
+
+	ld.param.u32 	%r1, [_Z17butterfly_untypedi_param_0];
+	mov.u32 	%r2, 31;
+	mov.u32 	%r3, 16;
+	mov.u32 	%r4, -1;
+	shfl.sync.bfly.b32 	%r5|%p1, %r1, %r3, %r2, %r4;
+	add.s32 	%r6, %r5, %r1;
+	mov.u32 	%r7, 8;
+	shfl.sync.bfly.b32 	%r8|%p2, %r6, %r7, %r2, %r4;
+	add.s32 	%r9, %r6, %r8;
+	mov.u32 	%r10, 4;
+	shfl.sync.bfly.b32 	%r11|%p3, %r9, %r10, %r2, %r4;
+	add.s32 	%r12, %r9, %r11;
+	mov.u32 	%r13, 2;
+	shfl.sync.bfly.b32 	%r14|%p4, %r12, %r13, %r2, %r4;
+	add.s32 	%r15, %r12, %r14;
+	mov.u32 	%r16, 1;
+	shfl.sync.bfly.b32 	%r17|%p5, %r15, %r16, %r2, %r4;
+	add.s32 	%r18, %r15, %r17;
+	st.param.b32 	[func_retval0+0], %r18;
+	ret;
+
+}
+
+=== Step 5b: PTX Regeneration + Execution ===
+typed_butterfly_kernel: REGENERATED  committed[.version 7.0] -> pinned[.version 7.0]
+reduce7_typed: REGENERATED  committed[.version 7.0] -> pinned[.version 7.0]
+rust_ptx_typed: REGENERATED  committed[.version 7.0] -> pinned[.version 7.0]
+
+--- host harness on the REGENERATED ptx ---
+ Downloading crates ...
+  Downloaded libloading v0.9.0
+  Downloaded cudarc v0.19.3
+   Compiling cfg-if v1.0.4
+   Compiling cudarc v0.19.3
+   Compiling libloading v0.9.0
+   Compiling warp-types-host v0.1.0 (/tmp/warp-types/reproduce/host)
+    Finished `release` profile [optimized] target(s) in 9.29s
+     Running `target/release/run-kernel`
+GPU: NVIDIA H200
+
+=== Test 1: typed_butterfly_reduce ===
+  Input:    [1; 32]
+  Expected: every lane = 32
+  Got:      lane[0]=32, lane[15]=32, lane[31]=32
+  Result:   PASS
+
+=== Test 2: typed_butterfly_reduce (sequential) ===
+  Input:    [0, 1, 2, ..., 31]
+  Expected: every lane = 496
+  Got:      lane[0]=496, lane[15]=496, lane[31]=496
+  Result:   PASS
+
+=== Test 3: typed_diverge_merge_reduce ===
+  Input:    [0, 1, 2, ..., 31]
+  Expected: every lane = 496 (diverge/merge erased)
+  Got:      lane[0]=496, lane[15]=496, lane[31]=496
+  Result:   PASS
+
+Linear typestate divergence: correct results on real GPU hardware.
+Zero type system overhead. Zero runtime cost. Zero wrong answers.
+
+================================================================
+cuda-samples #398: The Killer Demo
+================================================================
+
+=== Untyped (buggy): CUDA's reduce7 pattern ===
+  Input:    [1; 32]
+  Expected: 32
+  Got:      1
+  Result:   WRONG (bug!)
+
+=== Typed (fixed): Warp<All> enforced before shuffle ===
+  Input:    [1; 32]
+  Expected: 32
+  Got:      32
+  Result:   CORRECT
+
+=== The point ===
+The buggy pattern (shfl_down with partial mask) is a COMPILE ERROR
+in our type system: Warp<Lane0> has no shfl_down method.
+The fix (all lanes participate) is the ONLY version that type-checks.
+Same GPU. Same algorithm. Type system prevents the bug.
+
+=== Step 5c: gpu feature (CUDA-only, untested anywhere else) ===
+test dimacs::tests::parse_error_duplicate_header ... ok
+test dimacs::tests::parse_error_missing_header ... ok
+test dimacs::tests::parse_error_num_vars_exceeds_encoding ... ok
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 27.89s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+=== Step 5d: examples/gpu-project (6 kernels via cudarc) ===
+GPU: NVIDIA H200
+=== Test 1: butterfly_reduce (all ones) ===
+  Result:   PASS
+=== Test 2: diverge_merge_reduce (sequential) ===
+  Result:   PASS
+=== Test 3: reduce_n (with scalar param) ===
+  Result:   PASS
+=== Test 4: bitonic_sort_i32 (reverse → sorted) ===
+  Result:   PASS
+=== Test 5: ballot_lower_half (setp workaround) ===
+  Result:    PASS
+=== Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===
+  Result:    PASS
+--- compute-sanitizer --tool memcheck ---
+========= ERROR SUMMARY: 0 errors
+--- compute-sanitizer --tool synccheck ---
+========= ERROR SUMMARY: 0 errors
+
+=== Step 6: Full Demo ===
+╔════════════════════════════════════════════════════════════════╗
+║  warp-types: Type-Safe Warp Programming via Linear Typestate   ║
+║  Same bug. Same GPU. The type system prevents it.              ║
+╚════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Beat 1: THE BUG
+CUDA compiles the buggy pattern. GPU produces wrong answer.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Pattern: diverge to lane 0, then shuffle_down.
+  Lane 0 reads from lane 16 — but lane 16 didn't participate.
+  Its register value is whatever was there. Undefined behavior.
+
+▸ Compiling CUDA reduce7 (buggy + fixed)...
+
+cuda-samples #398 Reproduction
+==============================
+Input: 32 ones, expected sum = 32
+Grid: (1,1,1), Block: (32,1,1)
+
+Buggy reduce7: sum = 1  (WRONG)
+Fixed reduce7: sum = 32  (correct)
+
+Buggy version, 10 runs:
+  run 0: sum = 1 (WRONG)
+  run 1: sum = 1 (WRONG)
+  run 2: sum = 1 (WRONG)
+  run 3: sum = 1 (WRONG)
+  run 4: sum = 1 (WRONG)
+  run 5: sum = 1 (WRONG)
+  run 6: sum = 1 (WRONG)
+  run 7: sum = 1 (WRONG)
+  run 8: sum = 1 (WRONG)
+  run 9: sum = 1 (WRONG)
+
+Buggy reduce7 with block_size=256: sum = 32  (WRONG — bug affects any blockDim/warpSize < 32)
+
+GPU: NVIDIA H200 (compute 9.0)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Beat 2: THE COMPILER ERROR
+The same pattern in Rust. The compiler catches it.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Code:
+
+    let warp: Warp<All> = Warp::kernel_entry();
+    let (evens, _odds) = warp.diverge_even_odd();
+    evens.shuffle_xor(data, 1);  // <-- the bug
+
+  Compiler output:
+
+    error[E0599]: no method named `shuffle_xor` found for struct `warp_types::Warp<Even>` in the current scope
+      --> examples/buggy_pattern.rs:25:24
+       |
+    25 |     let _wrong = evens.shuffle_xor(data, 1);
+       |                        ^^^^^^^^^^^
+       |
+
+  The method was found for Warp<All> — not Warp<Even>.
+  The buggy pattern is not checked at runtime.
+  It does not exist in the type system.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Beat 3: THE FIX
+Typed Rust kernels on real GPU. Correct results.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+▸ Compiling typed Rust kernels to PTX...
+  GPU: NVIDIA H200
+    Input:    [1; 32]
+    Expected: every lane = 32
+    Got:      lane[0]=32, lane[31]=32
+    Result:   PASS
+    Input:    [0, 1, 2, ..., 31]
+    Expected: every lane = 496 (diverge/merge erased)
+    Got:      lane[0]=496, lane[31]=496
+    Result:   PASS
+    Input:    [1; 32], n=32
+    Expected: 32
+    Got:      32
+    Result:   PASS
+    Input:    [31, 30, 29, ..., 1, 0]
+    Expected: [0, 1, 2, ..., 30, 31]
+    Got:      [0, 1, 2, ..., 30, 31]
+    Result:   PASS
+    Expected:  0x0000FFFF (lanes 0..16 = 1, lanes 16..32 = 0)
+    Result:    PASS
+    Result:    PASS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CUDA:                Compiles the bug. Produces wrong answer.
+  Rust (warp-types):   Rejects the bug. Produces correct answer.
+
+  The type system:
+    ✓ Catches shuffle-from-inactive-lane at compile time
+    ✓ Zero runtime overhead (PhantomData erasure)
+    ✓ Verified at MIR, LLVM IR, and PTX levels
+    ✓ 6 typed kernels via cudarc: 4 PASS on NVIDIA H200 SXM and RTX 4000 Ada, 2 more on the Ada
+    ✓ AMD MI300X mask correctness verified via HIP
+
+  21 documented bugs across 16 real-world projects.
+  32 Lean theorems. 424 Rust tests. One type system.
+
+  github.com/modelmiser/warp-types
+
+
+=== DONE ===
+Results saved to /tmp/h200-results.txt
+Copy with: cat /tmp/h200-results.txt

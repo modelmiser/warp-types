@@ -8,8 +8,9 @@
   the PTX ISA leaves undefined; the method's own doc example did this. Lanes outside `S` now skip the instruction and
   return their input. `Warp<Empty>::shuffle_xor_within` fails at codegen (post-monomorphization `E0080`; not under
   `cargo check`), on the host (`compile_fail,E0080` doctest) and on nvptx64 (`scripts/check-ptx-operands.sh`
-  `empty-probe`). Found by the 2026-10-18 unsafe and boundary audits; the fixed semantics run on an RTX 4000 Ada
-  (`examples/gpu-project` Test 6, `results/rtx4000ada-2026-10-18.txt`; a value test cannot witness the old UB).
+  `empty-probe`). Found by the 2026-10-18 unsafe and boundary audits; the fixed semantics run on an H200 SXM and an RTX 4000 Ada
+  (`examples/gpu-project` Test 6; compute-sanitizer memcheck + synccheck 0 errors on the H200 — `results/h200-2026-10-18-main.txt`, `results/rtx4000ada-2026-10-18.txt`;
+  a value test cannot witness the old UB).
   Reviewed by a five-seat cross-vendor panel before release (`.review/panel-2026-10-18-041`, not committed).
 - **warp-types-builder 0.3.2: `find_ptx_file` searches the new asm output layout.** nightly-2026-09-15 writes
   `--emit=asm` output under `build/<crate>/<hash>/out/`, not `deps/`; the builder kept picking a stale `deps/` file,
