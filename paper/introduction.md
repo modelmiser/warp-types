@@ -80,7 +80,7 @@ This paper makes the following contributions:
 
 4. **Practical patterns for GPU programming** (§5). We show how to type common GPU idioms including reductions, scans, and filters, and extend the core system to handle loops and arbitrary predicates.
 
-5. **Empirical grounding** (§7). We document real shuffle-mask bugs in NVIDIA's reference code (cuda-samples, CUB) and scientific simulation (PIConGPU) that our type system would have caught at compile time, and demonstrate this concretely by modeling cuda-samples#398 as a runnable example where the bug is a type error.
+5. **Empirical grounding** (§7). We document shuffle-mask bugs in NVIDIA's reference code (cuda-samples; a suspected one in CUB) and scientific simulation (PIConGPU) that our type system would have caught at compile time, and demonstrate this concretely by modeling cuda-samples#398 as a runnable example where the bug is a type error.
 
 ## 1.3 The Bigger Picture
 

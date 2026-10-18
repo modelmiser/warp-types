@@ -8,7 +8,7 @@ GPU warp primitives like shuffle enable efficient communication between threads,
 
 Existing approaches track which lanes are active at runtime (ISPC's compiler-emitted masks, NVIDIA's Cooperative Groups) or detect violations after execution (compute-sanitizer). We present *warp typestate*, which embeds the active lane mask in the type system. Divergence creates sub-warps with complementary active sets; reconvergence requires type-level proof that the sets are complements. Operations requiring all lanes (full-warp shuffles, ballots, reductions) are *absent from the type* of a diverged warp rather than checked — it has no method to call; a shuffle confined to a sub-warp's own lanes is a separate operation whose mask must preserve the active set.
 
-We prove our type system sound (progress and preservation via Lean 4 mechanization), implement it as a Rust library with zero runtime overhead, and demonstrate that it catches real bugs from NVIDIA's cuda-samples and CUB library at compile time. The result is strictly more permissive than the divergence-prohibition approach (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` (which defers mask correctness to runtime).
+We prove our type system sound (progress and preservation via Lean 4 mechanization), implement it as a Rust library with zero runtime overhead, and demonstrate that it catches a confirmed bug from NVIDIA's cuda-samples and a suspected one from the CUB library at compile time. The result is strictly more permissive than the divergence-prohibition approach (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` (which defers mask correctness to runtime).
 
 ## Paper Sections
 
@@ -37,7 +37,7 @@ We prove our type system sound (progress and preservation via Lean 4 mechanizati
 
 4. **Zero-overhead implementation** — Rust embedding using traits and generics; types erased at compile time.
 
-5. **Empirical grounding** — Real bugs from NVIDIA cuda-samples, CUB, and PIConGPU modeled and caught at compile time.
+5. **Empirical grounding** — Bugs from NVIDIA cuda-samples and PIConGPU, and a suspected one from CUB, modeled and caught at compile time.
 
 ## Demo
 
