@@ -37,7 +37,10 @@ IMAGE="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 die() { echo "gpu-session: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found"; }
 
-pods_json() { runpodctl pod list 2>/dev/null; }
+# A list that fails (no key, expired key) must not read as "no pods running":
+# on 2026-10-18 `status` said exactly that with ~/.runpod/config.toml's apikey
+# blank (secrets moved to `pass` 2026-10-07), which is a check that cannot fail.
+pods_json() { runpodctl pod list || die "runpodctl pod list failed (RUNPOD_API_KEY unset or invalid?)"; }
 
 cmd_status() {
     local out; out=$(pods_json)
@@ -121,6 +124,12 @@ cmd_run() {
 }
 
 need runpodctl; need python3
+# runpodctl reads RUNPOD_API_KEY; the key lives in `pass` (runpod/api), never in a file.
+if [ -z "${RUNPOD_API_KEY:-}" ]; then
+    need pass
+    RUNPOD_API_KEY="$(pass show runpod/api | head -1)" || die "pass show runpod/api failed"
+    export RUNPOD_API_KEY
+fi
 case "${1:-status}" in
     up)     cmd_up "${2:-}" ;;
     run)    cmd_run "${2:-}" ;;
