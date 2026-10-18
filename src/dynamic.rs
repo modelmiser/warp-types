@@ -21,7 +21,7 @@
 //! // No full-warp shuffle on either branch — they're partial warps;
 //! // DynDiverge exposes masks, not Warp<All> handles
 //!
-//! // MUST merge to get Warp<All> back — then shuffle is available
+//! // Merge to get Warp<All> back — then shuffle is available
 //! let warp: Warp<All> = diverged.merge();
 //! let data = data::PerLane::new(42i32);
 //! let _result = warp.shuffle_xor(data, 1);

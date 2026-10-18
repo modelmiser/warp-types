@@ -229,9 +229,9 @@ Modern GPUs also support subgroups smaller than a warp via `tiled_partition`.
 
 ### Typing Cooperative Groups
 
-Our type system extends naturally to these levels. Each group carries its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and `Subgroup<S: ActiveSet8>` for 8-lane partitions. The `tiled_partition` operation creates typed subgroups from a warp, each inheriting the active-set discipline.
+Our type system extends to these levels in design: each group would carry its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and a `Subgroup<S: ActiveSet8>` for 8-lane partitions — and a `tiled_partition` operation would create typed subgroups from a warp, each inheriting the active-set discipline. The crate implements `Warp<S>` and const-sized `Tile`s (without per-tile active sets); `Subgroup` is not implemented.
 
-The same principles apply at every width: full-group shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The `ComplementOf` proof mechanism is parameterized by group size, not hardcoded to 32 lanes.
+The same principles apply at every width: full-group shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The complement mechanism is the same at every width; the crate's `ComplementOf` has no width parameter and is implemented for the configured warp width (32, or 64 with `warp64`), with const-sized tiles alongside.
 
 ## 5.5 Memory Safety Integration
 
@@ -256,7 +256,7 @@ GlobalRegion<Unwritten>
   → threadfence(FullWrite) → GlobalRegion<Fenced>
 ```
 
-The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures complementary write coverage before a fence. A fence on a partially-written region is not a runtime error — it is *unrepresentable*, exactly as shuffling a diverged warp is unrepresentable.
+The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures complementary write coverage before a fence. A fence on a partially-written region is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is (§6.9 lists the trusted entry points).
 
 ```rust
 fn safe_fence_pattern(warp: Warp<All>) {

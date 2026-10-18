@@ -193,7 +193,9 @@ impl DynWarp {
     /// active has the same `active_mask` as a 32-lane `All`, but ascribing it
     /// would forge a `Warp<All>` whose shuffle reads inactive lanes.
     /// This is the gradual typing boundary: the point where runtime
-    /// evidence becomes compile-time proof.
+    /// evidence becomes compile-time proof. The evidence is only as good as
+    /// the mask the `DynWarp` was built from: `from_mask_32` accepts any mask,
+    /// so this is a trusted entry point, like `Warp::kernel_entry()`.
     ///
     /// ```
     /// use warp_types::gradual::DynWarp;
@@ -277,6 +279,9 @@ impl DynWarp {
     }
 
     /// Sum reduction — runtime check for all-active.
+    ///
+    /// **CPU model:** on success returns `value * warp_width` (every lane
+    /// holding `value`); it does not read other lanes.
     pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -294,6 +299,8 @@ impl DynWarp {
     }
 
     /// Broadcast — runtime check for all-active.
+    ///
+    /// **CPU model:** on success returns `value`.
     pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {

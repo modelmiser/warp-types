@@ -119,6 +119,7 @@ impl<S: ActiveSet> Warp<S> {
 
 // NOTE: No Default impl for Warp<All>. Warp handles should only be created
 // via kernel_entry() (public) or diverge (which consumes the parent).
+// `DynWarp::ascribe` is a third, trusted route (README Limitations).
 // A Default impl would allow silent construction in generic contexts
 // (unwrap_or_default, etc.), weakening the entry-point discipline.
 

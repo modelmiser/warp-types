@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+- **Breaking:** `GpuShuffle`'s methods (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, `gpu_shfl_up`,
+  `gpu_shfl_idx`, `*_width`) are now `unsafe fn` with a `# Safety` contract. They were safe methods on plain values,
+  re-exported in the prelude, so safe code could issue a full-warp `shfl.sync` under divergence (UB) without any
+  `Warp` handle; the impl-level SAFETY note claiming they were "only reachable through the typed wrappers" was false.
+  The typed `Warp<All>` / `Tile` methods are unchanged. A compile-fail doctest guards the change.
+- Paper, README, crate docs, CITATION.cff, .zenodo.json: priority claims removed (Descend, SPMD barrier inference,
+  Titanium, Lucid Synchrone precede them); "cannot shuffle" qualified to full-warp shuffle; new paper §8.6; trusted
+  entry points listed in §6.9 and README Limitations (`kernel_entry`, `DynWarp` ascription, merge without
+  provenance). Reviewed cross-vendor over four rounds.
+
 ## [0.3.2] — 2026-04-18
 
 *(Entry added retroactively 2026-08-13 — the tag/Cargo/CITATION/Zenodo release

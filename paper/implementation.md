@@ -309,13 +309,15 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
 
-2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.1, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
+2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. Merge checks set shape, not provenance: complementary sub-warps from different entry points (`Even` from one handle, `Odd` from another) merge without error — the §6.1 example fails only because `Even` and `LowHalf` are not complements. The programmer can also bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
-### Public Intrinsics
+### Gradual Ascription
 
-The `GpuShuffle` trait, re-exported in the prelude, exposes the raw shuffle intrinsics as safe methods on plain values (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, …). Calling them needs no `Warp` handle, so it bypasses the typestate entirely. The guarantee covers programs that shuffle only through `Warp` methods.
+`DynWarp::from_mask_32` / `from_mask_64` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask, so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
+
+The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling one directly requires `unsafe` and its `# Safety` contract (every lane converged).
 
 ## 6.10 Summary
 

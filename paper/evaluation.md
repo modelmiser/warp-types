@@ -82,11 +82,11 @@ This is not a deficiency in the sanitizer. `shfl.sync` sourcing a register from 
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes sixteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes seventeen compile-fail doctests covering shuffle on diverged warps, raw-intrinsic calls without `unsafe`, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Test Inventory
 
-Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). That 413 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 407 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
+Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 39 doc tests (17 compile-fail, 22 doc examples) collected across the whole workspace: the 33 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the seventeen above (415 total). That 415 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 409 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
 ## 7.2 Performance
 
@@ -147,7 +147,7 @@ Programs that use lane-level divergence require explicit `diverge`/`merge` annot
 
 Four patterns are not fully expressible in our current system:
 
-1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, `diverge_dynamic(mask)` provides runtime masks with structural complement guarantees. The mask is dynamic but the pairing is static — both branches must merge before shuffle.
+1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, `diverge_dynamic(mask)` provides runtime masks with structural complement guarantees. The mask is dynamic but the pairing is static — both branches must merge before a full-warp shuffle.
 
 2. **Arbitrary runtime predicates**: Our marker types cover common patterns (Even, Odd, LowHalf, HighHalf). Predicates not matching these markers require existential types, which add a runtime check.
 
@@ -155,7 +155,7 @@ Four patterns are not fully expressible in our current system:
 
 4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. In the formal calculus this is a type error; in Rust the drop is only a `#[must_use]` warning (§6.9), and what the type system rejects is any later full-warp operation—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern. `DynWarp` (§9.3) provides a runtime escape for patterns where static exit tracking is too restrictive.
 
-These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows necessarily from the linearity discipline that makes the type system sound.
+These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows from the linearity discipline of the formal calculus (in Rust, the drop itself is only a warning).
 
 ## 7.4 Threats to Validity
 
@@ -174,7 +174,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
 | Real GPU execution | 4 typed kernels PASS on H200 SXM and RTX 4000 Ada (butterfly reduce, diverge/merge, reduce_n, bitonic sort) |
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
-| Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 37 doc tests (413 total) spanning two scopes; 407 main-crate total in a single invocation |
+| Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 39 doc tests (415 total) spanning two scopes; 409 main-crate total in a single invocation |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | ≈16% of source lines aggregate across the 8 examples (varies ~2.5× between examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, and similar — indicative, no counting script ships with the artifact; see §10) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |

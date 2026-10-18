@@ -1101,9 +1101,9 @@ Modern GPUs also support subgroups smaller than a warp via `tiled_partition`.
 
 ### Typing Cooperative Groups
 
-Our type system extends naturally to these levels. Each group carries its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and `Subgroup<S: ActiveSet8>` for 8-lane partitions. The `tiled_partition` operation creates typed subgroups from a warp, each inheriting the active-set discipline.
+Our type system extends to these levels in design: each group would carry its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and a `Subgroup<S: ActiveSet8>` for 8-lane partitions — and a `tiled_partition` operation would create typed subgroups from a warp, each inheriting the active-set discipline. The crate implements `Warp<S>` and const-sized `Tile`s (without per-tile active sets); `Subgroup` is not implemented.
 
-The same principles apply at every width: full-group shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The `ComplementOf` proof mechanism is parameterized by group size, not hardcoded to 32 lanes.
+The same principles apply at every width: full-group shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The complement mechanism is the same at every width; the crate's `ComplementOf` has no width parameter and is implemented for the configured warp width (32, or 64 with `warp64`), with const-sized tiles alongside.
 
 ## 5.5 Memory Safety Integration
 
@@ -1128,7 +1128,7 @@ GlobalRegion<Unwritten>
   → threadfence(FullWrite) → GlobalRegion<Fenced>
 ```
 
-The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures complementary write coverage before a fence. A fence on a partially-written region is not a runtime error — it is *unrepresentable*, exactly as shuffling a diverged warp is unrepresentable.
+The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures complementary write coverage before a fence. A fence on a partially-written region is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is (§6.9 lists the trusted entry points).
 
 ```rust
 fn safe_fence_pattern(warp: Warp<All>) {
@@ -1474,13 +1474,15 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
 
-2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. The complement-based merge still prevents the most dangerous misuse — merging sub-warps from different entry points fails at compile time (§6.1, example above) — but the programmer can bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
+2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. Merge checks set shape, not provenance: complementary sub-warps from different entry points (`Even` from one handle, `Odd` from another) merge without error — the §6.1 example fails only because `Even` and `LowHalf` are not complements. The programmer can also bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
-### Public Intrinsics
+### Gradual Ascription
 
-The `GpuShuffle` trait, re-exported in the prelude, exposes the raw shuffle intrinsics as safe methods on plain values (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, …). Calling them needs no `Warp` handle, so it bypasses the typestate entirely. The guarantee covers programs that shuffle only through `Warp` methods.
+`DynWarp::from_mask_32` / `from_mask_64` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask, so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
+
+The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling one directly requires `unsafe` and its `# Safety` contract (every lane converged).
 
 ## 6.10 Summary
 
@@ -1579,11 +1581,11 @@ This is not a deficiency in the sanitizer. `shfl.sync` sourcing a register from 
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes sixteen compile-fail doctests covering shuffle on diverged warps, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes seventeen compile-fail doctests covering shuffle on diverged warps, raw-intrinsic calls without `unsafe`, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Test Inventory
 
-Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 37 doc tests (16 compile-fail, 21 doc examples) collected across the whole workspace: the 31 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the sixteen above (413 total). That 413 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 407 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
+Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 39 doc tests (17 compile-fail, 22 doc examples) collected across the whole workspace: the 33 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the seventeen above (415 total). That 415 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 409 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
 ## 7.2 Performance
 
@@ -1644,7 +1646,7 @@ Programs that use lane-level divergence require explicit `diverge`/`merge` annot
 
 Four patterns are not fully expressible in our current system:
 
-1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, `diverge_dynamic(mask)` provides runtime masks with structural complement guarantees. The mask is dynamic but the pairing is static — both branches must merge before shuffle.
+1. **Data-dependent shuffle targets**: When the shuffle source lane is computed from data, `diverge_dynamic(mask)` provides runtime masks with structural complement guarantees. The mask is dynamic but the pairing is static — both branches must merge before a full-warp shuffle.
 
 2. **Arbitrary runtime predicates**: Our marker types cover common patterns (Even, Odd, LowHalf, HighHalf). Predicates not matching these markers require existential types, which add a runtime check.
 
@@ -1652,7 +1654,7 @@ Four patterns are not fully expressible in our current system:
 
 4. **Irreversible divergence**: If one branch of a diverge exits early (return, panic, trap), the warp handle for that branch is dropped, violating linearity. In the formal calculus this is a type error; in Rust the drop is only a `#[must_use]` warning (§6.9), and what the type system rejects is any later full-warp operation—without both halves, you cannot reconstruct `Warp<All>` for subsequent shuffles. The workaround is a ballot-based exit pattern. `DynWarp` (§9.3) provides a runtime escape for patterns where static exit tracking is too restrictive.
 
-These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows necessarily from the linearity discipline that makes the type system sound.
+These limitations are real but narrowly scoped. The first two are addressed by our extension layers (§5); the third is a standard trade-off in any type-parameterized system; the fourth follows from the linearity discipline of the formal calculus (in Rust, the drop itself is only a warning).
 
 ## 7.4 Threats to Validity
 
@@ -1671,7 +1673,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
 | Real GPU execution | 4 typed kernels PASS on H200 SXM and RTX 4000 Ada (butterfly reduce, diverge/merge, reduce_n, bitonic sort) |
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
-| Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 37 doc tests (413 total) spanning two scopes; 407 main-crate total in a single invocation |
+| Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 39 doc tests (415 total) spanning two scopes; 409 main-crate total in a single invocation |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | ≈16% of source lines aggregate across the 8 examples (varies ~2.5× between examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, and similar — indicative, no counting script ships with the artifact; see §10) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
@@ -1779,7 +1781,7 @@ Linear logic [Girard 1987] provides the foundation for both session types [Caire
 
 ## 8.5 GPU Programming Models
 
-CUDA [NVIDIA 2007], OpenCL [Khronos 2008], SYCL [Khronos 2021], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles are hardware-confined and safe by construction (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
+CUDA [NVIDIA 2007], OpenCL [Khronos 2008], SYCL [Khronos 2021], oneAPI, and HIP [AMD 2016] all expose warp/wavefront/sub-group primitives but provide no type-level divergence safety; our typed layer can wrap any of these. Cooperative Groups [NVIDIA 2017] make group membership explicit — statically-sized tiles carry their size as a template parameter and are hardware-confined (see below) — but dynamically-obtained coalesced groups can go stale across reconvergence points with no static check; our types cover that gap at compile time.
 
 ### AMD DPP and Intel Subgroup Operations
 
@@ -1799,11 +1801,11 @@ NVIDIA deprecated the original `__shfl` family in CUDA 9.0, replacing it with `_
 
 ### NVIDIA Cooperative Groups
 
-NVIDIA Cooperative Groups [2017] introduce `thread_block_tile<N>` for statically-sized sub-warp groups and `coalesced_threads()` for dynamically obtaining the set of converged threads — a runtime active-set mechanism. The `sync()` method enforces convergence before cross-lane operations. This is the closest vendor-provided abstraction to our type-level active sets. The key difference: Cooperative Groups track convergence at runtime (the group object is a runtime value), while our `Warp<S>` tracks it at compile time (the active set is a type parameter). A `thread_block_tile<16>` can call `shfl` and the hardware confines it to the tile — safe by construction. But `coalesced_threads()` returns a runtime group whose membership can change at each reconvergence point, and the programmer must ensure the group is still valid when cross-lane operations execute. Our type system would prevent using a stale group handle.
+NVIDIA Cooperative Groups [2017] introduce `thread_block_tile<N>` for statically-sized sub-warp groups and `coalesced_threads()` for dynamically obtaining the set of converged threads — a runtime active-set mechanism. The `sync()` method enforces convergence before cross-lane operations. This is a close vendor-provided relative of our type-level active sets. The key difference: a coalesced group's membership is a runtime value, while our `Warp<S>` tracks it at compile time (the active set is a type parameter); `thread_block_tile<N>` fixes the tile *size* statically, not which lanes are active. A `thread_block_tile<16>` can call `shfl` and the hardware confines it to the tile, but divergence inside the tile still leaves lanes inactive. But `coalesced_threads()` returns a runtime group whose membership can change at each reconvergence point, and the programmer must ensure the group is still valid when cross-lane operations execute. Our type system would prevent using a stale group handle.
 
 ### NVIDIA compute-sanitizer `synccheck`
 
-NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level synchronization errors at runtime, including mismatched masks in `__shfl_sync` calls. This is the closest dynamic analysis tool to our static approach. `synccheck` catches bugs post-compilation via instrumented execution; our types prevent them pre-compilation. The approaches are complementary: `synccheck` catches bugs in code that cannot be rewritten in our type system (legacy CUDA, inline PTX), while our types prevent the entire bug class at compile time for new code.
+NVIDIA's `compute-sanitizer --tool synccheck` [CUDA Toolkit] detects warp-level synchronization errors at runtime, including mismatched masks in `__shfl_sync` calls. This is the closest dynamic analysis tool to our static approach. `synccheck` catches bugs post-compilation via instrumented execution; our types prevent them pre-compilation. The approaches are complementary: `synccheck` catches bugs in code that cannot be rewritten in our type system (legacy CUDA, inline PTX), while our types prevent the bug class at compile time for new code written against the typed API (§6.9 lists its trusted entry points).
 
 ### Scheduling Languages: Halide and TVM
 
@@ -1819,9 +1821,9 @@ The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single per
 
 ## 8.6 Static Collectives and Clocks
 
-**Collectives under divergent control.** Aiken and Gay's barrier inference [Aiken and Gay, POPL 1998] checks *structural correctness*: if processes enter an expression agreeing on its single-valued variables and all terminate, they execute the same sequence of synchronization operations and leave agreeing on those variables; an effect system over single-valued expressions checks it. Titanium enforces textual alignment of barriers with single-valued expressions (the `single` qualifier), after Aiken and Gay [Kamil and Yelick, LCPC 2005]; later work set out flaws in that type system — burdensome annotations, and that its authors had not found a clean way to extend it to collectives over a subset of the threads — and enforced alignment with run-time checks instead [Kamil and Yelick, LCPC 2009]. The hazard there is deadlock or misaligned collectives; within a warp it is reading inactive lanes, and collectives over a subset of the lanes are the point. Warp typestate types which lanes are active.
+**Collectives under divergent control.** Aiken and Gay's barrier inference [Aiken and Gay, POPL 1998] checks *structural correctness*: if processes enter an expression agreeing on a set of single-valued variables and all terminate, they execute the same sequence of synchronization operations and leave agreeing on an exit set of single-valued variables; an effect system tracking synchronization sequences and single-valued variables checks it. Titanium enforces textual alignment of barriers with single-valued expressions (the `single` qualifier), after Aiken and Gay [Kamil and Yelick, LCPC 2005]; later work set out flaws in that type system — burdensome annotations, and that its authors had not found a clean way to extend it to collectives over a subset of the threads — and enforced alignment with run-time checks instead [Kamil and Yelick, LCPC 2009]. The Titanium language reference also proposes a `partition` construct that divides the threads into non-overlapping teams with team-scoped collectives — the closest SPMD analogue of `diverge` — and Kamil and Yelick show a correctly typed `partition` program that deadlocks, because a team updates a `single` variable that all threads later branch on. The hazard there is deadlock or misaligned collectives; within a warp it is reading inactive lanes, and collectives over a subset of the lanes are the point. Warp typestate types which lanes are active.
 
-**Clocks in synchronous dataflow.** Lucid Synchrone types clocks as abstract types [Colaço and Pouzet, EMSOFT 2003]: `when` samples a stream on a Boolean clock, and `merge c x y` combines a stream on clock `c` with one on `not c` — warp typestate's divergence and complement merge, over instants instead of lanes. A local clock may not escape its scope, and streams on different clocks cannot be combined; but a sampled stream may simply go unused — nothing obliges the program to merge it back. Related: Lustre's clock calculus [Caspi et al., POPL 1987], Signal's [Le Guernic et al., Proc. IEEE 1991], and N-synchronous Kahn networks [Cohen et al., POPL 2006].
+**Clocks in synchronous dataflow.** Lucid Synchrone types clocks as abstract types [Colaço and Pouzet, EMSOFT 2003]: `when` samples a stream on a Boolean clock, and `merge c x y` combines a stream on clock `c` with one on `not c` — warp typestate's divergence and complement merge, over instants instead of lanes. A local clock may not escape its scope, and pointwise primitives need a common clock (differently clocked streams may still be paired); a sampled stream may simply go unused — no rule obliges the program to merge it back. Related: Lustre's clock calculus [Caspi et al., POPL 1987], Signal's [Le Guernic et al., Proc. IEEE 1991], and N-synchronous Kahn networks [Cohen et al., POPL 2006].
 
 ## 8.7 Summary
 
@@ -1834,7 +1836,7 @@ The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single per
 | MPST | All parties active | We model quiescence |
 | ISPC | uniform/varying + runtime active set | We track active sets at compile time, not runtime |
 | Futhark | Avoids divergence | We embrace + type it |
-| `__shfl_sync` | Require mask (runtime) | We prove mask correct (compile-time) |
+| `__shfl_sync` | Require mask (runtime) | Full-warp mask fixed by type; sub-warp XOR mask asserted at run time |
 | Cooperative Groups | Runtime group objects | We use compile-time type parameters |
 | Vulkan/SPIR-V subgroups | "Undefined if not converged" | Full-warp shuffle absent from a diverged warp's type |
 | AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |

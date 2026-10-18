@@ -140,7 +140,7 @@ Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined
 
 ## The Artifact
 
-- 413 tests (326 unit + 50 example tests in the main crate, 37 doc tests workspace-wide), all passing
+- 415 tests (326 unit + 50 example tests in the main crate, 39 doc tests workspace-wide), all passing
 - 32 Lean 4 theorems mechanizing the core calculus (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`; set-preserving shuffle and the collective exit predicate are not modeled)
 - 21 documented instances across 16 real-world projects (19 bugs + 2 corroborating spec/vendor signals)
 - Real GPU execution on NVIDIA H200 SXM (Hopper) and RTX 4000 Ada: 4 typed kernels PASS, zero-overhead PTX confirmed on both; AMD MI300X mask-correctness verified via HIP

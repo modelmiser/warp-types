@@ -184,10 +184,10 @@ impl<S: ActiveSet> Warp<S> {
         // those lanes — a full-warp 0xFFFFFFFF would name inactive lanes,
         // which is UB. The assert above guarantees every source lane
         // (i ^ mask) is also in S, discharging gpu_shfl_xor_masked's
-        // contract. `as u32` truncation: nvptx64 warps are 32-lane so
+        // contract (the `unsafe` below relies on exactly this). `as u32` truncation: nvptx64 warps are 32-lane so
         // S::MASK's low 32 bits are the whole member set; the CPU identity
         // impl ignores the mask (the 64-lane amdgpu backend is stubbed).
-        PerLane::new(data.get().gpu_shfl_xor_masked(mask, S::MASK as u32))
+        PerLane::new(unsafe { data.get().gpu_shfl_xor_masked(mask, S::MASK as u32) })
     }
 }
 
@@ -195,6 +195,10 @@ impl<S: ActiveSet> Warp<S> {
 // Shuffle operations restricted to Warp<All>
 // ============================================================================
 
+// SAFETY (every `unsafe { ….gpu_shfl_*(…) }` in this impl): `&self` is a
+// `Warp<All>`, the typed witness that every lane is converged, which is the
+// `GpuShuffle` contract. (A second `kernel_entry()` can forge that witness;
+// README Limitations / paper §6.9.)
 impl Warp<All> {
     /// Shuffle XOR: each lane exchanges with lane (id ^ mask).
     ///
@@ -208,7 +212,7 @@ impl Warp<All> {
         data: PerLane<T>,
         mask: u32,
     ) -> PerLane<T> {
-        PerLane::new(data.get().gpu_shfl_xor(mask))
+        PerLane::new(unsafe { data.get().gpu_shfl_xor(mask) })
     }
 
     /// Shuffle down: lane\[i\] reads from lane\[i+delta\].
@@ -220,7 +224,7 @@ impl Warp<All> {
         data: PerLane<T>,
         delta: u32,
     ) -> PerLane<T> {
-        PerLane::new(data.get().gpu_shfl_down(delta))
+        PerLane::new(unsafe { data.get().gpu_shfl_down(delta) })
     }
 
     /// Sum reduction across all lanes.
@@ -242,13 +246,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = val + val.gpu_shfl_xor(32);
+            val = val + unsafe { val.gpu_shfl_xor(32) };
         }
-        val = val + val.gpu_shfl_xor(16);
-        val = val + val.gpu_shfl_xor(8);
-        val = val + val.gpu_shfl_xor(4);
-        val = val + val.gpu_shfl_xor(2);
-        val = val + val.gpu_shfl_xor(1);
+        val = val + unsafe { val.gpu_shfl_xor(16) };
+        val = val + unsafe { val.gpu_shfl_xor(8) };
+        val = val + unsafe { val.gpu_shfl_xor(4) };
+        val = val + unsafe { val.gpu_shfl_xor(2) };
+        val = val + unsafe { val.gpu_shfl_xor(1) };
         Uniform::from_const(val)
     }
 
@@ -261,13 +265,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = val.wrapping_add(val.gpu_shfl_xor(32));
+            val = val.wrapping_add(unsafe { val.gpu_shfl_xor(32) });
         }
-        val = val.wrapping_add(val.gpu_shfl_xor(16));
-        val = val.wrapping_add(val.gpu_shfl_xor(8));
-        val = val.wrapping_add(val.gpu_shfl_xor(4));
-        val = val.wrapping_add(val.gpu_shfl_xor(2));
-        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(16) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(8) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(4) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(2) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(1) });
         Uniform::from_const(val)
     }
 
@@ -276,13 +280,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = val.wrapping_add(val.gpu_shfl_xor(32));
+            val = val.wrapping_add(unsafe { val.gpu_shfl_xor(32) });
         }
-        val = val.wrapping_add(val.gpu_shfl_xor(16));
-        val = val.wrapping_add(val.gpu_shfl_xor(8));
-        val = val.wrapping_add(val.gpu_shfl_xor(4));
-        val = val.wrapping_add(val.gpu_shfl_xor(2));
-        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(16) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(8) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(4) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(2) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(1) });
         Uniform::from_const(val)
     }
 
@@ -291,13 +295,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = val.wrapping_add(val.gpu_shfl_xor(32));
+            val = val.wrapping_add(unsafe { val.gpu_shfl_xor(32) });
         }
-        val = val.wrapping_add(val.gpu_shfl_xor(16));
-        val = val.wrapping_add(val.gpu_shfl_xor(8));
-        val = val.wrapping_add(val.gpu_shfl_xor(4));
-        val = val.wrapping_add(val.gpu_shfl_xor(2));
-        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(16) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(8) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(4) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(2) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(1) });
         Uniform::from_const(val)
     }
 
@@ -306,13 +310,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = val.wrapping_add(val.gpu_shfl_xor(32));
+            val = val.wrapping_add(unsafe { val.gpu_shfl_xor(32) });
         }
-        val = val.wrapping_add(val.gpu_shfl_xor(16));
-        val = val.wrapping_add(val.gpu_shfl_xor(8));
-        val = val.wrapping_add(val.gpu_shfl_xor(4));
-        val = val.wrapping_add(val.gpu_shfl_xor(2));
-        val = val.wrapping_add(val.gpu_shfl_xor(1));
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(16) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(8) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(4) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(2) });
+        val = val.wrapping_add(unsafe { val.gpu_shfl_xor(1) });
         Uniform::from_const(val)
     }
 
@@ -351,12 +355,12 @@ impl Warp<All> {
     /// Equivalent to `self.shuffle_xor(PerLane::new(val), mask).get()` but
     /// avoids the verbosity of wrapping/unwrapping for the common case.
     pub fn shuffle_xor_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, mask: u32) -> T {
-        val.gpu_shfl_xor(mask)
+        unsafe { val.gpu_shfl_xor(mask) }
     }
 
     /// Shuffle down on a raw scalar — convenience that skips PerLane wrapping.
     pub fn shuffle_down_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, delta: u32) -> T {
-        val.gpu_shfl_down(delta)
+        unsafe { val.gpu_shfl_down(delta) }
     }
 }
 
@@ -980,14 +984,14 @@ mod tests {
         assert_eq!(warp.shuffle_xor_within(data, 2).get(), 7);
 
         // Direct trait-level check across types: CPU ignores the membermask.
-        assert_eq!(5i32.gpu_shfl_xor_masked(3, Even::MASK as u32), 5);
-        assert_eq!(5i32.gpu_shfl_xor_masked(3, 0), 5);
-        assert_eq!(9u32.gpu_shfl_xor_masked(1, 0xAAAA_AAAA), 9);
-        assert_eq!(2.5f32.gpu_shfl_xor_masked(1, 0x5555_5555), 2.5);
-        assert_eq!(7i64.gpu_shfl_xor_masked(1, 0xFFFF), 7);
-        assert_eq!(8u64.gpu_shfl_xor_masked(1, 0xFFFF), 8);
-        assert_eq!(1.5f64.gpu_shfl_xor_masked(1, 0xFFFF), 1.5);
-        assert!(true.gpu_shfl_xor_masked(1, 0xFFFF));
+        assert_eq!(unsafe { 5i32.gpu_shfl_xor_masked(3, Even::MASK as u32) }, 5);
+        assert_eq!(unsafe { 5i32.gpu_shfl_xor_masked(3, 0) }, 5);
+        assert_eq!(unsafe { 9u32.gpu_shfl_xor_masked(1, 0xAAAA_AAAA) }, 9);
+        assert_eq!(unsafe { 2.5f32.gpu_shfl_xor_masked(1, 0x5555_5555) }, 2.5);
+        assert_eq!(unsafe { 7i64.gpu_shfl_xor_masked(1, 0xFFFF) }, 7);
+        assert_eq!(unsafe { 8u64.gpu_shfl_xor_masked(1, 0xFFFF) }, 8);
+        assert_eq!(unsafe { 1.5f64.gpu_shfl_xor_masked(1, 0xFFFF) }, 1.5);
+        assert!(unsafe { true.gpu_shfl_xor_masked(1, 0xFFFF) });
     }
 
     #[test]

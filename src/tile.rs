@@ -145,6 +145,9 @@ impl Warp<All> {
     }
 }
 
+// SAFETY (every `unsafe { ….gpu_shfl_*_width(…) }` in this impl): a `Tile`
+// can only be made from `&Warp<All>` (`Warp::tile`), so every lane of the warp
+// is converged, which is the `GpuShuffle` contract.
 impl<'w, const SIZE: usize> Tile<'w, SIZE>
 where
     Tile<'w, SIZE>: ValidTileSize,
@@ -163,7 +166,7 @@ where
             mask < SIZE as u32,
             "shuffle_xor: mask {mask} >= tile SIZE {SIZE}"
         );
-        PerLane::new(data.get().gpu_shfl_xor_width(mask, SIZE as u32))
+        PerLane::new(unsafe { data.get().gpu_shfl_xor_width(mask, SIZE as u32) })
     }
 
     /// Shuffle down within the tile (confined to tile-sized segments).
@@ -176,7 +179,7 @@ where
             delta < SIZE as u32,
             "shuffle_down: delta {delta} >= tile SIZE {SIZE}"
         );
-        PerLane::new(data.get().gpu_shfl_down_width(delta, SIZE as u32))
+        PerLane::new(unsafe { data.get().gpu_shfl_down_width(delta, SIZE as u32) })
     }
 
     /// Sum reduction across all tile lanes.
@@ -189,7 +192,7 @@ where
         let mut val = data.get();
         let mut stride = 1u32;
         while stride < SIZE as u32 {
-            val = val + val.gpu_shfl_xor_width(stride, SIZE as u32);
+            val = val + unsafe { val.gpu_shfl_xor_width(stride, SIZE as u32) };
             stride *= 2;
         }
         val
@@ -212,7 +215,7 @@ where
         let mut val = data.get();
         let mut stride = 1u32;
         while stride < SIZE as u32 {
-            let s = val.gpu_shfl_up_width(stride, SIZE as u32);
+            let s = unsafe { val.gpu_shfl_up_width(stride, SIZE as u32) };
             val = val + s;
             stride *= 2;
         }

@@ -26,6 +26,9 @@ use crate::GpuValue;
 // WarpReduce — reduction with arbitrary operator
 // ============================================================================
 
+// SAFETY (every `unsafe { ….gpu_shfl_*(…) }` in this impl): `&self` is a
+// `Warp<All>`, the typed witness that every lane is converged, which is the
+// `GpuShuffle` contract.
 impl Warp<All> {
     /// Reduce with a custom binary operator across all lanes.
     ///
@@ -49,13 +52,13 @@ impl Warp<All> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
         {
-            val = op(val, val.gpu_shfl_xor(32));
+            val = op(val, unsafe { val.gpu_shfl_xor(32) });
         }
-        val = op(val, val.gpu_shfl_xor(16));
-        val = op(val, val.gpu_shfl_xor(8));
-        val = op(val, val.gpu_shfl_xor(4));
-        val = op(val, val.gpu_shfl_xor(2));
-        val = op(val, val.gpu_shfl_xor(1));
+        val = op(val, unsafe { val.gpu_shfl_xor(16) });
+        val = op(val, unsafe { val.gpu_shfl_xor(8) });
+        val = op(val, unsafe { val.gpu_shfl_xor(4) });
+        val = op(val, unsafe { val.gpu_shfl_xor(2) });
+        val = op(val, unsafe { val.gpu_shfl_xor(1) });
         val
     }
 
@@ -95,15 +98,15 @@ impl Warp<All> {
         let mut val = data.get();
         // Hillis-Steele: add from lane (id - delta), not (id + delta)
         // Using shuffle-up: lane[i] reads from lane[i - delta]
-        let s1 = val.gpu_shfl_up(1);
+        let s1 = unsafe { val.gpu_shfl_up(1) };
         val = val + s1;
-        let s2 = val.gpu_shfl_up(2);
+        let s2 = unsafe { val.gpu_shfl_up(2) };
         val = val + s2;
-        let s4 = val.gpu_shfl_up(4);
+        let s4 = unsafe { val.gpu_shfl_up(4) };
         val = val + s4;
-        let s8 = val.gpu_shfl_up(8);
+        let s8 = unsafe { val.gpu_shfl_up(8) };
         val = val + s8;
-        let s16 = val.gpu_shfl_up(16);
+        let s16 = unsafe { val.gpu_shfl_up(16) };
         val = val + s16;
         PerLane::new(val)
     }
@@ -139,7 +142,7 @@ impl Warp<All> {
         // Inclusive scan then shift down by 1
         #[allow(deprecated)]
         let inclusive = self.inclusive_sum(data);
-        let shifted = inclusive.get().gpu_shfl_up(1);
+        let shifted = unsafe { inclusive.get().gpu_shfl_up(1) };
         // TODO: lane 0 should get `identity`, but we lack lane_id() on CPU.
         // On real GPU, use: if lane_id() == 0 { identity } else { shifted }
         let _ = identity;
@@ -190,14 +193,14 @@ impl Warp<All> {
             "broadcast_lane: src_lane {src_lane} >= {}",
             crate::WARP_SIZE
         );
-        PerLane::new(data.get().gpu_shfl_idx(src_lane))
+        PerLane::new(unsafe { data.get().gpu_shfl_idx(src_lane) })
     }
 
     /// Warp-level shuffle up: lane\[i\] reads from lane\[i - delta\].
     ///
     /// Useful for scan-like operations. Lanes below delta get undefined values.
     pub fn shuffle_up<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, delta: u32) -> PerLane<T> {
-        PerLane::new(data.get().gpu_shfl_up(delta))
+        PerLane::new(unsafe { data.get().gpu_shfl_up(delta) })
     }
 }
 
