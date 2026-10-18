@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — 0.4.3
+## [0.4.3] — 2026-10-18
 
 - **`DynWarp` scalar collectives do the work (nvptx64, 32-lane).** `shuffle_xor_scalar`, `shuffle_down_scalar`,
   `reduce_sum_scalar` and `broadcast_scalar` performed the all-active check and then returned their input

@@ -1,6 +1,6 @@
-Warning: Permanently added '[213.181.104.52]:19027' (ED25519) to the list of known hosts.
+Warning: Permanently added '[213.181.104.52]:17557' (ED25519) to the list of known hosts.
 === warp-types H200 SXM Verification ===
-Date: 2026-10-18T18:36:46Z
+Date: 2026-10-18T19:14:49Z
 
 === Step 0: GPU Info ===
 NVIDIA H200, 9.0, 570.211.01, 143771 MiB
@@ -55,7 +55,7 @@ rustup default : nightly-x86_64-unknown-linux-gnu (default)
 
 === Step 2: Clone ===
 Already up to date.
-Commit: d6d051a
+Commit: 9b7c23f
 repo pin      : channel = "nightly-2026-09-15"
 info: syncing channel updates for nightly-2026-09-15-x86_64-unknown-linux-gnu
 info: latest update on 2026-09-15 for version 1.100.0-nightly (574ff7d98 2026-09-14)
@@ -66,22 +66,22 @@ info: you may opt out with `RUSTUP_AUTO_INSTALL=0` or `rustup set auto-install d
 rustc in repo : rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 
 === Step 3: Rust Tests (CPU) ===
-test result: ok. 334 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 335 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
-test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.52s
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.17s
 test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 40 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.20s
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
 
 === Step 4: GPU Shuffle Semantics ===
 Compiling for sm_90...
@@ -180,7 +180,7 @@ rust_ptx_typed: REGENERATED  committed[.version 7.0] -> pinned[.version 7.0]
    Compiling cudarc v0.19.3
    Compiling libloading v0.9.0
    Compiling warp-types-host v0.1.0 (/tmp/warp-types/reproduce/host)
-    Finished `release` profile [optimized] target(s) in 9.39s
+    Finished `release` profile [optimized] target(s) in 9.65s
      Running `target/release/run-kernel`
 GPU: NVIDIA H200
 
@@ -228,18 +228,18 @@ The fix (all lanes participate) is the ONLY version that type-checks.
 Same GPU. Same algorithm. Type system prevents the bug.
 
 === Step 5c: gpu feature (CUDA-only, untested anywhere else) ===
-test dimacs::tests::parse_error_missing_header ... ok
 test dimacs::tests::parse_error_duplicate_header ... ok
 test dimacs::tests::parse_error_num_vars_exceeds_encoding ... ok
-test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.22s
+test dimacs::tests::parse_error_missing_header ... ok
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.33s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
-test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.19s
 
-=== Step 5d: examples/gpu-project (6 kernels via cudarc) ===
+=== Step 5d: examples/gpu-project (8 kernels via cudarc) ===
 GPU: NVIDIA H200
 === Test 1: butterfly_reduce (all ones) ===
   Result:   PASS
@@ -253,9 +253,15 @@ GPU: NVIDIA H200
   Result:    PASS
 === Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===
   Result:    PASS
+=== Test 7: dyn_shuffle_xor (gradual API, runtime-checked, real shuffle) ===
+  Result:    PASS
+=== Test 8: dyn_shuffle_xor_partial (gradual API, error path) ===
+  Result:    PASS
 --- compute-sanitizer --tool memcheck ---
+=== Test 8: dyn_shuffle_xor_partial (gradual API, error path) ===
 ========= ERROR SUMMARY: 0 errors
 --- compute-sanitizer --tool synccheck ---
+=== Test 8: dyn_shuffle_xor_partial (gradual API, error path) ===
 ========= ERROR SUMMARY: 0 errors
 
 === Step 6: Full Demo ===
@@ -349,6 +355,8 @@ Typed Rust kernels on real GPU. Correct results.
     Expected:  0x0000FFFF (lanes 0..16 = 1, lanes 16..32 = 0)
     Result:    PASS
     Result:    PASS
+    Result:    PASS
+    Result:    PASS
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Summary
@@ -361,7 +369,7 @@ Summary
     ✓ Catches shuffle-from-inactive-lane at compile time
     ✓ Zero runtime overhead (PhantomData erasure)
     ✓ Verified at MIR, LLVM IR, and PTX levels
-    ✓ 6 typed kernels via cudarc PASS on NVIDIA H200 SXM and RTX 4000 Ada (compute-sanitizer clean on the H200)
+    ✓ 8 typed kernels via cudarc PASS on NVIDIA RTX 4000 Ada, 6 on H200 SXM (compute-sanitizer clean on the H200)
     ✓ AMD MI300X mask correctness verified via HIP
 
   21 documented bugs across 16 real-world projects.
