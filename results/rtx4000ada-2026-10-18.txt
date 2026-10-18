@@ -1,7 +1,8 @@
-# examples/gpu-project on the local workstation, 2026-10-18T17:06Z
-# tree: e846588fa (committed; clean: 0 dirty paths under examples/gpu-project+src)
+# examples/gpu-project on the local workstation, 2026-10-18T18:17Z
+# tree: f9a467c6a (committed; 0 dirty paths under examples/gpu-project+src)
 # rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 # driver: 580.173.02 cuda: 12.0, V12.0.140
+# 0.4.2: warp collectives lowered through llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot with an i1 predicate.
 # Test 6 checks the FIXED semantics of shuffle_xor_within (odd lanes return their input); the pre-0.4.1 behaviour was undefined and is not witnessed by a value test.
 
 ╔══════════════════════════════════════════════════════════╗
@@ -35,7 +36,7 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
   Got:      [0, 1, 2, ..., 30, 31]
   Result:   PASS
 
-=== Test 5: ballot_lower_half (setp workaround) ===
+=== Test 5: ballot_lower_half (vote.sync.ballot) ===
   Predicate: tid < 16
   Expected:  0x0000FFFF (lanes 0..16 = 1, lanes 16..32 = 0)
   lane[0]:   0x0000FFFF
