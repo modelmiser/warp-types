@@ -26,6 +26,10 @@ out="$PWD/target/ptxprobe-check"          # under target/ (gitignored, on disk: 
 mkdir -p "$out"
 ptx="$out/probe.s"
 rm -f "$ptx"
+# A cached build re-runs nothing and writes nothing (the first pre-push with this
+# script failed with "no PTX emitted" for exactly that reason), so evict the probe.
+( cd tools/ptxprobe && CARGO_TARGET_DIR="$out/target" cargo clean --quiet -p ptxprobe --release \
+    --target nvptx64-nvidia-cuda 2>/dev/null || true )
 ( cd tools/ptxprobe && CARGO_TARGET_DIR="$out/target" cargo rustc --release --quiet \
     --target nvptx64-nvidia-cuda -- --emit "asm=$ptx" >/dev/null )
 [ -s "$ptx" ] || { echo "no PTX emitted at $ptx"; exit 1; }
