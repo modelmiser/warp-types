@@ -1,5 +1,12 @@
 //! # OpenCV Issue #12320: Hardcoded Full Mask in warpScanInclusive
 //!
+//! **Self-contained re-implementation.** This file defines its own minimal `Warp` /
+//! `ActiveSet` types so the bug and its fix can be read in one place; it does not
+//! import the crate, and `cargo test --examples` therefore checks the pattern, not
+//! the shipped types. The same pattern is checked against the real `warp_types`
+//! API by the `compile_fail` doctests in `src/lib.rs` ("Real bugs against the
+//! real types") and throughout `src/`.
+//!
 //! Demonstrates how warp typestate catches a real deadlock bug from
 //! OpenCV's GPU module.
 //!

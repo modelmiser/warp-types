@@ -22,6 +22,78 @@
 //! let merged: Warp<All> = merge(evens, odds);
 //! ```
 //!
+//! # Real bugs against the real types
+//!
+//! The eight files under `examples/` re-implement each surveyed bug with their own
+//! toy `Warp` so bug and fix read in one place. These doctests are the same four
+//! shapes against the shipped API, so `cargo test --doc` fails if the types stop
+//! rejecting them.
+//!
+//! **cuda-samples#398** — the block-level reduction narrows to a few lanes, then
+//! shuffles down with a ballot-derived mask. Here the narrowing is a `diverge`,
+//! and the full-warp `shuffle_down` does not exist on the sub-warp:
+//!
+//! ```compile_fail,E0599
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (low, _high) = warp.diverge_halves();           // only some lanes continue
+//! let v = low.shuffle_down(data::PerLane::new(1i32), 16); // no such method on Warp<LowHalf>
+//! ```
+//!
+//! The fix the sample adopted — every lane participates, inactive lanes
+//! contribute zero — type-checks because the warp is never diverged:
+//!
+//! ```
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let lane_is_active = true;                           // the old `tid < n` predicate
+//! let contribution = if lane_is_active { 1i32 } else { 0 };
+//! let _sum = warp.reduce_add(data::PerLane::new(contribution));
+//! ```
+//!
+//! **PIConGPU#2514** — `__ballot_sync(0xFFFFFFFF, …)` inside a divergent branch.
+//! `ballot` exists only on `Warp<All>`:
+//!
+//! ```compile_fail,E0599
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (evens, _odds) = warp.diverge_even_odd();
+//! let _ = evens.ballot(data::PerLane::new(true));       // no such method on Warp<Even>
+//! ```
+//!
+//! **CUB/CCCL#854** — a 16-lane logical warp shuffling with a full-warp mask. The
+//! full-warp `shuffle_xor` is absent on `Warp<LowHalf>`; the sub-warp form
+//! `shuffle_xor_within` is what a 16-lane exchange is, and it checks its mask:
+//!
+//! ```compile_fail,E0599
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (low, _high) = warp.diverge_halves();
+//! let _ = low.shuffle_xor(data::PerLane::new(1i32), 1); // no such method on Warp<LowHalf>
+//! ```
+//!
+//! ```
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (low, high) = warp.diverge_halves();
+//! let _ = low.shuffle_xor_within(data::PerLane::new(1i32), 1); // 1 preserves LowHalf
+//! let _merged: Warp<All> = merge(low, high);
+//! ```
+//!
+//! **LLVM#155682** — a broadcast from inside `if (laneId == 0)`. Narrowing the warp
+//! removes `broadcast_lane` from the type:
+//!
+//! ```compile_fail,E0599
+//! use warp_types::*;
+//! let warp: Warp<All> = Warp::kernel_entry();
+//! let (low, _high) = warp.diverge_halves();
+//! let _ = low.broadcast_lane(data::PerLane::new(1i32), 0); // no such method on Warp<LowHalf>
+//! ```
+//!
+//! What these cannot show is the raw-branch form (`if tid < 16 { warp.shuffle_xor(..) }`),
+//! which is ordinary Rust and outside the typed fragment — see "Trusted entry points"
+//! on [`Warp::kernel_entry`].
+//!
 //! # Module Overview
 //!
 //! - [`active_set`] — Lane subset types (`All`, `Even`, `Odd`, ...) and complement proofs

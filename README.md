@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. Main crate 334 unit + 50 example tests, plus 40 doc tests workspace-wide (424 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
+**Status:** Research prototype with real GPU execution. Main crate 334 unit + 50 example tests, plus 46 doc tests workspace-wide (430 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 
@@ -68,7 +68,7 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 
 ```bash
 cargo test                                    # 334 unit tests (main crate)
-cargo test --workspace --doc                  # 40 doc tests (18 compile-fail)
+cargo test --workspace --doc                  # 46 doc tests (22 compile-fail)
 cargo test --examples                         # 50 example tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -117,7 +117,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't call full-warp shuffle, merge requires complements) | 18 compile-fail doctests | `cargo test --workspace --doc` |
+| Type safety (diverged warp can't call full-warp shuffle, merge requires complements) | 22 compile-fail doctests | `cargo test --workspace --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 7 kernels via cudarc PASS on RTX 4000 Ada and 6 on H200 SXM (Test 7, the gradual API's runtime-checked shuffle, was added in 0.4.3 and awaits its H200 run), incl. ballot and sub-warp `shuffle_xor_within`; compute-sanitizer memcheck + synccheck 0 errors on the H200 (`results/h200-2026-10-18-main.txt`, `results/rtx4000ada-2026-10-18.txt`) | `cd examples/gpu-project && cargo run` |
@@ -129,7 +129,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` | <!-- unguarded: 6 — module-scoped test count; the guard computes no per-module actual -->
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (33 tests) | `cargo test gradual` | <!-- unguarded: 33 — module-scoped test count; the guard computes no per-module actual -->
-| Main-crate claims | Main-crate test suite (418 tests) | `cargo test && cargo test --examples` | <!-- unguarded: 418 — measured 2026-10-18: cargo test -p warp-types (368) + --examples (50); no main-crate-scoped DOC actual exists; see TODO -->
+| Main-crate claims | Main-crate test suite (424 tests) | `cargo test && cargo test --examples` | <!-- unguarded: 424 — measured 2026-10-18: cargo test -p warp-types (374) + --examples (50); no main-crate-scoped DOC actual exists; see TODO -->
 
 ## Project Structure
 

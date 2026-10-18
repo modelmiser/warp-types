@@ -1,5 +1,12 @@
 //! # The Bug That Types Catch
 //!
+//! **Self-contained re-implementation.** This file defines its own minimal `Warp` /
+//! `ActiveSet` types so the bug and its fix can be read in one place; it does not
+//! import the crate, and `cargo test --examples` therefore checks the pattern, not
+//! the shipped types. The same pattern is checked against the real `warp_types`
+//! API by the `compile_fail` doctests in `src/lib.rs` ("Real bugs against the
+//! real types") and throughout `src/`.
+//!
 //! This demo shows how warp typestate catches shuffle-after-diverge
 //! bugs at compile time.
 //!

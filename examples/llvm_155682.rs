@@ -1,5 +1,12 @@
 //! # LLVM Issue #155682: shfl_sync After Conditional Eliminates Branch
 //!
+//! **Self-contained re-implementation.** This file defines its own minimal `Warp` /
+//! `ActiveSet` types so the bug and its fix can be read in one place; it does not
+//! import the crate, and `cargo test --examples` therefore checks the pattern, not
+//! the shipped types. The same pattern is checked against the real `warp_types`
+//! API by the `compile_fail` doctests in `src/lib.rs` ("Real bugs against the
+//! real types") and throughout `src/`.
+//!
 //! Demonstrates how warp typestate prevents a bug where the compiler
 //! "optimizes" a conditional into unconditional execution because of UB from
 //! an uninitialized value reaching a shuffle.
