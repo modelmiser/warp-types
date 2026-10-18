@@ -71,7 +71,7 @@ We prove type safety through progress and preservation.
 
 - **Case SHUFFLE**: The premise `Γ ⊢ w : Warp<All>` ensures all lanes are active. The E-SHUFFLE-XOR rule applies, and the operation completes.
 
-The key insight: shuffle operations have a premise requiring `Warp<All>`. If a program type-checks, this premise is satisfied, and progress is guaranteed. If a program has `Warp<Even>` and tries to shuffle, **it doesn't type-check**—we never reach this case.
+The key insight: shuffle operations have a premise requiring `Warp<All>`. If a program type-checks, this premise is satisfied, and progress is guaranteed. If a program has `Warp<Even>` and tries a full-warp shuffle, **it doesn't type-check**—we never reach this case.
 
 ### Theorem 4.2 (Preservation)
 

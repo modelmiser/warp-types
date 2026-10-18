@@ -244,6 +244,9 @@ impl DynWarp {
     ///
     /// The `Warp<S>` equivalent only exists on `Warp<All>`.
     /// `DynWarp` checks at runtime instead.
+    ///
+    /// **Prototype:** the check is real, but on success this returns `value`
+    /// unchanged; it does not yet read the partner lane.
     pub fn shuffle_xor_scalar(&self, value: i32, _xor_mask: u32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -259,6 +262,8 @@ impl DynWarp {
     }
 
     /// Shuffle down on a single scalar — runtime check for all-active.
+    ///
+    /// **Prototype:** on success this returns `value` unchanged.
     pub fn shuffle_down_scalar(&self, value: i32, _delta: u32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {

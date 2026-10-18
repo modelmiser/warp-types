@@ -208,7 +208,7 @@ We compose the two levels hierarchically: warp protocols use our typestate withi
 
 ### Why This Matters
 
-The novel contribution of this paper is *linear typestate with quiescent participants*. This is the gap in prior work:
+The contribution of this section is *linear typestate with quiescent participants* (linear in the formal calculus; the Rust crate is affine, §6). Relative to session types:
 
 - Traditional session types: all parties active or failed
 - Our extension: parties can go quiescent and resume
@@ -231,16 +231,16 @@ Modern GPUs also support subgroups smaller than a warp via `tiled_partition`.
 
 Our type system extends naturally to these levels. Each group carries its own active-set type parameter — e.g., `Warp<S: ActiveSet>` for 32-lane warps and `Subgroup<S: ActiveSet8>` for 8-lane partitions. The `tiled_partition` operation creates typed subgroups from a warp, each inheriting the active-set discipline.
 
-The same principles apply at every width: shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The `ComplementOf` proof mechanism is parameterized by group size, not hardcoded to 32 lanes.
+The same principles apply at every width: full-group shuffle requires all group lanes active, diverge produces complements, and merge verifies them. The `ComplementOf` proof mechanism is parameterized by group size, not hardcoded to 32 lanes.
 
 ## 5.5 Memory Safety Integration
 
-Our type system focuses on divergence safety and composes orthogonally with memory safety systems like Descend [Köpcke et al. 2024]. The two systems address independent concerns:
+Our type system focuses on divergence safety and could be layered with memory safety systems like Descend [Köpcke et al. 2024]. The two systems' main concerns differ:
 
 - **Descend** prevents data races and use-after-free via ownership/borrowing for GPU memory
 - **Warp typestate** prevents reads from inactive lanes via active-set tracking
 
-The systems are orthogonal: Descend ensures no data races, while our system ensures no divergence bugs. Together, they provide comprehensive GPU safety — the first preventing spatial errors (wrong memory), the second preventing temporal errors (wrong execution state). Neither subsumes the other, and they can be layered via a proc macro that checks both ownership and active-set constraints on each operation. A unified type system tracking `Warp<S: ActiveSet, M: MemoryState>` is future work (§9).
+Descend ensures no data races and also rejects synchronization on conditional or split thread groups; warp typestate types the complementary lane sets of a divergence and their merge. Descend's ownership and borrowing address memory; warp typestate addresses which lanes are active. Combining them is unimplemented: no checker in this repository enforces both, and a unified type system tracking `Warp<S: ActiveSet, M: MemoryState>` is future work (§9).
 
 ## 5.6 Fence-Divergence Interactions
 
@@ -284,7 +284,7 @@ Our extensions handle:
 | Runtime predicates | Layered types (1–4) | Varies |
 | Inter-block | Traditional MPST | Full |
 | Cooperative groups | Hierarchical protocols | Full |
-| Memory safety | Compose with Descend | Full |
+| Memory safety | Compose with Descend | Future work |
 | Fence-divergence | Type-state write tracking | Full |
 
 The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication, memory safety).

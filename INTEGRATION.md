@@ -279,7 +279,7 @@ __global__ void buggy_reduce(int* data) {
 ```
 
 **What you get:**
-- Shuffle/reduce/ballot only on `Warp<All>` — diverged warps can't shuffle
+- Shuffle/reduce/ballot only on `Warp<All>` — diverged warps can't call them
 - `merge()` requires `ComplementOf` — can't merge `Even + LowHalf`
 - Works with CUDA (`__shfl_xor_sync`), HIP (`__shfl_xor`), and host-only (modeling)
 - Zero runtime overhead — `Warp<S>` is empty

@@ -23,14 +23,14 @@ We survey 21 documented instances across 16 real-world projects (19 bugs plus a 
 
 ## The Solution
 
-Track which lanes are active in the type system. Shuffle only exists on fully-active warps:
+Track which lanes are active in the type system. Full-warp shuffle only exists on fully-active warps:
 
 ```rust
 use warp_types::*;
 
 let warp: Warp<All> = Warp::kernel_entry();
 
-// After diverge, shuffle is gone from the type:
+// After diverge, full-warp shuffle_xor is gone from the type:
 let (evens, odds) = warp.diverge_even_odd();
 // evens.shuffle_xor(data, 1);  // COMPILE ERROR — method not found
 let merged: Warp<All> = merge(evens, odds);
@@ -117,7 +117,7 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't shuffle, merge requires complements) | 16 compile-fail doctests | `cargo test --workspace --doc` |
+| Type safety (diverged warp can't call full-warp shuffle, merge requires complements) | 16 compile-fail doctests | `cargo test --workspace --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
 | Real GPU execution | 4 kernels PASS on H200 SXM and RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
@@ -187,6 +187,7 @@ warp-types/
 - **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
 - **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0, Hopper) and RTX 4000 Ada (compute 8.9, Ada Lovelace): shuffle semantics, zero-overhead PTX, and typed kernel execution (4/4 kernels PASS on both GPUs).
 - **The guarantee covers the typed fragment.** A raw data-dependent branch around a warp intrinsic (`if tid < 16 { warp.shuffle_xor(...) }`) is ordinary Rust: it type-checks and is exactly the unsafe pattern on hardware. The safety claim holds for programs that express divergence exclusively via `diverge`/`merge`.
+- **The raw intrinsics are public and safe.** `GpuShuffle` (re-exported in the prelude) exposes `gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down` and friends as safe methods on plain values, with no `Warp` handle. Calling them directly bypasses the typestate entirely; use the `Warp` methods.
 - **`kernel_entry()` is callable anywhere.** The `Warp<All>` witness is not unforgeable: a fresh handle can be constructed after a diverge, bypassing the typestate discipline. The discipline requires calling it exactly once at kernel entry; nothing enforces that yet.
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 

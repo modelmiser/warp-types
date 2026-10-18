@@ -298,6 +298,6 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 
 ---
 
-**The core idea is simple:** Warps carry types. Types track which lanes are active. Shuffle only exists when all lanes are active. Everything else — the proc macros, the builder, the tiles, the sort — follows from that one decision.
+**The core idea is simple:** Warps carry types. Types track which lanes are active. Full-warp shuffle only exists when all lanes are active. Everything else — the proc macros, the builder, the tiles, the sort — follows from that one decision.
 
 If this idea proves useful, we'll be glad to have been a footnote in the story of safe GPU programming.

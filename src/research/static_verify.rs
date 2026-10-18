@@ -330,8 +330,7 @@ impl Warp<All> {
 impl<S: ActiveSet> Warp<S> {
     /// Sync: barrier for all active lanes in this warp.
     ///
-    /// Safe because we only sync the lanes that are actually active.
-    /// The active set S tells us exactly which lanes participate.
+    /// Research model: a no-op. The intended lowering is `__syncwarp(S::MASK)`.
     pub fn sync(&self) {
         // In real implementation: __syncwarp(S::MASK)
         // Sync with mask S::MASK — type guarantees only active lanes participate
@@ -423,9 +422,9 @@ mod tests {
         let (evens, odds) = all.diverge_even_odd();
 
         // Sync works on any active set - it just syncs those lanes
-        all.sync(); // Syncs all 32 lanes
-        evens.sync(); // Syncs only even lanes
-        odds.sync(); // Syncs only odd lanes
+        all.sync(); // would sync all 32 lanes (no-op in this model)
+        evens.sync(); // would sync only even lanes
+        odds.sync(); // would sync only odd lanes
     }
 
     // ========================================================================

@@ -1,7 +1,9 @@
 //! Warp Types: Type-safe GPU warp programming via linear typestate.
 //!
-//! Prevents warp divergence bugs at compile time using linear typestate.
-//! A diverged warp literally cannot call shuffle — the method doesn't exist.
+//! Prevents warp divergence bugs at compile time using linear typestate (affine in
+//! Rust; see the README's Limitations). A diverged warp cannot call a full-warp
+//! shuffle — the method doesn't exist; `shuffle_xor_within` serves sub-warps and
+//! checks its mask at run time.
 //!
 //! # Core Idea
 //!
@@ -14,7 +16,7 @@
 //! // OK: shuffle on full warp
 //! let _shuffled = warp.shuffle_xor(data, 1);
 //!
-//! // After diverge, shuffle is gone from the type:
+//! // After diverge, full-warp shuffle_xor is gone from the type:
 //! let (evens, odds) = warp.diverge_even_odd();
 //! // evens.shuffle_xor(data, 1);  // COMPILE ERROR — method not found
 //! let merged: Warp<All> = merge(evens, odds);
@@ -27,7 +29,8 @@
 //! - [`data`] — Value categories: `PerLane<T>`, `Uniform<T>`, `SingleLane<T, N>`
 //! - [`diverge`] — Split warps by predicate (produces complementary sub-warps)
 //! - [mod@merge] — Rejoin complementary sub-warps (compile-time verified)
-//! - [`shuffle`] — Shuffle/ballot/reduce (restricted to `Warp<All>`) + permutation algebra
+//! - [`shuffle`] — Full-warp shuffle/ballot/reduce (restricted to `Warp<All>`), `shuffle_xor_within`
+//!   on any `Warp<S>`, + permutation algebra
 //! - [`fence`] — Fence-divergence interactions (§5.6) — type-state write tracking
 //! - [`block`] — Block-level: shared memory ownership, inter-block sessions, reductions
 //! - `proof` — Soundness proof sketch (progress + preservation)

@@ -18,8 +18,8 @@
 //! // Diverge on a runtime predicate (mask determined by data)
 //! let diverged: DynDiverge = warp.diverge_dynamic(0x0000FFFF);
 //!
-//! // Can't shuffle on either branch — they're partial warps
-//! // diverged.true_warp().shuffle_xor(...)  // doesn't exist
+//! // No full-warp shuffle on either branch — they're partial warps;
+//! // DynDiverge exposes masks, not Warp<All> handles
 //!
 //! // MUST merge to get Warp<All> back — then shuffle is available
 //! let warp: Warp<All> = diverged.merge();
@@ -168,7 +168,7 @@ impl Warp<All> {
     /// are complements by construction.
     ///
     /// Returns a `DynDiverge` that must be merged to recover `Warp<All>`.
-    /// Neither branch supports shuffle — only the merged warp does.
+    /// Neither branch supports a full-warp shuffle — only the merged warp does.
     ///
     /// This is the solution to data-dependent divergence without dependent types.
     /// The mask is runtime. The complement guarantee is structural.

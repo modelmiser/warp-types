@@ -21,7 +21,7 @@
 //! # Type System Guarantee
 //!
 //! `Tile<N>` has `shuffle_xor` for any N — because all N lanes participate.
-//! This is unlike `Warp<S>` where only `Warp<All>` has shuffle.
+//! This is unlike `Warp<S>` where only `Warp<All>` has full-warp shuffle.
 //! The safety comes from the partition structure, not the active set.
 
 use crate::active_set::{sealed, All};

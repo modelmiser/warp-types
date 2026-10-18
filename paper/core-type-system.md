@@ -200,7 +200,7 @@ Shuffle operations require all lanes to be active:
 Γ ⊢ shuffle_xor(w, data, mask) : PerLane<T>
 ```
 
-**This is the key safety rule:** The premise `Warp<All>` prevents shuffling on a diverged warp. If you have `Warp<Even>`, you cannot call `shuffle_xor`—the rule doesn't apply.
+**This is the key safety rule:** The premise `Warp<All>` prevents a full-warp shuffle on a diverged warp. If you have `Warp<Even>`, you cannot call `shuffle_xor`—the rule doesn't apply.
 
 ### SHUFFLE-WITHIN (Restricted)
 
@@ -385,7 +385,7 @@ fn filtered_sum(warp: Warp<All>, data: PerLane<i32>, keep: PerLane<bool>) -> Uni
 }
 ```
 
-The type system guides the programmer: you cannot shuffle until you merge. The merge requires complementary sets. The result is correct by construction.
+The type system guides the programmer: you cannot perform a full-warp shuffle until you merge. The merge requires complementary sets. The result is correct by construction.
 
 ## 3.6 Summary
 

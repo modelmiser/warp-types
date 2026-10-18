@@ -35,7 +35,8 @@ use core::marker::PhantomData;
 ///
 /// The type parameter `S` records which lanes are active. This enables:
 /// - `Warp<All>` provides shuffle/reduce (all lanes needed)
-/// - `Warp<Even>` cannot shuffle (would read inactive odd lanes)
+/// - `Warp<Even>` has no full-warp shuffle (would read inactive odd lanes);
+///   `shuffle_xor_within` allows masks that stay within the active set
 /// - `merge(Warp<Even>, Warp<Odd>)` → `Warp<All>` (complement verified)
 ///
 /// Zero-cost: `Warp<S>` is zero-sized. The active set exists only in the type system.
@@ -107,10 +108,10 @@ impl<S: ActiveSet> Warp<S> {
         S::MASK.count_ones()
     }
 
-    /// Barrier synchronization for active lanes.
+    /// Intended barrier synchronization for active lanes.
     ///
-    /// Safe because we only sync the lanes that are actually active.
-    /// In a real implementation: `__syncwarp(S::MASK)`.
+    /// **Currently a no-op on every target:** it does not emit `__syncwarp`.
+    /// The intended lowering is `__syncwarp(S::MASK)`, naming only active lanes.
     pub fn sync(&self) {
         // In real implementation: __syncwarp(S::MASK)
     }

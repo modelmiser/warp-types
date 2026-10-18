@@ -4,7 +4,8 @@
 //!
 //! 1. **Type-safe shuffle traits** — enforce correct return types
 //!    (shuffle → PerLane, ballot → Uniform, reduce → T)
-//! 2. **`Warp<All>`-restricted shuffles** — shuffle methods only on full warps
+//! 2. **`Warp<All>`-restricted shuffles** — full-warp shuffle methods only on full
+//!    warps; `shuffle_xor_within` on any `Warp<S>` asserts its mask preserves `S`
 //! 3. **Permutation algebra** — XOR/Rotate/Compose with group-theoretic properties
 //!
 //! # The `Warp<All>`-only restriction is structural, not checked (W3 wall)
@@ -197,7 +198,8 @@ impl<S: ActiveSet> Warp<S> {
 impl Warp<All> {
     /// Shuffle XOR: each lane exchanges with lane (id ^ mask).
     ///
-    /// **ONLY AVAILABLE ON `Warp<All>`** — diverged warps cannot shuffle.
+    /// **ONLY AVAILABLE ON `Warp<All>`** — diverged warps have no full-warp
+    /// shuffle (see `shuffle_xor_within` for masks that preserve a sub-warp).
     ///
     /// On GPU: emits `shfl.sync.bfly.b32` via inline assembly.
     /// On CPU: returns the input value (single-thread identity).

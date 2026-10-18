@@ -45,7 +45,7 @@ We introduce *warp typestate*, a linear type system that tracks which lanes are 
    merge : Warp<S₁> → Warp<S₂> → Warp<S₁ ∪ S₂>  where S₁ ∩ S₂ = ∅
    ```
 
-4. **Operations restrict by active set.** Shuffle operations are only available on `Warp<All>`. You cannot shuffle on a diverged warp—the method simply doesn't exist.
+4. **Operations restrict by active set.** Full-warp shuffle operations are only available on `Warp<All>`. You cannot call `shuffle_xor` on a diverged warp—the method simply doesn't exist. (A shuffle that stays within a sub-warp's own lanes has its own rule, §3.3.)
 
 With this type system, the buggy code above becomes a compile error:
 
@@ -72,9 +72,9 @@ We present a linear typestate system for intra-warp divergence that statically e
 
 This paper makes the following contributions:
 
-1. **A novel type system for GPU divergence** (§3). We present the first type system that tracks active lane masks, preventing undefined behavior from reading inactive lanes. The type system uses linear typestate with a Boolean lattice of active sets, motivated by the structural analogy to multiparty session type branching.
+1. **A type system for GPU divergence** (§3). A warp's active-lane set is a type: diverging yields two sub-warps with complementary sets, merging requires that they be complements, and full-warp shuffles exist only on a fully active warp, preventing undefined behavior from reading inactive lanes. Prior static treatments of collectives under divergence — Descend, SPMD barrier inference, and Lucid Synchrone's complementary clocks — are compared in §8. The type system uses linear typestate with a Boolean lattice of active sets, motivated by the structural analogy to multiparty session type branching.
 
-2. **A soundness proof** (§4). We prove that well-typed programs satisfy progress and preservation, ensuring they never read from inactive lanes.
+2. **A soundness proof** (§4). We prove that well-typed programs in the mechanized calculus satisfy progress and preservation, ensuring they never read from inactive lanes. SHUFFLE-WITHIN is outside the mechanized fragment, and the Rust crate is affine with an unrestricted `kernel_entry` (§6.9).
 
 3. **A zero-overhead implementation** (§6). We implement our type system as a Rust library using traits and generics. Types are erased at compile time—the generated code is identical to untyped Rust equivalents (byte-identical PTX verified).
 

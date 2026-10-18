@@ -121,7 +121,7 @@ We also implemented:
 
 The state of the art for GPU warp safety is: don't diverge. Persistent thread programs like the Hazy megakernel maintain warp-uniform execution — all lanes always active, no divergence, no shuffle bugs. It works, but it prohibits an entire class of algorithms.
 
-Our type system is **strictly more permissive**: you CAN diverge, you CAN have sub-warps with different active sets, you just can't shuffle until you merge back. Lane-level heterogeneity becomes safe rather than forbidden.
+Our type system is **strictly more permissive**: you CAN diverge, you CAN have sub-warps with different active sets, you just can't do a full-warp shuffle until you merge back. Lane-level heterogeneity becomes safe rather than forbidden.
 
 The core insight is transferable to any language with phantom types or zero-cost abstractions. The `ComplementOf` pattern (compile-time proof of set complement) works in Rust, Haskell, Scala, Swift, and potentially C++ with concepts.
 

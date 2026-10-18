@@ -84,9 +84,9 @@ We presented **warp typestate**, a linear type system that makes lane-level dive
 
 3. **Merge verifies complements**. The type system statically checks that merged warps are complementary.
 
-4. **Shuffles require all lanes active**. The `shuffle_xor` method exists only on `Warp<All>`. Calling it on a diverged warp is not a runtime error—it is *unrepresentable*.
+4. **Full-warp shuffles require all lanes active**. The `shuffle_xor` method exists only on `Warp<All>`. Calling it on a diverged warp is not a runtime error—it is a missing method (within the typed API; §6.9).
 
-The concept of tracking which lanes are active is not new. ISPC manages it via compiler-emitted masks, Cooperative Groups expose it as runtime objects, LLVM's uniformity analysis infers it during compilation, and NVIDIA's synccheck detects violations post-execution. What we add is a *type-level* encoding: the active lane mask is a type parameter (`Warp<S>`) on a Boolean lattice, reconvergence is verified by sealed complement traits, and operations requiring all lanes are structurally absent (not checked — absent) on sub-warps. This is the first system that makes shuffle-from-inactive-lane a *missing-method error* rather than a runtime fault, an API documentation warning, or a post-hoc sanitizer finding.
+The concept of tracking which lanes are active is not new. ISPC manages it via compiler-emitted masks, Cooperative Groups expose it as runtime objects, LLVM's uniformity analysis infers it during compilation, and NVIDIA's synccheck detects violations post-execution. Static treatments of collectives under divergence also exist — SPMD barrier inference, Descend's rejection of synchronization on conditional thread groups, and Lucid Synchrone's complementary clocks (§8). What we add is a *type-level* encoding of the warp's active lanes: the active lane mask is a type parameter (`Warp<S>`) on a Boolean lattice, reconvergence is verified by sealed complement traits, and full-warp operations are structurally absent (not checked — absent) on sub-warps, so a full-warp shuffle from a diverged warp is a *missing-method error* rather than a runtime fault, an API documentation warning, or a post-hoc sanitizer finding.
 
 Our implementation's static core has **zero runtime overhead** — those types are erased at compile time (verified by PTX comparison); the gradual/dynamic layers (§5) trade runtime checks for expressiveness, by design. For uniform programs (the dominant style, including state-of-the-art megakernels), the type system is invisible. For lane-heterogeneous programs, it replaces implicit bugs with explicit types. The annotation burden is modest: roughly one line in six across our 8 examples (aggregate ≈16%; per-example figures vary by a factor of ~2.5 — no counting script ships with this artifact, so treat the figure as indicative).
 
@@ -173,6 +173,20 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 [36] Wright, A. K. and Felleisen, M. "A Syntactic Approach to Type Soundness." Information and Computation 115(1), 1994. https://doi.org/10.1006/inco.1994.1093
 
 [37] Zheng, M., Ravi, V. T., Qin, F., and Agrawal, G. "GMRace: Detecting Data Races in GPU Programs via a Low-Overhead Scheme." IEEE TPDS 25(1), 2014. https://doi.org/10.1109/TPDS.2013.44
+
+[38] Aiken, A. and Gay, D. "Barrier Inference." POPL, 1998, pp. 342–354. https://doi.org/10.1145/268946.268974
+
+[39] Kamil, A. and Yelick, K. "Concurrency Analysis for Parallel Programs with Textually Aligned Barriers." LCPC 2005, pp. 185–199. https://doi.org/10.1007/978-3-540-69330-7_13
+
+[40] Kamil, A. and Yelick, K. "Enforcing Textual Alignment of Collectives Using Dynamic Checks." LCPC 2009, pp. 368–382. https://doi.org/10.1007/978-3-642-13374-9_25
+
+[41] Colaço, J.-L. and Pouzet, M. "Clocks as First Class Abstract Types." EMSOFT 2003, pp. 134–155. https://doi.org/10.1007/978-3-540-45212-6_10
+
+[42] Caspi, P., Pilaud, D., Halbwachs, N., and Plaice, J. "LUSTRE: A Declarative Language for Real-Time Programming." POPL, 1987, pp. 178–188. https://doi.org/10.1145/41625.41641
+
+[43] Le Guernic, P., Gautier, T., Le Borgne, M., and Le Maire, C. "Programming Real-Time Applications with SIGNAL." Proceedings of the IEEE 79(9), 1991, pp. 1321–1336. https://doi.org/10.1109/5.97301
+
+[44] Cohen, A., Duranton, M., Eisenbeis, C., Pagetti, C., Plateau, F., and Pouzet, M. "N-Synchronous Kahn Networks." POPL, 2006, pp. 180–193. https://doi.org/10.1145/1111037.1111054
 
 ### Bug Reports Cited
 

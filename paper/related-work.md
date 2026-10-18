@@ -8,13 +8,9 @@ Warp typestate draws on and differs from work in GPU verification, session types
 
 Descend [Köpcke et al. 2024] brings Rust-style ownership and borrowing to GPU programming, preventing data races and use-after-free in GPU code.
 
-**Relationship to our work**: Descend and warp typestate are *orthogonal* and *composable*:
-- Descend: memory safety (ownership, borrowing, lifetimes)
-- Our work: divergence safety (active lane tracking)
+**Relationship to our work**: Descend tracks which execution resource runs each computation, including a block or warp narrowed by a split or by a runtime condition, and rejects synchronizing such a subset ("A synchronization performed on a split block or a conditional is forbidden", §2.2); its evaluation reports warp shuffles in safe Descend, whose typing rules are not in the PLDI paper and are not compared here. Reconvergence in Descend is structural: a split's scope ends. Warp typestate instead names the two sides of a divergence as complementary types and checks their merge. Descend's ownership and borrowing for GPU memory go further than warp typestate's per-block shared-memory ownership (§5), so the two differ in what each enforces about memory.
 
-Descend does not track which lanes are active. A shuffle in Descend may read from inactive lanes if the programmer gets the mask wrong. Conversely, our system does not track memory ownership.
-
-The ideal system combines both: lanes must be active (our contribution) *and* have valid data (Descend's contribution).
+A combined system would add Descend's memory safety to complement-typed divergence.
 
 ### GPUVerify, CUDA Sanitizers, and Race Detection
 
@@ -38,14 +34,14 @@ Session types were introduced by Honda [1993] for the π-calculus. A session typ
 
 Honda, Yoshida, and Carbone [2008] extended session types to multiple parties. Each party follows a local type projected from a global protocol.
 
-**Relationship to our work**: Our system shares MPST's concern with multi-party coordination but differs in mechanism. MPST types *channels* carrying *directed messages* between parties following a *protocol sequence*. Our system types a *linear resource* (the warp handle) carrying a *set-valued state* (which lanes are active), with no channels, no directed messages, and no protocol sequencing. The structural analogy—branching, compatibility, reconvergence—is genuine and motivating but not a technical extension of MPST. The key novelty (quiescence: parties go temporarily inactive rather than failing) is a concept that *could* extend MPST, but our formalization does not build on MPST foundations.
+**Relationship to our work**: Our system shares MPST's concern with multi-party coordination but differs in mechanism. MPST types *channels* carrying *directed messages* between parties following a *protocol sequence*. Our system types a *linear resource* (the warp handle) carrying a *set-valued state* (which lanes are active), with no channels, no directed messages, and no protocol sequencing. The structural analogy—branching, compatibility, reconvergence—is genuine and motivating but not a technical extension of MPST. The key difference (quiescence: parties go temporarily inactive rather than failing) is a concept that *could* extend MPST, but our formalization does not build on MPST foundations.
 
 | MPST | Our System | Match |
 |------|-----------|-------|
 | N parties, all active | 32 parties, subset active | Motivating analogy |
 | Channels with send/receive | Shared register file, symmetric shuffle | No |
 | Protocol sequence | Active-set snapshot | No |
-| Party fails = session stuck | Party quiesces = temporarily inactive | Novel concept |
+| Party fails = session stuck | Party quiesces = temporarily inactive | Not in MPST |
 
 ### Gradual Session Types
 
@@ -81,7 +77,7 @@ Our approach is complementary: we *embrace* divergence and make it safe. This al
 
 ISPC [Pharr and Mark 2012] implements SPMD programming on CPU SIMD hardware with `uniform` and `varying` type qualifiers—a `uniform` variable holds a single value shared across all instances in a gang (analogous to our `Uniform<T>`), while `varying` (the default) holds per-instance values (analogous to our `PerLane<T>`). ISPC also provides `foreach_active` and cross-lane operations whose mask correctness is guaranteed by compiler-emitted mask instructions.
 
-**Relationship to our work**: ISPC is the closest existing system in its language-level awareness of divergence. ISPC's compiler manages the execution mask and provides `foreach_active` to iterate over active instances — so ISPC *knows* the active set at runtime and exposes it through language constructs. The key difference is *where* the active set lives: in ISPC the compiler emits mask-management code at compile time, but the active set itself is a runtime value those masks track; our `Warp<S>` types encode the active set in the type itself (the parameter `S`), so it is a compile-time object. In ISPC, cross-lane operations are safe because the compiler generates correct masks. In GPU programming, the programmer passes masks manually via `__shfl_sync(mask, ...)` — exactly where the bug class arises. Our type system makes `shuffle_xor` *absent from the type* when lanes are inactive, preventing the mask error at compile time rather than relying on runtime mask management.
+**Relationship to our work**: ISPC is a close relative in its language-level awareness of divergence. ISPC's compiler manages the execution mask and provides `foreach_active` to iterate over active instances — so ISPC *knows* the active set at runtime and exposes it through language constructs. The key difference is *where* the active set lives: in ISPC the compiler emits mask-management code at compile time, but the active set itself is a runtime value those masks track; our `Warp<S>` types encode the active set in the type itself (the parameter `S`), so it is a compile-time object. In ISPC, cross-lane operations are safe because the compiler generates correct masks. In GPU programming, the programmer passes masks manually via `__shfl_sync(mask, ...)` — exactly where the bug class arises. Our type system makes full-warp `shuffle_xor` *absent from the type* when lanes are inactive, preventing the mask error at compile time rather than relying on runtime mask management. (ISPC's `uniform`/`varying` qualifiers are themselves checked statically; what stays at run time is the mask.)
 
 ### DPJ, Æminium, and Data-Race-Free Type Systems
 
@@ -109,7 +105,7 @@ Intel's subgroup operations in SYCL/oneAPI (`sub_group::shuffle`, `sub_group::re
 
 ### Vulkan/SPIR-V Subgroup Operations
 
-Vulkan 1.1 (2018) introduced subgroup operations (`subgroupShuffle`, `subgroupBallot`, `subgroupBroadcast`) in SPIR-V/GLSL — the most widely deployed cross-vendor subgroup API. The GLSL specification explicitly states that subgroup operations have "undefined results if invocations are not converged." The WebGPU specification excluded indexed subgroup shuffles entirely due to this safety concern (Bug 21 in our survey). Our type system would prevent the undefined-results cases that the Vulkan specification warns about — the shuffle method is absent on diverged warps, not merely documented as "undefined."
+Vulkan 1.1 (2018) introduced subgroup operations (`subgroupShuffle`, `subgroupBallot`, `subgroupBroadcast`) in SPIR-V/GLSL — the most widely deployed cross-vendor subgroup API. The GLSL specification explicitly states that subgroup operations have "undefined results if invocations are not converged." The WebGPU specification excluded indexed subgroup shuffles entirely due to this safety concern (Bug 21 in our survey). Our type system would prevent the undefined-results cases that the Vulkan specification warns about — the full-warp shuffle method is absent on diverged warps, not merely documented as "undefined."
 
 ### NVIDIA's `__shfl_sync` Migration (CUDA 9.0)
 
@@ -137,18 +133,26 @@ Habermaier and Knapp [ESOP 2012] formalize the SIMT execution model — lockstep
 
 The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
 
-## 8.6 Summary
+## 8.6 Static Collectives and Clocks
+
+**Collectives under divergent control.** Aiken and Gay's barrier inference [Aiken and Gay, POPL 1998] checks *structural correctness*: if processes enter an expression agreeing on its single-valued variables and all terminate, they execute the same sequence of synchronization operations and leave agreeing on those variables; an effect system over single-valued expressions checks it. Titanium enforces textual alignment of barriers with single-valued expressions (the `single` qualifier), after Aiken and Gay [Kamil and Yelick, LCPC 2005]; later work set out flaws in that type system — burdensome annotations, and that its authors had not found a clean way to extend it to collectives over a subset of the threads — and enforced alignment with run-time checks instead [Kamil and Yelick, LCPC 2009]. The hazard there is deadlock or misaligned collectives; within a warp it is reading inactive lanes, and collectives over a subset of the lanes are the point. Warp typestate types which lanes are active.
+
+**Clocks in synchronous dataflow.** Lucid Synchrone types clocks as abstract types [Colaço and Pouzet, EMSOFT 2003]: `when` samples a stream on a Boolean clock, and `merge c x y` combines a stream on clock `c` with one on `not c` — warp typestate's divergence and complement merge, over instants instead of lanes. A local clock may not escape its scope, and streams on different clocks cannot be combined; but a sampled stream may simply go unused — nothing obliges the program to merge it back. Related: Lustre's clock calculus [Caspi et al., POPL 1987], Signal's [Le Guernic et al., Proc. IEEE 1991], and N-synchronous Kahn networks [Cohen et al., POPL 2006].
+
+## 8.7 Summary
 
 | Related Work | Focus | Our Difference |
 |--------------|-------|----------------|
-| Descend | Memory safety | We do divergence safety |
+| Descend | Memory safety; no sync on conditional thread groups | We type complementary lane sets and their merge |
+| Barrier inference / Titanium `single` | Static barrier alignment across SPMD processes | We type active lanes within a warp |
+| Lucid Synchrone clocks | Complementary clocks, `merge` over time | Complementary lane sets, merge over lanes |
 | GPUVerify | External verification | We use types |
 | MPST | All parties active | We model quiescence |
 | ISPC | uniform/varying + runtime active set | We track active sets at compile time, not runtime |
 | Futhark | Avoids divergence | We embrace + type it |
 | `__shfl_sync` | Require mask (runtime) | We prove mask correct (compile-time) |
 | Cooperative Groups | Runtime group objects | We use compile-time type parameters |
-| Vulkan/SPIR-V subgroups | "Undefined if not converged" | We make diverged shuffle absent from the type |
+| Vulkan/SPIR-V subgroups | "Undefined if not converged" | Full-warp shuffle absent from a diverged warp's type |
 | AMD DPP / Intel subgroups | Hardware-masked operations | We add type-level tracking portable across vendors |
 | synccheck | Runtime detection | We prevent at compile time |
 | Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
@@ -157,5 +161,5 @@ The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single per
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |
 
-**Positioning**: The concept of tracking which lanes are active is not new — ISPC's compiler emits mask-management code (the active set itself being a runtime value), Cooperative Groups expose it at runtime via group objects, and LLVM's uniformity analysis infers it during compilation. What is new is embedding the active lane mask *in the type system* with a *complement lattice* that makes reconvergence statically verifiable and shuffle *absent from the type* (not checked, not documented as unsafe — absent). No prior work provides this compile-time guarantee. The structural analogy to session type branching motivated the design; the technical mechanism is linear typestate over a Boolean lattice of bitmasks.
+**Positioning**: The concept of tracking which lanes are active is not new — ISPC's compiler emits mask-management code (the active set itself being a runtime value), Cooperative Groups expose it at runtime via group objects, and LLVM's uniformity analysis infers it during compilation. Keeping collectives out of divergent control statically is not new either: Aiken and Gay's barrier inference and Titanium's `single` qualifier do it for SPMD barriers (§8.6), and Descend rejects synchronization on a conditionally selected block or warp (§8.1). Lucid Synchrone gives the two sides of a dynamic condition complementary clock types and merges them back, over time rather than lanes (§8.6). Within that line, warp typestate makes a warp's active-lane set a type parameter: static divergence yields sub-warps with complementary named sets in a *complement lattice*, their merge is checked against that lattice at compile time (the dynamic layer of §5 checks at run time; §6.9 lists how the Rust crate can be bypassed), and full-warp operations such as `shuffle_xor` and `ballot` are absent from a diverged warp's type. A shuffle confined to a sub-warp is typed by SHUFFLE-WITHIN (§3.3), whose mask premise the crate checks with a run-time assertion and the Lean model does not include. The structural analogy to session type branching motivated the design; the technical mechanism is linear typestate over a Boolean lattice of bitmasks.
 

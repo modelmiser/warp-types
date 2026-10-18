@@ -6,7 +6,7 @@
 
 GPU warp primitives like shuffle enable efficient communication between threads, but reading from an inactive lane produces undefined behavior. These bugs are notoriously difficult to detect—they compile successfully, may appear to work, and fail silently: NVIDIA's own reference code contains them, and a plasma physics simulation ran for months with undefined behavior that went undetected on pre-Volta hardware. State-of-the-art persistent thread programs avoid the problem by maintaining warp-uniform execution.
 
-Existing approaches track which lanes are active at runtime (ISPC's compiler-emitted masks, NVIDIA's Cooperative Groups) or detect violations after execution (compute-sanitizer). We present *warp typestate*, which embeds the active lane mask in the type system. Divergence creates sub-warps with complementary active sets; reconvergence requires type-level proof that the sets are complements. Operations requiring all lanes (shuffles) are not checked at runtime but *absent from the type* — a diverged warp has no shuffle method to call.
+Existing approaches track which lanes are active at runtime (ISPC's compiler-emitted masks, NVIDIA's Cooperative Groups) or detect violations after execution (compute-sanitizer). We present *warp typestate*, which embeds the active lane mask in the type system. Divergence creates sub-warps with complementary active sets; reconvergence requires type-level proof that the sets are complements. Operations requiring all lanes (full-warp shuffles, ballots, reductions) are *absent from the type* of a diverged warp rather than checked — it has no method to call; a shuffle confined to a sub-warp's own lanes is a separate operation whose mask must preserve the active set.
 
 We prove our type system sound (progress and preservation via Lean 4 mechanization), implement it as a Rust library with zero runtime overhead, and demonstrate that it catches real bugs from NVIDIA's cuda-samples and CUB library at compile time. The result is strictly more permissive than the divergence-prohibition approach (which maintains warp-uniform execution) while being strictly safer than CUDA's `__shfl_sync` (which defers mask correctness to runtime).
 
@@ -29,7 +29,7 @@ We prove our type system sound (progress and preservation via Lean 4 mechanizati
 
 ## Key Contributions
 
-1. **Novel type system for GPU divergence** — First to type active lane masks, preventing undefined behavior from reading inactive lanes.
+1. **Type system for GPU divergence** — A warp's active-lane set is a type: complementary sub-warps on divergence, a complement-checked merge, and no full-warp shuffle on a diverged warp, preventing undefined behavior from reading inactive lanes. Prior static work on collectives under divergence is compared in §8.
 
 2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks, enforced by Rust's move semantics and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
 

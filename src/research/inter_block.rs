@@ -466,7 +466,7 @@ impl SessionLevel for GridLevel {
 // | Participants     | Fixed (32/64)           | Variable (1..65535)    |
 // | Failure modes    | Deadlock-free (SIMT)    | Deadlock possible      |
 //
-// The warp-level "session-typed divergence" model is novel because:
+// The warp-level "session-typed divergence" model differs from traditional MPST because:
 // 1. Divergence = some participants go quiescent (not in traditional MPST)
 // 2. Reconvergence = quiescent participants rejoin
 // 3. Implicit sync means no deadlock (if divergence matches)

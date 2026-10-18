@@ -313,6 +313,10 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
+### Public Intrinsics
+
+The `GpuShuffle` trait, re-exported in the prelude, exposes the raw shuffle intrinsics as safe methods on plain values (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, …). Calling them needs no `Warp` handle, so it bypasses the typestate entirely. The guarantee covers programs that shuffle only through `Warp` methods.
+
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
