@@ -75,10 +75,12 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let body = &input.block;
     let vis = &input.vis;
     let attrs = &input.attrs;
+    let thin_asserts = thin_pointer_asserts(&input.sig);
 
     // Generate the kernel function for nvptx64
     // Preserve outer attributes (doc comments, #[cfg], etc.)
     let expanded = quote! {
+        #(#thin_asserts)*
         #(#attrs)*
         // `extern "ptx-kernel"` entry points are invoked by the GPU driver at
         // launch, never by Rust code, so `missing_safety_doc` asks the author to
@@ -92,6 +94,39 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+/// For every raw-pointer parameter, a `const` assertion that the pointer is
+/// thin at the TYPE level. `is_thin_pointee` is syntactic: it cannot see through
+/// a type alias, so `type S = [i32]; fn k(p: *mut S)` passed it as a path type
+/// (found by the 2026-10-18 cross-vendor panel). `size_of::<*mut S>()` is
+/// evaluated after name resolution, so the alias case fails to compile with a
+/// named message instead of corrupting the kernel parameter space at launch.
+/// Post-monomorphization is not an issue here: kernels are never generic.
+fn thin_pointer_asserts(sig: &syn::Signature) -> Vec<proc_macro2::TokenStream> {
+    sig.inputs
+        .iter()
+        .filter_map(|p| match p {
+            FnArg::Typed(pt) if matches!(&*pt.ty, syn::Type::Ptr(_)) => Some(pt),
+            _ => None,
+        })
+        .map(|pt| {
+            let ty = &pt.ty;
+            let pat = &pt.pat;
+            let msg = format!(
+                "warp_kernel: parameter `{}` has type `{}`, which is a fat pointer (16 bytes) — \
+                 probably a type alias to a slice, `str` or trait object; the kernel parameter ABI needs a thin pointer",
+                quote!(#pat),
+                quote!(#ty)
+            );
+            quote! {
+                const _: () = assert!(
+                    ::core::mem::size_of::<#ty>() == ::core::mem::size_of::<usize>(),
+                    #msg
+                );
+            }
+        })
+        .collect()
 }
 
 /// Validate a full kernel signature: qualifiers, generics, return type, params.
@@ -320,6 +355,23 @@ mod tests {
         // the pointed-to fat pointer.
         let msg = err_msg("fn k(pp: *mut *mut [i32]) {}");
         assert!(msg.contains("fat pointer"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn emits_size_assert_for_each_pointer_param() {
+        let sig: syn::ItemFn =
+            syn::parse_str("fn k(a: *mut i32, n: u32, b: *const u8) {}").unwrap();
+        let asserts = thin_pointer_asserts(&sig.sig);
+        assert_eq!(asserts.len(), 2, "one const assert per pointer parameter");
+        let text = asserts[0].to_string();
+        assert!(text.contains("size_of"), "{text}");
+        assert!(text.contains("usize"), "{text}");
+        assert!(text.contains("fat pointer"), "{text}");
+        assert!(
+            text.contains("parameter `a`"),
+            "names the parameter: {text}"
+        );
+        assert!(asserts[1].to_string().contains("parameter `b`"));
     }
 
     // ── Return types ──

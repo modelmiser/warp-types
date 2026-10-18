@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased] — 0.4.2
+
+- warp-types-builder 0.3.3: `build.rs` support emits `cargo:rerun-if-changed` for the kernel crate's path dependencies
+  (a change under `warp-types/src` now rebuilds the PTX; a stale `kernels.ptx` was run twice on 2026-10-18 before this).
+- **Warp collectives are `convergent`.** The nvptx primitives (`shfl.sync.{bfly,down,up,idx}`, `vote.sync.ballot`,
+  `bar.warp.sync`) were `asm!` blocks, which LLVM treats as opaque side-effecting calls that are *not* `convergent`:
+  a transformation that adds a control dependency (jump threading, tail duplication, loop unswitching) may legally
+  duplicate such a call into divergent blocks — the hazard this crate exists to rule out. They now call the
+  `llvm.nvvm.*` intrinsics by `#[link_name]`, which LLVM declares `convergent nocallback nounwind
+  memory(inaccessiblemem: readwrite)`; the NVPTX backend emits the same instructions with constant operands folded.
+  `scripts/check-ptx-operands.sh` now also reads the LLVM IR and fails if any warp collective is inline asm or its
+  intrinsic is not declared `convergent`. The `.reg .pred`/`setp` ballot workaround is gone (`bool` lowers to `i1`).
+  Device build gains `#![feature(link_llvm_intrinsics)]` (compiler-internal; nightly was already required). Raised
+  by the 2026-10-18 panel (Opus seat, "not asked").
+- **`#[warp_kernel]` rejects fat pointers hidden behind type aliases.** The thin-pointee check is syntactic and saw
+  `type S = [i32]; p: *mut S` as a path type (panel, GPT seat). The macro now also emits
+  `const _: () = assert!(size_of::<*mut S>() == size_of::<usize>())` per pointer parameter, so the alias case fails to
+  compile with a named message; a device-side negative probe guards it.
+
 ## [0.4.1] — 2026-10-18
 
 - Release corresponding to tag `v0.4.1`, Zenodo DOI 10.5281/zenodo.23456256 (concept DOI 10.5281/zenodo.19040615); crates.io `warp-types 0.4.1`, `warp-types-builder 0.3.2`.

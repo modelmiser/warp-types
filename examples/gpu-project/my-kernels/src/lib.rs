@@ -195,7 +195,7 @@ pub fn bitonic_sort_i32(data: *mut i32) {
 }
 
 // ============================================================================
-// Kernel 5: ballot — verifies the setp-based workaround for the missing
+// Kernel 5: ballot — exercises `Warp<All>::ballot` (llvm.nvvm.vote.ballot.sync since 0.4.2; before that a setp-based workaround for the missing
 // `pred` register class. Each lane votes (tid < 16); expected mask 0x0000FFFF.
 //
 // This is the runtime-verification kernel for the 2026-03-29 unblock commit

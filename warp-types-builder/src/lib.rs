@@ -486,6 +486,68 @@ fn emit_rerun_if_changed(kernel_dir: &Path) {
     if src_dir.exists() {
         emit_rerun_recursive(&src_dir);
     }
+
+    // Path dependencies of the kernel crate (warp-types itself, in the worked
+    // example) are compiled INTO the PTX, so a change there must rebuild it too.
+    // Without this the example ran a stale kernels.ptx twice on 2026-10-18 after
+    // src/gpu.rs changed: cargo saw nothing under my-kernels/ move and reused
+    // the old artifact (CUDA_ERROR_INVALID_PTX once the ABI had shifted).
+    for dep in path_dependencies(kernel_dir) {
+        println!(
+            "cargo:rerun-if-changed={}",
+            dep.join("Cargo.toml").display()
+        );
+        let dep_src = dep.join("src");
+        if dep_src.exists() {
+            emit_rerun_recursive(&dep_src);
+        }
+    }
+}
+
+/// `path = "..."` dependencies named in the kernel crate's Cargo.toml, resolved
+/// against the kernel directory. A minimal TOML scan (no parser dependency):
+/// any `path = "<p>"` inside a `[dependencies]`, `[dev-dependencies]` or
+/// `[build-dependencies]` table, or a `[dependencies.<name>]` table, or an
+/// inline `{ path = "<p>" }` on a dependency line.
+fn path_dependencies(kernel_dir: &Path) -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(kernel_dir.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let mut in_deps = false;
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            let t = line.trim_matches(|c| c == '[' || c == ']');
+            in_deps = t == "dependencies"
+                || t == "dev-dependencies"
+                || t == "build-dependencies"
+                || t.starts_with("dependencies.")
+                || t.starts_with("dev-dependencies.")
+                || t.starts_with("build-dependencies.")
+                || t.starts_with("target.") && t.contains("dependencies");
+            continue;
+        }
+        if !in_deps {
+            continue;
+        }
+        if let Some(idx) = line.find("path") {
+            let rest = &line[idx + 4..];
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('"') {
+                    if let Some(end) = rest.find('"') {
+                        let p = kernel_dir.join(&rest[..end]);
+                        if !out.contains(&p) {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn emit_rerun_recursive(dir: &Path) {
@@ -837,6 +899,30 @@ mod tests {
         std::fs::write(&sibling, "sibling").unwrap();
         let picked = find_ptx_file(&target_dir, &kernel_dir).unwrap();
         assert_eq!(picked, fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn path_dependencies_are_found_in_all_dependency_table_shapes() {
+        let dir = std::env::temp_dir().join(format!(
+            "warp-types-builder-pathdeps-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"k\"\nversion = \"0.0.0\"\npath = \"not-a-dep\"\n\n\
+             [dependencies]\nwarp-types = { path = \"../../\" }\nother = \"1.0\"\n\n\
+             [dependencies.local]\npath = \"../local\"\nfeatures = [\"x\"]\n\n\
+             [profile.release]\nopt-level = 3\n",
+        )
+        .unwrap();
+        let deps = path_dependencies(&dir);
+        assert_eq!(deps, vec![dir.join("../../"), dir.join("../local")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

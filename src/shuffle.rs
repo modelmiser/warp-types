@@ -300,6 +300,7 @@ impl Warp<All> {
     /// GPU integer arithmetic wraps on overflow (two's complement, no trap).
     /// This variant uses `wrapping_add` to match that behavior exactly.
     /// Hardware-verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`.
+    #[inline]
     pub fn reduce_sum_wrapping_i32(&self, data: PerLane<i32>) -> Uniform<i32> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
@@ -315,6 +316,7 @@ impl Warp<All> {
     }
 
     /// Wrapping reduce-sum for `u32` — GPU hardware overflow semantics.
+    #[inline]
     pub fn reduce_sum_wrapping_u32(&self, data: PerLane<u32>) -> Uniform<u32> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
@@ -330,6 +332,7 @@ impl Warp<All> {
     }
 
     /// Wrapping reduce-sum for `i64` — GPU hardware overflow semantics.
+    #[inline]
     pub fn reduce_sum_wrapping_i64(&self, data: PerLane<i64>) -> Uniform<i64> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
@@ -345,6 +348,7 @@ impl Warp<All> {
     }
 
     /// Wrapping reduce-sum for `u64` — GPU hardware overflow semantics.
+    #[inline]
     pub fn reduce_sum_wrapping_u64(&self, data: PerLane<u64>) -> Uniform<u64> {
         let mut val = data.get();
         #[cfg(feature = "warp64")]
@@ -365,8 +369,13 @@ impl Warp<All> {
     /// Requires `Warp<All>` because reading predicates from inactive lanes
     /// is undefined behavior.
     ///
-    /// On GPU (nvptx64): calls `vote.sync.ballot.b32` via PTX inline asm.
+    /// On GPU (nvptx64): `vote.sync.ballot.b32` via the convergent `llvm.nvvm.vote.ballot.sync`
+    /// intrinsic. `#[inline]` because this is a non-generic method: without it the
+    /// kernel crate gets an `.extern .func` the single-file PTX link cannot resolve
+    /// (`CUDA_ERROR_INVALID_PTX` at JIT; hit on 2026-10-18 when the body stopped
+    /// being inline asm).
     /// On CPU: returns mask with bit 0 set if predicate is true (single-thread identity).
+    #[inline]
     pub fn ballot(&self, predicate: PerLane<bool>) -> BallotResult {
         #[cfg(target_arch = "nvptx64")]
         {

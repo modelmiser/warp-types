@@ -117,6 +117,42 @@ pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
     result
 }
 
+// ----------------------------------------------------------------------------
+// NVVM intrinsics for the warp collectives.
+//
+// Until 0.4.2 these were `asm!` blocks. LLVM treats inline asm as an opaque
+// side-effecting call that is NOT `convergent`, so a transformation that adds a
+// control dependency to it (jump threading, tail duplication, loop unswitching)
+// is legal, and a `shfl.sync` duplicated into divergent blocks is exactly the
+// hazard the crate exists to rule out. The `llvm.nvvm.*` intrinsics are declared
+// `convergent` by LLVM (`#print`ed in the emitted IR as
+// `convergent nocallback nounwind memory(inaccessiblemem: readwrite)`), and the
+// NVPTX backend lowers them to the same `shfl.sync` / `vote.sync.ballot` /
+// `bar.warp.sync` instructions, with constant operands folded into the
+// instruction. `scripts/check-ptx-operands.sh` asserts both the PTX operands and
+// that every collective in the IR is a `convergent` intrinsic call.
+//
+// `bool` lowers to `i1` for `llvm.nvvm.vote.ballot.sync`, which also retires
+// the `.reg .pred` / `setp` workaround that the asm ballot needed.
+// ----------------------------------------------------------------------------
+#[cfg(target_arch = "nvptx64")]
+mod nvvm {
+    extern "C" {
+        #[link_name = "llvm.nvvm.shfl.sync.bfly.i32"]
+        pub fn shfl_sync_bfly_i32(mask: i32, a: i32, b: i32, c: i32) -> i32;
+        #[link_name = "llvm.nvvm.shfl.sync.down.i32"]
+        pub fn shfl_sync_down_i32(mask: i32, a: i32, b: i32, c: i32) -> i32;
+        #[link_name = "llvm.nvvm.shfl.sync.up.i32"]
+        pub fn shfl_sync_up_i32(mask: i32, a: i32, b: i32, c: i32) -> i32;
+        #[link_name = "llvm.nvvm.shfl.sync.idx.i32"]
+        pub fn shfl_sync_idx_i32(mask: i32, a: i32, b: i32, c: i32) -> i32;
+        #[link_name = "llvm.nvvm.vote.ballot.sync"]
+        pub fn vote_ballot_sync(mask: i32, pred: bool) -> i32;
+        #[link_name = "llvm.nvvm.bar.warp.sync"]
+        pub fn bar_warp_sync(mask: i32);
+    }
+}
+
 /// Butterfly shuffle: exchange with lane (lane_id XOR lane_mask).
 /// PTX: `shfl.sync.bfly.b32`
 ///
@@ -154,17 +190,7 @@ pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_bfly_i32(mask: u32, val: i32, lane_mask: u32) -> i32 {
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.bfly.b32 {result}, {val}, {lane_mask}, 31, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            lane_mask = in(reg32) lane_mask,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_bfly_i32(mask as i32, val, lane_mask as i32, 31) }
 }
 
 /// Shuffle down: lane[i] reads from lane[i + delta].
@@ -182,17 +208,7 @@ pub unsafe fn shfl_sync_bfly_i32(mask: u32, val: i32, lane_mask: u32) -> i32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_down_i32(mask: u32, val: i32, delta: u32) -> i32 {
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.down.b32 {result}, {val}, {delta}, 31, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            delta = in(reg32) delta,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_down_i32(mask as i32, val, delta as i32, 31) }
 }
 
 /// Shuffle up: lane[i] reads from lane[i - delta].
@@ -211,17 +227,7 @@ pub unsafe fn shfl_sync_down_i32(mask: u32, val: i32, delta: u32) -> i32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_up_i32(mask: u32, val: i32, delta: u32) -> i32 {
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.up.b32 {result}, {val}, {delta}, 0, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            delta = in(reg32) delta,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_up_i32(mask as i32, val, delta as i32, 0) }
 }
 
 /// Indexed shuffle: lane[i] reads from lane[src_lane].
@@ -240,17 +246,7 @@ pub unsafe fn shfl_sync_up_i32(mask: u32, val: i32, delta: u32) -> i32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn shfl_sync_idx_i32(mask: u32, val: i32, src_lane: u32) -> i32 {
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.idx.b32 {result}, {val}, {src_lane}, 31, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            src_lane = in(reg32) src_lane,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_idx_i32(mask as i32, val, src_lane as i32, 31) }
 }
 
 /// Butterfly shuffle confined to a segment of `width` lanes.
@@ -277,18 +273,7 @@ pub unsafe fn shfl_sync_bfly_i32_width(mask: u32, val: i32, lane_mask: u32, widt
         "shfl_sync_bfly width {width} must be a power of two in 4..=32"
     );
     let c = ((32 - width) << 8) | 0x1F;
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.bfly.b32 {result}, {val}, {lane_mask}, {c}, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            lane_mask = in(reg32) lane_mask,
-            c = in(reg32) c,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_bfly_i32(mask as i32, val, lane_mask as i32, c as i32) }
 }
 
 /// Shuffle down confined to a segment of `width` lanes.
@@ -312,18 +297,7 @@ pub unsafe fn shfl_sync_down_i32_width(mask: u32, val: i32, delta: u32, width: u
         "shfl_sync_down width {width} must be a power of two in 4..=32"
     );
     let c = ((32 - width) << 8) | (width - 1);
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.down.b32 {result}, {val}, {delta}, {c}, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            delta = in(reg32) delta,
-            c = in(reg32) c,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_down_i32(mask as i32, val, delta as i32, c as i32) }
 }
 
 /// Shuffle up confined to a segment of `width` lanes.
@@ -346,31 +320,13 @@ pub unsafe fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32
         "shfl_sync_up width {width} must be a power of two in 4..=32"
     );
     let c = (32 - width) << 8;
-    let result: i32;
-    unsafe {
-        core::arch::asm!(
-            "shfl.sync.up.b32 {result}, {val}, {delta}, {c}, {mask};",
-            result = out(reg32) result,
-            val = in(reg32) val,
-            delta = in(reg32) delta,
-            c = in(reg32) c,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::shfl_sync_up_i32(mask as i32, val, delta as i32, c as i32) }
 }
 
 /// Ballot: each thread votes, returns bitmask of votes.
-/// PTX: `vote.sync.ballot.b32`
-///
-/// Works around Rust's missing `pred` register class by declaring `.reg .pred`
-/// inside the asm block and building the predicate with `setp`. Everything
-/// crossing the asm boundary goes through `reg32`. Same pattern as Rust-CUDA's
-/// `cuda_std`.
-///
-/// This was described as a "setp/selp workaround" in five places; there is no
-/// `selp`. Only the inbound direction needs converting — `vote.sync.ballot.b32`
-/// already writes a `.b32` register, so nothing converts back.
+/// PTX: `vote.sync.ballot.b32`, via `llvm.nvvm.vote.ballot.sync` (`bool` lowers
+/// to the `i1` predicate operand, so the `.reg .pred` / `setp` workaround the
+/// asm version needed is gone, and the call is `convergent`).
 ///
 /// # Safety
 ///
@@ -386,21 +342,7 @@ pub unsafe fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn ballot_sync(mask: u32, predicate: bool) -> u32 {
-    let result: u32;
-    let pred_u32 = predicate as u32;
-    unsafe {
-        core::arch::asm!(
-            "{{",
-            ".reg .pred %p_vote;",
-            "setp.ne.u32 %p_vote, {pred_in}, 0;",
-            "vote.sync.ballot.b32 {result}, %p_vote, {mask};",
-            "}}",
-            pred_in = in(reg32) pred_u32,
-            result = out(reg32) result,
-            mask = in(reg32) mask,
-        );
-    }
-    result
+    unsafe { nvvm::vote_ballot_sync(mask as i32, predicate) as u32 }
 }
 
 /// Warp barrier synchronization.
@@ -414,12 +356,7 @@ pub unsafe fn ballot_sync(mask: u32, predicate: bool) -> u32 {
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn syncwarp(mask: u32) {
-    unsafe {
-        core::arch::asm!(
-            "bar.warp.sync {mask};",
-            mask = in(reg32) mask,
-        );
-    }
+    unsafe { nvvm::bar_warp_sync(mask as i32) }
 }
 
 /// Thread fence (global memory ordering).

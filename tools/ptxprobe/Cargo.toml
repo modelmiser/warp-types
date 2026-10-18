@@ -11,9 +11,12 @@ crate-type = ["rlib"]
 [features]
 # Instantiates Warp<Empty>::shuffle_xor_within from an .entry: the device build must FAIL (E0080).
 empty-probe = []
+# A #[warp_kernel] with `type S = [i32]; p: *mut S`: the device build must FAIL (fat pointer).
+alias-probe = []
 
 [dependencies]
 warp-types = { path = "../.." }
+warp-types-kernel = { path = "../../warp-types-kernel" }
 
 [profile.release]
 opt-level = 3

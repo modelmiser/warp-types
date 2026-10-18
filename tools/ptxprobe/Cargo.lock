@@ -16,6 +16,7 @@ name = "ptxprobe"
 version = "0.0.0"
 dependencies = [
  "warp-types",
+ "warp-types-kernel",
 ]
 
 [[package]]

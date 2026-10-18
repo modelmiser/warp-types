@@ -149,11 +149,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // === Test 5: ballot_lower_half — verifies the setp-based workaround ===
+    // === Test 5: ballot_lower_half — ballot via the convergent vote intrinsic ===
     // The 2026-03-29 unblock commit (b6b737622) routes ballot through PTX
     // inline asm using .reg .pred inside a scope block, crossing the
     // Rust↔PTX boundary as reg32 only. This kernel exercises that path.
-    println!("=== Test 5: ballot_lower_half (setp workaround) ===");
+    println!("=== Test 5: ballot_lower_half (vote.sync.ballot) ===");
     {
         let dev_out = stream.memcpy_stod(&[0u32; WARP_SIZE])?;
 

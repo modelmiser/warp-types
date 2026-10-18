@@ -53,6 +53,18 @@ pub unsafe extern "ptx-kernel" fn probe_up_i64(out: *mut i64) {
     *out.add(tid as usize) = v;
 }
 
+/// `Warp<All>::ballot` and the non-generic wrapping reduce: both must be inlined
+/// into the entry — the script fails on any `.extern .func` in the PTX, which is
+/// what a non-inlined cross-crate device function looks like.
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_ballot_and_wrapping(out: *mut u32) {
+    let w: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let b = w.ballot(data::PerLane::new(tid < 16)).mask_u32().get();
+    let r = w.reduce_sum_wrapping_u32(data::PerLane::new(tid)).get();
+    *out.add(tid as usize) = b ^ r;
+}
+
 /// Negative probe (feature `empty-probe`): `Warp<Empty>` has no lanes, and the
 /// inline const assert in `shuffle_xor_within` must reject this instantiation at
 /// codegen. The script expects this build to fail with E0080.
@@ -63,4 +75,17 @@ pub unsafe extern "ptx-kernel" fn probe_within_empty(out: *mut i32) {
     let tid = warp_types::gpu::thread_id_x();
     let v = w.shuffle_xor_within(data::PerLane::new(tid as i32), 0).get();
     *out.add(tid as usize) = v;
+}
+
+/// Negative probe (feature `alias-probe`): a fat pointer hidden behind a type
+/// alias. `#[warp_kernel]`'s syntactic check sees a path type; its `const` size
+/// assertion must reject it at compile time.
+#[cfg(feature = "alias-probe")]
+mod alias_probe {
+    #[allow(dead_code)]
+    type Hidden = [i32];
+    #[warp_types_kernel::warp_kernel]
+    pub fn probe_alias(p: *mut Hidden) {
+        let _ = p;
+    }
 }

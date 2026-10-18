@@ -50,6 +50,11 @@
 // `warp-types-kernel`'s macro into the *user's* crate, which declares the
 // feature itself (see `examples/gpu-project/my-kernels/src/lib.rs`).
 #![cfg_attr(target_arch = "nvptx64", feature(asm_experimental_arch))]
+// The warp collectives call `llvm.nvvm.*` intrinsics by `#[link_name]` so that
+// LLVM sees them as `convergent` (inline asm is not) — see `gpu.rs`. That needs
+// the compiler-internal `link_llvm_intrinsics` feature on the device build only.
+#![cfg_attr(target_arch = "nvptx64", feature(link_llvm_intrinsics))]
+#![cfg_attr(target_arch = "nvptx64", allow(internal_features))]
 // dead_code is allowed only in the research module (experimental prototypes).
 // Core modules should not have dead code — if it's unused, remove it or
 // mark it #[allow(dead_code)] individually with a justification comment.
