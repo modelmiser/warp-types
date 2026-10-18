@@ -49,6 +49,5 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
 All kernels compiled from cargo, type-checked at build time,
 and executed on real GPU hardware with correct results.
 
---- compute-sanitizer --tool memcheck ---
-
---- compute-sanitizer --tool synccheck ---
+# compute-sanitizer: installed on this workstation but its injection library (libsanitizer-collection.so) is missing,
+# so memcheck/synccheck were NOT run here. The RunPod H200 step (reproduce/runpod-h200.sh step 5d) runs both on this binary.
