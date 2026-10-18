@@ -157,7 +157,7 @@ echo "" | tee -a "$RESULTS"
 # issues a sub-warp membermask, and the one the 2026-10-18 audit found unsound
 # before the lane guard. Then compute-sanitizer over the same binary where the
 # tool exists: memcheck + synccheck is the null result the paper cites.
-echo "=== Step 5d: examples/gpu-project (7 kernels via cudarc) ===" | tee -a "$RESULTS"
+echo "=== Step 5d: examples/gpu-project (8 kernels via cudarc) ===" | tee -a "$RESULTS"
 cd /tmp/warp-types/examples/gpu-project
 cargo run --release 2>&1 | grep -E "GPU:|=== Test|Result:|PASS|FAIL|error|panicked" | tee -a "$RESULTS"
 if command -v compute-sanitizer &>/dev/null; then

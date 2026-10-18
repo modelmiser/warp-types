@@ -2,11 +2,20 @@
 
 ## [Unreleased] — 0.4.3
 
-- **`DynWarp` scalar collectives do the work.** `shuffle_xor_scalar`, `shuffle_down_scalar`, `reduce_sum_scalar` and
-  `broadcast_scalar` performed the all-active check and then returned their input (`reduce_sum_scalar`: `value × width`)
-  — a prototype that was a silent wrong result on the device, behind an `Ok`. They now issue the full-warp
-  `shfl.sync` after the check (CPU: identity, as for `Warp<All>`). `examples/gpu-project` Test 7 runs
-  `shuffle_xor_scalar` on hardware. (0.4.1 panel, Opus "not asked" #2.)
+- **`DynWarp` scalar collectives do the work (nvptx64, 32-lane).** `shuffle_xor_scalar`, `shuffle_down_scalar`,
+  `reduce_sum_scalar` and `broadcast_scalar` performed the all-active check and then returned their input
+  (`reduce_sum_scalar`: `value × width`) — a prototype that was a silent wrong result on the device, behind an `Ok`.
+  They now issue the full-warp `shfl.sync` after the check (CPU: identity, as for `Warp<All>`; the butterfly uses
+  `reduce_add`'s stage order; `broadcast_scalar` now specifies lane 0). The check also requires the handle's width
+  to be this build's warp width, as `ascribe` does — a `DynWarp::all_64()` on a 32-lane build is refused instead of
+  running a sixth butterfly stage. `ballot(&[bool; 32])` remains a CPU model (packs the supplied array; no device
+  vote) and says so. `examples/gpu-project` Tests 7 and 8 run the success and error paths on hardware. (0.4.1 panel,
+  Opus "not asked" #2; 0.4.3 panel Q1–Q3.)
+- **`examples/*.rs` say what they are; the real types get the same four bugs as doctests.** The eight examples are
+  self-contained re-implementations with their own toy `Warp` (the 0.4.1 research review's R3); their headers now say
+  so, and `src/lib.rs` ("Real bugs against the real types") checks cuda-samples#398, PIConGPU#2514, CUB/CCCL#854 and
+  LLVM#155682 against the shipped `Warp<S>` as `compile_fail,E0599` doctests, with two passing shapes marked as
+  illustrative where they are not the upstream fix. Doc tests 40 → 46 (22 compile-fail).
 
 ## [0.4.2] — 2026-10-18
 

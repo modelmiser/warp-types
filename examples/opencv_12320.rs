@@ -3,9 +3,10 @@
 //! **Self-contained re-implementation.** This file defines its own minimal `Warp` /
 //! `ActiveSet` types so the bug and its fix can be read in one place; it does not
 //! import the crate, and `cargo test --examples` therefore checks the pattern, not
-//! the shipped types. The same pattern is checked against the real `warp_types`
-//! API by the `compile_fail` doctests in `src/lib.rs` ("Real bugs against the
-//! real types") and throughout `src/`.
+//! the shipped types. The shipped types are checked by the crate's own
+//! `compile_fail` doctests throughout `src/`; four of the surveyed shapes
+//! (cuda-samples#398, PIConGPU#2514, CUB/CCCL#854, LLVM#155682) are written
+//! against the real API in `src/lib.rs` ("Real bugs against the real types").
 //!
 //! Demonstrates how warp typestate catches a real deadlock bug from
 //! OpenCV's GPU module.

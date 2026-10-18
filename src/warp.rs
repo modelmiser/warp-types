@@ -71,7 +71,9 @@ impl Warp<crate::active_set::All> {
     ///    after a diverge or inside a raw branch. Call it once, at kernel entry.
     /// 2. Gradual ascription: `DynWarp::{all, all_64, from_mask_32,
     ///    from_mask_64, from_mask}(…).ascribe::<S>()` checks `S` only against
-    ///    the caller's own mask, so it can produce any `Warp<S>` anywhere.
+    ///    the caller's own mask, so it can produce any `Warp<S>` anywhere; and
+    ///    `DynWarp`'s own collectives (`shuffle_xor_scalar` …) trust the same
+    ///    claim after their runtime check (`require_all`: stored masks only).
     ///    `DynWarp::from_static(warp)` consumes a real handle and is sound.
     /// 3. Merge checks set shape, not provenance: `Even` from one
     ///    `kernel_entry()` handle and `Odd` from another merge without error.

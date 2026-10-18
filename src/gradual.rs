@@ -252,19 +252,29 @@ impl DynWarp {
     // Operations that require All lanes (runtime-checked)
     // ========================================================================
 
-    /// The all-active check every collective below performs. On success it is
-    /// the same witness `Warp<All>` carries statically: this handle claims every
-    /// lane of the warp is converged and executing the call. It is a *claim*
-    /// (`DynWarp` is a trusted entry point, see `Warp::kernel_entry`), so the
-    /// full-warp membermask the collectives then use is only as sound as the
-    /// caller's mask.
+    /// The check every collective below performs: (1) this handle's width is this
+    /// build's warp width (`All::MASK`), as `ascribe` also requires — a 64-lane
+    /// handle on a 32-lane build would otherwise pass and run the 32-lane
+    /// intrinsics with a sixth butterfly stage, a wrong sum behind an `Ok`;
+    /// (2) `active_mask == full_mask`. Both compare STORED masks; nothing here
+    /// observes the hardware or which lanes execute. On success the handle makes
+    /// the same *claim* `Warp<All>` carries statically — every lane converged and
+    /// executing — and the collectives trust it exactly as they trust `Warp<All>`
+    /// (`DynWarp` is a trusted entry point; see `Warp::kernel_entry`).
     #[inline]
     fn require_all(&self, operation: &'static str) -> Result<(), WarpError> {
-        let full = self.full_mask;
-        if self.active_mask != full {
+        let build_full = crate::active_set::All::MASK;
+        if self.full_mask != build_full {
+            return Err(WarpError {
+                operation: "width mismatch: handle width is not this build's warp width",
+                expected_mask: build_full,
+                actual_mask: self.full_mask,
+            });
+        }
+        if self.active_mask != self.full_mask {
             return Err(WarpError {
                 operation,
-                expected_mask: full,
+                expected_mask: self.full_mask,
                 actual_mask: self.active_mask,
             });
         }
@@ -295,24 +305,25 @@ impl DynWarp {
         Ok(unsafe { value.gpu_shfl_down(delta) })
     }
 
-    /// Sum reduction — runtime check for all-active, then a butterfly over the
-    /// warp width (`log2(width)` XOR stages). On the CPU the identity shuffle
-    /// makes this `value * warp_width`, as `Warp<All>::reduce_add`; it uses
-    /// standard `+` (debug overflow panics) like that method.
+    /// Sum reduction — the checks above, then the same butterfly as
+    /// `Warp<All>::reduce_add`: XOR stages `width/2 … 1` in that order, so a debug
+    /// overflow panics at the same stage. On the CPU the identity shuffle makes
+    /// this `value * warp_width` (32, or 64 on a `warp64` build).
     #[inline]
     pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
         self.require_all("reduce_sum")?;
         let stages = self.full_mask.count_ones().trailing_zeros();
         let mut v = value;
-        for i in 0..stages {
+        for i in (0..stages).rev() {
             // SAFETY: as in `shuffle_xor_scalar`.
             v += unsafe { v.gpu_shfl_xor(1 << i) };
         }
         Ok(v)
     }
 
-    /// Broadcast lane 0's value — runtime check for all-active, then the
-    /// full-warp `shfl.sync.idx` from lane 0 (CPU: identity).
+    /// Broadcast lane 0's value — the checks above, then the full-warp
+    /// `shfl.sync.idx` from lane 0 (CPU: identity). The source lane is specified
+    /// as 0 since 0.4.3; before, the method returned its input and named no lane.
     #[inline]
     pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
         self.require_all("broadcast")?;
@@ -320,7 +331,10 @@ impl DynWarp {
         Ok(unsafe { value.gpu_shfl_idx(0) })
     }
 
-    /// Ballot — runtime check for all-active.
+    /// Ballot — runtime check for all-active, then a **CPU model**: the result is
+    /// the supplied `[bool; 32]` packed into a mask by this lane. Unlike the four
+    /// scalar collectives above it issues no device `vote.sync`; a kernel wanting
+    /// a real ballot uses `Warp<All>::ballot` (`ascribe` first).
     ///
     /// Only supports 32-lane warps. Returns an error for 64-lane warps
     /// because the `[bool; 32]` input and `u32` return type cannot represent
@@ -659,10 +673,32 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "warp64")]
     fn reduce_sum_64_lane() {
         let w = DynWarp::all_64();
         let result = w.reduce_sum_scalar(1).unwrap();
         assert_eq!(result, 64); // Not 32!
+    }
+
+    #[test]
+    #[cfg(not(feature = "warp64"))]
+    fn reduce_sum_64_lane_rejected_on_32_lane_build() {
+        // 0.4.3 panel: before the width check this passed require_all and ran a
+        // sixth butterfly stage — a 2× sum behind Ok on a 32-lane device.
+        let w = DynWarp::all_64();
+        let err = w.reduce_sum_scalar(1).unwrap_err();
+        assert!(err.operation.contains("width"), "{}", err.operation);
+        assert_eq!(err.expected_mask, All::MASK);
+        assert_eq!(err.actual_mask, 0xFFFF_FFFF_FFFF_FFFF);
+    }
+
+    #[test]
+    fn reduce_sum_stage_order_matches_reduce_add_on_cpu() {
+        // identity shuffles: doubling per stage, width/2 … 1
+        let w = DynWarp::all();
+        assert_eq!(w.reduce_sum_scalar(3).unwrap(), 3 * crate::WARP_SIZE as i32);
+        assert_eq!(w.broadcast_scalar(9).unwrap(), 9);
+        assert_eq!(w.shuffle_down_scalar(5, 1).unwrap(), 5);
     }
 
     #[test]
@@ -674,17 +710,24 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_64_lane_succeeds() {
+    fn shuffle_64_lane_width_checked() {
         let w = DynWarp::all_64();
-        assert!(w.shuffle_xor_scalar(42, 1).is_ok());
+        // succeeds only when 64 lanes IS this build's warp width
+        assert_eq!(
+            w.shuffle_xor_scalar(42, 1).is_ok(),
+            cfg!(feature = "warp64")
+        );
     }
 
     #[test]
     fn from_mask_infers_64_lane_width() {
         let w = DynWarp::from_mask(0xFFFFFFFFFFFFFFFF);
         assert_eq!(w.population(), 64);
-        // Should succeed — full_mask now auto-detected as 64-lane
-        assert!(w.shuffle_xor_scalar(42, 1).is_ok());
+        // full_mask auto-detected as 64-lane; a collective then needs a 64-lane build
+        assert_eq!(
+            w.shuffle_xor_scalar(42, 1).is_ok(),
+            cfg!(feature = "warp64")
+        );
     }
 
     #[test]

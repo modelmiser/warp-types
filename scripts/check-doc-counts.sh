@@ -28,14 +28,14 @@ word2num() {
 }
 
 # --- Collect actual counts ---
-# Unit tests are counted MAIN-CRATE-ONLY (-p warp-types) by design: 326 is the
-# figure the docs assert. The workspace lib total is 608, which no doc claims.
+# Unit tests are counted MAIN-CRATE-ONLY (-p warp-types) by design: that is the
+# figure the docs assert. The workspace lib total is larger and no doc claims it.
 UNIT=$(cargo test -p warp-types --lib --quiet 2>&1 | grep "^test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
 
 # Doc tests are counted WORKSPACE-WIDE, because that is what CI runs
 # (`cargo test --workspace --doc` in .github/workflows/ci.yml). An unscoped
-# `cargo test --doc` sees the root crate only (31) and would mark CI's real
-# number (37) as stale. One "test result:" line per crate, so sum them —
+# `cargo test --doc` sees the root crate only and would mark CI's real
+# (workspace) number as stale. One "test result:" line per crate, so sum them —
 # same shape as the EXAMPLE loop below. Only `passed` is counted; the 3
 # `ignore`d doctests are collected but never run, so they are not tests
 # that passed.
@@ -72,8 +72,8 @@ done < <(cargo test --examples --quiet 2>&1 | grep "^test result:")
 TOTAL=$((UNIT + DOC + EXAMPLE))
 
 # Main-crate doc tests, as distinct from the workspace-wide DOC above. The docs
-# quote both: 37 workspace-wide, of which 31 are the main crate's. Without an
-# actual for the 31 it was an unguarded numeral sitting next to guarded ones,
+# quote both: the workspace-wide figure and the main crate's share. Without an
+# actual for the latter it was an unguarded numeral sitting next to guarded ones,
 # which is the shape that drifts.
 DOC_MAIN=$(cargo test -p warp-types --doc --quiet 2>&1 | grep "^test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')
 DOC_MAIN=${DOC_MAIN:-0}

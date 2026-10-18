@@ -40,8 +40,11 @@
 //! let v = low.shuffle_down(data::PerLane::new(1i32), 16); // no such method on Warp<LowHalf>
 //! ```
 //!
-//! The fix the sample adopted — every lane participates, inactive lanes
-//! contribute zero — type-checks because the warp is never diverged:
+//! The shape of the fix — every lane participates and an inactive lane contributes
+//! the identity element instead of leaving the warp — type-checks because the warp
+//! is never diverged. (On the CPU model the predicate is a constant; the example
+//! file shows both fixes the issue discussed, and the repository does not record
+//! which one upstream merged.)
 //!
 //! ```
 //! use warp_types::*;
@@ -61,9 +64,11 @@
 //! let _ = evens.ballot(data::PerLane::new(true));       // no such method on Warp<Even>
 //! ```
 //!
-//! **CUB/CCCL#854** — a 16-lane logical warp shuffling with a full-warp mask. The
-//! full-warp `shuffle_xor` is absent on `Warp<LowHalf>`; the sub-warp form
-//! `shuffle_xor_within` is what a 16-lane exchange is, and it checks its mask:
+//! **CUB/CCCL#854** — a 16-lane logical warp shuffling with a full-warp mask
+//! (suspected, see §7.1 of the paper). The full-warp `shuffle_xor` is absent on
+//! `Warp<LowHalf>`. The passing block below is an *illustrative* 16-lane exchange
+//! through `shuffle_xor_within`, which checks its mask — not CUB's fix, which is a
+//! scan and does not go through this API:
 //!
 //! ```compile_fail,E0599
 //! use warp_types::*;

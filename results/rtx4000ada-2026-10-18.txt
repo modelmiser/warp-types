@@ -1,8 +1,8 @@
-# examples/gpu-project on the local workstation, 2026-10-18T19:00Z
-# tree: 3196f28e2 (committed; 0 dirty paths under examples/gpu-project+src)
+# examples/gpu-project on the local workstation, 2026-10-18T19:13Z
+# tree: d6016f2ea + the 0.4.3 panel-fix working tree (committed as the next commit)
 # rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 # driver: 580.173.02 cuda: 12.0, V12.0.140
-# 0.4.3: warp collectives via llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot; Test 7 = DynWarp runtime-checked shuffle issuing the real shfl.sync.
+# 0.4.3: warp collectives via llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot; Tests 7–8 = DynWarp runtime-checked shuffle (success and error paths) issuing / refusing the real shfl.sync.
 # Test 6 checks the FIXED semantics of shuffle_xor_within (odd lanes return their input); the pre-0.4.1 behaviour was undefined and is not witnessed by a value test.
 
 ╔══════════════════════════════════════════════════════════╗
@@ -49,6 +49,10 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
 
 === Test 7: dyn_shuffle_xor (gradual API, runtime-checked, real shuffle) ===
   Every lane: tid ^ 1
+  Result:    PASS
+
+=== Test 8: dyn_shuffle_xor_partial (gradual API, error path) ===
+  Mask 0x0000FFFF: every lane gets Err → -1 sentinel
   Result:    PASS
 
 All kernels compiled from cargo, type-checked at build time,

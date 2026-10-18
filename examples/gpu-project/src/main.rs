@@ -242,6 +242,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // === Test 8: the gradual API refuses a partial mask on the device ===
+    println!("=== Test 8: dyn_shuffle_xor_partial (gradual API, error path) ===");
+    {
+        let dev_out = stream.memcpy_stod(&[7i32; WARP_SIZE])?;
+        unsafe {
+            stream
+                .launch_builder(&k.dyn_shuffle_xor_partial)
+                .arg(&dev_out)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        let result = stream.memcpy_dtov(&dev_out)?;
+        let pass = result.iter().all(|&v| v == -1);
+        println!("  Mask 0x0000FFFF: every lane gets Err → -1 sentinel");
+        println!("  Result:    {}", if pass { "PASS" } else { "FAIL" });
+        if !pass {
+            println!("  Got:       {:?}", result);
+        }
+    }
+    println!();
+
     println!("All kernels compiled from cargo, type-checked at build time,");
     println!("and executed on real GPU hardware with correct results.");
 

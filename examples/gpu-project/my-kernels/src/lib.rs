@@ -252,3 +252,16 @@ pub fn dyn_shuffle_xor(out: *mut i32) {
     let v = w.shuffle_xor_scalar(tid as i32, 1).unwrap_or(-1);
     *out.add(tid as usize) = v;
 }
+
+// ============================================================================
+// Kernel 8: the gradual API's ERROR path on the device. A partial mask must be
+// refused before any shfl.sync is issued; every lane writes the -1 sentinel.
+// ============================================================================
+
+#[warp_kernel]
+pub fn dyn_shuffle_xor_partial(out: *mut i32) {
+    let tid = warp_types::gpu::thread_id_x();
+    let w = DynWarp::from_mask_32(0x0000_FFFF);
+    let v = w.shuffle_xor_scalar(tid as i32, 1).unwrap_or(-1);
+    *out.add(tid as usize) = v;
+}
