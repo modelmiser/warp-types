@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — 0.4.1
+## [0.4.1] — 2026-10-18
 
 - **Soundness: `shuffle_xor_within` now guards its own execution.** `diverge_*` emits no branch, so after
   `diverge_even_odd()` every lane still runs the code that follows. The method issued `shfl.sync` with membermask

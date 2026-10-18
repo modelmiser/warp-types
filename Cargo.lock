@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "warp-types"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "warp-types-kernel",
  "warp-types-macros",
