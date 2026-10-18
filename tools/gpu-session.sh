@@ -33,6 +33,7 @@ GPU_DEFAULT="NVIDIA RTX 4000 Ada Generation"   # ~$0.20/hr community; compute 8.
 # runs, gpu_launcher assert exercise, gpu-feature regression — runs on the Ada,
 # or on this workstation for free.
 IMAGE="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+STATE="${STATE:-$PWD/target/gpu-session-pod.json}"   # last create response (id, ssh command)
 # CLOUD_TYPE=SECURE when COMMUNITY has no instances (2026-10-18: no community H200 SXM; secure $5.29/hr).
 
 die() { echo "gpu-session: $*" >&2; exit 1; }
@@ -77,13 +78,17 @@ cmd_down() {
 cmd_up() {
     local gpu="${1:-$GPU_DEFAULT}"
     echo "creating pod: $gpu  (billing starts now)"
+    # The create response is the ONLY place the ssh command is reported (`pod list`
+    # has no "ssh" field: 2026-10-18 a run created a $5.29/hr pod, KeyError'd on
+    # it, ran nothing, terminated). Keep it on disk for cmd_run.
+    mkdir -p "$(dirname "$STATE")"
     runpodctl pod create \
         --gpu-id "$gpu" --image "$IMAGE" \
         --cloud-type "${CLOUD_TYPE:-COMMUNITY}" --public-ip --ssh \
         --ports '22/tcp' --container-disk-in-gb 30 \
         --name "warp-types-verify" \
         --wait --wait-timeout 10m \
-      | python3 -c '
+      | tee "$STATE" | python3 -c '
 import json, sys
 p = json.load(sys.stdin)
 s = p.get("ssh") or {}
@@ -107,7 +112,22 @@ cmd_run() {
     # the exact leak the trap exists to stop. Arm it, then create.
     trap cmd_down EXIT
     cmd_up "$gpu" || die "pod creation failed (pod terminated by trap if one was made)"
-    local ssh_cmd; ssh_cmd=$(pods_json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["ssh"]["ssh_command"])')
+    local ssh_cmd
+    ssh_cmd=$(python3 - "$STATE" <<'PY'
+import json, sys, subprocess
+p = json.load(open(sys.argv[1]))
+cmd = (p.get("ssh") or {}).get("ssh_command") or ""
+if not cmd and p.get("id"):
+    # fall back to the pod's own record
+    try:
+        q = json.loads(subprocess.run(["runpodctl", "pod", "get", p["id"]], capture_output=True, text=True, check=True).stdout)
+        cmd = (q.get("ssh") or {}).get("ssh_command") or ""
+    except Exception:
+        pass
+print(cmd)
+PY
+    ) || die "could not read the create response ($STATE)"
+    [ -n "$ssh_cmd" ] || die "no ssh command for the pod (see $STATE); nothing was run"
     # WARP_REF selects the branch or commit to verify (default main). The whole
     # remote transcript is also kept locally under results/, because the pod's
     # /tmp/h200-results.txt dies with the pod and the paper's H200 numbers had
@@ -121,6 +141,11 @@ cmd_run() {
          cd /tmp && git clone -q https://github.com/modelmiser/warp-types.git 2>/dev/null
          cd /tmp/warp-types && git fetch -q origin && git checkout -q '$ref' && (git pull -q origin '$ref' 2>/dev/null || true)
          bash reproduce/runpod-h200.sh" 2>&1 | tee "$log"
+    local rc=${PIPESTATUS[0]}
+    if [ "$rc" -ne 0 ] || ! grep -q "=== DONE ===" "$log"; then
+        echo "=== verification FAILED (ssh exit $rc); partial log in $log; terminating ===" >&2
+        exit 1
+    fi
     echo "=== verification done; log in $log; terminating ==="
 }
 
