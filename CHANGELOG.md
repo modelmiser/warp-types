@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — 0.4.2
+## [0.4.2] — 2026-10-18
 
 - warp-types-builder 0.3.3: `build.rs` support emits `cargo:rerun-if-changed` for the kernel crate's path dependencies
   (a change under `warp-types/src` now rebuilds the PTX; a stale `kernels.ptx` was run twice on 2026-10-18 before this).
