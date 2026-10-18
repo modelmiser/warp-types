@@ -1,5 +1,5 @@
-# examples/gpu-project on the local workstation, 2026-10-18T18:17Z
-# tree: f9a467c6a (committed; 0 dirty paths under examples/gpu-project+src)
+# examples/gpu-project on the local workstation, 2026-10-18T18:35Z
+# tree: 77c057cb3 (committed; 0 dirty paths under examples/gpu-project+src)
 # rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 # driver: 580.173.02 cuda: 12.0, V12.0.140
 # 0.4.2: warp collectives lowered through llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot with an i1 predicate.
