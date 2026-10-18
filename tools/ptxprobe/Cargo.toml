@@ -1,0 +1,17 @@
+[package]
+name = "ptxprobe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Device-side probe: emits PTX for a few typed operations so scripts/check-ptx-operands.sh can grep their operands"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+warp-types = { path = "../.." }
+
+[profile.release]
+opt-level = 3
+
+[workspace]

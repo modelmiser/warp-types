@@ -281,7 +281,7 @@ This is not a "type error" in the traditional sense—it's a *method resolution 
 
 2. **Clear errors:** The error message says exactly what's wrong: "method not found for `Warp<Even>`."
 
-3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The one bypass is constructing a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
+3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The bypasses are trusted entry points, listed in §6.9: a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry, and gradual ascription; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
 
 4. **Composable:** Library authors can add methods for specific active sets without modifying the core types.
 

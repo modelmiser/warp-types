@@ -313,9 +313,13 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
+### Execution Is Not Restricted by the Types
+
+`diverge_*` returns two handles and emits no branch, so after `warp.diverge_even_odd()` every lane of the hardware warp still executes the code that follows, holding both handles. The types record which lanes a handle *claims*; nothing in the crate restricts *execution* to them. That is harmless while every collective uses the full-warp membermask, and it is why `shuffle_xor_within` guards its own instruction: a lane outside `S` skips the `shfl.sync` and returns its input, so the membermask `S::MASK` names exactly the lanes that execute it (0.4.1; in 0.4.0 the lanes outside `S` executed an instruction whose membermask did not name them, which the PTX ISA leaves undefined). The sound hand-written form, `if lane_id() % 2 == 0 { evens.shuffle_xor_within(..) }`, is a raw branch, which the typed fragment does not cover; the guard makes the branch-free form the documented examples use sound as well. `Warp<Empty>` is rejected at compile time.
+
 ### Gradual Ascription
 
-`DynWarp::from_mask_32` / `from_mask_64` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask, so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
+`DynWarp::all`, `all_64`, `from_mask_32`, `from_mask_64` and `from_mask` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask (and the build's warp width), so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
 
 The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling one directly requires `unsafe` and its `# Safety` contract (every lane converged).
 

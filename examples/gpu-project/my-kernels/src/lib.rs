@@ -219,3 +219,22 @@ pub fn ballot_lower_half(out: *mut u32) {
     // warp-uniform result.
     *out.add(tid as usize) = mask;
 }
+
+// ============================================================================
+// Kernel 6: shuffle_xor_within after a real diverge, with NO branch.
+//
+// This is the pattern the method's own documentation uses. `diverge_even_odd`
+// emits no branch, so all 32 lanes reach the call holding both handles; the
+// method must guard its own instruction so that the lanes outside Even issue
+// nothing. Expected: even lanes get their partner (tid ^ 2), odd lanes get
+// their own tid back.
+// ============================================================================
+
+#[warp_kernel]
+pub fn shuffle_within_even(out: *mut i32) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let (evens, _odds) = warp.diverge_even_odd();
+    let v = evens.shuffle_xor_within(data::PerLane::new(tid as i32), 2).get();
+    *out.add(tid as usize) = v;
+}

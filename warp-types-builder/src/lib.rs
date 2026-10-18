@@ -548,54 +548,49 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         }
     }
 
-    // Fallback: search deps/ for .s files matching the crate name pattern.
+    // Fallback: search for .s files matching the crate name pattern. Where
+    // rustc puts `--emit=asm` output depends on the toolchain: older nightlies
+    // wrote `deps/<crate>-HASH.s`; nightly-2026-09-15 writes
+    // `build/<crate>/<HASH>/out/<crate>-HASH.s`. Both layouts are searched.
     // Multiple crate_name-HASH.s artifacts accumulate across rebuilds with
     // different flags, and read_dir order is arbitrary — collect all matches
     // and pick the newest (see pick_newest) so a stale artifact is never
-    // silently selected.
-    let deps = target_dir.join("deps");
-    if let Ok(entries) = std::fs::read_dir(&deps) {
-        let matches: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == "s") && {
-                    let fname = p
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    // Match crate_name-HASH.s pattern, skip core/compiler_builtins
-                    fname.starts_with(&crate_name)
-                        && !fname.starts_with("core-")
-                        && !fname.starts_with("compiler_builtins-")
-                }
-            })
-            .collect();
-        if let Some(p) = pick_newest(matches) {
-            return Ok(p);
-        }
+    // silently selected. (2026-10-18: a stale `deps/` file from the previous
+    // pin shadowed the fresh `build/.../out/` file for one pin bump, and the
+    // worked example ran kernels that were not in its source.)
+    let dirs = asm_search_dirs(target_dir);
+    let matches: Vec<PathBuf> = asm_files(&dirs)
+        .into_iter()
+        .filter(|p| {
+            let fname = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            // Match crate_name-HASH.s pattern, skip core/compiler_builtins
+            fname.starts_with(&crate_name)
+                && !fname.starts_with("core-")
+                && !fname.starts_with("compiler_builtins-")
+        })
+        .collect();
+    if let Some(p) = pick_newest(matches) {
+        return Ok(p);
     }
 
-    // Last resort: any non-core .s file in deps/, newest first (same rationale)
-    if let Ok(entries) = std::fs::read_dir(&deps) {
-        let candidates: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == "s") && {
-                    let fname = p
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    !fname.starts_with("core-")
-                        && !fname.starts_with("compiler_builtins-")
-                        && !fname.starts_with("warp_types-")
-                }
-            })
-            .collect();
-        if let Some(p) = pick_newest(candidates) {
-            return Ok(p);
-        }
+    // Last resort: any non-core .s file in either layout, newest first (same rationale)
+    let any_asm: Vec<PathBuf> = asm_files(&dirs)
+        .into_iter()
+        .filter(|p| {
+            let fname = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            !fname.starts_with("core-")
+                && !fname.starts_with("compiler_builtins-")
+                && !fname.starts_with("warp_types-")
+        })
+        .collect();
+    if let Some(p) = pick_newest(any_asm) {
+        return Ok(p);
     }
 
     Err(BuildError::PtxNotFound(format!(
@@ -607,6 +602,53 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
             .map(|c| c.display().to_string())
             .collect::<Vec<_>>()
     )))
+}
+
+/// The directories rustc may have written `--emit=asm` output to under a
+/// `target/<triple>/<profile>` dir: `deps/` (older toolchains) and every
+/// `build/<pkg>/<hash>/out/` or `build/<pkg-hash>/out/` (nightly-2026-09-15+).
+fn asm_search_dirs(target_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![target_dir.join("deps")];
+    let build = target_dir.join("build");
+    if let Ok(entries) = std::fs::read_dir(&build) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if !p.is_dir() {
+                continue;
+            }
+            // `build/<pkg-hash>/out` (old layout)
+            let out = p.join("out");
+            if out.is_dir() {
+                dirs.push(out);
+            }
+            // `build/<pkg>/<hash>/out` (new layout)
+            if let Ok(inner) = std::fs::read_dir(&p) {
+                for h in inner.flatten() {
+                    let out = h.path().join("out");
+                    if out.is_dir() {
+                        dirs.push(out);
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Every `*.s` file directly inside any of `dirs`.
+fn asm_files(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for d in dirs {
+        if let Ok(entries) = std::fs::read_dir(d) {
+            out.extend(
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "s")),
+            );
+        }
+    }
+    out
 }
 
 /// Pick the best artifact among several discovered candidates: the one with
@@ -712,6 +754,47 @@ mod tests {
     #[test]
     fn empty_candidates_give_none() {
         assert_eq!(pick_newest_stamped(vec![]), None);
+    }
+
+    #[test]
+    fn find_ptx_file_prefers_fresh_build_out_over_stale_deps() {
+        // nightly-2026-09-15 writes --emit=asm output to build/<crate>/<hash>/out/,
+        // not deps/. A stale deps/ artifact from an older pin must not win.
+        let dir = std::env::temp_dir().join(format!(
+            "warp-types-builder-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let kernel_dir = dir.join("my-kernels");
+        let target_dir = dir
+            .join("target")
+            .join("nvptx64-nvidia-cuda")
+            .join("release");
+        std::fs::create_dir_all(&kernel_dir).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"my-kernels\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        let deps = target_dir.join("deps");
+        let out = target_dir
+            .join("build")
+            .join("my-kernels")
+            .join("deadbeef")
+            .join("out");
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        let stale = deps.join("my_kernels-aaaa.s");
+        let fresh = out.join("my_kernels-deadbeef.s");
+        std::fs::write(&stale, ".visible .entry old(").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&fresh, ".visible .entry new(").unwrap();
+        let picked = find_ptx_file(&target_dir, &kernel_dir).unwrap();
+        assert_eq!(picked, fresh);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

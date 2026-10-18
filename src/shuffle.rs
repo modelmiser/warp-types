@@ -144,6 +144,26 @@ impl<S: ActiveSet> Warp<S> {
     /// every active lane to another active lane. Formally: for every lane `i`
     /// in `S`, lane `(i ^ mask)` is also in `S`.
     ///
+    /// # Which lanes execute the instruction
+    ///
+    /// `diverge_*` emits no branch: after `warp.diverge_even_odd()` every lane
+    /// of the hardware warp still runs the code that follows, holding both
+    /// handles. So this method guards the shuffle itself: a lane that is not
+    /// in `S` skips the `shfl.sync` and returns `data` unchanged, and the
+    /// instruction's membermask (`S::MASK`) then names exactly the lanes that
+    /// execute it. Without that guard (releases before 0.4.1) the lanes
+    /// outside `S` executed an instruction whose membermask did not name
+    /// them, which the PTX ISA leaves undefined. A caller who already
+    /// branches on `lane_id()` loses nothing: the guard is then always true.
+    ///
+    /// `Warp<Empty>` has no lanes to shuffle and is rejected at compile time:
+    ///
+    /// ```compile_fail
+    /// use warp_types::*;
+    /// let w: Warp<Empty> = DynWarp::from_mask_32(0).ascribe::<Empty>().unwrap();
+    /// let _ = w.shuffle_xor_within(PerLane::new(1i32), 0);
+    /// ```
+    ///
     /// # Examples
     ///
     /// ```
@@ -179,15 +199,29 @@ impl<S: ActiveSet> Warp<S> {
             S::NAME,
             S::MASK,
         );
-        // Membermask = S::MASK: under real divergence only the lanes in S
-        // execute this instruction, so the PTX membermask must name exactly
-        // those lanes — a full-warp 0xFFFFFFFF would name inactive lanes,
-        // which is UB. The assert above guarantees every source lane
-        // (i ^ mask) is also in S, discharging gpu_shfl_xor_masked's
-        // contract (the `unsafe` below relies on exactly this). `as u32` truncation: nvptx64 warps are 32-lane so
-        // S::MASK's low 32 bits are the whole member set; the CPU identity
-        // impl ignores the mask (the 64-lane amdgpu backend is stubbed).
-        PerLane::new(unsafe { data.get().gpu_shfl_xor_masked(mask, S::MASK as u32) })
+        const {
+            assert!(
+                S::MASK != 0,
+                "shuffle_xor_within: Warp<Empty> has no lanes to shuffle"
+            )
+        };
+        // The `gpu_shfl_xor_masked` contract has two halves. (1) Every
+        // source lane (i ^ mask) of a named lane is named: the assert above.
+        // (2) The membermask names the executing lane and only lanes that
+        // arrive: the guard below. `diverge_*` emits no branch, so without
+        // the guard every lane of the warp would execute this instruction
+        // and the lanes outside S would be unnamed in their own membermask
+        // (UB). A lane outside S returns `data` and issues nothing; every
+        // lane in S arrives, so no named lane is missing. `as u32`
+        // truncation: nvptx64 warps are 32-lane and `warp64` + nvptx64 is a
+        // compile error (lib.rs), so S::MASK's low 32 bits are the whole
+        // member set; the CPU identity impl ignores the mask and lane_id() is 0.
+        if (S::MASK >> crate::gpu::lane_id()) & 1 == 1 {
+            // SAFETY: both halves of the contract hold here; see above.
+            PerLane::new(unsafe { data.get().gpu_shfl_xor_masked(mask, S::MASK as u32) })
+        } else {
+            data
+        }
     }
 }
 
@@ -197,8 +231,9 @@ impl<S: ActiveSet> Warp<S> {
 
 // SAFETY (every `unsafe { ….gpu_shfl_*(…) }` in this impl): `&self` is a
 // `Warp<All>`, the typed witness that every lane is converged, which is the
-// `GpuShuffle` contract. (A second `kernel_entry()` can forge that witness;
-// README Limitations / paper §6.9.)
+// `GpuShuffle` contract. The witness is trusted, not unforgeable: the routes
+// that mint one without hardware evidence are listed once, under "Trusted
+// entry points" on `Warp::kernel_entry`.
 impl Warp<All> {
     /// Shuffle XOR: each lane exchanges with lane (id ^ mask).
     ///
@@ -333,7 +368,8 @@ impl Warp<All> {
         {
             // SAFETY: `self: Warp<All>` witnesses that all 32 lanes are
             // converged and executing this call, so membermask 0xFFFFFFFF
-            // names exactly the executing lanes.
+            // names exactly the executing lanes. The witness is trusted
+            // ("Trusted entry points" on `Warp::kernel_entry`).
             let mask = unsafe { crate::gpu::ballot_sync(0xFFFFFFFF, predicate.get()) } as u64;
             BallotResult::from_mask(Uniform::from_const(mask))
         }
@@ -712,6 +748,44 @@ mod tests {
             expected = expected.wrapping_add(expected);
         }
         assert_eq!(result.get(), expected);
+    }
+
+    #[test]
+    fn test_reduce_sum_wrapping_i64_u64() {
+        let all: Warp<All> = Warp::new();
+        let stages = crate::WARP_SIZE.trailing_zeros();
+        let mut e64 = i64::MAX;
+        let mut eu64 = u64::MAX;
+        for _ in 0..stages {
+            e64 = e64.wrapping_add(e64);
+            eu64 = eu64.wrapping_add(eu64);
+        }
+        assert_eq!(
+            all.reduce_sum_wrapping_i64(PerLane::new(i64::MAX)).get(),
+            e64
+        );
+        assert_eq!(
+            all.reduce_sum_wrapping_u64(PerLane::new(u64::MAX)).get(),
+            eu64
+        );
+    }
+
+    #[test]
+    fn test_shuffle_down_and_raw_variants_cpu_identity() {
+        let all: Warp<All> = Warp::new();
+        assert_eq!(all.shuffle_down(PerLane::new(7i32), 1).get(), 7);
+        assert_eq!(all.shuffle_xor_raw(9u32, 3), 9);
+        assert_eq!(all.shuffle_down_raw(2.5f32, 4), 2.5);
+    }
+
+    #[test]
+    fn test_shuffle_xor_within_odd_on_cpu_returns_input() {
+        // CPU lane_id() is 0, which is not in Odd: the lane guard returns the
+        // input without issuing a shuffle (on the device, odd lanes shuffle and
+        // even lanes return their input; examples/gpu-project Test 6).
+        use crate::active_set::Odd;
+        let w: Warp<Odd> = Warp::new();
+        assert_eq!(w.shuffle_xor_within(PerLane::new(11i32), 2).get(), 11);
     }
 
     #[test]

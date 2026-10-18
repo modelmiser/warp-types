@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. Main crate 326 unit + 50 example tests, plus 39 doc tests workspace-wide (415 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
+**Status:** Research prototype with real GPU execution. Main crate 334 unit + 50 example tests, plus 40 doc tests workspace-wide (424 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 
@@ -67,8 +67,8 @@ bash reproduce/demo.sh  # The entire pitch in one terminal
 ## Quick Start
 
 ```bash
-cargo test                                    # 326 unit tests (main crate)
-cargo test --workspace --doc                  # 39 doc tests (17 compile-fail)
+cargo test                                    # 334 unit tests (main crate)
+cargo test --workspace --doc                  # 40 doc tests (18 compile-fail)
 cargo test --examples                         # 50 example tests across 8 examples (7 real-bug + 1 synthetic)
 cargo test --example nvidia_cuda_samples_398  # Real NVIDIA bug, caught by types
 ```
@@ -117,10 +117,10 @@ fn main() {
 
 | Claim | Evidence | Command |
 |-------|----------|---------|
-| Type safety (diverged warp can't call full-warp shuffle, merge requires complements) | 17 compile-fail doctests | `cargo test --workspace --doc` |
+| Type safety (diverged warp can't call full-warp shuffle, merge requires complements) | 18 compile-fail doctests | `cargo test --workspace --doc` |
 | Real bug caught at compile time | 7 real-bug + 1 synthetic examples (21 bugs surveyed) | `cargo test --examples` |
 | Hardware reproduction | Deterministic wrong result on H200 SXM, RTX 4000 Ada | `bash reproduce/demo.sh` |
-| Real GPU execution | 4 kernels PASS on H200 SXM and RTX 4000 Ada via cudarc | `cd examples/gpu-project && cargo run` |
+| Real GPU execution | 6 kernels via cudarc: 4 PASS on H200 SXM and RTX 4000 Ada, ballot and sub-warp `shuffle_xor_within` PASS on RTX 4000 Ada (`results/rtx4000ada-2026-10-18.txt`) | `cd examples/gpu-project && cargo run` |
 | Shuffle semantics | Verified on H200 (sm_90), RTX 4000 Ada (sm_89), MI300X (gfx942) | `bash reproduce/runpod-h200.sh` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
@@ -129,7 +129,7 @@ fn main() {
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` | <!-- unguarded: 6 — module-scoped test count; the guard computes no per-module actual -->
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
 | Gradual typing (DynWarp ↔ Warp<S>) | Runtime/compile-time bridge (33 tests) | `cargo test gradual` | <!-- unguarded: 33 — module-scoped test count; the guard computes no per-module actual -->
-| Main-crate claims | Main-crate test suite (407 tests) | `cargo test && cargo test --examples` | <!-- unguarded: 407 — no main-crate-scoped DOC actual exists; see TODO -->
+| Main-crate claims | Main-crate test suite (418 tests) | `cargo test && cargo test --examples` | <!-- unguarded: 418 — measured 2026-10-18: cargo test -p warp-types (368) + --examples (50); no main-crate-scoped DOC actual exists; see TODO -->
 
 ## Project Structure
 
@@ -187,7 +187,8 @@ warp-types/
 - **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
 - **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0, Hopper) and RTX 4000 Ada (compute 8.9, Ada Lovelace): shuffle semantics, zero-overhead PTX, and typed kernel execution (4/4 kernels PASS on both GPUs).
 - **The guarantee covers the typed fragment.** A raw data-dependent branch around a warp intrinsic (`if tid < 16 { warp.shuffle_xor(...) }`) is ordinary Rust: it type-checks and is exactly the unsafe pattern on hardware. The safety claim holds for programs that express divergence exclusively via `diverge`/`merge`.
-- **Gradual ascription is a trusted entry point.** `DynWarp::from_mask_32(m).ascribe::<S>()` checks `S` only against the caller's own `m`, so it can produce any `Warp<S>` anywhere, like a second `kernel_entry()`.
+- **`diverge` emits no branch; `shuffle_xor_within` guards its own execution.** After `diverge_even_odd()` every lane still runs the code that follows. Since 0.4.1 `shuffle_xor_within` skips the `shfl.sync` on lanes outside `S` (they return their input), so its membermask names exactly the executing lanes. In 0.4.0 and earlier the lanes outside `S` executed an instruction whose membermask did not name them — undefined behaviour under the crate's own documented usage. `Warp<Empty>` is rejected at compile time.
+- **Gradual ascription is a trusted entry point.** `DynWarp::{all, all_64, from_mask_32, from_mask_64, from_mask}(…).ascribe::<S>()` checks `S` only against the caller's own mask, so it can produce any `Warp<S>` anywhere, like a second `kernel_entry()`. The full list of such routes is under "Trusted entry points" on `Warp::kernel_entry`.
 - **Merge checks set shape, not provenance.** `Even` from one `kernel_entry()` handle and `Odd` from another merge without error.
 - **Raw intrinsics are `unsafe`.** `GpuShuffle::gpu_shfl_*` (re-exported for use as a bound) are `unsafe fn` since 0.4.0 (a breaking change): they are raw `shfl.sync` instructions, UB under divergence. Shuffle through `Warp<All>` / `Tile`.
 - **`kernel_entry()` is callable anywhere.** The `Warp<All>` witness is not unforgeable: a fresh handle can be constructed after a diverge, bypassing the typestate discipline. The discipline requires calling it exactly once at kernel entry; nothing enforces that yet.

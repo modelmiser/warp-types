@@ -28,7 +28,8 @@ use crate::GpuValue;
 
 // SAFETY (every `unsafe { ….gpu_shfl_*(…) }` in this impl): `&self` is a
 // `Warp<All>`, the typed witness that every lane is converged, which is the
-// `GpuShuffle` contract.
+// `GpuShuffle` contract. The witness is trusted ("Trusted entry points" on
+// `Warp::kernel_entry`).
 impl Warp<All> {
     /// Reduce with a custom binary operator across all lanes.
     ///
@@ -277,6 +278,23 @@ mod tests {
         let data = PerLane::new(10i32);
         let result = warp.shuffle_up(data, 1);
         assert_eq!(result.get(), 10);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_exclusive_sum_runs_on_cpu_identity() {
+        // Documented as wrong on every target (no lane_id guard); this pins the
+        // CPU behaviour so a change to the deprecated path is noticed.
+        let warp: Warp<All> = Warp::kernel_entry();
+        let r = warp.exclusive_sum(PerLane::new(3i32), 0);
+        assert_eq!(r.get(), 3 * 32); // inclusive doubling, then identity shuffle_up
+    }
+
+    #[test]
+    #[should_panic(expected = "broadcast_lane")]
+    fn test_broadcast_lane_rejects_out_of_range_lane() {
+        let warp: Warp<All> = Warp::kernel_entry();
+        let _ = warp.broadcast_lane(PerLane::new(1i32), crate::WARP_SIZE);
     }
 
     // Verify CUB-equivalent methods are ONLY on Warp<All>

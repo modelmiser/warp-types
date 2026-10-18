@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "warp-types-builder"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "warp-types-kernel"

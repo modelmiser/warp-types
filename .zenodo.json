@@ -1,6 +1,6 @@
 {
   "title": "warp-types: Type-Safe GPU Warp Programming via Linear Typestate",
-  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps cannot call a full-warp shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada (4 typed kernels PASS on both); AMD MI300X mask-correctness verified via HIP.",
+  "description": "A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time. Diverged warps cannot call a full-warp shuffle — the method does not exist on the type. Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Real GPU execution on NVIDIA H200 SXM and RTX 4000 Ada (6 typed kernels via cudarc: 4 PASS on both, ballot and sub-warp shuffle PASS on the Ada); AMD MI300X mask-correctness verified via HIP.",
   "creators": [
     {
       "name": "Aldreda, Chad"
@@ -29,5 +29,5 @@
       "identifier": "https://github.com/modelmiser/warp-types"
     }
   ],
-  "notes": "Includes: Rust implementation (326 unit + 50 example + 37 doc = 413 tests), SimWarp multi-lane simulator, Lean 4 formalization (32 theorems, zero sorry, zero axioms — progress, preservation, all four §5.1 loop rules, nested merge, letPair), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), C++20 interop header (include/warp_types.h), CUB-equivalent typed warp primitives, and 8 worked bug examples drawn from a survey of 21 documented instances (19 bugs + 2 spec/vendor signals) across 16 real-world projects."
+  "notes": "Includes: Rust implementation (334 unit + 50 example + 40 doc = 424 tests), SimWarp multi-lane simulator, Lean 4 formalization (32 theorems, zero sorry, zero axioms — progress, preservation, all four §5.1 loop rules, nested merge, letPair), cargo-integrated GPU compilation pipeline (#[warp_kernel] + WarpBuilder), C++20 interop header (include/warp_types.h), CUB-equivalent typed warp primitives, and 8 worked bug examples drawn from a survey of 21 documented instances (19 bugs + 2 spec/vendor signals) across 16 real-world projects."
 }

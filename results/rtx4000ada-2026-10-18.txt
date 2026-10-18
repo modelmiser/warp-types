@@ -1,0 +1,49 @@
+# examples/gpu-project on the local workstation, 2026-10-18T16:27Z
+# tree: 8dce2c9f0 + uncommitted Arc A (shuffle_xor_within lane guard, builder find_ptx_file fix, kernel 6)
+# rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
+# driver: 580.173.02 cuda: 12.0, V12.0.140
+
+╔══════════════════════════════════════════════════════════╗
+║  warp-types: cargo-integrated GPU kernel demo           ║
+║  Type-safe kernels, compiled from cargo, run on GPU     ║
+╚══════════════════════════════════════════════════════════╝
+
+GPU: NVIDIA RTX 4000 SFF Ada Generation
+
+=== Test 1: butterfly_reduce (all ones) ===
+  Input:    [1; 32]
+  Expected: every lane = 32
+  Got:      lane[0]=32, lane[31]=32
+  Result:   PASS
+
+=== Test 2: diverge_merge_reduce (sequential) ===
+  Input:    [0, 1, 2, ..., 31]
+  Expected: every lane = 496 (diverge/merge erased)
+  Got:      lane[0]=496, lane[31]=496
+  Result:   PASS
+
+=== Test 3: reduce_n (with scalar param) ===
+  Input:    [1; 32], n=32
+  Expected: 32
+  Got:      32
+  Result:   PASS
+
+=== Test 4: bitonic_sort_i32 (reverse → sorted) ===
+  Input:    [31, 30, 29, ..., 1, 0]
+  Expected: [0, 1, 2, ..., 30, 31]
+  Got:      [0, 1, 2, ..., 30, 31]
+  Result:   PASS
+
+=== Test 5: ballot_lower_half (setp workaround) ===
+  Predicate: tid < 16
+  Expected:  0x0000FFFF (lanes 0..16 = 1, lanes 16..32 = 0)
+  lane[0]:   0x0000FFFF
+  uniform:   true (all 32 lanes wrote the same value)
+  Result:    PASS
+
+=== Test 6: shuffle_within_even (sub-warp membermask, no branch) ===
+  Even lanes: tid ^ 2 (partner within Even); odd lanes: own tid
+  Result:    PASS
+
+All kernels compiled from cargo, type-checked at build time,
+and executed on real GPU hardware with correct results.

@@ -6,9 +6,15 @@
 //!
 //! # Key Difference from Divergence
 //!
-//! Diverged sub-warps (`Warp<Even>`) have inactive lanes — shuffle is unsafe.
-//! Tiles are *partitions* — ALL threads within a tile are active by construction.
-//! Shuffle within a tile is always safe because every lane participates.
+//! Diverged sub-warps (`Warp<Even>`) have inactive lanes — a full-warp shuffle
+//! is unavailable on them. Tiles are *partitions* of a fully active warp: a
+//! `Tile` borrows `&Warp<All>`, so the warp cannot be diverged while the tile
+//! lives, and a tile shuffle is lowered as a full-warp `shfl.sync` (membermask
+//! `0xFFFFFFFF`) whose width operand confines the exchange to the tile.
+//! **All 32 lanes of the warp must execute a tile shuffle**, not only the N
+//! lanes of one tile: per-tile divergent control flow around a tile
+//! collective is the raw-branch hazard listed under "Trusted entry points"
+//! on `Warp::kernel_entry`, exactly as for `Warp<All>`.
 //!
 //! ```text
 //! Warp (32 lanes)
@@ -20,9 +26,10 @@
 //!
 //! # Type System Guarantee
 //!
-//! `Tile<N>` has `shuffle_xor` for any N — because all N lanes participate.
-//! This is unlike `Warp<S>` where only `Warp<All>` has full-warp shuffle.
-//! The safety comes from the partition structure, not the active set.
+//! `Tile<N>` has `shuffle_xor` for any N because a tile can only be made from
+//! a `&Warp<All>` and keeps that borrow alive. The safety comes from the
+//! full-warp borrow, not from the partition structure: the width operand
+//! decides which lanes exchange, the membermask stays the whole warp.
 
 use crate::active_set::{sealed, All};
 use crate::data::PerLane;
@@ -55,7 +62,9 @@ pub struct Tile<'w, const SIZE: usize> {
 /// Sealed — only implemented for Tile<4>, Tile<8>, Tile<16>, Tile<32>.
 /// External crates cannot implement this for arbitrary sizes.
 pub trait ValidTileSize: sealed::Sealed {
-    /// Mask for this tile within a warp (based on thread position).
+    /// The lanes a tile at position 0 covers. Informational: tile shuffles
+    /// pass the full-warp membermask and confine the exchange with the PTX
+    /// width operand, so this constant is not used as a membermask.
     const TILE_MASK: u32;
 }
 
@@ -147,7 +156,8 @@ impl Warp<All> {
 
 // SAFETY (every `unsafe { ….gpu_shfl_*_width(…) }` in this impl): a `Tile`
 // can only be made from `&Warp<All>` (`Warp::tile`), so every lane of the warp
-// is converged, which is the `GpuShuffle` contract.
+// is converged, which is the `GpuShuffle` contract. The witness is trusted
+// ("Trusted entry points" on `Warp::kernel_entry`).
 impl<'w, const SIZE: usize> Tile<'w, SIZE>
 where
     Tile<'w, SIZE>: ValidTileSize,
@@ -309,6 +319,29 @@ mod tests {
         // Shuffle within tile — always safe
         let result = tile.shuffle_xor(data, 1);
         assert_eq!(result.get(), 42); // CPU identity
+    }
+
+    #[test]
+    fn test_tile_shuffle_down_cpu_identity() {
+        let warp: Warp<All> = Warp::kernel_entry();
+        let tile: Tile<8> = warp.tile();
+        assert_eq!(tile.shuffle_down(PerLane::new(5i32), 1).get(), 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "shuffle_xor")]
+    fn test_tile_shuffle_xor_rejects_mask_at_or_above_size() {
+        let warp: Warp<All> = Warp::kernel_entry();
+        let tile: Tile<8> = warp.tile();
+        let _ = tile.shuffle_xor(PerLane::new(1i32), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "shuffle_down")]
+    fn test_tile_shuffle_down_rejects_delta_at_or_above_size() {
+        let warp: Warp<All> = Warp::kernel_entry();
+        let tile: Tile<4> = warp.tile();
+        let _ = tile.shuffle_down(PerLane::new(1i32), 4);
     }
 
     #[test]

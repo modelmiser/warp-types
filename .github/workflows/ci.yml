@@ -101,6 +101,12 @@ jobs:
         run: cargo clippy --manifest-path warp-types-sat/sat-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
       - name: Clippy (device target — worked example)
         run: cargo clippy --manifest-path examples/gpu-project/my-kernels/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
+      - name: Clippy (device target — PTX probe)
+        run: cargo clippy --manifest-path tools/ptxprobe/Cargo.toml --target nvptx64-nvidia-cuda -- -D warnings
+      # The membermask and width operands the typed API promises must reach the
+      # emitted shfl.sync: a grep over the probe's PTX, no GPU needed.
+      - name: PTX operand check
+        run: bash scripts/check-ptx-operands.sh
       # reproduce/*.rs are standalone no_std files with no manifest at all —
       # nothing in the workspace compiles them, so their 16 unsafe constructs have
       # never been built by CI. They are the paper's bug-repro artifacts, so a

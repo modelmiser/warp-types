@@ -31,6 +31,9 @@ else
     echo "pre-push: skipping gpu-feature check (no CUDA toolkit on this host)"
 fi
 
+echo "pre-push: PTX operands (membermask / width reach shfl.sync)"
+bash scripts/check-ptx-operands.sh
+
 echo "pre-push: paper sync (section files == paper.md spans)"
 bash scripts/check-paper-sync.sh
 

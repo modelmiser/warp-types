@@ -184,6 +184,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // === Test 6: shuffle_xor_within after diverge_even_odd, no branch ===
+    // The documented usage. All 32 lanes reach the call; the method's lane
+    // guard must keep the odd lanes out of the shfl.sync (membermask Even).
+    println!("=== Test 6: shuffle_within_even (sub-warp membermask, no branch) ===");
+    {
+        let dev_out = stream.memcpy_stod(&[-1i32; WARP_SIZE])?;
+
+        unsafe {
+            stream
+                .launch_builder(&k.shuffle_within_even)
+                .arg(&dev_out)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+
+        let result = stream.memcpy_dtov(&dev_out)?;
+        let expected: Vec<i32> = (0..WARP_SIZE as i32)
+            .map(|t| if t % 2 == 0 { t ^ 2 } else { t })
+            .collect();
+        let pass = result == expected;
+        println!("  Even lanes: tid ^ 2 (partner within Even); odd lanes: own tid");
+        println!("  Result:    {}", if pass { "PASS" } else { "FAIL" });
+        if !pass {
+            println!("  Got:       {:?}", result);
+            println!("  Expected:  {:?}", expected);
+        }
+    }
+    println!();
+
     println!("All kernels compiled from cargo, type-checked at build time,");
     println!("and executed on real GPU hardware with correct results.");
 

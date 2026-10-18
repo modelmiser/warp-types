@@ -33,7 +33,7 @@ batsat = { version = "0.6", optional = true }
 splr = { version = "0.17", optional = true }
 
 [build-dependencies]
-warp-types-builder = { path = "../warp-types-builder", version = "0.3.1", optional = true }
+warp-types-builder = { path = "../warp-types-builder", version = "0.3.2", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

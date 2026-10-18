@@ -476,7 +476,7 @@ This is not a "type error" in the traditional sense—it's a *method resolution 
 
 2. **Clear errors:** The error message says exactly what's wrong: "method not found for `Warp<Even>`."
 
-3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The one bypass is constructing a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
+3. **No casting:** There is no conversion from `Warp<Even>` to `Warp<All>` — no safe cast, coercion, or subtyping path exists between active-set states. (The bypasses are trusted entry points, listed in §6.9: a *fresh* handle via `kernel_entry()`, which the discipline requires calling exactly once at kernel entry, and gradual ascription; §6.9 discusses this gap and why the witness is therefore not unforgeable in the strict sense.)
 
 4. **Composable:** Library authors can add methods for specific active sets without modifying the core types.
 
@@ -1478,9 +1478,13 @@ Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` 
 
 Both gaps stem from the same root: Rust is affine (use at most once), not linear (use exactly once). A language with linear types or uniqueness types would close both gaps.
 
+### Execution Is Not Restricted by the Types
+
+`diverge_*` returns two handles and emits no branch, so after `warp.diverge_even_odd()` every lane of the hardware warp still executes the code that follows, holding both handles. The types record which lanes a handle *claims*; nothing in the crate restricts *execution* to them. That is harmless while every collective uses the full-warp membermask, and it is why `shuffle_xor_within` guards its own instruction: a lane outside `S` skips the `shfl.sync` and returns its input, so the membermask `S::MASK` names exactly the lanes that execute it (0.4.1; in 0.4.0 the lanes outside `S` executed an instruction whose membermask did not name them, which the PTX ISA leaves undefined). The sound hand-written form, `if lane_id() % 2 == 0 { evens.shuffle_xor_within(..) }`, is a raw branch, which the typed fragment does not cover; the guard makes the branch-free form the documented examples use sound as well. `Warp<Empty>` is rejected at compile time.
+
 ### Gradual Ascription
 
-`DynWarp::from_mask_32` / `from_mask_64` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask, so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
+`DynWarp::all`, `all_64`, `from_mask_32`, `from_mask_64` and `from_mask` accept any mask, and `ascribe::<S>()` checks the result only against that caller-supplied mask (and the build's warp width), so `DynWarp::from_mask_32(0xAAAAAAAA).ascribe::<Odd>()` produces a `Warp<Odd>` anywhere. The run-time evidence at the gradual boundary is whatever the caller passes in; nothing ties it to the hardware's active mask. Like a second `kernel_entry()`, this is a trusted entry point.
 
 The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling one directly requires `unsafe` and its `# Safety` contract (every lane converged).
 
@@ -1581,11 +1585,11 @@ This is not a deficiency in the sanitizer. `shfl.sync` sourcing a register from 
 
 ### Compile-Fail Tests as Proof Artifacts
 
-Our implementation includes seventeen compile-fail doctests covering shuffle on diverged warps, raw-intrinsic calls without `unsafe`, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
+Our implementation includes eighteen compile-fail doctests covering shuffle on diverged warps, raw-intrinsic calls without `unsafe`, non-complement merges, use-after-diverge, constructor forgery, fence non-complements, method absence on sub-warps, and validation bypass on the bounded-model-checking transition system—each verified by the Rust compiler as a type error. Any future change to the type system that accidentally permits these operations would cause `cargo test` to fail.
 
 ### Test Inventory
 
-Our prototype includes 326 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 39 doc tests (17 compile-fail, 22 doc examples) collected across the whole workspace: the 33 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the seventeen above (415 total). That 415 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 409 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
+Our prototype includes 334 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 40 doc tests (18 compile-fail, 22 doc examples) collected across the whole workspace: the 34 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the eighteen above (424 total). That 424 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 418 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
 ## 7.2 Performance
 
@@ -1660,7 +1664,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 **Bug sample size**: Our evaluation surveys 21 documented shuffle-divergence instances across 16 projects (§7.1), with 8 modeled as self-contained Rust examples. Of the 21, 14 are fully caught by the type system.
 
-**GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents on both sm_89 (Ada) and sm_90 (Hopper). We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on both H200 SXM and RTX 4000 Ada via cudarc, producing correct results (32, 496, 32, and a fully sorted sequence respectively). The `diverge_merge_reduce` kernel is particularly significant: it diverges into `Warp<Even>` and `Warp<Odd>`, merges back to `Warp<All>`, then reduces—the type system prevented shuffle during divergence, and the merge produces PTX identical to the non-diverging butterfly. The ballot codepath uses a `setp`/`selp` workaround for Rust's missing `pred` register class in the nvptx64 backend (declaring `.reg .pred` inside the asm block and converting to/from `u32`), but has not yet been exercised in a GPU kernel.
+**GPU hardware evaluation**: Our type system prototype runs on CPU, emulating warp semantics. The zero-overhead claim is established by type erasure verified at three levels: Rust MIR, LLVM IR, and NVIDIA PTX (§7.2). We compiled actual Rust type system code (PhantomData, trait bounds, diverge/merge) to PTX via `nvptx64-nvidia-cuda` and confirmed byte-identical output vs. untyped equivalents on both sm_89 (Ada) and sm_90 (Hopper). We reproduced the cuda-samples#398 bug and verified shuffle semantics (wrap, clamp, overflow) on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace). AMD MI300X (gfx942) verified for mask correctness via HIP. Four typed Rust kernels (butterfly reduce, diverge/merge reduce, parameterized reduce, bitonic sort) execute successfully on both H200 SXM and RTX 4000 Ada via cudarc, producing correct results (32, 496, 32, and a fully sorted sequence respectively). The `diverge_merge_reduce` kernel is particularly significant: it diverges into `Warp<Even>` and `Warp<Odd>`, merges back to `Warp<All>`, then reduces—the type system prevented shuffle during divergence, and the merge produces PTX identical to the non-diverging butterfly. The ballot codepath uses a `setp`/`selp` workaround for Rust's missing `pred` register class in the nvptx64 backend (declaring `.reg . The setp-based ballot workaround runs as Test 5 of `examples/gpu-project` (RTX 4000 Ada, PASS).
 
 **Selection bias**: The bugs we model are ones where the type system succeeds. We explicitly identify patterns where it does not (data-dependent masks, §7.3). Among the surveyed instances, none is fully outside the system's reach at the source level, though five are only partially caught (the residue in each case is a data-dependent mask or logic component beyond active-set typing).
 
@@ -1671,9 +1675,9 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Real bugs surveyed | 21 across 16 projects (14 fully caught, 5 partial, 1 motivation, 1 vendor response) |
 | Real bugs modeled | 8 with worked Rust examples (+ 5 mechanized untypability proofs in Lean) |
 | Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
-| Real GPU execution | 4 typed kernels PASS on H200 SXM and RTX 4000 Ada (butterfly reduce, diverge/merge, reduce_n, bitonic sort) |
+| Real GPU execution | 6 typed kernels via cudarc: butterfly reduce, diverge/merge, reduce_n and bitonic sort PASS on H200 SXM and RTX 4000 Ada; ballot and sub-warp `shuffle_xor_within` after a branch-free diverge PASS on RTX 4000 Ada (`results/rtx4000ada-2026-10-18.txt`) |
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
-| Type system tests | main crate: 326 unit + 50 example tests; workspace-wide: 39 doc tests (415 total) spanning two scopes; 409 main-crate total in a single invocation |
+| Type system tests | main crate: 334 unit + 50 example tests; workspace-wide: 40 doc tests (424 total) spanning two scopes; 418 main-crate total in a single invocation |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | ≈16% of source lines aggregate across the 8 examples (varies ~2.5× between examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, and similar — indicative, no counting script ships with the artifact; see §10) |
 | Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |

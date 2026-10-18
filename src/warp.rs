@@ -53,18 +53,35 @@ pub struct Warp<S: ActiveSet> {
 }
 
 impl Warp<crate::active_set::All> {
-    /// The only public entry point: get a warp with all lanes active.
+    /// Get a warp with all lanes active, at kernel entry.
     ///
     /// In real GPU code, this corresponds to kernel entry — the point
     /// where all 32 lanes are guaranteed active. Sub-warps are created
-    /// only via `diverge_*()` methods, which consume the parent.
+    /// via `diverge_*()` methods, which consume the parent.
     ///
-    /// **Limitation:** This can be called multiple times, creating independent
-    /// `Warp<All>` handles. Rust's affine type system cannot enforce that only
-    /// one exists. In real GPU code, call this once at kernel entry. Calling it
-    /// again after a diverge would bypass the typestate discipline — don't do
-    /// that. The Lean formalization models linear semantics where this is
-    /// enforced; the Rust implementation trusts the programmer here.
+    /// # Trusted entry points
+    ///
+    /// A `Warp<S>` is a zero-sized witness that the lanes in `S` are the
+    /// converged lanes of this hardware warp. No constructor inspects
+    /// hardware state, so the witness is trusted, not unforgeable. Every
+    /// `unsafe` block in the typed shuffles relies on it, and these are the
+    /// routes that produce one without hardware evidence:
+    ///
+    /// 1. `Warp::kernel_entry()` itself: it can be called anywhere, including
+    ///    after a diverge or inside a raw branch. Call it once, at kernel entry.
+    /// 2. Gradual ascription: `DynWarp::{all, all_64, from_mask_32,
+    ///    from_mask_64, from_mask}(…).ascribe::<S>()` checks `S` only against
+    ///    the caller's own mask, so it can produce any `Warp<S>` anywhere.
+    ///    `DynWarp::from_static(warp)` consumes a real handle and is sound.
+    /// 3. Merge checks set shape, not provenance: `Even` from one
+    ///    `kernel_entry()` handle and `Odd` from another merge without error.
+    /// 4. A raw data-dependent branch around a `&self` call
+    ///    (`if tid < 16 { warp.shuffle_xor(..) }`) is ordinary Rust and is
+    ///    exactly the hardware hazard; the guarantee covers programs that
+    ///    express divergence through `diverge`/`merge` only.
+    ///
+    /// Inside the crate, `Warp::new()` is `pub(crate)`. The Lean calculus has
+    /// the same gap: its `warpVal` literals are unrestricted (paper §4.8).
     pub fn kernel_entry() -> Self {
         Warp {
             _phantom: PhantomData,
@@ -118,8 +135,8 @@ impl<S: ActiveSet> Warp<S> {
 }
 
 // NOTE: No Default impl for Warp<All>. Warp handles should only be created
-// via kernel_entry() (public) or diverge (which consumes the parent).
-// `DynWarp::ascribe` is a third, trusted route (README Limitations).
+// via kernel_entry() (public) or diverge (which consumes the parent); the
+// other routes are listed under "Trusted entry points" on kernel_entry.
 // A Default impl would allow silent construction in generic contexts
 // (unwrap_or_default, etc.), weakening the entry-point discipline.
 

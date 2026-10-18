@@ -104,12 +104,20 @@ cmd_run() {
     trap cmd_down EXIT
     cmd_up "$gpu" || die "pod creation failed (pod terminated by trap if one was made)"
     local ssh_cmd; ssh_cmd=$(pods_json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["ssh"]["ssh_command"])')
-    echo "=== running verification ==="
+    # WARP_REF selects the branch or commit to verify (default main). The whole
+    # remote transcript is also kept locally under results/, because the pod's
+    # /tmp/h200-results.txt dies with the pod and the paper's H200 numbers had
+    # no committed artifact until 2026-10-18.
+    local ref="${WARP_REF:-main}"
+    local log="results/h200-$(date -u +%Y-%m-%d)-${ref//\//_}.txt"
+    mkdir -p results
+    echo "=== running verification (ref $ref) -> $log ==="
     $ssh_cmd -o StrictHostKeyChecking=accept-new \
-        'export PATH=/usr/local/cuda/bin:$HOME/.cargo/bin:$PATH
+        "export PATH=/usr/local/cuda/bin:\$HOME/.cargo/bin:\$PATH
          cd /tmp && git clone -q https://github.com/modelmiser/warp-types.git 2>/dev/null
-         cd /tmp/warp-types && git pull -q && bash reproduce/runpod-h200.sh'
-    echo "=== verification done; terminating ==="
+         cd /tmp/warp-types && git fetch -q origin && git checkout -q '$ref' && (git pull -q origin '$ref' 2>/dev/null || true)
+         bash reproduce/runpod-h200.sh" 2>&1 | tee "$log"
+    echo "=== verification done; log in $log; terminating ==="
 }
 
 need runpodctl; need python3

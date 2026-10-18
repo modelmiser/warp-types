@@ -151,6 +151,24 @@ cargo test -p warp-types-sat --features gpu 2>&1 | grep -E "test result|error|pa
 # they have never executed. A panic here is a finding, not a flake.
 echo "" | tee -a "$RESULTS"
 
+# --- Step 5d: The cargo-integrated example on this GPU ---
+# Six kernels through the typed API via cudarc, including Test 6:
+# shuffle_xor_within after a branch-free diverge_even_odd — the only kernel that
+# issues a sub-warp membermask, and the one the 2026-10-18 audit found unsound
+# before the lane guard. Then compute-sanitizer over the same binary where the
+# tool exists: memcheck + synccheck is the null result the paper cites.
+echo "=== Step 5d: examples/gpu-project (6 kernels via cudarc) ===" | tee -a "$RESULTS"
+cd /tmp/warp-types/examples/gpu-project
+cargo run --release 2>&1 | grep -E "GPU:|=== Test|Result:|PASS|FAIL|error|panicked" | tee -a "$RESULTS"
+if command -v compute-sanitizer &>/dev/null; then
+    BIN=$(ls -t target/release/gpu-project-example 2>/dev/null | head -1)
+    for tool in memcheck synccheck; do
+        echo "--- compute-sanitizer --tool $tool ---" | tee -a "$RESULTS"
+        compute-sanitizer --tool $tool "$BIN" 2>&1 | grep -E "ERROR SUMMARY|FAIL|error" | tee -a "$RESULTS"
+    done
+fi
+echo "" | tee -a "$RESULTS"
+
 # --- Step 6: Full demo (bug → error → fix) ---
 echo "=== Step 6: Full Demo ===" | tee -a "$RESULTS"
 cd /tmp/warp-types
