@@ -127,7 +127,10 @@ pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
 ///
 /// The instruction WAITS: it blocks until every *non-exited* lane named in
 /// `mask` has executed a `shfl.sync` with the same qualifiers and the same
-/// mask. Two consequences the previous wording got wrong. Naming a live lane
+/// mask. (Paraphrase of the PTX ISA's `shfl.sync` section, from memory of the
+/// text; the ISA is not vendored in this repository and the 2026-10-18 panel
+/// could not verify it offline — check against the current ISA before relying
+/// on a detail beyond "named lanes rendezvous; an unnamed executing lane is UB".) Two consequences the previous wording got wrong. Naming a live lane
 /// that never arrives HANGS — it is not undefined behavior. Naming a lane that
 /// has already exited is fine; exited lanes are excluded from the wait.
 ///

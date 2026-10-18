@@ -52,3 +52,15 @@ pub unsafe extern "ptx-kernel" fn probe_up_i64(out: *mut i64) {
     let v = w.shuffle_up(data::PerLane::new(tid as i64), 1).get();
     *out.add(tid as usize) = v;
 }
+
+/// Negative probe (feature `empty-probe`): `Warp<Empty>` has no lanes, and the
+/// inline const assert in `shuffle_xor_within` must reject this instantiation at
+/// codegen. The script expects this build to fail with E0080.
+#[cfg(feature = "empty-probe")]
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_within_empty(out: *mut i32) {
+    let w: Warp<Empty> = DynWarp::from_mask_32(0).ascribe::<Empty>().unwrap();
+    let tid = warp_types::gpu::thread_id_x();
+    let v = w.shuffle_xor_within(data::PerLane::new(tid as i32), 0).get();
+    *out.add(tid as usize) = v;
+}

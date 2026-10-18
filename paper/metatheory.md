@@ -55,6 +55,8 @@ for each lane i in S: result[i] = data[i ⊕ mask]
 (σ, S, shuffle_xor_within(Warp<S>, data, mask)) → (σ, S, result)
 ```
 
+The result on a lane outside `S` is `data[i]`: the crate's method returns its input there and issues no instruction (§6.9), so the rule and the implementation agree on every lane.
+
 ## 4.2 Type Safety
 
 We prove type safety through progress and preservation.
@@ -89,13 +91,9 @@ The key insight: shuffle operations have a premise requiring `Warp<All>`. If a p
 
 **Well-typed programs don't go wrong.**
 
-Specifically: if `⊢ e : τ` and `e →* e'` where `e'` is stuck (cannot step further and is not a value), then `e'` does not contain a shuffle operation with an inactive source lane.
+Specifically: if `⊢ e : τ` and `e →* e'`, then `e'` is a value or can step (`type_safety`). Two facts turn that into the safety property. By `shuffle_diverged_stuck`, the term `shuffle (warpVal s) perLaneVal` with `s ≠ all` has no successor, so it is never such an `e'`: a shuffle on a diverged warp is a stuck *top-level* state and is unreachable. By inversion (`shuffle_requires_all`), every shuffle subterm of a well-typed term has an operand of type `Warp<All>`, and preservation keeps that true along the reduction.
 
-*Proof:* By progress and preservation, well-typed programs either:
-1. Reduce to a value (normal termination), or
-2. Step forever (non-termination).
-
-They never reach a stuck state, and a shuffle on a diverged warp *is* a stuck state: in the mechanization `Step.shuffleVal` fires only on `warpVal all`, and `shuffle_diverged_stuck` proves that `shuffle (warpVal s) perLaneVal` with `s ≠ all` has no successor, so `type_safety` says no closed well-typed term reaches it. (Until 0.4.1 the reduction rule accepted any `s`; the semantics was total on shuffles and this corollary rested on the typing-side `shuffle_requires_all` and the untypability theorems alone.) The calculus has no store and no lane-indexed data: "inactive source lane" is represented by the active set of the warp operand, not by a runtime mask.
+*Proof:* `type_safety` is by induction on `e →* e'` from progress and preservation; the two facts are the named theorems. (Until 0.4.1 the reduction rule `shuffleVal` accepted any `s`; the semantics was total on shuffles, so the stuckness half was missing and the corollary rested on inversion, preservation and the untypability theorems.) The calculus has no store and no lane-indexed data: "inactive source lane" is represented by the active set of the warp operand, not by a runtime mask, and Lemma 4.6 below is stated over the prose semantics only.
 
 ## 4.3 Key Lemmas
 
@@ -128,7 +126,7 @@ This lemma ensures that merging the results of a diverge restores the original a
 
 *Proof:* The typing rule requires `Γ ⊢ w : Warp<All>`. In `Warp<All>`, all 32 lanes are active. For any `i` and any `mask`, `i ⊕ mask` is a valid lane index (0–31). Since all lanes are active, every source lane is active.
 
-This is the key safety property: shuffles only read from active lanes.
+This is the key safety property: shuffles only read from active lanes. It is stated over the prose semantics; the Lean calculus has no mask or lane data, so this lemma is not mechanized.
 
 ### Lemma 4.7 (No Unsafe Shuffle with Diverged Warp)
 
@@ -140,21 +138,19 @@ This lemma formalizes our key mechanism: the bug is a type error, not a runtime 
 
 ## 4.4 Linearity
 
-Warps are linear resources—they cannot be duplicated or discarded. This is essential for soundness.
+Warps are meant to be linear resources—neither duplicated nor discarded. What the calculus actually enforces is narrower, and the two lemmas are stated accordingly. Neither is mechanized.
 
-### Lemma 4.8 (No Warp Duplication)
+### Lemma 4.8 (No Warp Duplication in Evaluated Positions)
 
-**If `Γ, w : Warp<S> ⊢ e : τ`, then `w` occurs exactly once in `e`.**
+**If `Γ, w : Warp<S> ⊢ e : τ`, then `w` is consumed by at most one evaluated use in `e`.**
 
-*Proof:* By the linear typing rule for warps. The type system tracks each warp capability and ensures single use.
+*Proof sketch:* the `var` rule removes the binding from the context, so a second evaluated use finds no binding. A body the semantics discards without evaluating (a LOOP-VARYING or LOOP-PHASED varying body, which is only required to be `warpFree`) may still mention `w`: `let x = warpVal all in (x, for_varying(warpVal all, x))` is closed and typable, with `x` occurring twice. The syntactic "exactly once" does not hold.
 
-### Lemma 4.9 (No Warp Discard)
+### Lemma 4.9 (No Warp Discard) — intended, not a property of the mechanized calculus
 
-**If `Γ ⊢ e : τ` and `w : Warp<S>` is bound in `Γ`, then `w` is used in `e`.**
+**Intended:** if `w : Warp<S>` is bound in `Γ` and `Γ ⊢ e : τ`, then `w` is used in `e`. The `letBind`/`letPair` consumption checks require the *name* to be used, but what the use produces can be discarded: `let w = warpVal all in fst (perLaneVal, w)` is closed and typable and drops the warp. So the mechanized calculus is affine for warps, like Rust (§6.9), and nothing in it forces a diverged warp to be merged.
 
-*Proof:* By the linear typing rule. Unused linear resources are a type error.
-
-Without linearity, the original warp could be reused after diverge, allowing unsafe shuffles on `Warp<All>` when some lanes are actually inactive.
+What soundness needs from this section is the duplication half: without it the original warp could be reused after diverge, allowing a full-warp shuffle on `Warp<All>` when some lanes are inactive. That half holds for evaluated positions, which is where the semantics looks.
 
 ## 4.5 Nested Divergence
 
@@ -252,7 +248,7 @@ Each factors through `shuffle_diverged_untypable`: if the active set after diver
 
 ### Design Choices
 
-Active sets are modeled as `PSet n` (a `BitVec n`, instantiated at 32 for the GPU calculus), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, which encodes Rust's move semantics for `diverge` and `merge`. The mechanized `shuffle` also consumes its warp operand, where the Rust method borrows `&self` and is called repeatedly (the butterfly in §3.5 calls it five times); this is a modelling simplification, not a difference in the guarantee. The mechanization has no trusted assumptions beyond Lean's kernel and its three standard axioms.
+Active sets are modeled as `PSet n` (a `BitVec n`, instantiated at 32 for the GPU calculus), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, which encodes Rust's move semantics for `diverge` and `merge`. The mechanized `shuffle` also consumes its warp operand, where the Rust method borrows `&self` and is called repeatedly (the butterfly in §3.5 calls it five times); the Rust borrow is not modelled. The mechanization has no trusted assumptions beyond Lean's kernel: a `CollectAxioms` scan of all 530 theorem constants in the library (2026-10-18) finds only `propext`, `Classical.choice` and `Quot.sound`. <!-- unguarded: 530 — CollectAxioms scan count (all theorem constants in WarpTypes.*), dated 2026-10-18; the guard totals only Basic + Metatheory -->
 
 ### What Is Mechanized
 
@@ -267,7 +263,7 @@ The following are fully mechanized with zero `sorry` (standard axioms only):
 
 - The operational semantics for `shuffle_within` (§4.6, set-preserving masks). The Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`); the Lean model does not include this construct.
 - **LOOP-CONVERGENT modeling note**: The Lean `loopConvergent` uses fuel (`Nat` bound) rather than modeling the paper's collective-predicate exit condition (`p : Warp<S> → Bool` where `p` uses ballot/all/any). The typing rule is structurally identical to `loopUniform` — body preserves active set `S`. This proves type safety regardless of when the loop exits (a strictly stronger guarantee), but does not model the collective-predicate requirement that distinguishes LOOP-CONVERGENT from LOOP-UNIFORM in the paper.
-- **Linearity**: `letBind`/`letPair` check freshness and consumption, so a *let-bound* warp can be neither duplicated nor dropped. But `fst`/`snd` discard a pair component and `warpVal` literals are typable in any context, so the calculus is affine for pairs and has the unrestricted-entry gap of §6.9: `fst (diverge (warpVal all) even)` is closed and well-typed with the odd half gone. Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) therefore hold for let-bound warps only and are not stated as Lean theorems; the untypability results are statements about specific closed terms.
+- **Linearity**: `letBind`/`letPair` check freshness and consumption of the *name*; `var` removes the binding, so a bound warp is consumed by at most one evaluated use. But `fst`/`snd` discard a pair component (`let w = warpVal all in fst (perLaneVal, w)` drops a bound warp; `fst (diverge (warpVal all) even)` drops the odd half), discarded `warpFree` loop bodies may mention a consumed name, and `warpVal` literals are typable in any context (the unrestricted-entry gap of §6.9). The calculus is affine for warps. Lemmas 4.8 and 4.9 are not Lean theorems (§4.4 states what holds); the untypability results are statements about specific closed terms.
 
-We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
+The mechanized scope covers the active-set discipline — progress, preservation, substitution, stuckness of the partial-warp shuffle, and the untypability of the surveyed bug shapes. It does not model lane data (Lemma 4.6), the Rust borrow of `&self` collectives, or `shuffle_within`.
 

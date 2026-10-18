@@ -8,6 +8,10 @@ description = "Device-side probe: emits PTX for a few typed operations so script
 [lib]
 crate-type = ["rlib"]
 
+[features]
+# Instantiates Warp<Empty>::shuffle_xor_within from an .entry: the device build must FAIL (E0080).
+empty-probe = []
+
 [dependencies]
 warp-types = { path = "../.." }
 

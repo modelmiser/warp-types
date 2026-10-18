@@ -6,13 +6,20 @@
   `diverge_even_odd()` every lane still runs the code that follows. The method issued `shfl.sync` with membermask
   `S::MASK` on all 32 lanes, so lanes outside `S` executed an instruction whose membermask did not name them, which
   the PTX ISA leaves undefined; the method's own doc example did this. Lanes outside `S` now skip the instruction and
-  return their input. `Warp<Empty>::shuffle_xor_within` is a compile error. Found by the 2026-10-18 unsafe and
-  boundary audits; verified on an RTX 4000 Ada (`examples/gpu-project` Test 6, `results/rtx4000ada-2026-10-18.txt`).
+  return their input. `Warp<Empty>::shuffle_xor_within` fails at codegen (post-monomorphization `E0080`; not under
+  `cargo check`), on the host (`compile_fail,E0080` doctest) and on nvptx64 (`scripts/check-ptx-operands.sh`
+  `empty-probe`). Found by the 2026-10-18 unsafe and boundary audits; the fixed semantics run on an RTX 4000 Ada
+  (`examples/gpu-project` Test 6, `results/rtx4000ada-2026-10-18.txt`; a value test cannot witness the old UB).
+  Reviewed by a five-seat cross-vendor panel before release (`.review/panel-2026-10-18-041`, not committed).
 - **warp-types-builder 0.3.2: `find_ptx_file` searches the new asm output layout.** nightly-2026-09-15 writes
   `--emit=asm` output under `build/<crate>/<hash>/out/`, not `deps/`; the builder kept picking a stale `deps/` file,
-  so the worked example silently ran kernels that were not in its source. Regression test added.
-- `scripts/check-ptx-operands.sh` + `tools/ptxprobe`: the membermask and width operands reach the emitted
-  `shfl.sync` (greps the probe's PTX; runs in the nvptx CI job and the pre-push hook; no GPU needed).
+  so the worked example silently ran kernels that were not in its source. Exact-name candidates now compete on
+  mtime too (they were returned first), and a sibling crate sharing the name prefix is no longer matched.
+  Regression tests added. mtime remains a heuristic.
+- `scripts/check-ptx-operands.sh` + `tools/ptxprobe`: the register in each `shfl.sync`'s membermask operand is
+  loaded with the promised constant, the lane guard is present, the width operands are right, and the `Empty`
+  instantiation fails the device build (reads PTX rustc writes to a named path; nvptx CI job + pre-push hook; no
+  GPU needed). Pattern and one-hop dataflow, not a dominance proof.
 - **Lean: the reduction rules now carry the safety property.** `Step.shuffleVal` (and `fenceVal`/`finalizeVal` in the
   core metatheory) accepted any active set, so an ill-typed shuffle on a diverged warp *stepped* and progress/
   preservation said nothing about shuffles. They now fire only on the full set; `shuffle_diverged_stuck`,

@@ -221,13 +221,15 @@ pub fn ballot_lower_half(out: *mut u32) {
 }
 
 // ============================================================================
-// Kernel 6: shuffle_xor_within after a real diverge, with NO branch.
+// Kernel 6: shuffle_xor_within after a real diverge, with no branch in the caller.
 //
 // This is the pattern the method's own documentation uses. `diverge_even_odd`
 // emits no branch, so all 32 lanes reach the call holding both handles; the
 // method must guard its own instruction so that the lanes outside Even issue
 // nothing. Expected: even lanes get their partner (tid ^ 2), odd lanes get
-// their own tid back.
+// their own tid back. This checks the FIXED semantics; it cannot witness the
+// pre-0.4.1 behaviour, which was undefined and may well have produced the same
+// values on a given GPU.
 // ============================================================================
 
 #[warp_kernel]

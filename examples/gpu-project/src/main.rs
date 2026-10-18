@@ -184,10 +184,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // === Test 6: shuffle_xor_within after diverge_even_odd, no branch ===
+    // === Test 6: shuffle_xor_within after diverge_even_odd, no branch in the caller ===
     // The documented usage. All 32 lanes reach the call; the method's lane
     // guard must keep the odd lanes out of the shfl.sync (membermask Even).
-    println!("=== Test 6: shuffle_within_even (sub-warp membermask, no branch) ===");
+    println!("=== Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===");
     {
         let dev_out = stream.memcpy_stod(&[-1i32; WARP_SIZE])?;
 

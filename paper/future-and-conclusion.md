@@ -35,7 +35,7 @@ Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservatio
 
 Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`). <!-- unguarded: 14 — module-scoped test count; the guard computes no per-module actual -->
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides a subset of `Warp<S>`'s operations (scalar `i32` shuffles, `ballot`, `merge`) and checks the active-set invariants at runtime instead of compile time; `ascribe` converts back to the typed fragment and is one of the trusted routes of §6.9. The migration path: <!-- unguarded: 30 — module-scoped test count; the guard computes no per-module actual -->
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides a subset of `Warp<S>`'s operations (scalar `i32` shuffles, `ballot`, `merge`) and checks the active-set invariants at runtime instead of compile time; its shuffles are prototypes that perform the check and return their input unchanged rather than reading the partner lane (`src/gradual.rs`); `ascribe` converts back to the typed fragment and is one of the trusted routes of §6.9. The migration path: <!-- unguarded: 30 — module-scoped test count; the guard computes no per-module actual -->
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -198,7 +198,7 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 
 [48] Coutinho, B., Sampaio, D., Pereira, F. M. Q., and Meira Jr., W. "Divergence Analysis and Optimizations." PACT 2011.
 
-[49] Sampaio, D., Martins, R., Collange, S., and Pereira, F. M. Q. "Divergence Analysis." ACM TOPLAS 35(4), 2013.
+[49] Sampaio, D., Martins de Souza, R., Collange, S., and Pereira, F. M. Q. "Divergence Analysis." ACM TOPLAS 35(4), 2014.
 
 [50] Karrenberg, R. and Hack, S. "Whole-Function Vectorization." CGO 2011.
 

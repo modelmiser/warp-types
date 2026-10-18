@@ -44,7 +44,7 @@ use core::marker::PhantomData;
 /// Warp handles are affine — diverge consumes the parent warp via Rust's move
 /// semantics, preventing use-after-diverge. Dropping a warp without merging is
 /// permitted by the compiler (Rust is affine, not linear), but `#[must_use]`
-/// emits a warning. The Lean formalization models linear semantics; the Rust
+/// emits a warning. The Lean calculus is affine for warps as well (paper §4.8); the Rust
 /// implementation approximates this via move + must_use.
 #[must_use = "dropping a Warp without merging may indicate a missing merge — \
               both branches of a diverge should be merged before shuffling"]
@@ -79,9 +79,17 @@ impl Warp<crate::active_set::All> {
     ///    (`if tid < 16 { warp.shuffle_xor(..) }`) is ordinary Rust and is
     ///    exactly the hardware hazard; the guarantee covers programs that
     ///    express divergence through `diverge`/`merge` only.
+    /// 5. The `research` feature (host-only, `cfg(not(target_arch = "nvptx64"))`)
+    ///    compiles design explorations whose `diverge`/`merge` mint handles
+    ///    freely. Never enable it for device code.
     ///
-    /// Inside the crate, `Warp::new()` is `pub(crate)`. The Lean calculus has
-    /// the same gap: its `warpVal` literals are unrestricted (paper §4.8).
+    /// Everything else that yields a handle — `diverge_*`, `merge`, `Warp::tile`,
+    /// `Tile::partition_*`, `DynDiverge::merge`, the fence witnesses — consumes
+    /// or borrows an existing witness, so it is derived, not a trust root.
+    /// `merge(Warp<All>, Warp<Empty>)` is accepted (`ComplementOf<Empty> for
+    /// All`); it is the identity. Inside the crate, `Warp::new()` is
+    /// `pub(crate)`. The Lean calculus has the same gap: its `warpVal` literals
+    /// are unrestricted (paper §4.8).
     pub fn kernel_entry() -> Self {
         Warp {
             _phantom: PhantomData,

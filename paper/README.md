@@ -31,7 +31,7 @@ We prove our type system sound (progress and preservation via Lean 4 mechanizati
 
 1. **Type system for GPU divergence** — A warp's active-lane set is a type: complementary sub-warps on divergence, a complement-checked merge, and no full-warp shuffle on a diverged warp, preventing undefined behavior from reading inactive lanes. Prior static work on collectives under divergence is compared in §8.
 
-2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks; linear for let-bound warps in the mechanized calculus (pair projections and literals are unrestricted, §4.8), approximated in Rust by move semantics (affine: a handle can be dropped) and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
+2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks; affine in the mechanized calculus as in Rust (a bound warp is consumed by at most one evaluated use, but can be dropped through a pair projection; §4.4, §4.8), with Rust's move semantics as the implementation and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
 
 3. **Soundness proof** — Progress and preservation theorems ensure well-typed programs in the mechanized calculus never read from inactive lanes.
 

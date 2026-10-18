@@ -533,7 +533,11 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
             .unwrap_or_else(|| "kernels".to_string())
     };
 
-    // Check common locations for the .s file
+    // Unhashed locations some toolchains/flags produce (kept for the error message
+    // and as candidates — they compete on mtime with the hashed ones below, they
+    // are NOT returned first: the 2026-10-18 panel pointed out that an exact-name
+    // file from an old build would otherwise shadow a fresh hashed one, the very
+    // bug this function was just fixed for).
     let candidates = [
         target_dir.join(format!("{}.s", crate_name)),
         target_dir.join(format!("lib{}.s", crate_name)),
@@ -542,36 +546,37 @@ fn find_ptx_file(target_dir: &Path, kernel_dir: &Path) -> Result<PathBuf, BuildE
         target_dir.join("deps").join(format!("lib{}.s", crate_name)),
     ];
 
-    for path in &candidates {
-        if path.exists() {
-            return Ok(path.clone());
-        }
-    }
-
-    // Fallback: search for .s files matching the crate name pattern. Where
-    // rustc puts `--emit=asm` output depends on the toolchain: older nightlies
-    // wrote `deps/<crate>-HASH.s`; nightly-2026-09-15 writes
-    // `build/<crate>/<HASH>/out/<crate>-HASH.s`. Both layouts are searched.
-    // Multiple crate_name-HASH.s artifacts accumulate across rebuilds with
-    // different flags, and read_dir order is arbitrary — collect all matches
-    // and pick the newest (see pick_newest) so a stale artifact is never
-    // silently selected. (2026-10-18: a stale `deps/` file from the previous
-    // pin shadowed the fresh `build/.../out/` file for one pin bump, and the
-    // worked example ran kernels that were not in its source.)
+    // Where rustc puts `--emit=asm` output depends on the toolchain: older
+    // nightlies wrote `deps/<crate>-HASH.s`; nightly-2026-09-15 was observed to
+    // write `build/<crate>/<HASH>/out/<crate>-HASH.s`. Both layouts are
+    // searched. Multiple crate_name-HASH.s artifacts accumulate across rebuilds
+    // with different flags, and read_dir order is arbitrary — collect all
+    // matches, exact-name candidates included, and pick the newest (see
+    // pick_newest) so a stale artifact is never silently selected. (2026-10-18:
+    // a stale `deps/` file from the previous pin shadowed the fresh
+    // `build/.../out/` file for one pin bump, and the worked example ran kernels
+    // that were not in its source.) mtime is a heuristic; the exact answer would
+    // be `cargo --message-format=json`'s artifact list, which is a larger change.
     let dirs = asm_search_dirs(target_dir);
-    let matches: Vec<PathBuf> = asm_files(&dirs)
+    let is_ours = |fname: &str| {
+        let lib = format!("lib{}", crate_name);
+        fname == crate_name
+            || fname == lib
+            || fname.starts_with(&format!("{}-", crate_name))
+            || fname.starts_with(&format!("{}-", lib))
+    };
+    let mut matches: Vec<PathBuf> = asm_files(&dirs)
         .into_iter()
         .filter(|p| {
             let fname = p
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            // Match crate_name-HASH.s pattern, skip core/compiler_builtins
-            fname.starts_with(&crate_name)
-                && !fname.starts_with("core-")
-                && !fname.starts_with("compiler_builtins-")
+            // `<crate>-HASH.s` exactly — not a sibling crate sharing the prefix
+            is_ours(&fname)
         })
         .collect();
+    matches.extend(candidates.iter().filter(|p| p.exists()).cloned());
     if let Some(p) = pick_newest(matches) {
         return Ok(p);
     }
@@ -792,6 +797,44 @@ mod tests {
         std::fs::write(&stale, ".visible .entry old(").unwrap();
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(&fresh, ".visible .entry new(").unwrap();
+        let picked = find_ptx_file(&target_dir, &kernel_dir).unwrap();
+        assert_eq!(picked, fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_ptx_file_exact_name_competes_on_mtime_and_prefix_siblings_are_ignored() {
+        let dir = std::env::temp_dir().join(format!(
+            "warp-types-builder-exact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let kernel_dir = dir.join("my-kernels");
+        let target_dir = dir
+            .join("target")
+            .join("nvptx64-nvidia-cuda")
+            .join("release");
+        std::fs::create_dir_all(&kernel_dir).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"my-kernels\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        let deps = target_dir.join("deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        // stale EXACT-name artifact (the pre-fix fast path returned this first)
+        let stale_exact = deps.join("my_kernels.s");
+        std::fs::write(&stale_exact, "old").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        // a sibling crate sharing the prefix, newer than everything: must be ignored
+        let sibling = deps.join("my_kernels_extra-ffff.s");
+        let fresh = deps.join("my_kernels-beef.s");
+        std::fs::write(&fresh, "new").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&sibling, "sibling").unwrap();
         let picked = find_ptx_file(&target_dir, &kernel_dir).unwrap();
         assert_eq!(picked, fresh);
         let _ = std::fs::remove_dir_all(&dir);

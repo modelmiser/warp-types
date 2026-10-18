@@ -1,6 +1,6 @@
 # Warp Typestate: Lean 4 Formalization
 
-A mechanized proof of type safety for a typestate calculus (linear for let-bound warps — see Scope) that prevents GPU warp divergence bugs at compile time.
+A mechanized proof of type safety for a typestate calculus (affine for warps — see Scope) that prevents GPU warp divergence bugs at compile time.
 
 Warp-level shuffle operations on diverged (partially active) warps are undefined behavior in CUDA/GPU programming (prior static treatments are compared in the paper's §8). This formalization proves that a typestate approach makes such programs untypable.
 
@@ -10,12 +10,12 @@ The type system models GPU warp resources as linear values typed by their active
 
 This catches three classes of bugs:
 - **Shuffle on diverged warp**: reading from inactive lanes (undefined behavior)
-- **Missing merge** of a let-bound sub-warp (the consumption check). `fst`/`snd` projections and `warpVal` literals are not covered — see Scope
+- **Missing merge** is NOT caught: a bound name must be used once, but `fst`/`snd` can drop the handle it produces — see Scope
 - **Mismatched merge**: merging non-complementary subsets
 
 ## Theorems Proven
 
-Core theorems are fully machine-checked. Zero sorry; `#print axioms` shows only Lean's standard `propext`, `Classical.choice`, `Quot.sound`.
+Core theorems are fully machine-checked. Zero sorry; a `CollectAxioms` scan of all 530 theorem constants in the `WarpTypes.*` modules (2026-10-18) finds only Lean's standard `propext`, `Classical.choice`, `Quot.sound`. <!-- unguarded: 530 — CollectAxioms scan count (all theorem constants in WarpTypes.*), dated 2026-10-18; the guard totals only Basic + Metatheory -->
 
 | Theorem | Statement | File |
 |---------|-----------|------|
@@ -36,7 +36,7 @@ Core theorems are fully machine-checked. Zero sorry; `#print axioms` shows only 
 
 The Lean model focuses on active-set tracking — the core safety mechanism. It uses a pure expression calculus (no store/configuration triples) with `PerLane` as an opaque type (no data payload). The merge rule uses `IsComplement s1 s2 parent` (general parent set, not restricted to `All`), supporting nested divergence. All four loop typing rules from §5.1 (LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) are mechanized with full progress, preservation, and substitution coverage.
 
-**Affine pairs, unrestricted literals.** `letBind`/`letPair` enforce consumption, but `fst`/`snd` discard a pair component and `warpVal s` is typable in any context, so `fst (diverge (warpVal all) even)` is closed and well-typed with the odd half gone. The untypability theorems are about specific closed terms; "missing merge" is caught for let-bound handles only.
+**Affine for warps.** `letBind`/`letPair` enforce consumption of the *name*, and `var` removes the binding, so a bound warp is consumed by at most one evaluated use. But `fst`/`snd` discard a pair component (`let w = warpVal all in fst (pairVal perLaneVal (var w))` drops a bound warp; `fst (diverge (warpVal all) even)` drops the odd half), a `warpFree` loop body the semantics discards may still mention a consumed name, and `warpVal s` is typable in any context. The untypability theorems are about specific closed terms; no theorem says a diverged warp must be merged.
 
 **LOOP-CONVERGENT note:** The Lean model uses fuel (`Nat` bound) rather than the paper's collective-predicate exit condition. The typing rule is structurally identical to LOOP-UNIFORM. This proves type safety regardless of exit timing but does not model the collective-predicate requirement. See §4.8 of the paper for the full mechanization scope.
 
@@ -52,7 +52,7 @@ This linearity condition was introduced to fix a soundness bug discovered during
 
 ## Build
 
-Requires Lean 4.28.0. No external Lake dependencies (uses only Lean's bundled Std library for `BVDecide`).
+Requires Lean 4.28.0. No external Lake dependencies.
 
 ```
 lake build

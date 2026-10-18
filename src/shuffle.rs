@@ -156,9 +156,13 @@ impl<S: ActiveSet> Warp<S> {
     /// them, which the PTX ISA leaves undefined. A caller who already
     /// branches on `lane_id()` loses nothing: the guard is then always true.
     ///
-    /// `Warp<Empty>` has no lanes to shuffle and is rejected at compile time:
+    /// `Warp<Empty>` has no lanes to shuffle and is rejected at codegen: an
+    /// inline `const` assert fails post-monomorphization (`E0080`) for every
+    /// instantiation reached from a codegen root. `cargo check`, rust-analyzer
+    /// and an instantiation in dead private code do not report it. The nvptx64
+    /// build is checked by `scripts/check-ptx-operands.sh` (`empty-probe`).
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0080
     /// use warp_types::*;
     /// let w: Warp<Empty> = DynWarp::from_mask_32(0).ascribe::<Empty>().unwrap();
     /// let _ = w.shuffle_xor_within(PerLane::new(1i32), 0);
