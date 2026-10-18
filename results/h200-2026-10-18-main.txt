@@ -1,9 +1,9 @@
-Warning: Permanently added '[103.196.86.60]:20757' (ED25519) to the list of known hosts.
+Warning: Permanently added '[213.181.104.52]:19027' (ED25519) to the list of known hosts.
 === warp-types H200 SXM Verification ===
-Date: 2026-10-18T17:11:36Z
+Date: 2026-10-18T18:36:46Z
 
 === Step 0: GPU Info ===
-NVIDIA H200, 9.0, 595.91.07, 143771 MiB
+NVIDIA H200, 9.0, 570.211.01, 143771 MiB
 Cuda compilation tools, release 12.4, V12.4.131
 Build cuda_12.4.r12.4/compiler.34097967_0
 
@@ -55,7 +55,7 @@ rustup default : nightly-x86_64-unknown-linux-gnu (default)
 
 === Step 2: Clone ===
 Already up to date.
-Commit: 3bbbe92
+Commit: d6d051a
 repo pin      : channel = "nightly-2026-09-15"
 info: syncing channel updates for nightly-2026-09-15-x86_64-unknown-linux-gnu
 info: latest update on 2026-09-15 for version 1.100.0-nightly (574ff7d98 2026-09-14)
@@ -68,20 +68,20 @@ rustc in repo : rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 === Step 3: Rust Tests (CPU) ===
 test result: ok. 334 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
-test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
-test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 27.76s
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.52s
 test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.19s
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
 
 === Step 4: GPU Shuffle Semantics ===
 Compiling for sm_90...
@@ -180,7 +180,7 @@ rust_ptx_typed: REGENERATED  committed[.version 7.0] -> pinned[.version 7.0]
    Compiling cudarc v0.19.3
    Compiling libloading v0.9.0
    Compiling warp-types-host v0.1.0 (/tmp/warp-types/reproduce/host)
-    Finished `release` profile [optimized] target(s) in 9.29s
+    Finished `release` profile [optimized] target(s) in 9.39s
      Running `target/release/run-kernel`
 GPU: NVIDIA H200
 
@@ -228,16 +228,16 @@ The fix (all lanes participate) is the ONLY version that type-checks.
 Same GPU. Same algorithm. Type system prevents the bug.
 
 === Step 5c: gpu feature (CUDA-only, untested anywhere else) ===
-test dimacs::tests::parse_error_duplicate_header ... ok
 test dimacs::tests::parse_error_missing_header ... ok
+test dimacs::tests::parse_error_duplicate_header ... ok
 test dimacs::tests::parse_error_num_vars_exceeds_encoding ... ok
-test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 27.89s
+test result: ok. 203 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 29.22s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
-test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.17s
 
 === Step 5d: examples/gpu-project (6 kernels via cudarc) ===
 GPU: NVIDIA H200
@@ -249,7 +249,7 @@ GPU: NVIDIA H200
   Result:   PASS
 === Test 4: bitonic_sort_i32 (reverse → sorted) ===
   Result:   PASS
-=== Test 5: ballot_lower_half (setp workaround) ===
+=== Test 5: ballot_lower_half (vote.sync.ballot) ===
   Result:    PASS
 === Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===
   Result:    PASS
@@ -361,11 +361,11 @@ Summary
     ✓ Catches shuffle-from-inactive-lane at compile time
     ✓ Zero runtime overhead (PhantomData erasure)
     ✓ Verified at MIR, LLVM IR, and PTX levels
-    ✓ 6 typed kernels via cudarc: 4 PASS on NVIDIA H200 SXM and RTX 4000 Ada, 2 more on the Ada
+    ✓ 6 typed kernels via cudarc PASS on NVIDIA H200 SXM and RTX 4000 Ada (compute-sanitizer clean on the H200)
     ✓ AMD MI300X mask correctness verified via HIP
 
   21 documented bugs across 16 real-world projects.
-  32 Lean theorems. 424 Rust tests. One type system.
+  33 Lean theorems. 424 Rust tests. One type system.
 
   github.com/modelmiser/warp-types
 
