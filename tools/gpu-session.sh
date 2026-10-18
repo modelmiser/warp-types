@@ -33,6 +33,7 @@ GPU_DEFAULT="NVIDIA RTX 4000 Ada Generation"   # ~$0.20/hr community; compute 8.
 # runs, gpu_launcher assert exercise, gpu-feature regression — runs on the Ada,
 # or on this workstation for free.
 IMAGE="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+# CLOUD_TYPE=SECURE when COMMUNITY has no instances (2026-10-18: no community H200 SXM; secure $5.29/hr).
 
 die() { echo "gpu-session: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found"; }
@@ -78,7 +79,7 @@ cmd_up() {
     echo "creating pod: $gpu  (billing starts now)"
     runpodctl pod create \
         --gpu-id "$gpu" --image "$IMAGE" \
-        --cloud-type COMMUNITY --public-ip --ssh \
+        --cloud-type "${CLOUD_TYPE:-COMMUNITY}" --public-ip --ssh \
         --ports '22/tcp' --container-disk-in-gb 30 \
         --name "warp-types-verify" \
         --wait --wait-timeout 10m \
