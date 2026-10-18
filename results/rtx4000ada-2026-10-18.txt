@@ -1,8 +1,8 @@
-# examples/gpu-project on the local workstation, 2026-10-18T18:35Z
-# tree: 77c057cb3 (committed; 0 dirty paths under examples/gpu-project+src)
+# examples/gpu-project on the local workstation, 2026-10-18T19:00Z
+# tree: 3196f28e2 (committed; 0 dirty paths under examples/gpu-project+src)
 # rustc: rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 # driver: 580.173.02 cuda: 12.0, V12.0.140
-# 0.4.2: warp collectives lowered through llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot with an i1 predicate.
+# 0.4.3: warp collectives via llvm.nvvm.* intrinsics (convergent); Test 5 ballot via vote.sync.ballot; Test 7 = DynWarp runtime-checked shuffle issuing the real shfl.sync.
 # Test 6 checks the FIXED semantics of shuffle_xor_within (odd lanes return their input); the pre-0.4.1 behaviour was undefined and is not witnessed by a value test.
 
 ╔══════════════════════════════════════════════════════════╗
@@ -45,6 +45,10 @@ GPU: NVIDIA RTX 4000 SFF Ada Generation
 
 === Test 6: shuffle_within_even (sub-warp membermask, no caller branch) ===
   Even lanes: tid ^ 2 (partner within Even); odd lanes: own tid
+  Result:    PASS
+
+=== Test 7: dyn_shuffle_xor (gradual API, runtime-checked, real shuffle) ===
+  Every lane: tid ^ 1
   Result:    PASS
 
 All kernels compiled from cargo, type-checked at build time,
