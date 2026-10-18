@@ -23,7 +23,7 @@ gpu = ["dep:cudarc", "dep:warp-types-builder"]
 compare = ["dep:batsat", "dep:splr"]
 
 [dependencies]
-warp-types = { path = "..", version = "0.3.2" }
+warp-types = { path = "..", version = "0.4.0" }
 cudarc = { version = "0.19", features = ["driver", "cuda-12000"], optional = true }
 # Peer solvers for comparison benches. Listed as optional [dependencies]
 # (not [dev-dependencies]) because Cargo rejects `optional = true` on

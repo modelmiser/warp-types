@@ -16,6 +16,6 @@ name = "pdr"
 path = "src/bin/pdr.rs"
 
 [dependencies]
-warp-types = { path = "..", version = "0.3.2" }
+warp-types = { path = "..", version = "0.4.0" }
 warp-types-sat = { path = "../warp-types-sat", version = "0.3.0" }
 warp-types-bmc = { path = "../warp-types-bmc", version = "0.1.0" }

@@ -189,7 +189,7 @@ warp-types/
 - **The guarantee covers the typed fragment.** A raw data-dependent branch around a warp intrinsic (`if tid < 16 { warp.shuffle_xor(...) }`) is ordinary Rust: it type-checks and is exactly the unsafe pattern on hardware. The safety claim holds for programs that express divergence exclusively via `diverge`/`merge`.
 - **Gradual ascription is a trusted entry point.** `DynWarp::from_mask_32(m).ascribe::<S>()` checks `S` only against the caller's own `m`, so it can produce any `Warp<S>` anywhere, like a second `kernel_entry()`.
 - **Merge checks set shape, not provenance.** `Even` from one `kernel_entry()` handle and `Odd` from another merge without error.
-- **Raw intrinsics are `unsafe`.** `GpuShuffle::gpu_shfl_*` (re-exported for use as a bound) are `unsafe fn` (breaking change after 0.3.2, unreleased): they are raw `shfl.sync` instructions, UB under divergence. Shuffle through `Warp<All>` / `Tile`.
+- **Raw intrinsics are `unsafe`.** `GpuShuffle::gpu_shfl_*` (re-exported for use as a bound) are `unsafe fn` since 0.4.0 (a breaking change): they are raw `shfl.sync` instructions, UB under divergence. Shuffle through `Warp<All>` / `Tile`.
 - **`kernel_entry()` is callable anywhere.** The `Warp<All>` witness is not unforgeable: a fresh handle can be constructed after a diverge, bypassing the typestate discipline. The discipline requires calling it exactly once at kernel entry; nothing enforces that yet.
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 

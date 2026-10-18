@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] — 2026-10-18
 
 - **Breaking:** `GpuShuffle`'s methods (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, `gpu_shfl_up`,
   `gpu_shfl_idx`, `*_width`) are now `unsafe fn` with a `# Safety` contract. They were safe methods on plain values,
@@ -11,6 +11,8 @@
   Titanium, Lucid Synchrone precede them); "cannot shuffle" qualified to full-warp shuffle; new paper §8.6; trusted
   entry points listed in §6.9 and README Limitations (`kernel_entry`, `DynWarp` ascription, merge without
   provenance). Reviewed cross-vendor over four rounds.
+- Workspace crates `warp-types-sat`, `-bmc`, `-smt`, `-pdr` now require `warp-types` 0.4.0 in this repository; their
+  crates.io releases (built against 0.3.2) are unchanged and not republished — none of them calls `GpuShuffle` directly.
 
 ## [0.3.2] — 2026-04-18
 
