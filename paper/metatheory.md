@@ -95,7 +95,7 @@ Specifically: if `⊢ e : τ` and `e →* e'` where `e'` is stuck (cannot step f
 1. Reduce to a value (normal termination), or
 2. Step forever (non-termination).
 
-They never reach a stuck state. Since shuffle-from-inactive-lane would be stuck (the E-SHUFFLE-XOR rule requires `All`), it cannot occur in a well-typed program.
+They never reach a stuck state, and a shuffle on a diverged warp *is* a stuck state: in the mechanization `Step.shuffleVal` fires only on `warpVal all`, and `shuffle_diverged_stuck` proves that `shuffle (warpVal s) perLaneVal` with `s ≠ all` has no successor, so `type_safety` says no closed well-typed term reaches it. (Until 0.4.1 the reduction rule accepted any `s`; the semantics was total on shuffles and this corollary rested on the typing-side `shuffle_requires_all` and the untypability theorems alone.) The calculus has no store and no lane-indexed data: "inactive source lane" is represented by the active set of the warp operand, not by a runtime mask.
 
 ## 4.3 Key Lemmas
 
@@ -223,11 +223,11 @@ These limitations are addressed in §5 (Extensions).
 
 ## 4.8 Mechanization
 
-We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry` and zero axioms**.
+We have mechanized the core metatheory for the base calculus in Lean 4 (`lean/WarpTypes/`). All theorems are machine-checked with **zero `sorry`**; `#print axioms` reports only Lean's standard `propext`, `Classical.choice`, `Quot.sound` (no project axioms).
 
 ### Scope
 
-The mechanization covers two files totaling 1337 lines of Lean:
+The GPU calculus is three files — `Generic.lean` (width-parametric participant sets `PSet n`), `Basic.lean` and `Metatheory.lean`; the built library also carries a second, family-parametric metatheory (`Core.lean`, `CoreMetatheory.lean`) instantiated by the fence (§5.6) and tree-reduce domains, and the CSP/protocol experiments of §9.4 — ten modules in all. The GPU files:
 
 **Core type system properties** (`Basic.lean`):
 - `diverge_partition`: Diverge produces disjoint, covering sub-sets (Lemma 4.4). Proved by bitvector extensionality.
@@ -239,6 +239,7 @@ The mechanization covers two files totaling 1337 lines of Lean:
 - **Progress** (Theorem 4.1): A closed well-typed expression is either a value or can step.
 - **Preservation** (Theorem 4.2): If `Γ ⊢ e : τ ⊣ Γ'` and `e ⟶ e'`, then `Γ ⊢ e' : τ ⊣ Γ'`.
 - **Substitution lemma** (`subst_typing`): Substituting a value for a linear binding removes that binding from both input and output contexts.
+- **Stuckness** (`shuffle_diverged_stuck`): a shuffle on a diverged warp has no successor, because `shuffleVal` fires only on `all`. This is what makes progress carry the safety property rather than merely totality.
 
 **Untypability proofs** (5 documented GPU bugs):
 - `bug1_cuda_samples_398`: Shuffle after extracting lane 0 — untypable.
@@ -251,14 +252,14 @@ Each factors through `shuffle_diverged_untypable`: if the active set after diver
 
 ### Design Choices
 
-Active sets are modeled as `BitVec 32`, enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, directly encoding Rust's move semantics. The mechanization has no trusted assumptions beyond Lean's kernel.
+Active sets are modeled as `PSet n` (a `BitVec n`, instantiated at 32 for the GPU calculus), enabling `decide` for concrete instances and extensionality for universal properties. Typing judgements use a linear context `Γ ⊢ e : τ ⊣ Γ'` where `Γ'` tracks bindings remaining after evaluation, which encodes Rust's move semantics for `diverge` and `merge`. The mechanized `shuffle` also consumes its warp operand, where the Rust method borrows `&self` and is called repeatedly (the butterfly in §3.5 calls it five times); this is a modelling simplification, not a difference in the guarantee. The mechanization has no trusted assumptions beyond Lean's kernel and its three standard axioms.
 
 ### What Is Mechanized
 
-The following are fully mechanized with zero sorry, zero axioms:
+The following are fully mechanized with zero `sorry` (standard axioms only):
 
 - **Core type system** (§3–4): diverge, merge, shuffle, letBind, letPair, fst/snd, pairs — with progress, preservation, and substitution.
-- **Extension typing rules** (§5.1): all four loop typing rules — LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — with full progress, preservation, and substitution coverage.
+- **Extension typing rules** (§5.1): all four loop forms — LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED — with progress, preservation, and substitution. LOOP-UNIFORM and LOOP-CONVERGENT type their bodies; LOOP-VARYING and LOOP-PHASED only require the body to be warp-free (`warpFree`) and discard it on reduction, so for LOOP-VARYING and LOOP-PHASED the theorems are about the loop form, not about the body.
 - **Nested merge**: `HasType.merge` uses `IsComplement s1 s2 parent` (parameterized by a general parent set, not restricted to `All`). `Step.mergeVal` produces `s1 ||| s2`. Concrete instance: `evenLow_evenHigh_complement_within_even`.
 - **Five untypability proofs**: real GPU bugs (cuda-samples #398, CUB/CCCL #854, PIConGPU #2514, LLVM #155682, demo) proved unreachable in the type system.
 
@@ -266,7 +267,7 @@ The following are fully mechanized with zero sorry, zero axioms:
 
 - The operational semantics for `shuffle_within` (§4.6, set-preserving masks). The Rust implementation uses a runtime assertion (`xor_mask_preserves_active_set`); the Lean model does not include this construct.
 - **LOOP-CONVERGENT modeling note**: The Lean `loopConvergent` uses fuel (`Nat` bound) rather than modeling the paper's collective-predicate exit condition (`p : Warp<S> → Bool` where `p` uses ballot/all/any). The typing rule is structurally identical to `loopUniform` — body preserves active set `S`. This proves type safety regardless of when the loop exits (a strictly stronger guarantee), but does not model the collective-predicate requirement that distinguishes LOOP-CONVERGENT from LOOP-UNIFORM in the paper.
-- **Linearity**: Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) are enforced by the linear context threading mechanism (`letBind` checks freshness and consumption), but are not stated as standalone Lean theorems. The mechanism is sound; the explicit theorem statements are future work.
+- **Linearity**: `letBind`/`letPair` check freshness and consumption, so a *let-bound* warp can be neither duplicated nor dropped. But `fst`/`snd` discard a pair component and `warpVal` literals are typable in any context, so the calculus is affine for pairs and has the unrestricted-entry gap of §6.9: `fst (diverge (warpVal all) even)` is closed and well-typed with the odd half gone. Lemmas 4.8 (No Warp Duplication) and 4.9 (No Warp Discard) therefore hold for let-bound warps only and are not stated as Lean theorems; the untypability results are statements about specific closed terms.
 
 We consider the mechanized scope sufficient: progress, preservation, substitution, and untypability cover the core safety claim.
 

@@ -32,7 +32,7 @@ The result: your reduction produces 17 instead of 32. Your sort puts elements in
 
 ## This Bug Is Everywhere
 
-We surveyed 21 documented instances across 16 real-world projects — 19 bugs plus two corroborating signals (a spec-level exclusion in WebGPU and a CUDA API deprecation):
+We surveyed 21 documented instances across 16 real-world projects — 19 bugs plus two corroborating signals (WGSL's specification, which defines a shuffle from an inactive invocation as an indeterminate value, and a CUDA API deprecation):
 
 - **NVIDIA cuda-samples #398** — their own reference reduction. Wrong results for certain input sizes.
 - **NVIDIA CUB (CCCL#854)** — the standard GPU primitives library. Warp-level scan (WarpScanShfl) suspected of wrong mask in sub-warp configurations.
@@ -141,7 +141,7 @@ Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined
 ## The Artifact
 
 - 424 tests (334 unit + 50 example tests in the main crate, 40 doc tests workspace-wide), all passing
-- 32 Lean 4 theorems mechanizing the core calculus (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`; set-preserving shuffle and the collective exit predicate are not modeled)
+- 33 Lean 4 theorems mechanizing the core calculus (progress + preservation + all four §5.1 loop rules + letPair + nested merge: zero `sorry`; set-preserving shuffle and the collective exit predicate are not modeled)
 - 21 documented instances across 16 real-world projects (19 bugs + 2 corroborating spec/vendor signals)
 - Real GPU execution on NVIDIA H200 SXM (Hopper) and RTX 4000 Ada: 4 typed kernels PASS on both and two more (ballot, sub-warp shuffle) on the Ada, zero-overhead PTX confirmed on both; AMD MI300X mask-correctness verified via HIP
 - Cargo-integrated pipeline: `cargo run` from source to GPU

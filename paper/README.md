@@ -31,7 +31,7 @@ We prove our type system sound (progress and preservation via Lean 4 mechanizati
 
 1. **Type system for GPU divergence** — A warp's active-lane set is a type: complementary sub-warps on divergence, a complement-checked merge, and no full-warp shuffle on a diverged warp, preventing undefined behavior from reading inactive lanes. Prior static work on collectives under divergence is compared in §8.
 
-2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks; linear in the calculus, approximated in Rust by move semantics (affine: a handle can be dropped) and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
+2. **Linear typestate over active-set lattice** — Tracks which lanes are active via a Boolean lattice of bitmasks; linear for let-bound warps in the mechanized calculus (pair projections and literals are unrestricted, §4.8), approximated in Rust by move semantics (affine: a handle can be dropped) and sealed traits. (Not session types proper — see §2.4 and §8.2 for the distinction.)
 
 3. **Soundness proof** — Progress and preservation theorems ensure well-typed programs in the mechanized calculus never read from inactive lanes.
 
@@ -72,5 +72,5 @@ let partner = active.shuffle_xor(data, 1);
 ## Related Files
 
 - [../src/proof.rs](../src/proof.rs) — Executable proof sketch (11 tests) <!-- unguarded: 11 — module-scoped test count; the guard computes no per-module actual -->
-- [../lean/](../lean/) — Lean 4 formalization (32 named theorems, zero sorry, zero axioms)
+- [../lean/](../lean/) — Lean 4 formalization (33 named theorems, zero sorry, standard axioms only)
 

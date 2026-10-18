@@ -9,7 +9,7 @@ We evaluate warp typestate on three dimensions:
 
 ### Documented Shuffle-Divergence Issues
 
-We surveyed 21 documented shuffle-from-inactive-lane instances across 16 GPU projects. Eight are modeled as self-contained Rust examples; thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
+We surveyed 21 documented shuffle-from-inactive-lane instances across 16 GPU projects. Seven documented bugs plus the synthetic demo are modeled as self-contained Rust examples (each re-implements the pattern with its own toy `Warp`; the crate's `compile_fail` doctests check the same patterns against the real types); thirteen additional bugs were identified via systematic search of issue trackers (OpenCV, PyTorch, TVM, CUB, Kokkos, Halide, ROCm/HIP, HOOMD-blue, cuDF, Triton, Ginkgo) and specifications (WebGPU, SYCLomatic). Of the 21 instances, 19 are bugs proper — 14 fully caught by our type system, 5 partially — and 2 are corroborating signals rather than bug instances: WebGPU's spec-level exclusion of indexed subgroup shuffles (design motivation) and the CUDA 9.0 API deprecation (a vendor response to the class). The full per-issue table is not included in this artifact; the eight bugs modeled as Rust examples (`examples/`) are the independently checkable core, and the remaining thirteen are identified by tracker/spec citation in this section.
 
 **Survey methodology.** We searched GitHub issue trackers for 16 projects with known warp/shuffle usage, covering the period 2016–2025, and included bugs where the root cause involves reading from inactive lanes via shuffle, ballot, or vote operations. The sample is convenience-based; we did not exhaustively search all GPU projects and report exact caveats for each bug (see footnotes below).
 
@@ -62,19 +62,19 @@ Both fixes type-check because they ensure all lanes participate before shuffling
 
 ### Concrete Demonstrations: Remaining Bugs
 
-Each remaining documented bug has a self-contained worked example demonstrating the exact type error our system produces.
+Each remaining documented bug has a self-contained worked example in `examples/`. These examples define their own minimal `Warp`/`ActiveSet` types rather than importing the crate, so they document the pattern and the shape of the type error; the crate's own `compile_fail` doctests are what check it against the shipped types.
 
 **PIConGPU #2514** (`examples/picongpu_2514.rs`): After divergence, calling `ballot()` on `Warp<Active>` is a type error—`ballot()` exists only on `Warp<All>`. The CUDA code used `__ballot_sync(0xFFFFFFFF, 1)` inside a divergent branch; the hardware accepted the mask regardless of how many lanes were actually active.
 
-**CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The compiler generated wrong PTX by predicating off the mask initialization. In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register representation—so the compiler cannot optimize away something that doesn't exist at runtime.
+**CUB/CCCL #854** (`examples/cub_cccl_854.rs`): The report suspects the compiler predicated off the mask initialization and emitted PTX with an uninitialized membermask (unconfirmed; †). In our type system, the mask is `PhantomData<SubWarp16>`—a zero-sized phantom type with no register representation—so the compiler cannot optimize away something that doesn't exist at runtime.
 
 **LLVM #155682** (`examples/llvm_155682.rs`): After `if (laneId == 0)`, lane 0 has `Warp<Lane0>`. Calling `shuffle_broadcast()` on `Warp<Lane0>` is a type error. The fix—merging back via `merge(lane0, rest)`—forces both sides to provide data, eliminating the uninitialized value that triggered LLVM's UB-based branch elimination.
 
 ### Hardware Reproduction
 
-We reproduced the cuda-samples#398 bug on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace) using CUDA 12.0. With `block_size=32`, the buggy `reduce7` kernel consistently returns `sum = 1` instead of `sum = 32` (the correct value). The result is deterministic across 10 runs on both GPUs—not intermittent. The bug also manifests at `block_size=256`: the kernel returns `sum = 32` instead of `sum = 256`, because `blockDim.x / warpSize = 8` means only 8 lanes enter the final reduction, producing a partial ballot mask (`0xFF`). The `__shfl_down_sync` with offset 16 reads from lanes outside this mask.
+We reproduced the cuda-samples#398 bug on NVIDIA H200 SXM (compute 9.0, Hopper) and RTX 4000 SFF Ada (compute 8.9, Ada Lovelace) using CUDA 12.0. With `block_size=32`, the buggy `reduce7` kernel consistently returns `sum = 1` instead of `sum = 32` (the correct value). The result was deterministic across 10 runs on both GPUs—not intermittent (observed in our sessions; the per-run transcripts were not archived, and `reproduce/reduce7_bug.cu` regenerates them — `tools/gpu-session.sh` now keeps the RunPod transcript under `results/`). The bug also manifests at `block_size=256`: the kernel returns `sum = 32` instead of `sum = 256`, because `blockDim.x / warpSize = 8` means only 8 lanes enter the final reduction, producing a partial ballot mask (`0xFF`). The `__shfl_down_sync` with offset 16 reads from lanes outside this mask.
 
-The bug affects all block sizes where `blockDim.x / warpSize < 32`—only `block_size=1024` produces the correct result, where all 32 lanes vote true and the ballot mask is `0xFFFFFFFF`. The fixed version (all lanes participate with zeroed inactive data) produces correct results at all block sizes. The reproduction code is in `reproduce/reduce7_bug.cu`.
+The bug affects all block sizes where `blockDim.x / warpSize < 32`; `block_size=1024` is the one configuration where all 32 lanes vote true and the ballot mask is `0xFFFFFFFF` (`reduce7_bug.cu` exercises 32 and 256). The fixed version (all lanes participate with zeroed inactive data) produces correct results at all block sizes. The reproduction code is in `reproduce/reduce7_bug.cu`.
 
 **The standard dynamic tooling does not detect this bug.** We ran NVIDIA's `compute-sanitizer` (version 2024.1.1.0) on an H200 against `reproduce/host`, which executes the untyped `reduce7` kernel and the typed fix in the same process. The untyped kernel returned `1` instead of `32`, and all four tools—`memcheck`, `synccheck`, `initcheck`, and `racecheck`—reported zero errors.
 
@@ -86,7 +86,7 @@ Our implementation includes eighteen compile-fail doctests covering shuffle on d
 
 ### Test Inventory
 
-Our prototype includes 334 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 40 doc tests (18 compile-fail, 22 doc examples) collected across the whole workspace: the 34 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the eighteen above (424 total). That 424 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure a reader can reproduce in a single invocation (`cargo test -p warp-types --lib --doc --examples`) is 418 main-crate total. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
+Our prototype includes 334 unit tests and 50 example tests across 8 worked bug examples in the main crate, plus 40 doc tests (18 compile-fail, 22 doc examples) collected across the whole workspace: the 34 in the main crate, 4 usage examples in the sibling solver and codegen crates, and the two validation-bypass tests on the bounded-model-checking transition system already counted among the eighteen above (424 total). That 424 is a composite of two scopes — main-crate unit and example tests plus workspace-wide doc tests — so no single `cargo test` invocation reports it. The figure is 418 main-crate total, from `cargo test -p warp-types` (unit + doc) plus `cargo test -p warp-types --examples`; cargo refuses to combine `--doc` with other targets, so it is two commands. <!-- unguarded: two — no main-crate-scoped DOC actual exists; see TODO -->
 
 ## 7.2 Performance
 
@@ -174,10 +174,10 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 | Hardware reproduction | cuda-samples#398 confirmed on H200 SXM (compute 9.0) and RTX 4000 Ada (compute 8.9) |
 | Real GPU execution | 6 typed kernels via cudarc: butterfly reduce, diverge/merge, reduce_n and bitonic sort PASS on H200 SXM and RTX 4000 Ada; ballot and sub-warp `shuffle_xor_within` after a branch-free diverge PASS on RTX 4000 Ada (`results/rtx4000ada-2026-10-18.txt`) |
 | PTX verification | Rust type system compiles to identical PTX on sm_90 (Hopper) and sm_89 (Ada) |
-| Type system tests | main crate: 334 unit + 50 example tests; workspace-wide: 40 doc tests (424 total) spanning two scopes; 418 main-crate total in a single invocation |
+| Type system tests | main crate: 334 unit + 50 example tests; workspace-wide: 40 doc tests (424 total) spanning two scopes; 418 main-crate total across `cargo test -p warp-types` and `cargo test -p warp-types --examples` |
 | Runtime overhead | 0% (verified: Rust MIR, LLVM IR, NVIDIA PTX) |
 | Annotation burden | ≈16% of source lines aggregate across the 8 examples (varies ~2.5× between examples; counted lines referencing `Warp<`, `merge`, `diverge`, `PerLane`, `Uniform`, `Tile<`, and similar — indicative, no counting script ships with the artifact; see §10) |
-| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, zero-axiom. 5 bug untypability proofs. 32 named theorems total including 14 infrastructure lemmas (§4.8) |
+| Lean mechanization | Progress, preservation, substitution lemma — all zero-sorry, standard axioms only. 5 bug untypability proofs. 33 named theorems total including 14 infrastructure lemmas (§4.8) |
 
 Warp typestate provides strong safety guarantees with zero runtime cost. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 

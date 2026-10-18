@@ -20,7 +20,7 @@ Types τ ::= Warp<S>           -- Warp with active set S
 
 The central type is `Warp<S>`, representing a warp whose active lanes are described by the active set `S`. This type is a *capability*: possession of a `Warp<S>` value grants permission to perform operations on lanes in `S`.
 
-Importantly, `Warp<S>` is treated as a *linear* type in the formal calculus—it cannot be duplicated or discarded. The Rust implementation approximates linearity with affine types (move semantics + `#[must_use]` warnings); see §6 for the gap analysis. A warp that diverges into two sub-warps must eventually merge back. This prevents "losing" lanes.
+Importantly, `Warp<S>` is intended as a *linear* resource: a warp that diverges into two sub-warps must eventually merge back, which prevents "losing" lanes. The rules below state that intent. The Rust implementation is affine (move semantics + `#[must_use]` warnings), and the mechanized calculus enforces exactly-once use for let-bound warps but not for pair components or literals (§4.8); see §6.9 for the gap analysis.
 
 ### `PerLane<T>`
 
@@ -102,7 +102,7 @@ The lattice operations are:
 - **Join (∪)**: Union of active lanes
 - **Complement (¬)**: Lanes not in set
 - **Top (All)**: All lanes active
-- **Bottom (None)**: No lanes active (unreachable in well-typed programs)
+- **Bottom (None)**: No lanes active. Reachable in principle (`diverge(Warp<All>, All)` yields it) but inert: no collective is available on it, and the crate rejects `shuffle_xor_within` on `Warp<Empty>` at compile time.
 
 ### Complement Relation
 
@@ -232,7 +232,7 @@ The result is uniform because all (active) lanes see the same bitmask.
 
 ### LINEAR WARP USAGE
 
-In the formal calculus, warps are linear—each warp value must be used exactly once. Rust enforces the no-duplication half (move semantics) but permits dropping (affine, not linear); `#[must_use]` catches accidental drops as warnings.
+In the calculus as presented, warps are linear—each warp value must be used exactly once. Rust enforces the no-duplication half (move semantics) but permits dropping (affine, not linear); `#[must_use]` catches accidental drops as warnings. The Lean mechanization enforces exactly-once use for let-bound warps only (§4.8).
 
 ```
 Γ, w : Warp<S> ⊢ e : τ    w occurs exactly once in e

@@ -17,9 +17,10 @@ NVCC     ?= nvcc
 CXXFLAGS  = --std=c++20 -O2
 LDFLAGS   = -lcuda
 
-# Path to the Rust kernel PTX (from gpu-project example)
+# Path to the Rust kernel PTX (from gpu-project example). build.rs writes it
+# to the example's OUT_DIR as kernels.ptx; pick the newest.
 KERNEL_DIR = ../gpu-project
-PTX_PATH   = $(KERNEL_DIR)/target/nvptx64-nvidia-cuda/release/my_kernels.ptx
+PTX_PATH   = $(shell ls -t $(KERNEL_DIR)/target/release/build/gpu-project-example*/out/kernels.ptx 2>/dev/null | head -1)
 
 .PHONY: all clean run ptx
 
@@ -30,7 +31,7 @@ warp_demo: main.cu
 
 # Build Rust kernels to PTX (requires nightly + rust-src)
 ptx:
-	cd $(KERNEL_DIR) && cargo +nightly build --release
+	cd $(KERNEL_DIR) && cargo build --release   # rust-toolchain.toml selects the pinned nightly
 
 # Build everything and run
 run: warp_demo ptx

@@ -20,7 +20,7 @@ Secondary question:
 |-------|--------|------|
 | **warp-types** | v0.3.1, crates.io, Zenodo DOI 10.5281/zenodo.19040615 | GPU side proven: linear typestate, ComplementOf, Lean 4 metatheory |
 | **crossbar_protocol.rs** | Research module in warp-types/src/research/ | Sketch: TileGroup<S>, TileComplement, butterfly/ring_pass, stale-data bug demo |
-| **Lean 4 metatheory** | warp-types/lean/, zero sorry, zero axioms | Progress, preservation, substitution, 5 bug untypability proofs, DivTree |
+| **Lean 4 metatheory** | warp-types/lean/, zero sorry, standard axioms only | Progress, preservation, substitution, 5 bug untypability proofs, DivTree |
 | **warp-core J1 mesh** | Star topology current (SYSTEM.md rev 3.0), grid proposed (GRID_TOPOLOGY.md rev 0.3) | Physical target for CSP experiments |
 | **Sol** | Lean 4 verification framework, all phases complete | Could mechanize the generic framework |
 

@@ -1,27 +1,28 @@
 # Warp Typestate: Lean 4 Formalization
 
-A mechanized proof of type safety for a linear type system that prevents GPU warp divergence bugs at compile time.
+A mechanized proof of type safety for a typestate calculus (linear for let-bound warps — see Scope) that prevents GPU warp divergence bugs at compile time.
 
-Warp-level shuffle operations on diverged (partially active) warps are a class of undefined behavior in CUDA/GPU programming that no existing type system catches. This formalization proves that a typestate approach makes such programs untypable.
+Warp-level shuffle operations on diverged (partially active) warps are undefined behavior in CUDA/GPU programming (prior static treatments are compared in the paper's §8). This formalization proves that a typestate approach makes such programs untypable.
 
 ## What This Formalizes
 
-The type system models GPU warp resources as linear values typed by their active lane sets (32-bit bitmasks). Warp handles must be consumed exactly once — diverged, merged, or shuffled — enforced by a linearity condition on let-bindings. Shuffle operations are restricted to fully-converged warps (`Warp<All>`), making it a type error to shuffle on a subset of lanes.
+The type system models GPU warp resources as linear values typed by their active lane sets (32-bit bitmasks). Let-bound warp handles must be consumed exactly once — diverged, merged, or shuffled — enforced by a linearity condition on let-bindings. Shuffle operations are restricted to fully-converged warps (`Warp<All>`), making it a type error to shuffle on a subset of lanes.
 
 This catches three classes of bugs:
 - **Shuffle on diverged warp**: reading from inactive lanes (undefined behavior)
-- **Missing merge**: forgetting to reconverge after divergence (resource leak)
+- **Missing merge** of a let-bound sub-warp (the consumption check). `fst`/`snd` projections and `warpVal` literals are not covered — see Scope
 - **Mismatched merge**: merging non-complementary subsets
 
 ## Theorems Proven
 
-Core theorems are fully machine-checked. Zero sorry, zero axioms.
+Core theorems are fully machine-checked. Zero sorry; `#print axioms` shows only Lean's standard `propext`, `Classical.choice`, `Quot.sound`.
 
 | Theorem | Statement | File |
 |---------|-----------|------|
 | **Progress** | Well-typed closed terms are values or can step | Metatheory.lean |
 | **Preservation** | Reduction preserves typing | Metatheory.lean |
 | **Substitution** | Substituting a value preserves typing (generalized via context removal) | Metatheory.lean |
+| **Shuffle stuck on diverged warp** | `shuffle (warpVal s) perLaneVal` with `s ≠ all` has no successor, so progress carries the safety property | Metatheory.lean |
 | **Diverge partition** | `diverge` produces disjoint, covering sub-sets | Basic.lean |
 | **Shuffle requires All** | Shuffle typing requires `Warp<All>` | Basic.lean |
 | **Complement symmetry** | Complement relation is symmetric | Basic.lean |
@@ -34,6 +35,8 @@ Core theorems are fully machine-checked. Zero sorry, zero axioms.
 ### Scope
 
 The Lean model focuses on active-set tracking — the core safety mechanism. It uses a pure expression calculus (no store/configuration triples) with `PerLane` as an opaque type (no data payload). The merge rule uses `IsComplement s1 s2 parent` (general parent set, not restricted to `All`), supporting nested divergence. All four loop typing rules from §5.1 (LOOP-UNIFORM, LOOP-CONVERGENT, LOOP-VARYING, LOOP-PHASED) are mechanized with full progress, preservation, and substitution coverage.
+
+**Affine pairs, unrestricted literals.** `letBind`/`letPair` enforce consumption, but `fst`/`snd` discard a pair component and `warpVal s` is typable in any context, so `fst (diverge (warpVal all) even)` is closed and well-typed with the odd half gone. The untypability theorems are about specific closed terms; "missing merge" is caught for let-bound handles only.
 
 **LOOP-CONVERGENT note:** The Lean model uses fuel (`Nat` bound) rather than the paper's collective-predicate exit condition. The typing rule is structurally identical to LOOP-UNIFORM. This proves type safety regardless of exit timing but does not model the collective-predicate requirement. See §4.8 of the paper for the full mechanization scope.
 
@@ -55,7 +58,7 @@ Requires Lean 4.28.0. No external Lake dependencies (uses only Lean's bundled St
 lake build
 ```
 
-The build completes with zero errors, zero sorry, zero axioms. Warnings are limited to unused simp arguments (cosmetic).
+The build completes with zero errors and zero sorry; no axioms beyond Lean's standard three. Warnings are limited to unused simp arguments (cosmetic).
 
 ## Repository Structure
 

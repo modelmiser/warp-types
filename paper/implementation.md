@@ -163,7 +163,7 @@ butterfly_sum:
     ; Return
 ```
 
-No type tags, no runtime checks, no overhead.
+No type tags, no runtime checks on this path, no overhead. (The crate's runtime checks are the bounds and mask assertions in `shuffle_xor_within`, `Tile`, `diverge_dynamic` and `DynDiverge::merge`; §6.9.)
 
 ### Why Zero Overhead?
 
@@ -277,15 +277,20 @@ Good error messages are crucial for usability. Rust provides excellent diagnosti
 
 **Shuffle on diverged warp:**
 ```
-error[E0599]: no method named `shuffle_xor` found for struct `Warp<Even>` in the current scope
-  --> src/main.rs:10:20
-   |
-10 |     let result = warp.shuffle_xor(data, 1);
-   |                      ^^^^^^^^^^ method not found in `Warp<Even>`
-   |
-   = note: the method exists on `Warp<All>`
-help: consider calling `merge` to reconverge the warp first
+error[E0599]: no method named `shuffle_xor` found for struct `warp_types::Warp<Even>` in the current scope
+ --> src/main.rs:6:24
+  |
+6 |     let result = evens.shuffle_xor(data, 1);
+  |                        ^^^^^^^^^^^ this is an associated function, not a method
+  |
+note: the candidate is defined in the trait `warp_types::Platform`
+help: there is a method `shuffle_xor_within` with a similar name
+  |
+6 |     let result = evens.shuffle_xor_within(data, 1);
+  |                                   +++++++
 ```
+
+(rustc 1.95 nightly-2026-09-15, abridged.) The diagnostic says less than one would like: the "candidate" it finds is the unrelated `Platform::shuffle_xor` associated function, and the suggested `shuffle_xor_within` compiles — it is the within-set exchange of §3.3, which is the right call only when the algorithm wants an exchange among the active lanes rather than across the warp. There is no `#[diagnostic::on_unimplemented]` hook for a missing inherent method, so the type error is correct and terse.
 
 ## 6.8 Practical Considerations
 
@@ -295,9 +300,7 @@ The type system adds negligible compile time overhead: 2.3s without types vs 2.4
 
 ### Static Active Sets Only
 
-Our Rust implementation handles static active sets (Even, Odd, LowHalf, etc.). Runtime-dependent sets require:
-- Existential types (`SomeWarp` with runtime mask), or
-- Dependent types (beyond Rust's type system)
+The typed fragment handles static active sets (Even, Odd, LowHalf, etc.). Runtime-dependent sets go through `diverge_dynamic`/`DynDiverge` (§9.1, complement by construction) or the gradual `DynWarp` (§9.3), which check at run time what the static fragment checks at compile time; doing better would need dependent types, beyond Rust.
 
 ### Manual Diverge/Merge
 
@@ -307,7 +310,7 @@ Programmers must call `diverge` and `merge` explicitly. Automatic insertion base
 
 Rust's move semantics enforce the no-duplication half of linearity: a `Warp<S>` cannot be cloned, and diverge consumes the parent. But two gaps remain:
 
-1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean formalization models true linearity where this is rejected.
+1. **Drop without merge.** A sub-warp can be silently dropped without merging back, "losing" lanes. `#[must_use]` warnings catch this in practice, but it is not a hard error. The Lean calculus enforces consumption for let-bound warps, but its `fst`/`snd` projections and `warpVal` literals reopen the same gap (§4.8).
 
 2. **Unrestricted entry.** `Warp::kernel_entry()` can be called multiple times, creating independent `Warp<All>` handles. In a linear type system, the entry point would be a one-shot resource; Rust has no mechanism to enforce this. Merge checks set shape, not provenance: complementary sub-warps from different entry points (`Even` from one handle, `Odd` from another) merge without error — the §6.1 example fails only because `Even` and `LowHalf` are not complements. The programmer can also bypass the typestate discipline entirely by obtaining a fresh `Warp<All>` after a diverge.
 

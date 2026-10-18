@@ -37,7 +37,7 @@ let merged: Warp<All> = merge(evens, odds);
 let partner = merged.shuffle_xor(data, 1);  // OK
 ```
 
-The type system is **strictly more permissive** than current best practice (which prohibits divergence) while being **strictly safer** than the CUDA status quo (which allows it unchecked).
+The type system is **strictly more permissive** than current best practice (which prohibits divergence) while being **safer, within the typed fragment,** than the CUDA status quo (which allows it unchecked; Limitations below lists what the fragment excludes).
 
 ## Key Ideas
 
@@ -124,7 +124,7 @@ fn main() {
 | Shuffle semantics | Verified on H200 (sm_90), RTX 4000 Ada (sm_89), MI300X (gfx942) | `bash reproduce/runpod-h200.sh` |
 | Cargo integration | `#[warp_kernel]` + `WarpBuilder` + `Kernels` struct | `cd examples/gpu-project && cargo run` |
 | Zero overhead | Verified at MIR, LLVM IR, and PTX levels (search for `warp_types_zero_overhead_butterfly` in IR) | `bash reproduce/compare_ptx.sh` or `cargo rustc --release --lib -- --emit=llvm-ir` |
-| Soundness (progress + preservation) | Core calculus mechanized in Lean 4 (32 named theorems in Basic+Metatheory), zero sorry, zero axioms | `cd lean && lake build` |
+| Soundness (progress + preservation) | Core calculus mechanized in Lean 4 (33 named theorems in Basic+Metatheory), zero sorry, standard axioms only (`propext`, `Classical.choice`, `Quot.sound`) | `cd lean && lake build` |
 | CUB-equivalent primitives | Typed reduce, scan, broadcast (8 tests) | `cargo test cub` | <!-- unguarded: 8 — module-scoped test count; the guard computes no per-module actual -->
 | Fence-divergence safety | Type-state write tracking (6 tests) | `cargo test fence` | <!-- unguarded: 6 — module-scoped test count; the guard computes no per-module actual -->
 | Platform portability (32-lane warp via CpuSimd, 64-lane support) | u64 masks, AMD wavefronts, Platform trait | `cargo test warp_size` |
@@ -175,7 +175,7 @@ warp-types/
 │   ├── demo.sh             # Full demonstration script
 │   ├── host/               # cudarc host runner for real GPU execution
 │   └── *.rs, *.cu          # PTX comparison + hardware reproduction
-├── lean/                   # Lean 4 formalization (32 named theorems, zero sorry)
+├── lean/                   # Lean 4 formalization (33 named theorems, zero sorry)
 ├── paper/                  # Preprint (markdown)
 ├── tutorial/               # Step-by-step tutorial
 ├── blog/                   # Blog post draft
@@ -184,8 +184,8 @@ warp-types/
 
 ## Limitations
 
-- **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean formalization models linear semantics. In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
-- **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0, Hopper) and RTX 4000 Ada (compute 8.9, Ada Lovelace): shuffle semantics, zero-overhead PTX, and typed kernel execution (4/4 kernels PASS on both GPUs).
+- **Affine, not linear.** Rust's type system is affine (values can be dropped without use). The Lean calculus enforces consumption for let-bound warps, but its pair projections and warp literals leave the same gap (paper §4.8). In Rust, a `Warp<S>` can be silently dropped without merging. `#[must_use]` warnings catch this in practice, but it is not a hard error. See the paper's Section 6 for discussion.
+- **AMD partially verified.** u64 masks and `warp64` feature support 64-lane wavefronts. MI300X (gfx942) verified for mask correctness via HIP. Full GPU execution path untested (no amdgcn Rust target yet). NVIDIA verified on H200 SXM (compute 9.0, Hopper) and RTX 4000 Ada (compute 8.9, Ada Lovelace): shuffle semantics, zero-overhead PTX, and typed kernel execution (4 kernels PASS on both; the ballot and sub-warp-shuffle kernels PASS on the Ada — `results/rtx4000ada-2026-10-18.txt`).
 - **The guarantee covers the typed fragment.** A raw data-dependent branch around a warp intrinsic (`if tid < 16 { warp.shuffle_xor(...) }`) is ordinary Rust: it type-checks and is exactly the unsafe pattern on hardware. The safety claim holds for programs that express divergence exclusively via `diverge`/`merge`.
 - **`diverge` emits no branch; `shuffle_xor_within` guards its own execution.** After `diverge_even_odd()` every lane still runs the code that follows. Since 0.4.1 `shuffle_xor_within` skips the `shfl.sync` on lanes outside `S` (they return their input), so its membermask names exactly the executing lanes. In 0.4.0 and earlier the lanes outside `S` executed an instruction whose membermask did not name them — undefined behaviour under the crate's own documented usage. `Warp<Empty>` is rejected at compile time.
 - **Gradual ascription is a trusted entry point.** `DynWarp::{all, all_64, from_mask_32, from_mask_64, from_mask}(…).ascribe::<S>()` checks `S` only against the caller's own mask, so it can produce any `Warp<S>` anywhere, like a second `kernel_entry()`. The full list of such routes is under "Trusted entry points" on `Warp::kernel_entry`.

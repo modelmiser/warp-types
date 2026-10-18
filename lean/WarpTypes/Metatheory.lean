@@ -56,8 +56,12 @@ inductive Step {n : Nat} : Expr n → Expr n → Prop
            (.pairVal (.warpVal (s &&& pred)) (.warpVal (s &&& ~~~pred)))
   | mergeVal (s1 s2 : PSet n) :
       Step (.merge (.warpVal s1) (.warpVal s2)) (.warpVal (s1 ||| s2))
-  | shuffleVal (s : PSet n) :
-      Step (.shuffle (.warpVal s) .perLaneVal) .perLaneVal
+  | shuffleVal :
+      -- Only a converged warp shuffles. With `s` free here (releases before
+      -- 0.4.1) an ill-typed shuffle on a diverged warp also stepped, so
+      -- progress/preservation said nothing about shuffles; see
+      -- `shuffle_diverged_stuck`.
+      Step (.shuffle (.warpVal (PSet.all n)) .perLaneVal) .perLaneVal
   | letVal (name : String) (v body : Expr n) :
       isValue v = true →
       Step (.letBind name v body) (subst body name v)
@@ -259,7 +263,7 @@ theorem progress {n : Nat} {e : Expr n} {t : Ty n} {ctx' : Ctx n}
       | .inl hvd =>
         have h1 := canonical_warp hw hv; subst h1
         have h2 := canonical_perLane hd' hvd; subst h2
-        exact .inr ⟨_, Step.shuffleVal (PSet.all n)⟩
+        exact .inr ⟨_, Step.shuffleVal⟩
       | .inr ⟨d', hd''⟩ =>
         exact .inr ⟨_, Step.shuffleRight w data d' hv hd''⟩
   | .letBind _ _ _ name val body _ _ hval _ hbody _ =>
@@ -781,7 +785,7 @@ theorem preservation {n : Nat} {e e' : Expr n} {t : Ty n} {ctx ctx' : Ctx n}
           unfold PSet.Covers at hcov
           rw [hcov]
           exact HasType.warpVal _ _
-  | shuffleVal s =>
+  | shuffleVal =>
     cases ht with
     | shuffle _ _ _ _ _ hw hd =>
       cases hw with
@@ -936,6 +940,22 @@ theorem type_safety {n : Nat} {e e' : Expr n} {t : Ty n} {ctx' : Ctx n}
   induction hstar with
   | refl => exact progress ht
   | step h1 _ ih => exact ih (preservation ht h1)
+
+/-- A shuffle on a diverged warp is STUCK. `shuffleVal` fires only on
+    `warpVal (PSet.all n)`, and no congruence rule applies to a value, so
+    `shuffle (warpVal s) perLaneVal` with `s ≠ all` has no successor. This is
+    what connects `type_safety` to the safety property: a closed well-typed
+    term never reaches this configuration. Before 0.4.1 `shuffleVal` took any
+    `s`, this term stepped, and progress/preservation were silent about
+    shuffles (the mechanized safety content was `shuffle_requires_all` and the
+    untypability theorems alone). -/
+theorem shuffle_diverged_stuck {n : Nat} (s : PSet n) (hne : s ≠ PSet.all n) :
+    ¬ ∃ e', Step (.shuffle (.warpVal s) .perLaneVal) e' := by
+  intro ⟨_, h⟩
+  cases h with
+  | shuffleVal => exact hne rfl
+  | shuffleLeft _ _ _ hw => cases hw
+  | shuffleRight _ _ _ _ hd => cases hd
 
 -- ============================================================================
 -- Untypability: real GPU bugs cannot be typed (concrete n=32)

@@ -14,7 +14,7 @@ Data-dependent predicates (e.g., `data[lane] > threshold`) are now supported via
 
 ```rust
 let warp: Warp<All> = Warp::kernel_entry();
-let mask = ballot_result;  // runtime predicate
+let mask: u64 = ballot_result.into();  // runtime predicate, as a lane mask
 let diverged = warp.diverge_dynamic(mask);
 // Can't shuffle on either branch
 let warp: Warp<All> = diverged.merge();  // complement guaranteed by construction
@@ -25,7 +25,7 @@ A future `#[warp_typed]` proc macro could further optimize this pattern by autom
 
 ## 9.2 Formal Mechanization
 
-Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and zero axioms. Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and no axioms. Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
 - Mechanize set-preserving shuffle (§4.6)
 - Model `loopConvergent`'s collective-predicate requirement (currently uses fuel bound)
 - Verified Rust implementation via Aeneas translation
@@ -35,7 +35,7 @@ Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservatio
 
 Our current system requires explicit type annotations. We have explored inference strategies in research prototypes — local inference (within functions), bidirectional checking (mix inference and annotation), and gradual typing — with 14 tests across five approaches (`src/research/protocol_inference.rs`). <!-- unguarded: 14 — module-scoped test count; the guard computes no per-module actual -->
 
-The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides the same operations as `Warp<S>` but checks safety invariants at runtime instead of compile time. The migration path: <!-- unguarded: 30 — module-scoped test count; the guard computes no per-module actual -->
+The gradual typing approach is promoted to the public API (`src/gradual.rs`, 30 tests): `DynWarp` provides a subset of `Warp<S>`'s operations (scalar `i32` shuffles, `ballot`, `merge`) and checks the active-set invariants at runtime instead of compile time; `ascribe` converts back to the typed fragment and is one of the trusted routes of §6.9. The migration path: <!-- unguarded: 30 — module-scoped test count; the guard computes no per-module actual -->
 
 1. **Start dynamic**: `DynWarp::all()` — all operations runtime-checked
 2. **Ascribe at boundaries**: `dyn_warp.ascribe::<All>()?` — runtime evidence becomes compile-time proof
@@ -195,6 +195,30 @@ The author used Claude (Anthropic, claude-opus-4-6, 2026) extensively in the dra
 [46] Mauerhofer, S. (GreenArrays, Inc.) "AN009: Attaching a PS/2 Keyboard." Application Note, revised 9/12/12. https://www.greenarraychips.com
 
 [47] GreenArrays, Inc. "AN011: Ganglia Mark 1: A Dynamic Message Routing Surface." Application Note, revised 6/08/13. https://www.greenarraychips.com
+
+[48] Coutinho, B., Sampaio, D., Pereira, F. M. Q., and Meira Jr., W. "Divergence Analysis and Optimizations." PACT 2011.
+
+[49] Sampaio, D., Martins, R., Collange, S., and Pereira, F. M. Q. "Divergence Analysis." ACM TOPLAS 35(4), 2013.
+
+[50] Karrenberg, R. and Hack, S. "Whole-Function Vectorization." CGO 2011.
+
+[51] Leißa, R., Haffner, I., and Hack, S. "Sierra: A SIMD Extension for C++." WPMVP 2014.
+
+[52] Strom, R. E. and Yemini, S. "Typestate: A Programming Language Concept for Enhancing Software Reliability." IEEE TSE 12(1), 1986.
+
+[53] Aldrich, J., Sunshine, J., Saini, D., and Sparks, Z. "Typestate-Oriented Programming." Onward! 2009.
+
+[54] Deniélou, P.-M. and Yoshida, N. "Dynamic Multirole Session Types." POPL 2011.
+
+[55] Deniélou, P.-M., Yoshida, N., Bejleri, A., and Hu, R. "Parameterised Multiparty Session Types." LMCS 8(4), 2012.
+
+[56] Hu, R. and Yoshida, N. "Explicit Connection Actions in Multiparty Session Types." FASE 2017.
+
+[57] Cogumbreiro, T., Lange, J., Liew, D., and Zicarelli, H. "Checking Data-Race Freedom of GPU Kernels, Compositionally." CAV 2021.
+
+[58] Cogumbreiro, T., Lange, J., Liew, D., and Zicarelli, H. "Memory Access Protocols: Certified Data-Race Freedom for GPU Kernels." Formal Methods in System Design, 2023.
+
+[59] W3C. "WebGPU Shading Language," §Uniformity and the `subgroups` extension (`subgroupShuffle`). https://www.w3.org/TR/WGSL/
 
 ### Bug Reports Cited
 

@@ -25,7 +25,7 @@ But what are `S` and `S'`? They depend on runtime values.
 
 ### Solution: Layered Approach
 
-We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants via four typing rules.
+We don't try to track the exact active set through the loop. Instead, we verify entry and exit invariants via four typing rules. The listings in this section are written in the calculus' surface syntax (`for_uniform`, `loop_until`, `for_varying`, `for_phased`, `ballot_any`, `data[lane]`); they are not crate APIs. The crate exposes no loop combinators — the loop rules are mechanized in Lean (§4.8) and Rust code uses ordinary loops over a borrowed `&Warp<S>`.
 
 **LOOP-UNIFORM**: All lanes iterate together; warp operations permitted in body.
 
@@ -184,7 +184,7 @@ Safety is checked at runtime (masks must be complements), but the type system st
 
 ### Recommendation
 
-Most GPU code uses Layer 1–2 (80%+ of cases). Layer 3 handles cases where the predicate is known but the satisfying lanes are not. Layer 4 is the full escape hatch for arbitrary data-dependent patterns, trading static guarantees for runtime checks while still ensuring the check cannot be forgotten.
+Layers 1 and 4 are implemented: Layer 1 is the static hierarchy, and Layer 4 ships as `diverge_dynamic`/`DynDiverge` (paired, complement by construction) and the gradual `DynWarp` (§9.1, §9.3), whose `merge` checks disjointness at run time. Layers 2–3 (`LowRange`, `Stride`, `register_predicate`, `diverge_indexed`) and the `SomeWarp::merge_with_complement` listing are design sketches; those names exist nowhere in the crate. Layer 3 handles cases where the predicate is known but the satisfying lanes are not. Layer 4 is the full escape hatch for arbitrary data-dependent patterns, trading static guarantees for runtime checks while still ensuring the check cannot be forgotten.
 
 ## 5.3 Inter-Block Communication
 
@@ -273,6 +273,8 @@ fn safe_fence_pattern(warp: Warp<All>) {
 }
 ```
 
+This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate, and it emits no fence instruction itself (§6.9). The Lean fence rule (§4.8) gates on write-*permission* coverage (`group all`), not on writes performed.
+
 ## 5.7 Summary
 
 Our extensions handle:
@@ -280,12 +282,12 @@ Our extensions handle:
 | Challenge | Solution | Static Safety |
 |-----------|----------|---------------|
 | Uniform loops | Entry/exit invariants | Full |
-| Varying loops | No warp ops in body | Full |
+| Varying loops | No warp ops in body | Body warp-free (Lean types the loop form, not the body) |
 | Runtime predicates | Layered types (1–4) | Varies |
-| Inter-block | Traditional MPST | Full |
-| Cooperative groups | Hierarchical protocols | Full |
+| Inter-block | Traditional MPST | Design only (no checker shipped) |
+| Cooperative groups | Hierarchical protocols | Design only (`Subgroup` not implemented) |
 | Memory safety | Compose with Descend | Future work |
-| Fence-divergence | Type-state write tracking | Full |
+| Fence-divergence | Type-state write tracking | Permission coverage (see §5.6 note) |
 
 The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication, memory safety).
 

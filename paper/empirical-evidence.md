@@ -42,18 +42,21 @@ copy from.
 
 **Source:** https://github.com/NVIDIA/cccl/issues/854
 
-**What:** CUB's `WarpScanShfl` sets `member_mask` for `shfl_sync`. When threads
-exit a loop early, the compiler predicates off the mask initialization, leaving
-`member_mask` uninitialized. The `shfl.sync.idx.b32` PTX instruction executes
-unconditionally with the wrong mask.
+**What (as reported; unconfirmed):** CUB's `WarpScanShfl` sets `member_mask`
+for `shfl_sync`. The reporter suspected that when threads exit a loop early the
+compiler predicates off the mask initialization, leaving `member_mask`
+uninitialized, so the `shfl.sync.idx.b32` PTX instruction executes with the
+wrong mask. The reporter later noted the `synccheck` hit "may have been a false
+positive" and could not reproduce; the issue remains open.
 
-**Failure mode:** Silent wrong scan results. Only triggers with sub-warp logical
-warp sizes (`LOGICAL_WARP_THREADS < 32`) inside early-exit loops. Found via
-`cuda-memcheck --tool synccheck`, not by observing wrong output.
+**Failure mode (if real):** Silent wrong scan results. Only with sub-warp
+logical warp sizes (`LOGICAL_WARP_THREADS < 32`) inside early-exit loops. Found
+via `cuda-memcheck --tool synccheck`, not by observing wrong output.
 
 **Significance:** In CUB itself — the library virtually all CUDA reduction/scan
-code depends on. The bug involves compiler-level interaction: correct source
-produces wrong PTX because the compiler doesn't understand mask-shuffle coupling.
+code depends on. Whether or not this instance is real, the source-level pattern
+— a membermask computed by code the compiler may predicate — is ill-typed in
+our system, where the mask is a type and has no register to predicate.
 
 ### 3. PIConGPU #2514 — Hardcoded Full Mask in Divergent Branch
 
@@ -63,8 +66,9 @@ produces wrong PTX because the compiler doesn't understand mask-shuffle coupling
 `__ballot_sync(0xFFFFFFFF, 1)` inside a conditional branch. Hardcoded full mask
 doesn't match actual active threads when the warp is diverged.
 
-**Failure mode:** Undefined behavior producing plausible but mathematically wrong
-plasma physics simulation output. Ran on K80 GPUs for months without detection.
+**Failure mode:** Undefined behavior by the CUDA specification. No wrong output
+was observed — pre-Volta hardware converged the warp and masked it — and the
+fix (PR #2600) was preventive, targeting Volta's independent thread scheduling.
 Found during CUDA 9 migration, not by observing incorrect results. Took 3 months
 from report to fix (PR #2600).
 

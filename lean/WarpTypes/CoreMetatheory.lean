@@ -210,10 +210,14 @@ inductive Step {n : Nat} : CoreExpr n → CoreExpr n → Prop
            (.leafReduce (.groupVal (s1 ||| s2)))
   | writeVal (s : PSet n) :
       Step (.write (.groupVal s) .dataVal) (.groupVal s)
-  | fenceVal (s : PSet n) :
-      Step (.fence (.groupVal s)) .unitVal
-  | finalizeVal (s : PSet n) :
-      Step (.finalize (.leafReduce (.groupVal s))) .dataVal
+  -- `fenceVal`/`finalizeVal` fire only on the full group. With `s` free
+  -- here (releases before 0.4.1) an ill-typed fence on a partial group also
+  -- stepped, so progress/preservation were silent about fences; see
+  -- `fence_partial_stuck` / `finalize_partial_stuck`.
+  | fenceVal :
+      Step (.fence (.groupVal (PSet.all n))) .unitVal
+  | finalizeVal :
+      Step (.finalize (.leafReduce (.groupVal (PSet.all n)))) .dataVal
   | letVal (name : String) (v body : CoreExpr n) :
       isValue v = true →
       Step (.letBind name v body) (subst body name v)
@@ -900,10 +904,10 @@ theorem progress {n : Nat} {ctx e_ctx' : CoreCtx n} {e : CoreExpr n} {t : CoreTy
       cases tag
       · subst hempty
         have := canonical_group hw hv; subst this
-        exact .inr ⟨_, Step.fenceVal (PSet.all n)⟩
+        exact .inr ⟨_, Step.fenceVal⟩
       · subst hempty
         have := canonical_reduced hw hv; subst this
-        exact .inr ⟨_, Step.finalizeVal (PSet.all n)⟩
+        exact .inr ⟨_, Step.finalizeVal⟩
 
 /-- Progress at the empty input context — the usual form. -/
 theorem progress_closed {n : Nat} {e : CoreExpr n} {t : CoreTy n} {ctx' : CoreCtx n}
@@ -1049,7 +1053,7 @@ theorem preservation {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx ctx' : Co
       cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
     | finalizeFamily tag _ _ _ _ _ hExpr _ _ =>
       cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
-  | fenceVal s =>
+  | fenceVal =>
     cases ht with
     | finalizeFamily tag _ _ _ _ _ hExpr hTy hg =>
       cases tag with
@@ -1070,7 +1074,7 @@ theorem preservation {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx ctx' : Co
         cases hExpr
     | mergeFamily tag _ _ _ _ _ _ _ _ _ _ hExpr _ _ _ _ =>
       cases tag <;> · simp only [tagToMergeExpr] at hExpr; cases hExpr
-  | finalizeVal s =>
+  | finalizeVal =>
     cases ht with
     | finalizeFamily tag _ _ _ _ _ hExpr hTy hr =>
       cases tag with
@@ -1358,5 +1362,27 @@ theorem type_safety {n : Nat} {e e' : CoreExpr n} {t : CoreTy n} {ctx' : CoreCtx
   induction hstar with
   | refl => exact progress_closed ht
   | step h1 _ ih => exact ih (preservation ht h1)
+
+/-- A fence on a partial group is STUCK: `fenceVal` fires only on
+    `groupVal (PSet.all n)` and no congruence rule applies to a value. This is
+    what connects `type_safety` to the fence-domain safety property (Fence.lean
+    instantiates it at n = 8). -/
+theorem fence_partial_stuck {n : Nat} (s : PSet n) (hne : s ≠ PSet.all n) :
+    ¬ ∃ e', Step (.fence (.groupVal s)) e' := by
+  intro ⟨_, h⟩
+  cases h with
+  | fenceVal => exact hne rfl
+  | fenceCong _ _ hg => cases hg
+
+/-- A finalize on a partial reduction is STUCK (the tree all-reduce analogue
+    of `fence_partial_stuck`; Reduce.lean instantiates it at n = 4). -/
+theorem finalize_partial_stuck {n : Nat} (s : PSet n) (hne : s ≠ PSet.all n) :
+    ¬ ∃ e', Step (.finalize (.leafReduce (.groupVal s))) e' := by
+  intro ⟨_, h⟩
+  cases h with
+  | finalizeVal => exact hne rfl
+  | finalizeCong _ _ hr =>
+    cases hr with
+    | leafReduceCong _ _ hg => cases hg
 
 end CoreMetatheory

@@ -129,10 +129,9 @@ if command -v nvidia-smi &>/dev/null; then
     if [ "$RUN_STATUS" -eq 0 ] && [ -n "$FILTERED" ]; then
         echo "$FILTERED" | sed 's/^/  /'
     else
-        echo "  [GPU detected but kernel build failed — showing stored output from RTX 4000 Ada]"
-        echo "  (Known blocker: Rust nvptx64 backend missing pred register class for ballot)"
+        echo "  [GPU detected but the example did not run — showing the archived RTX 4000 Ada transcript]"
         echo ""
-        cat "$PROJECT_ROOT/reproduce/host/gpu-output-2026-03-17.txt" 2>/dev/null | grep -E "Test [0-9]:" | sed 's/^/  /' || {
+        grep -E "=== Test|Result:" "$PROJECT_ROOT/results/rtx4000ada-2026-10-18.txt" 2>/dev/null | sed 's/^/  /' || {
             echo "  Test 1: butterfly_reduce     → PASS (32)"
             echo "  Test 2: diverge_merge_reduce → PASS (496)"
             echo "  Test 3: reduce_n             → PASS (32)"

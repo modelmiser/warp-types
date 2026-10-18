@@ -13,6 +13,17 @@
   so the worked example silently ran kernels that were not in its source. Regression test added.
 - `scripts/check-ptx-operands.sh` + `tools/ptxprobe`: the membermask and width operands reach the emitted
   `shfl.sync` (greps the probe's PTX; runs in the nvptx CI job and the pre-push hook; no GPU needed).
+- **Lean: the reduction rules now carry the safety property.** `Step.shuffleVal` (and `fenceVal`/`finalizeVal` in the
+  core metatheory) accepted any active set, so an ill-typed shuffle on a diverged warp *stepped* and progress/
+  preservation said nothing about shuffles. They now fire only on the full set; `shuffle_diverged_stuck`,
+  `fence_partial_stuck` and `finalize_partial_stuck` prove the partial cases have no successor (33 named theorems).
+- Paper/README/lean README: the calculus is linear for let-bound warps only (`fst`/`snd` and `warpVal` literals are
+  unrestricted); "zero axioms" → Lean's three standard axioms; the WebGPU claim corrected (WGSL defines
+  `subgroupShuffle` with an indeterminate value for inactive sources, and mandates a uniformity analysis); the
+  lean/README priority claim removed; CCCL#854 stated as suspected throughout; §5.1/§5.2/§5.6 listings marked as
+  calculus syntax and design sketches, §5.7 table downgraded accordingly; §6.7 shows the real rustc diagnostic;
+  `examples/*.rs` described as self-contained re-implementations; new related-work paragraph (divergence analysis,
+  Sierra, typestate, dynamic MPST, Faial) with references [48]–[59].
 - Docs: "Trusted entry points" registry on `Warp::kernel_entry` (named from every SAFETY comment; `DynWarp::all()`
   and `from_mask()` added to the list); tile docs no longer say safety "comes from the partition structure"; the
   false claim that the Lean model enforces one-shot entry removed. README Limitations and paper §6.9 updated.
@@ -20,6 +31,8 @@
   panic, `reduce_sum_wrapping_{i64,u64}`, `exclusive_sum`, `Warp<Odd>::shuffle_xor_within` on the CPU path.
 
 ## [0.4.0] — 2026-10-18
+
+- Release corresponding to tag `v0.4.0`, Zenodo DOI 10.5281/zenodo.23451884.
 
 - **Breaking:** `GpuShuffle`'s methods (`gpu_shfl_xor`, `gpu_shfl_xor_masked`, `gpu_shfl_down`, `gpu_shfl_up`,
   `gpu_shfl_idx`, `*_width`) are now `unsafe fn` with a `# Safety` contract. They were safe methods on plain values,
