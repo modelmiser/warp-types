@@ -126,14 +126,31 @@ pub unsafe fn atomic_add_f64(addr: *mut f64, val: f64) -> f64 {
 // is legal, and a `shfl.sync` duplicated into divergent blocks is exactly the
 // hazard the crate exists to rule out. The `llvm.nvvm.*` intrinsics are declared
 // `convergent` by LLVM (`#print`ed in the emitted IR as
-// `convergent nocallback nounwind memory(inaccessiblemem: readwrite)`), and the
-// NVPTX backend lowers them to the same `shfl.sync` / `vote.sync.ballot` /
-// `bar.warp.sync` instructions, with constant operands folded into the
-// instruction. `scripts/check-ptx-operands.sh` asserts both the PTX operands and
-// that every collective in the IR is a `convergent` intrinsic call.
+// `convergent nocallback nounwind memory(inaccessiblemem: readwrite)` for the
+// shuffles and the ballot, `convergent nocallback nounwind` for `bar.warp.sync`),
+// and the NVPTX backend lowers them to the same `shfl.sync` / `vote.sync.ballot`
+// / `bar.warp.sync` instructions, with constant operands folded into the
+// instruction.
 //
-// `bool` lowers to `i1` for `llvm.nvvm.vote.ballot.sync`, which also retires
-// the `.reg .pred` / `setp` workaround that the asm ballot needed.
+// Scope of the guarantee. The attribute sits on the intrinsic call. The Rust
+// wrappers around it are never marked `convergent` (rustc has no way to say so),
+// so a wrapper that is NOT inlined is an ordinary call LLVM may still duplicate;
+// the primitives here are `#[inline(always)]` and the typed methods `#[inline]`,
+// and `scripts/check-ptx-operands.sh` checks the end state on its probe kernels:
+// no collective is inline asm, every `llvm.nvvm.{shfl.sync.*,vote.ballot.sync,
+// bar.warp.sync}` declaration is `convergent`, no `.extern .func` survives (every
+// device function inlined or instantiated locally) in the release profile the
+// builder uses by default (a dev-profile device build is not link-complete:
+// shared generics and live core::panicking; see WarpBuilder::debug).
+// On sm_70+ the ISA's own rendezvous semantics ("named non-exited lanes wait for
+// each other") make many duplications benign anyway; this is defence in depth
+// against a legal transformation, not a repaired miscompile.
+//
+// `bool` lowers to `i1` for `llvm.nvvm.vote.ballot.sync`, which also retires the
+// `.reg .pred` / `setp` workaround that the asm ballot needed. That lowering is
+// a property of the pinned nightly's `link_llvm_intrinsics` path, not a Rust ABI
+// promise; the check script (ptxas + IR) is what notices if a toolchain bump
+// changes it.
 // ----------------------------------------------------------------------------
 #[cfg(target_arch = "nvptx64")]
 mod nvvm {

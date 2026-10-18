@@ -116,6 +116,7 @@ impl DynWarp {
     /// All 32 lanes active (NVIDIA warp size).
     ///
     /// For AMD 64-lane wavefronts, use `DynWarp::all_64()`.
+    #[inline]
     pub fn all() -> Self {
         DynWarp {
             active_mask: crate::active_set::All::MASK,
@@ -124,6 +125,7 @@ impl DynWarp {
     }
 
     /// All 64 lanes active (AMD wavefront size).
+    #[inline]
     pub fn all_64() -> Self {
         DynWarp {
             active_mask: 0xFFFFFFFFFFFFFFFF,
@@ -135,6 +137,7 @@ impl DynWarp {
     ///
     /// The mask must fit in 32 bits (`mask <= 0xFFFFFFFF`). For 64-lane
     /// masks, use [`from_mask_64`](Self::from_mask_64).
+    #[inline]
     pub fn from_mask_32(mask: u32) -> Self {
         DynWarp {
             active_mask: mask as u64,
@@ -143,6 +146,7 @@ impl DynWarp {
     }
 
     /// Create a 64-lane `DynWarp` from a specific mask.
+    #[inline]
     pub fn from_mask_64(mask: u64) -> Self {
         DynWarp {
             active_mask: mask,
@@ -161,6 +165,7 @@ impl DynWarp {
     /// [`from_mask_32`](Self::from_mask_32) or [`from_mask_64`](Self::from_mask_64).
     ///
     /// For production code, prefer `DynWarp::all()` or `DynWarp::from_static()`.
+    #[inline]
     pub fn from_mask(mask: u64) -> Self {
         let full = if mask <= 0xFFFFFFFF {
             0xFFFFFFFF
@@ -178,6 +183,7 @@ impl DynWarp {
     /// This is the "forget" direction: we discard compile-time information
     /// and move to runtime tracking. Always safe — going from more
     /// information to less.
+    #[inline]
     pub fn from_static<S: ActiveSet>(_warp: Warp<S>) -> Self {
         DynWarp {
             active_mask: S::MASK,
@@ -208,6 +214,7 @@ impl DynWarp {
     /// let dyn_warp = DynWarp::all();
     /// assert!(dyn_warp.ascribe::<Even>().is_err());
     /// ```
+    #[inline]
     pub fn ascribe<S: ActiveSet>(self) -> Result<Warp<S>, AscribeError> {
         if self.active_mask != S::MASK {
             return Err(AscribeError {
@@ -229,11 +236,13 @@ impl DynWarp {
     }
 
     /// Current active lane mask.
+    #[inline]
     pub fn active_mask(&self) -> u64 {
         self.active_mask
     }
 
     /// Number of active lanes.
+    #[inline]
     pub fn population(&self) -> u32 {
         self.active_mask.count_ones()
     }
@@ -249,6 +258,7 @@ impl DynWarp {
     ///
     /// **Prototype:** the check is real, but on success this returns `value`
     /// unchanged; it does not yet read the partner lane.
+    #[inline]
     pub fn shuffle_xor_scalar(&self, value: i32, _xor_mask: u32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -266,6 +276,7 @@ impl DynWarp {
     /// Shuffle down on a single scalar — runtime check for all-active.
     ///
     /// **Prototype:** on success this returns `value` unchanged.
+    #[inline]
     pub fn shuffle_down_scalar(&self, value: i32, _delta: u32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -282,6 +293,7 @@ impl DynWarp {
     ///
     /// **CPU model:** on success returns `value * warp_width` (every lane
     /// holding `value`); it does not read other lanes.
+    #[inline]
     pub fn reduce_sum_scalar(&self, value: i32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -301,6 +313,7 @@ impl DynWarp {
     /// Broadcast — runtime check for all-active.
     ///
     /// **CPU model:** on success returns `value`.
+    #[inline]
     pub fn broadcast_scalar(&self, value: i32) -> Result<i32, WarpError> {
         let full = self.full_mask;
         if self.active_mask != full {
@@ -318,6 +331,7 @@ impl DynWarp {
     /// Only supports 32-lane warps. Returns an error for 64-lane warps
     /// because the `[bool; 32]` input and `u32` return type cannot represent
     /// 64 lanes. Use the static `Warp<All>` API for 64-lane ballot.
+    #[inline]
     pub fn ballot(&self, predicate: &[bool; 32]) -> Result<u32, WarpError> {
         let full = self.full_mask;
         if full > 0xFFFFFFFF {
@@ -351,6 +365,7 @@ impl DynWarp {
     ///
     /// Returns two `DynWarp`s with disjoint masks that together cover
     /// the original. This is the runtime equivalent of `warp.diverge()`.
+    #[inline]
     pub fn diverge(self, predicate_mask: u64) -> (DynWarp, DynWarp) {
         // Note: stray bits in predicate_mask are intentionally clamped (ANDed away),
         // NOT rejected. This is by design — callers can pass conceptual masks like
@@ -381,6 +396,7 @@ impl DynWarp {
     /// check covering because it doesn't track the parent set. Two small disjoint
     /// DynWarps can merge without recovering All. Use `ascribe::<All>()` after
     /// merge to verify the result covers all lanes.
+    #[inline]
     pub fn merge(self, other: DynWarp) -> Result<DynWarp, WarpError> {
         if self.full_mask != other.full_mask {
             return Err(WarpError {
@@ -408,6 +424,7 @@ impl DynWarp {
     ///
     /// Use this when you need the same guarantee as the static path.
     /// For partial merges (accumulating sub-warps), use [`merge`](Self::merge).
+    #[inline]
     pub fn merge_covering(self, other: DynWarp) -> Result<DynWarp, WarpError> {
         let result = self.merge(other)?;
         if result.active_mask != result.full_mask {

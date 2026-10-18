@@ -90,6 +90,7 @@ impl Warp<crate::active_set::All> {
     /// All`); it is the identity. Inside the crate, `Warp::new()` is
     /// `pub(crate)`. The Lean calculus has the same gap: its `warpVal` literals
     /// are unrestricted (paper §4.8).
+    #[inline]
     pub fn kernel_entry() -> Self {
         Warp {
             _phantom: PhantomData,
@@ -119,16 +120,19 @@ impl<S: ActiveSet> Warp<S> {
     }
 
     /// Human-readable name of the active set.
+    #[inline]
     pub fn active_set_name(&self) -> &'static str {
         S::NAME
     }
 
     /// Bitmask of active lanes (u64 for AMD 64-lane wavefront support).
+    #[inline]
     pub fn active_mask(&self) -> u64 {
         S::MASK
     }
 
     /// Number of active lanes.
+    #[inline]
     pub fn population(&self) -> u32 {
         S::MASK.count_ones()
     }
@@ -137,6 +141,7 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// **Currently a no-op on every target:** it does not emit `__syncwarp`.
     /// The intended lowering is `__syncwarp(S::MASK)`, naming only active lanes.
+    #[inline]
     pub fn sync(&self) {
         // In real implementation: __syncwarp(S::MASK)
     }

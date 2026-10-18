@@ -86,21 +86,25 @@ pub struct DynDiverge {
 
 impl DynDiverge {
     /// Mask of lanes in the true branch.
+    #[inline]
     pub fn true_mask(&self) -> u64 {
         self.true_mask
     }
 
     /// Mask of lanes in the false branch.
+    #[inline]
     pub fn false_mask(&self) -> u64 {
         self.false_mask
     }
 
     /// Number of lanes in the true branch.
+    #[inline]
     pub fn true_count(&self) -> u32 {
         self.true_mask.count_ones()
     }
 
     /// Number of lanes in the false branch.
+    #[inline]
     pub fn false_count(&self) -> u32 {
         self.false_mask.count_ones()
     }
@@ -113,6 +117,7 @@ impl DynDiverge {
     /// **Design note:** Returns `Warp<All>` because `diverge_dynamic` is only
     /// available on `Warp<All>`. If extended to sub-warps in the future, the
     /// return type must be parameterized by the parent set.
+    #[inline]
     pub fn merge(self) -> Warp<All> {
         assert_eq!(
             self.true_mask | self.false_mask,
@@ -149,6 +154,7 @@ impl DynDiverge {
     /// let data = data::PerLane::new(1i32);
     /// let _sum = warp.reduce_sum(data);
     /// ```
+    #[inline]
     pub fn with_branches<F1, F2>(self, true_fn: F1, false_fn: F2) -> Warp<All>
     where
         F1: FnOnce(u64),
@@ -172,6 +178,7 @@ impl Warp<All> {
     ///
     /// This is the solution to data-dependent divergence without dependent types.
     /// The mask is runtime. The complement guarantee is structural.
+    #[inline]
     pub fn diverge_dynamic(self, predicate_mask: u64) -> DynDiverge {
         let all_mask = self.active_mask();
         // Reject masks with bits outside the warp's active lanes.

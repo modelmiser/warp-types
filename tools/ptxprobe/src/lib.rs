@@ -65,6 +65,43 @@ pub unsafe extern "ptx-kernel" fn probe_ballot_and_wrapping(out: *mut u32) {
     *out.add(tid as usize) = b ^ r;
 }
 
+/// API-surface probe: every non-generic public method a kernel might call. The
+/// script fails on any `.extern .func`, so a method that stops being inlined
+/// across the crate boundary (the 2026-10-18 `ballot` failure, and
+/// `BallotResult::first_lane` before 0.4.2) is caught here without a GPU.
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
+    let w: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let mut acc: u32 = w.active_mask() as u32 ^ w.population();
+    acc ^= w.active_set_name().len() as u32;
+    w.sync();
+    // BallotResult
+    let b = w.ballot(data::PerLane::new(tid.is_multiple_of(3)));
+    acc ^= b.mask_u32().get() ^ b.popcount().get();
+    acc ^= b.lane_voted(data::LaneId::new(5)).get() as u32;
+    acc ^= b.first_lane().map(|l| l.get() as u32).unwrap_or(99);
+    acc ^= b.mask().get() as u32;
+    // idx shuffle (broadcast) and the width-confined tile shuffles
+    acc ^= w.broadcast_lane(data::PerLane::new(tid as i32), 3).get() as u32;
+    let t16: Tile<16> = w.tile();
+    acc ^= t16.shuffle_xor(data::PerLane::new(tid as i32), 1).get() as u32;
+    acc ^= t16.partition_8().shuffle_down(data::PerLane::new(tid as i32), 1).get() as u32;
+    acc ^= t16.partition_4().size() as u32;
+    // dynamic divergence and merge
+    let w2: Warp<All> = w.diverge_dynamic(0x0000_FFFF).merge();
+    acc ^= w2.reduce_add(data::PerLane::new(tid as i32)) as u32;
+    // gradual: DynWarp round trip
+    let d = DynWarp::from_mask_32(0xFFFF_FFFF);
+    acc ^= d.population() ^ d.active_mask() as u32;
+    let w3: Warp<All> = d.ascribe::<All>().unwrap();
+    acc ^= w3.shuffle_down(data::PerLane::new(tid as i32), 1).get() as u32;
+    // direct primitives
+    warp_types::gpu::syncwarp(0xFFFF_FFFF);
+    acc ^= warp_types::gpu::shfl_sync_idx_i32(0xFFFF_FFFF, tid as i32, 7) as u32;
+    *out.add(tid as usize) = acc;
+}
+
 /// Negative probe (feature `empty-probe`): `Warp<Empty>` has no lanes, and the
 /// inline const assert in `shuffle_xor_within` must reject this instantiation at
 /// codegen. The script expects this build to fail with E0080.

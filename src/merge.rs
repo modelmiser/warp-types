@@ -73,6 +73,7 @@ use crate::warp::Warp;
 /// let merged: Warp<All> = merge(evens, odds);
 /// assert_eq!(merged.active_mask(), All::MASK);
 /// ```
+#[inline]
 pub fn merge<S1, S2>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<All>
 where
     S1: ComplementOf<S2>,
@@ -85,6 +86,7 @@ where
 ///
 /// Unlike `merge()` which always returns `Warp<All>`, this returns the
 /// parent set `P` where `S1` and `S2` are complements within `P`.
+#[inline]
 pub fn merge_within<S1, S2, P>(_left: Warp<S1>, _right: Warp<S2>) -> Warp<P>
 where
     S1: ComplementWithin<S2, P>,

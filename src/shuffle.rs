@@ -47,26 +47,31 @@ pub struct BallotResult {
 
 impl BallotResult {
     /// Create a ballot result from a uniform mask.
+    #[inline]
     pub fn from_mask(mask: Uniform<u64>) -> Self {
         BallotResult { mask }
     }
 
     /// Create from a 32-bit mask (NVIDIA compatibility).
+    #[inline]
     pub fn from_mask_u32(mask: Uniform<u32>) -> Self {
         BallotResult {
             mask: Uniform::from_const(mask.get() as u64),
         }
     }
 
+    #[inline]
     pub fn mask(self) -> Uniform<u64> {
         self.mask
     }
 
     /// Get the lower 32 bits (NVIDIA compatibility).
+    #[inline]
     pub fn mask_u32(self) -> Uniform<u32> {
         Uniform::from_const(self.mask.get() as u32)
     }
 
+    #[inline]
     pub fn lane_voted(self, lane: LaneId) -> Uniform<bool> {
         let id = lane.get();
         if id >= crate::WARP_SIZE as u8 {
@@ -75,10 +80,12 @@ impl BallotResult {
         Uniform::from_const((self.mask.get() & (1u64 << id)) != 0)
     }
 
+    #[inline]
     pub fn popcount(self) -> Uniform<u32> {
         Uniform::from_const(self.mask.get().count_ones())
     }
 
+    #[inline]
     pub fn first_lane(self) -> Option<LaneId> {
         let tz = self.mask.get().trailing_zeros();
         if tz < crate::WARP_SIZE {
@@ -191,6 +198,7 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// Panics if `mask` does not preserve `S`, i.e., there exists an active
     /// lane `i` where lane `(i ^ mask)` is not active.
+    #[inline]
     pub fn shuffle_xor_within<T: GpuValue + GpuShuffle>(
         &self,
         data: PerLane<T>,
@@ -244,8 +252,9 @@ impl Warp<All> {
     /// **ONLY AVAILABLE ON `Warp<All>`** — diverged warps have no full-warp
     /// shuffle (see `shuffle_xor_within` for masks that preserve a sub-warp).
     ///
-    /// On GPU: emits `shfl.sync.bfly.b32` via inline assembly.
+    /// On GPU: `shfl.sync.bfly.b32` through the convergent `llvm.nvvm.shfl.sync.bfly.i32` intrinsic.
     /// On CPU: returns the input value (single-thread identity).
+    #[inline]
     pub fn shuffle_xor<T: GpuValue + crate::gpu::GpuShuffle>(
         &self,
         data: PerLane<T>,
@@ -258,6 +267,7 @@ impl Warp<All> {
     ///
     /// On GPU: emits `shfl.sync.down.b32`.
     /// On CPU: returns input (identity).
+    #[inline]
     pub fn shuffle_down<T: GpuValue + crate::gpu::GpuShuffle>(
         &self,
         data: PerLane<T>,
@@ -278,6 +288,7 @@ impl Warp<All> {
     /// verified on RTX 4000 Ada — see `reproduce/gpu_semantics_test.cu`). This
     /// function uses `+` (Rust's `Add` trait), which panics in debug on overflow.
     /// For GPU-faithful wrapping semantics, use [`reduce_sum_wrapping`](Self::reduce_sum_wrapping).
+    #[inline]
     pub fn reduce_sum<T: GpuValue + crate::gpu::GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
@@ -366,8 +377,9 @@ impl Warp<All> {
     /// Warp ballot: collect a predicate from all lanes into a bitmask.
     ///
     /// Every lane gets the same bitmask — the result is `Uniform<u64>`.
-    /// Requires `Warp<All>` because reading predicates from inactive lanes
-    /// is undefined behavior.
+    /// Requires `Warp<All>`: the witness that every lane executes this call, so the
+    /// full membermask names exactly the executing lanes (an unnamed lane that
+    /// executes `vote.sync` is UB; lanes not named contribute 0 — `gpu::ballot_sync`).
     ///
     /// On GPU (nvptx64): `vote.sync.ballot.b32` via the convergent `llvm.nvvm.vote.ballot.sync`
     /// intrinsic. `#[inline]` because this is a non-generic method: without it the
@@ -395,6 +407,7 @@ impl Warp<All> {
     }
 
     /// Broadcast: all lanes get the same value.
+    #[inline]
     pub fn broadcast<T: GpuValue>(&self, value: T) -> PerLane<T> {
         PerLane::new(value)
     }
@@ -403,11 +416,13 @@ impl Warp<All> {
     ///
     /// Equivalent to `self.shuffle_xor(PerLane::new(val), mask).get()` but
     /// avoids the verbosity of wrapping/unwrapping for the common case.
+    #[inline]
     pub fn shuffle_xor_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, mask: u32) -> T {
         unsafe { val.gpu_shfl_xor(mask) }
     }
 
     /// Shuffle down on a raw scalar — convenience that skips PerLane wrapping.
+    #[inline]
     pub fn shuffle_down_raw<T: GpuValue + crate::gpu::GpuShuffle>(&self, val: T, delta: u32) -> T {
         unsafe { val.gpu_shfl_down(delta) }
     }
@@ -580,6 +595,7 @@ pub type FullButterfly = Compose<
 
 /// Apply a permutation to an array of values.
 #[cfg(not(feature = "warp64"))]
+#[inline]
 pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32] {
     let mut result = values;
     for (i, slot) in result.iter_mut().enumerate() {
@@ -591,6 +607,7 @@ pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 32], _perm: P) -> [T; 32]
 
 /// Apply a permutation to an array of values.
 #[cfg(feature = "warp64")]
+#[inline]
 pub fn shuffle_by<T: Copy, P: Permutation>(values: [T; 64], _perm: P) -> [T; 64] {
     let mut result = values;
     for (i, slot) in result.iter_mut().enumerate() {

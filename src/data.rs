@@ -16,6 +16,7 @@ use crate::GpuValue;
 pub struct LaneId(u8);
 
 impl LaneId {
+    #[inline]
     pub const fn new(id: u8) -> Self {
         assert!(
             id < 64,
@@ -24,10 +25,12 @@ impl LaneId {
         LaneId(id)
     }
 
+    #[inline]
     pub const fn get(self) -> u8 {
         self.0
     }
 
+    #[inline]
     pub const fn index(self) -> usize {
         self.0 as usize
     }
@@ -39,10 +42,12 @@ impl LaneId {
 pub struct WarpId(u16);
 
 impl WarpId {
+    #[inline]
     pub const fn new(id: u16) -> Self {
         WarpId(id)
     }
 
+    #[inline]
     pub const fn get(self) -> u16 {
         self.0
     }
@@ -62,16 +67,19 @@ pub struct Uniform<T: GpuValue> {
 
 impl<T: GpuValue> Uniform<T> {
     /// Create a uniform value from a compile-time constant.
+    #[inline]
     pub const fn from_const(value: T) -> Self {
         Uniform { value }
     }
 
     /// Get the value. Safe because it's the same in all lanes.
+    #[inline]
     pub fn get(self) -> T {
         self.value
     }
 
     /// Broadcast: convert uniform to per-lane (identity, but changes type).
+    #[inline]
     pub fn broadcast(self) -> PerLane<T> {
         PerLane { value: self.value }
     }
@@ -90,10 +98,12 @@ pub struct PerLane<T: GpuValue> {
 }
 
 impl<T: GpuValue> PerLane<T> {
+    #[inline]
     pub fn new(value: T) -> Self {
         PerLane { value }
     }
 
+    #[inline]
     pub fn get(self) -> T {
         self.value
     }
@@ -102,6 +112,7 @@ impl<T: GpuValue> PerLane<T> {
     ///
     /// # Safety
     /// Caller must ensure all lanes hold the same value.
+    #[inline]
     pub unsafe fn assume_uniform(self) -> Uniform<T> {
         Uniform { value: self.value }
     }
@@ -129,16 +140,19 @@ pub struct SingleLane<T: GpuValue, const LANE: u8> {
 }
 
 impl<T: GpuValue, const LANE: u8> SingleLane<T, LANE> {
+    #[inline]
     pub fn new(value: T) -> Self {
         SingleLane { value }
     }
 
     /// Read the value. Only valid in the owning lane.
+    #[inline]
     pub fn get(self) -> T {
         self.value
     }
 
     /// Broadcast to all lanes — the ONLY safe way to share with other lanes.
+    #[inline]
     pub fn broadcast(self) -> Uniform<T> {
         Uniform::from_const(self.value)
     }
@@ -157,17 +171,20 @@ pub struct Role {
 
 impl Role {
     /// The bitmask of lanes in this role.
+    #[inline]
     pub const fn mask(self) -> u64 {
         self.mask
     }
 
     /// Human-readable role name.
+    #[inline]
     pub const fn name(self) -> &'static str {
         self.name
     }
 }
 
 impl Role {
+    #[inline]
     pub const fn lanes(start: u8, end: u8, name: &'static str) -> Self {
         assert!(start < 64 && end <= 64 && start < end);
         let width = (end - start) as u64;
@@ -179,6 +196,7 @@ impl Role {
         Role { mask, name }
     }
 
+    #[inline]
     pub const fn lane(id: u8, name: &'static str) -> Self {
         assert!(id < 64);
         Role {
@@ -187,10 +205,12 @@ impl Role {
         }
     }
 
+    #[inline]
     pub const fn contains(self, lane: LaneId) -> bool {
         (self.mask & (1u64 << lane.0)) != 0
     }
 
+    #[inline]
     pub const fn count(self) -> u32 {
         self.mask.count_ones()
     }

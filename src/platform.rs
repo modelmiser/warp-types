@@ -347,6 +347,7 @@ impl Platform for GpuWarp32 {
 /// This shows the key insight: the same algorithm works for CPU SIMD and GPU warps
 /// because both support shuffle_xor. The actual implementation would be
 /// specialized per platform for optimal codegen.
+#[inline]
 pub fn butterfly_reduce_sum<const WIDTH: usize, T>(values: PortableVector<T, WIDTH>) -> T
 where
     T: GpuValue + core::ops::Add<Output = T>,
@@ -375,6 +376,7 @@ where
 }
 
 /// Prefix sum (inclusive scan)
+#[inline]
 pub fn prefix_sum<const WIDTH: usize, T>(
     values: PortableVector<T, WIDTH>,
 ) -> PortableVector<T, WIDTH>

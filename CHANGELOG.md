@@ -9,11 +9,21 @@
   a transformation that adds a control dependency (jump threading, tail duplication, loop unswitching) may legally
   duplicate such a call into divergent blocks — the hazard this crate exists to rule out. They now call the
   `llvm.nvvm.*` intrinsics by `#[link_name]`, which LLVM declares `convergent nocallback nounwind
-  memory(inaccessiblemem: readwrite)`; the NVPTX backend emits the same instructions with constant operands folded.
-  `scripts/check-ptx-operands.sh` now also reads the LLVM IR and fails if any warp collective is inline asm or its
-  intrinsic is not declared `convergent`. The `.reg .pred`/`setp` ballot workaround is gone (`bool` lowers to `i1`).
-  Device build gains `#![feature(link_llvm_intrinsics)]` (compiler-internal; nightly was already required). Raised
-  by the 2026-10-18 panel (Opus seat, "not asked").
+  memory(inaccessiblemem: readwrite)` (`bar.warp.sync`: `convergent nocallback nounwind`); the NVPTX backend emits
+  the same instructions with constant operands folded. The attribute is on the intrinsic call; wrappers are
+  `#[inline(always)]`/`#[inline]` and the guarantee is checked on the end state: `scripts/check-ptx-operands.sh`
+  reads the LLVM IR and fails if any collective is inline asm, if any of the six intrinsics is not declared
+  `convergent`, or if an `.extern .func` survives (release profile; a dev-profile device build is not link-complete
+  by construction — shared generic instantiations and live `core::panicking` — and the builder's debug option now says so). On sm_70+ the ISA's rendezvous
+  semantics make many such duplications benign; this is defence in depth against a legal transformation, not a
+  repaired miscompile. The `.reg .pred`/`setp` ballot workaround is gone (`bool` lowers to `i1` on the pinned
+  nightly — a toolchain property, which the check notices if it changes). Device build gains
+  `#![feature(link_llvm_intrinsics)]` (compiler-internal; nightly was already required). Raised by the 2026-10-18
+  0.4.1 panel (Opus seat, "not asked"); the 0.4.2 panel then found the rest of this entry.
+- **Every non-generic public function is `#[inline]`.** A non-generic device-reachable function that rustc does not
+  export as cross-crate-inlinable becomes an `.extern .func` in the kernel PTX and fails PTX JIT with
+  `CUDA_ERROR_INVALID_PTX` — `BallotResult::first_lane()` in any kernel did this in 0.4.1. 164 functions across the
+  crate now carry `#[inline]`; the check script's probe exercises the API surface and fails on any `.extern .func`.
 - **`#[warp_kernel]` rejects fat pointers hidden behind type aliases.** The thin-pointee check is syntactic and saw
   `type S = [i32]; p: *mut S` as a path type (panel, GPT seat). The macro now also emits
   `const _: () = assert!(size_of::<*mut S>() == size_of::<usize>())` per pointer parameter, so the alias case fails to

@@ -36,6 +36,7 @@ pub struct SharedRegion<T: GpuValue, const OWNER: u8> {
 }
 
 impl<T: GpuValue + Default, const OWNER: u8> SharedRegion<T, OWNER> {
+    #[inline]
     pub fn new(owner: Role) -> Self {
         SharedRegion {
             data: [T::default(); crate::WARP_SIZE as usize],
@@ -46,16 +47,19 @@ impl<T: GpuValue + Default, const OWNER: u8> SharedRegion<T, OWNER> {
 }
 
 impl<T: GpuValue, const OWNER: u8> SharedRegion<T, OWNER> {
+    #[inline]
     pub fn write(&mut self, index: usize, value: T) {
         assert!(index < crate::WARP_SIZE as usize, "Index out of bounds");
         self.data[index] = value;
     }
 
+    #[inline]
     pub fn read(&self, index: usize) -> T {
         assert!(index < crate::WARP_SIZE as usize, "Index out of bounds");
         self.data[index]
     }
 
+    #[inline]
     pub fn grant_read(&self) -> SharedView<'_, T, OWNER> {
         SharedView {
             region: self,
@@ -63,6 +67,7 @@ impl<T: GpuValue, const OWNER: u8> SharedRegion<T, OWNER> {
         }
     }
 
+    #[inline]
     pub fn owner(&self) -> Role {
         self.owner
     }
@@ -75,6 +80,7 @@ pub struct SharedView<'a, T: GpuValue, const OWNER: u8> {
 }
 
 impl<'a, T: GpuValue, const OWNER: u8> SharedView<'a, T, OWNER> {
+    #[inline]
     pub fn read(&self, index: usize) -> T {
         self.region.read(index)
     }
@@ -96,6 +102,7 @@ pub struct QueueFull;
 impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
     WorkQueue<T, PRODUCER, CONSUMER>
 {
+    #[inline]
     pub fn new(producer_role: Role, _consumer_role: Role) -> Self {
         WorkQueue {
             tasks: SharedRegion::new(producer_role),
@@ -104,6 +111,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
         }
     }
 
+    #[inline]
     pub fn push(&mut self, task: T) -> Result<(), QueueFull> {
         let next = (self.head + 1) % crate::WARP_SIZE as usize;
         if next == self.tail {
@@ -114,6 +122,7 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
         Ok(())
     }
 
+    #[inline]
     pub fn pop(&mut self) -> Option<T> {
         if self.tail == self.head {
             return None;
@@ -123,9 +132,11 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
         Some(task)
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.tail == self.head
     }
+    #[inline]
     pub fn is_full(&self) -> bool {
         (self.head + 1) % crate::WARP_SIZE as usize == self.tail
     }
@@ -140,10 +151,12 @@ impl<T: GpuValue + Default, const PRODUCER: u8, const CONSUMER: u8>
 pub struct BlockId(u32);
 
 impl BlockId {
+    #[inline]
     pub const fn new(id: u32) -> Self {
         BlockId(id)
     }
 
+    #[inline]
     pub const fn get(self) -> u32 {
         self.0
     }
@@ -158,18 +171,22 @@ pub struct ThreadId {
 }
 
 impl ThreadId {
+    #[inline]
     pub const fn new(block: BlockId, warp: crate::data::WarpId, lane: crate::data::LaneId) -> Self {
         ThreadId { block, warp, lane }
     }
 
+    #[inline]
     pub const fn block(self) -> BlockId {
         self.block
     }
 
+    #[inline]
     pub const fn warp(self) -> crate::data::WarpId {
         self.warp
     }
 
+    #[inline]
     pub const fn lane(self) -> crate::data::LaneId {
         self.lane
     }
@@ -221,6 +238,7 @@ impl<R: BlockRole, S: ProtocolState, const N: usize> BlockSession<R, S, N> {
         }
     }
 
+    #[inline]
     pub fn block_id(&self) -> BlockId {
         self.block_id
     }
@@ -250,6 +268,7 @@ impl ReductionSession<WarpPhase> {
         }
     }
 
+    #[inline]
     pub fn warp_reduce(self) -> (u32, ReductionSession<BlockPhase>) {
         (
             self.value,
@@ -262,6 +281,7 @@ impl ReductionSession<WarpPhase> {
 }
 
 impl ReductionSession<BlockPhase> {
+    #[inline]
     pub fn block_reduce(self) -> (u32, ReductionSession<GridPhase>) {
         (
             self.value,
@@ -274,6 +294,7 @@ impl ReductionSession<BlockPhase> {
 }
 
 impl ReductionSession<GridPhase> {
+    #[inline]
     pub fn grid_reduce(self) -> (u32, ReductionSession<Complete>) {
         (
             self.value,
@@ -286,6 +307,7 @@ impl ReductionSession<GridPhase> {
 }
 
 impl ReductionSession<Complete> {
+    #[inline]
     pub fn result(self) -> u32 {
         self.value
     }

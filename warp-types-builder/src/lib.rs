@@ -146,6 +146,13 @@ impl WarpBuilder {
     }
 
     /// Disable release mode (compile in debug mode).
+    ///
+    /// Caveat (2026-10-18): a dev-profile device build is not link-complete as a
+    /// single PTX file. Debug builds share generic instantiations with the
+    /// upstream crate (`-Zshare-generics`) and keep `core::panicking` live, so the
+    /// PTX carries `.extern .func` declarations that `cuModuleLoad` rejects with
+    /// `CUDA_ERROR_INVALID_PTX`. Use the default release profile for anything you
+    /// intend to launch; `.debug()` is for reading the unoptimised PTX.
     pub fn debug(mut self) -> Self {
         self.release = false;
         self
@@ -504,45 +511,87 @@ fn emit_rerun_if_changed(kernel_dir: &Path) {
     }
 }
 
-/// `path = "..."` dependencies named in the kernel crate's Cargo.toml, resolved
-/// against the kernel directory. A minimal TOML scan (no parser dependency):
-/// any `path = "<p>"` inside a `[dependencies]`, `[dev-dependencies]` or
-/// `[build-dependencies]` table, or a `[dependencies.<name>]` table, or an
-/// inline `{ path = "<p>" }` on a dependency line.
+/// `path = "..."` dependencies of the kernel crate, TRANSITIVELY (a change in
+/// `warp-types/src` reaches the PTX through `my-kernels`'s path dep on it; a
+/// path dep's own path deps count too), each resolved against the manifest that
+/// names it. A minimal TOML scan, no parser dependency: a `path` KEY (not a
+/// substring — `xpath = …` and comment lines are ignored) with a single- or
+/// double-quoted value, inside a `[dependencies]` / `[dev-dependencies]` /
+/// `[build-dependencies]` / `[target.*.dependencies]` table or a
+/// `[dependencies.<name>]` table, or inline on a dependency line. Not handled
+/// (documented, not silent): `path.workspace = true` inheritance.
 fn path_dependencies(kernel_dir: &Path) -> Vec<PathBuf> {
-    let Ok(content) = std::fs::read_to_string(kernel_dir.join("Cargo.toml")) else {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut queue: Vec<PathBuf> = vec![kernel_dir.to_path_buf()];
+    while let Some(dir) = queue.pop() {
+        let canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if seen.contains(&canon) {
+            continue;
+        }
+        seen.push(canon);
+        for dep in direct_path_dependencies(&dir) {
+            if !out.contains(&dep) {
+                out.push(dep.clone());
+                queue.push(dep);
+            }
+        }
+    }
+    out
+}
+
+/// One manifest's `path = …` dependencies (see [`path_dependencies`]).
+fn direct_path_dependencies(dir: &Path) -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
         return Vec::new();
     };
     let mut in_deps = false;
     let mut out = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         if line.starts_with('[') {
-            let t = line.trim_matches(|c| c == '[' || c == ']');
+            let t = line.trim_matches(|c| c == '[' || c == ']').trim();
             in_deps = t == "dependencies"
                 || t == "dev-dependencies"
                 || t == "build-dependencies"
                 || t.starts_with("dependencies.")
                 || t.starts_with("dev-dependencies.")
                 || t.starts_with("build-dependencies.")
-                || t.starts_with("target.") && t.contains("dependencies");
+                || (t.starts_with("target.") && t.contains("dependencies"));
             continue;
         }
         if !in_deps {
             continue;
         }
-        if let Some(idx) = line.find("path") {
-            let rest = &line[idx + 4..];
+        // every `path = "<v>"` / `path = '<v>'` whose `path` is a whole key
+        let bytes = line.as_bytes();
+        let mut from = 0;
+        while let Some(rel) = line[from..].find("path") {
+            let at = from + rel;
+            from = at + 4;
+            let key_start = at == 0 || matches!(bytes[at - 1], b' ' | b'\t' | b'{' | b',');
+            if !key_start {
+                continue;
+            }
+            let rest = line[at + 4..].trim_start();
+            let Some(rest) = rest.strip_prefix('=') else {
+                continue;
+            };
             let rest = rest.trim_start();
-            if let Some(rest) = rest.strip_prefix('=') {
-                let rest = rest.trim_start();
-                if let Some(rest) = rest.strip_prefix('"') {
-                    if let Some(end) = rest.find('"') {
-                        let p = kernel_dir.join(&rest[..end]);
-                        if !out.contains(&p) {
-                            out.push(p);
-                        }
-                    }
+            let Some(q) = rest.chars().next() else {
+                continue;
+            };
+            if q != '"' && q != '\'' {
+                continue;
+            }
+            let inner = &rest[1..];
+            if let Some(end) = inner.find(q) {
+                let p = dir.join(&inner[..end]);
+                if !out.contains(&p) {
+                    out.push(p);
                 }
             }
         }
@@ -916,13 +965,46 @@ mod tests {
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"k\"\nversion = \"0.0.0\"\npath = \"not-a-dep\"\n\n\
-             [dependencies]\nwarp-types = { path = \"../../\" }\nother = \"1.0\"\n\n\
+             [dependencies]\nwarp-types = { path = \"../../\" }\nother = \"1.0\"\n\
+             # path = \"commented-out\"\nxpathy = { xpath = \"../xpath-crate\", version = \"1\" }\n\
+             single = { path = '../single' }\n\n\
              [dependencies.local]\npath = \"../local\"\nfeatures = [\"x\"]\n\n\
              [profile.release]\nopt-level = 3\n",
         )
         .unwrap();
+        // the first dep is itself a crate with a path dep: must be found transitively
+        std::fs::create_dir_all(dir.join("../../")).ok();
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("Cargo.toml"),
+            "[package]\nname = \"n\"\nversion = \"0.0.0\"\n[dependencies]\ndeeper = { path = \"deeper\" }\n",
+        )
+        .unwrap();
+        let mut toml = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        toml.push_str("[build-dependencies]\nnested = { path = \"nested\" }\n");
+        std::fs::write(dir.join("Cargo.toml"), toml).unwrap();
         let deps = path_dependencies(&dir);
-        assert_eq!(deps, vec![dir.join("../../"), dir.join("../local")]);
+        assert!(deps.contains(&dir.join("../../")), "{deps:?}");
+        assert!(
+            deps.contains(&dir.join("../single")),
+            "single-quoted path: {deps:?}"
+        );
+        assert!(deps.contains(&dir.join("../local")), "{deps:?}");
+        assert!(deps.contains(&nested), "{deps:?}");
+        assert!(
+            deps.contains(&nested.join("deeper")),
+            "transitive: {deps:?}"
+        );
+        assert!(
+            !deps.iter().any(|d| d.ends_with("commented-out")),
+            "comment: {deps:?}"
+        );
+        assert!(
+            !deps.iter().any(|d| d.ends_with("xpath-crate")),
+            "key boundary: {deps:?}"
+        );
+        assert!(!deps.iter().any(|d| d.ends_with("not-a-dep")), "{deps:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

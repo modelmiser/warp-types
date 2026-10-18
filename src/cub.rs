@@ -45,6 +45,7 @@ impl Warp<All> {
     /// let data = data::PerLane::new(3i32);
     /// let max = warp.reduce(data, |a, b| if a > b { a } else { b });
     /// ```
+    #[inline]
     pub fn reduce<T, F>(&self, data: PerLane<T>, op: F) -> T
     where
         T: GpuValue + GpuShuffle,
@@ -92,6 +93,7 @@ impl Warp<All> {
     #[deprecated(
         note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan."
     )]
+    #[inline]
     pub fn inclusive_sum<T>(&self, data: PerLane<T>) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
@@ -136,6 +138,7 @@ impl Warp<All> {
     /// // CPU emulation: NOT a correct exclusive scan (see doc)
     /// ```
     #[deprecated(note = "produces incorrect results — use inclusive_sum and manual shift instead")]
+    #[inline]
     pub fn exclusive_sum<T>(&self, data: PerLane<T>, identity: T) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
@@ -153,6 +156,7 @@ impl Warp<All> {
     /// Reduce with addition (convenience wrapper).
     ///
     /// Equivalent to `cub::WarpReduce<T>::Sum(val)`.
+    #[inline]
     pub fn reduce_add<T>(&self, data: PerLane<T>) -> T
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
@@ -163,6 +167,7 @@ impl Warp<All> {
     /// Reduce with maximum.
     ///
     /// Equivalent to `cub::WarpReduce<T>::Reduce(val, cub::Max())`.
+    #[inline]
     pub fn reduce_max<T>(&self, data: PerLane<T>) -> T
     where
         T: GpuValue + GpuShuffle + Ord,
@@ -173,6 +178,7 @@ impl Warp<All> {
     /// Reduce with minimum.
     ///
     /// Equivalent to `cub::WarpReduce<T>::Reduce(val, cub::Min())`.
+    #[inline]
     pub fn reduce_min<T>(&self, data: PerLane<T>) -> T
     where
         T: GpuValue + GpuShuffle + Ord,
@@ -184,6 +190,7 @@ impl Warp<All> {
     ///
     /// Equivalent to `__shfl_sync(0xFFFFFFFF, val, src_lane)`.
     /// All lanes receive the value from `src_lane`.
+    #[inline]
     pub fn broadcast_lane<T: GpuValue + GpuShuffle>(
         &self,
         data: PerLane<T>,
@@ -200,6 +207,7 @@ impl Warp<All> {
     /// Warp-level shuffle up: lane\[i\] reads from lane\[i - delta\].
     ///
     /// Useful for scan-like operations. Lanes below delta get undefined values.
+    #[inline]
     pub fn shuffle_up<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, delta: u32) -> PerLane<T> {
         PerLane::new(unsafe { data.get().gpu_shfl_up(delta) })
     }

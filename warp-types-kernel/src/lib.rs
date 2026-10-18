@@ -80,7 +80,6 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate the kernel function for nvptx64
     // Preserve outer attributes (doc comments, #[cfg], etc.)
     let expanded = quote! {
-        #(#thin_asserts)*
         #(#attrs)*
         // `extern "ptx-kernel"` entry points are invoked by the GPU driver at
         // launch, never by Rust code, so `missing_safety_doc` asks the author to
@@ -90,43 +89,56 @@ pub fn warp_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
         // every kernel author rediscovering this.
         #[allow(clippy::missing_safety_doc)]
         #[no_mangle]
-        #vis unsafe extern "ptx-kernel" fn #name(#params) #body
+        #vis unsafe extern "ptx-kernel" fn #name(#params) {
+            #(#thin_asserts)*
+            #body
+        }
     };
 
     TokenStream::from(expanded)
 }
 
-/// For every raw-pointer parameter, a `const` assertion that the pointer is
-/// thin at the TYPE level. `is_thin_pointee` is syntactic: it cannot see through
-/// a type alias, so `type S = [i32]; fn k(p: *mut S)` passed it as a path type
-/// (found by the 2026-10-18 cross-vendor panel). `size_of::<*mut S>()` is
-/// evaluated after name resolution, so the alias case fails to compile with a
-/// named message instead of corrupting the kernel parameter space at launch.
-/// Post-monomorphization is not an issue here: kernels are never generic.
+/// For every raw-pointer parameter, `const` assertions that the pointer — and
+/// every pointer nested inside its pointee chain — is thin at the TYPE level.
+/// `is_thin_pointee` is syntactic: it cannot see through a type alias, so
+/// `type S = [i32]; fn k(p: *mut S)` passed it as a path type (found by the
+/// 2026-10-18 cross-vendor panel). `size_of::<*mut S>()` is evaluated after name
+/// resolution, so the alias case fails to compile with a named message instead
+/// of corrupting the kernel parameter space at launch. The chain walk keeps the
+/// policy consistent with the syntactic check, which rejects `*mut *mut [i32]`:
+/// `*mut *mut Hidden` asserts both `*mut *mut Hidden` and `*mut Hidden`.
+/// The items are emitted inside the kernel body, so a `#[cfg]` on the kernel
+/// governs them too. Post-monomorphization is not an issue: kernels are never
+/// generic.
 fn thin_pointer_asserts(sig: &syn::Signature) -> Vec<proc_macro2::TokenStream> {
-    sig.inputs
-        .iter()
-        .filter_map(|p| match p {
-            FnArg::Typed(pt) if matches!(&*pt.ty, syn::Type::Ptr(_)) => Some(pt),
-            _ => None,
-        })
-        .map(|pt| {
-            let ty = &pt.ty;
-            let pat = &pt.pat;
+    let mut out = Vec::new();
+    for p in sig.inputs.iter() {
+        let FnArg::Typed(pt) = p else { continue };
+        let pat = &pt.pat;
+        // the parameter type itself, then each pointer type nested in it
+        let mut level: &syn::Type = &pt.ty;
+        while let syn::Type::Ptr(ptr) = level {
+            let ty = level;
             let msg = format!(
-                "warp_kernel: parameter `{}` has type `{}`, which is a fat pointer (16 bytes) — \
-                 probably a type alias to a slice, `str` or trait object; the kernel parameter ABI needs a thin pointer",
+                "warp_kernel: parameter `{}`: `{}` is a fat pointer (16 bytes) — \
+                 probably a type alias to a slice, `str` or trait object; the kernel parameter ABI needs thin pointers",
                 quote!(#pat),
                 quote!(#ty)
-            );
-            quote! {
+            )
+            // the message is an `assert!` format string: braces in a type
+            // (`[u8; {4}]`) must not be read as format arguments
+            .replace('{', "{{")
+            .replace('}', "}}");
+            out.push(quote! {
                 const _: () = assert!(
                     ::core::mem::size_of::<#ty>() == ::core::mem::size_of::<usize>(),
                     #msg
                 );
-            }
-        })
-        .collect()
+            });
+            level = &ptr.elem;
+        }
+    }
+    out
 }
 
 /// Validate a full kernel signature: qualifiers, generics, return type, params.
@@ -238,12 +250,14 @@ fn validate_kernel_param(ty: &syn::Type, pat: &Pat) -> Result<(), syn::Error> {
         syn::Type::Ptr(ptr) => {
             if !is_thin_pointee(&ptr.elem) {
                 let msg = format!(
-                    "warp_kernel: parameter `{}` has type `{}`, a pointer to an \
-                     unsized (or non-thin) pointee. This is a fat pointer — 16 bytes \
-                     (data + length/vtable) instead of the 8-byte thin pointer the \
-                     kernel parameter ABI expects — which silently corrupts the \
-                     kernel parameter space. Pass a thin pointer (`*const T`/`*mut T` \
-                     with `T: Sized`) plus an explicit length parameter instead.",
+                    "warp_kernel: parameter `{}` has type `{}`, a pointer to a pointee \
+                     the macro cannot prove thin (accepted: path types other than `str`, \
+                     arrays, and pointers to those). A fat pointer — 16 bytes (data + \
+                     length/vtable) instead of the 8-byte thin pointer the kernel \
+                     parameter ABI expects — silently corrupts the kernel parameter \
+                     space; a thin pointee not in the accepted set is rejected \
+                     conservatively. Pass `*const T`/`*mut T` with a path or array `T` \
+                     plus an explicit length parameter instead.",
                     quote!(#pat),
                     quote!(#ty)
                 );
@@ -363,6 +377,19 @@ mod tests {
             syn::parse_str("fn k(a: *mut i32, n: u32, b: *const u8) {}").unwrap();
         let asserts = thin_pointer_asserts(&sig.sig);
         assert_eq!(asserts.len(), 2, "one const assert per pointer parameter");
+        let nested: syn::ItemFn = syn::parse_str("fn k(pp: *mut *mut [u8; {4}]) {}").unwrap();
+        let na = thin_pointer_asserts(&nested.sig);
+        assert_eq!(na.len(), 2, "one assert per pointer level in the chain");
+        assert!(
+            na[1].to_string().contains("* mut [u8 ; { 4 }]"),
+            "{}",
+            na[1]
+        );
+        assert!(
+            na[0].to_string().contains("{{ 4 }}"),
+            "braces in the message are escaped for assert!'s format string: {}",
+            na[0]
+        );
         let text = asserts[0].to_string();
         assert!(text.contains("size_of"), "{text}");
         assert!(text.contains("usize"), "{text}");

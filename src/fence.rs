@@ -145,6 +145,7 @@ impl GlobalRegion<'_, Unwritten> {
     ///     let _fenced = threadfence(full);
     /// });
     /// ```
+    #[inline]
     pub fn with_region<R>(f: impl for<'r> FnOnce(GlobalRegion<'r, Unwritten>) -> R) -> R {
         f(GlobalRegion {
             _brand: PhantomData,
@@ -167,6 +168,7 @@ impl<'r> GlobalRegion<'r, Unwritten> {
     /// halves together but does not track which memory addresses each
     /// half covers. A real GPU memory model would need address-level
     /// tracking to prevent combining writes to disjoint address ranges.
+    #[inline]
     pub fn split(self) -> (GlobalRegion<'r, Unwritten>, GlobalRegion<'r, Unwritten>) {
         (
             GlobalRegion {
@@ -193,6 +195,7 @@ impl<S: ActiveSet> Warp<S> {
     /// Use `global_store_complement` with the complement's partial write to
     /// advance to `FullWrite`. The sequential path is:
     /// `warp.global_store(region)` → `warp.global_store_complement(partial)` → `FullWrite`.
+    #[inline]
     pub fn global_store<'r>(
         self,
         _region: GlobalRegion<'r, Unwritten>,
@@ -211,6 +214,7 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// Returns the warp (unchanged) so it can still be merged.
     /// The lifetime `'r` must match — both writes must target the same region.
+    #[inline]
     pub fn global_store_complement<'r, S2: ActiveSet>(
         self,
         _region: GlobalRegion<'r, PartialWrite<S2>>,
@@ -251,6 +255,7 @@ impl<S: ActiveSet> Warp<S> {
 ///     });
 /// });
 /// ```
+#[inline]
 pub fn merge_writes<'r, S1, S2>(
     _a: GlobalRegion<'r, PartialWrite<S1>>,
     _b: GlobalRegion<'r, PartialWrite<S2>>,
@@ -270,6 +275,7 @@ where
 /// For nested divergence: e.g., EvenLow + EvenHigh within Even.
 /// Returns a partial write for the parent set, not a full write.
 /// The lifetime `'r` must match — both writes must target the same region.
+#[inline]
 pub fn merge_writes_within<'r, S1, S2, P>(
     _a: GlobalRegion<'r, PartialWrite<S1>>,
     _b: GlobalRegion<'r, PartialWrite<S2>>,
@@ -289,6 +295,7 @@ where
 ///
 /// Only callable on `GlobalRegion<FullWrite>` — the type system ensures
 /// all lanes have written before the fence.
+#[inline]
 pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
     // In real implementation: __threadfence()
     GlobalRegion {
@@ -301,6 +308,7 @@ impl GlobalRegion<'_, Fenced> {
     /// Read from a fenced global region. Safe because:
     /// 1. All lanes have written (FullWrite)
     /// 2. Fence ensures visibility (Fenced)
+    #[inline]
     pub fn read<T: Default>(&self) -> T {
         T::default() // placeholder
     }

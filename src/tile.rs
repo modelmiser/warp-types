@@ -144,6 +144,7 @@ impl Warp<All> {
     /// let (_evens, _odds) = warp.diverge_even_odd(); // ERROR: move of borrowed `warp`
     /// let _ = tile.shuffle_xor(data::PerLane::new(42i32), 1);
     /// ```
+    #[inline]
     pub fn tile<'w, const SIZE: usize>(&'w self) -> Tile<'w, SIZE>
     where
         Tile<'w, SIZE>: ValidTileSize,
@@ -171,6 +172,7 @@ where
     ///
     /// On GPU: emits `shfl.sync.bfly.b32` with `c = ((32-SIZE)<<8)|0x1F`,
     /// confining the shuffle to SIZE-lane segments.
+    #[inline]
     pub fn shuffle_xor<T: GpuValue + GpuShuffle>(&self, data: PerLane<T>, mask: u32) -> PerLane<T> {
         assert!(
             mask < SIZE as u32,
@@ -180,6 +182,7 @@ where
     }
 
     /// Shuffle down within the tile (confined to tile-sized segments).
+    #[inline]
     pub fn shuffle_down<T: GpuValue + GpuShuffle>(
         &self,
         data: PerLane<T>,
@@ -195,6 +198,7 @@ where
     /// Sum reduction across all tile lanes.
     ///
     /// Uses butterfly reduction with `log2(SIZE)` shuffle-XOR steps.
+    #[inline]
     pub fn reduce_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
@@ -218,6 +222,7 @@ where
     #[deprecated(
         note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan."
     )]
+    #[inline]
     pub fn inclusive_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
@@ -233,6 +238,7 @@ where
     }
 
     /// Number of threads in this tile.
+    #[inline]
     pub const fn size(&self) -> usize {
         SIZE
     }
@@ -244,18 +250,21 @@ where
 
 impl<'w> Tile<'w, 32> {
     /// Sub-partition into tiles of 16.
+    #[inline]
     pub fn partition_16(&self) -> Tile<'w, 16> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 8.
+    #[inline]
     pub fn partition_8(&self) -> Tile<'w, 8> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 4.
+    #[inline]
     pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,
@@ -265,12 +274,14 @@ impl<'w> Tile<'w, 32> {
 
 impl<'w> Tile<'w, 16> {
     /// Sub-partition into tiles of 8.
+    #[inline]
     pub fn partition_8(&self) -> Tile<'w, 8> {
         Tile {
             _phantom: PhantomData,
         }
     }
     /// Sub-partition into tiles of 4.
+    #[inline]
     pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,
@@ -280,6 +291,7 @@ impl<'w> Tile<'w, 16> {
 
 impl<'w> Tile<'w, 8> {
     /// Sub-partition into tiles of 4.
+    #[inline]
     pub fn partition_4(&self) -> Tile<'w, 4> {
         Tile {
             _phantom: PhantomData,

@@ -114,6 +114,7 @@ impl Warp<All> {
     /// let data = data::PerLane::new(42i32);
     /// evens.bitonic_sort(data); // ERROR: method not found for Warp<Even>
     /// ```
+    #[inline]
     pub fn bitonic_sort<T: GpuValue + GpuShuffle + Ord>(&self, data: PerLane<T>) -> PerLane<T> {
         let mut val = data;
 
@@ -160,6 +161,7 @@ impl Warp<All> {
     ///
     /// Like `bitonic_sort` but uses a user-provided comparison function
     /// instead of `Ord`. Useful for sorting by key, reverse order, etc.
+    #[inline]
     pub fn bitonic_sort_by<T, F>(&self, data: PerLane<T>, cmp: F) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle,
@@ -237,6 +239,7 @@ impl Warp<All> {
     /// let vals = data::PerLane::new(100u32);
     /// let (sorted_keys, sorted_vals) = warp.bitonic_sort_pairs(keys, vals);
     /// ```
+    #[inline]
     pub fn bitonic_sort_pairs<K, V>(
         &self,
         keys: PerLane<K>,

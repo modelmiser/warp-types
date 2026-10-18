@@ -195,13 +195,11 @@ pub fn bitonic_sort_i32(data: *mut i32) {
 }
 
 // ============================================================================
-// Kernel 5: ballot — exercises `Warp<All>::ballot` (llvm.nvvm.vote.ballot.sync since 0.4.2; before that a setp-based workaround for the missing
-// `pred` register class. Each lane votes (tid < 16); expected mask 0x0000FFFF.
-//
-// This is the runtime-verification kernel for the 2026-03-29 unblock commit
-// (b6b737622). The workaround declares `.reg .pred %p_vote` inside a PTX
-// scope block and crosses the Rust↔PTX boundary as `reg32` only — see
-// `src/gpu.rs::ballot_sync` for the PTX template.
+// Kernel 5: ballot — exercises `Warp<All>::ballot`. Each lane votes (tid < 16);
+// expected mask 0x0000FFFF. Since 0.4.2 it lowers through the convergent
+// `llvm.nvvm.vote.ballot.sync` intrinsic (see `src/gpu.rs::ballot_sync`); before
+// that it was inline asm with a `.reg .pred` + `setp` workaround for Rust's
+// missing predicate register class (b6b737622, 2026-03-29).
 // ============================================================================
 
 #[warp_kernel]

@@ -42,6 +42,7 @@ impl<T: Copy + Default, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// let sw = SimWarp::<i32>::new(|lane| lane as i32 * 10);
     /// assert_eq!(sw.lanes[3], 30);
     /// ```
+    #[inline]
     pub fn new(init: impl Fn(u32) -> T) -> Self {
         let mut lanes = [T::default(); WIDTH];
         for i in 0..WIDTH {
@@ -51,6 +52,7 @@ impl<T: Copy + Default, const WIDTH: usize> SimWarp<T, WIDTH> {
     }
 
     /// Read a single lane's value.
+    #[inline]
     pub fn lane(&self, id: usize) -> T {
         self.lanes[id]
     }
@@ -58,6 +60,7 @@ impl<T: Copy + Default, const WIDTH: usize> SimWarp<T, WIDTH> {
 
 impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Create from an existing array.
+    #[inline]
     pub fn from_array(lanes: [T; WIDTH]) -> Self {
         SimWarp { lanes }
     }
@@ -74,6 +77,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Hardware masks the operand to its low log2(WIDTH) bits (PTX:
     /// `bval = b[4:0]`), so mask=33 on 32 lanes behaves as mask=1 —
     /// never as identity.
+    #[inline]
     pub fn shuffle_xor(&self, mask: u32) -> Self {
         const {
             assert!(
@@ -95,6 +99,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// The PTX `shfl.sync` pseudocode masks the operand (`bval = b[4:0]`)
     /// in every mode, so delta ≥ WIDTH acts as `delta & (WIDTH-1)` on
     /// silicon (delta ≥ warpSize is out-of-contract at the CUDA C level).
+    #[inline]
     pub fn shuffle_down(&self, delta: u32) -> Self {
         const {
             assert!(
@@ -119,6 +124,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// Lanes below the masked delta read their own value (GPU clamp behavior).
     ///
     /// Same `b[4:0]` operand masking as [`SimWarp::shuffle_down`].
+    #[inline]
     pub fn shuffle_up(&self, delta: u32) -> Self {
         const {
             assert!(
@@ -142,6 +148,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     ///
     /// Uses bitwise mask (`& (WIDTH-1)`) for out-of-range indices, matching
     /// GPU hardware which masks to 5 bits (32-lane) or 6 bits (64-lane).
+    #[inline]
     pub fn shuffle_idx(&self, src_lane: u32) -> Self {
         // `& (WIDTH-1)` is only the hardware b[4:0] masking when WIDTH is a
         // power of two — same requirement as the sibling shuffles.
@@ -174,6 +181,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// the partner never leaves the segment. Semantics derived from the PTX
     /// ISA `shfl.sync` pseudocode; the cross-segment case is not covered by
     /// `reproduce/gpu_semantics_test.cu` (hardware verification pending).
+    #[inline]
     pub fn shuffle_xor_width(&self, mask: u32, width: u32) -> Self {
         const {
             assert!(
@@ -209,6 +217,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// `lane + bval` clamps at the reader's segment top (`j <= maxLane`).
     /// Since addition is monotone, down never crosses segments — unlike
     /// [`SimWarp::shuffle_xor_width`].
+    #[inline]
     pub fn shuffle_down_width(&self, delta: u32, width: u32) -> Self {
         const {
             assert!(
@@ -243,6 +252,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     /// clamps at the reader's segment base (`j >= maxLane`, which for up
     /// mode is the segment base since cval=0). Subtraction is monotone, so
     /// up never crosses segments.
+    #[inline]
     pub fn shuffle_up_width(&self, delta: u32, width: u32) -> Self {
         const {
             assert!(
@@ -273,6 +283,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     // ========================================================================
 
     /// Element-wise binary operation (add, min, max, etc.)
+    #[inline]
     pub fn zip_with(&self, other: &Self, f: impl Fn(T, T) -> T) -> Self {
         let mut out = self.lanes;
         for i in 0..WIDTH {
@@ -282,6 +293,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
     }
 
     /// Per-lane transform.
+    #[inline]
     pub fn map(&self, f: impl Fn(usize, T) -> T) -> Self {
         let mut out = self.lanes;
         for i in 0..WIDTH {
@@ -299,6 +311,7 @@ impl<T: Copy, const WIDTH: usize> SimWarp<T, WIDTH> {
 /// Butterfly reduction (matches cub.rs `Warp<All>::reduce` for 32-lane warps).
 ///
 /// Dynamically computes log2(WIDTH) XOR stages, so works for any power-of-2 WIDTH.
+#[inline]
 pub fn butterfly_reduce<T: Copy + Default, const WIDTH: usize>(
     sw: &SimWarp<T, WIDTH>,
     op: impl Fn(T, T) -> T,
@@ -314,6 +327,7 @@ pub fn butterfly_reduce<T: Copy + Default, const WIDTH: usize>(
 }
 
 /// Tile-confined butterfly reduction (matches tile.rs `Tile<SIZE>::reduce_sum`).
+#[inline]
 pub fn tile_reduce<T: Copy + Default>(
     sw: &SimWarp<T>,
     tile_size: u32,
@@ -333,6 +347,7 @@ pub fn tile_reduce<T: Copy + Default>(
 ///
 /// Direction-aware compare-and-swap using lane_id, identical to the
 /// actual GPU algorithm. Returns sorted SimWarp.
+#[inline]
 pub fn bitonic_sort(sw: &SimWarp<i32>) -> SimWarp<i32> {
     let mut v = sw.clone();
 

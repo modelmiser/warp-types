@@ -36,16 +36,19 @@ impl Warp<All> {
     ///
     /// Returns two warps with COMPLEMENTARY active sets.
     /// The type system tracks that Even and Odd together make All.
+    #[inline]
     pub fn diverge_even_odd(self) -> (Warp<Even>, Warp<Odd>) {
         (Warp::new(), Warp::new())
     }
 
     /// Diverge into low/high halves.
+    #[inline]
     pub fn diverge_halves(self) -> (Warp<LowHalf>, Warp<HighHalf>) {
         (Warp::new(), Warp::new())
     }
 
     /// Extract lane 0 (e.g., for reduction result handling).
+    #[inline]
     pub fn extract_lane0(self) -> (Warp<Lane0>, Warp<NotLane0>) {
         (Warp::new(), Warp::new())
     }
@@ -60,6 +63,7 @@ impl Warp<Even> {
     ///
     /// Even ∩ LowHalf = lanes 0, 2, 4, 6, 8, 10, 12, 14
     /// Even ∩ HighHalf = lanes 16, 18, 20, 22, 24, 26, 28, 30
+    #[inline]
     pub fn diverge_halves(self) -> (Warp<EvenLow>, Warp<EvenHigh>) {
         (Warp::new(), Warp::new())
     }
@@ -67,6 +71,7 @@ impl Warp<Even> {
 
 impl Warp<Odd> {
     /// Split odd lanes into low-odd and high-odd.
+    #[inline]
     pub fn diverge_halves(self) -> (Warp<OddLow>, Warp<OddHigh>) {
         (Warp::new(), Warp::new())
     }
@@ -74,6 +79,7 @@ impl Warp<Odd> {
 
 impl Warp<LowHalf> {
     /// Split low-half lanes into even-low and odd-low.
+    #[inline]
     pub fn diverge_even_odd(self) -> (Warp<EvenLow>, Warp<OddLow>) {
         (Warp::new(), Warp::new())
     }
@@ -81,6 +87,7 @@ impl Warp<LowHalf> {
 
 impl Warp<HighHalf> {
     /// Split high-half lanes into even-high and odd-high.
+    #[inline]
     pub fn diverge_even_odd(self) -> (Warp<EvenHigh>, Warp<OddHigh>) {
         (Warp::new(), Warp::new())
     }

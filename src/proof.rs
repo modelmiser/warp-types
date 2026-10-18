@@ -36,38 +36,47 @@ pub const WARP_SIZE: u32 = crate::WARP_SIZE;
 pub struct ProofActiveSet(HashSet<Lane>);
 
 impl ProofActiveSet {
+    #[inline]
     pub fn all() -> Self {
         ProofActiveSet((0..WARP_SIZE).collect())
     }
 
+    #[inline]
     pub fn empty() -> Self {
         ProofActiveSet(HashSet::new())
     }
 
+    #[inline]
     pub fn from_predicate<F: Fn(Lane) -> bool>(pred: F) -> Self {
         ProofActiveSet((0..WARP_SIZE).filter(|&l| pred(l)).collect())
     }
 
+    #[inline]
     pub fn union(&self, other: &Self) -> Self {
         ProofActiveSet(self.0.union(&other.0).copied().collect())
     }
 
+    #[inline]
     pub fn intersection(&self, other: &Self) -> Self {
         ProofActiveSet(self.0.intersection(&other.0).copied().collect())
     }
 
+    #[inline]
     pub fn complement(&self) -> Self {
         ProofActiveSet((0..WARP_SIZE).filter(|l| !self.0.contains(l)).collect())
     }
 
+    #[inline]
     pub fn is_disjoint(&self, other: &Self) -> bool {
         self.0.is_disjoint(&other.0)
     }
 
+    #[inline]
     pub fn is_all(&self) -> bool {
         self.0.len() == WARP_SIZE as usize
     }
 
+    #[inline]
     pub fn contains(&self, lane: Lane) -> bool {
         self.0.contains(&lane)
     }
@@ -125,6 +134,7 @@ pub enum Predicate {
 }
 
 impl Predicate {
+    #[inline]
     pub fn eval(&self, lane: Lane) -> bool {
         match self {
             Predicate::Even => lane % 2 == 0,
@@ -133,6 +143,7 @@ impl Predicate {
         }
     }
 
+    #[inline]
     pub fn active_set(&self) -> ProofActiveSet {
         ProofActiveSet::from_predicate(|l| self.eval(l))
     }
@@ -153,6 +164,7 @@ pub type TypeResult = Result<Type, String>;
 /// The context is consumed linearly: variable lookup removes the binding,
 /// let-binding checks freshness, and the body must consume the bound variable.
 /// This matches the Lean formalization's `HasType : Ctx → Expr → Ty → Ctx → Prop`.
+#[inline]
 pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
     match expr {
         // Values have their literal types (context passes through unchanged)
@@ -276,6 +288,7 @@ pub fn type_check(ctx: &mut Context, expr: &Expr) -> TypeResult {
 // ============================================================================
 
 /// Values are fully reduced expressions
+#[inline]
 pub fn is_value(expr: &Expr) -> bool {
     match expr {
         Expr::WarpVal(_) => true,
@@ -287,6 +300,7 @@ pub fn is_value(expr: &Expr) -> bool {
 }
 
 /// Single step of evaluation
+#[inline]
 pub fn step(expr: &Expr) -> Option<Expr> {
     match expr {
         // Values don't step
@@ -430,6 +444,7 @@ fn substitute(expr: &Expr, var: &str, val: &Expr) -> Expr {
 /// - Case Merge: if both values, can step (disjointness from typing); else IH
 /// - Case Shuffle: if both values, can step (All from typing); else IH
 /// - Case Let: if e1 is value, can substitute; else IH on e1
+#[inline]
 pub fn progress_check(expr: &Expr) -> bool {
     let mut ctx = Context::new();
     if type_check(&mut ctx, expr).is_ok() {
@@ -448,6 +463,7 @@ pub fn progress_check(expr: &Expr) -> bool {
 /// - Case Merge: result type is Warp<S1∪S2> where S1, S2 came from typing ✓
 /// - Case Shuffle: result type is PerLane ✓
 /// - Case Let/substitution: standard substitution lemma
+#[inline]
 pub fn preservation_check(expr: &Expr) -> bool {
     let mut ctx = Context::new();
     let original_type = type_check(&mut ctx, expr);
@@ -467,6 +483,7 @@ pub fn preservation_check(expr: &Expr) -> bool {
 /// Definition: e is "stuck" if e is not a value and there's no e' with e → e'
 ///
 /// Proof: By Progress, well-typed closed terms are never stuck.
+#[inline]
 pub fn type_safety_check(expr: &Expr) -> bool {
     let mut ctx = Context::new();
     if type_check(&mut ctx, expr).is_err() {
@@ -508,6 +525,7 @@ pub fn type_safety_check(expr: &Expr) -> bool {
 
 /// LEMMA: Diverge produces complements
 /// If diverge(Warp<S>, P) → (Warp<S1>, Warp<S2>), then S1 ∪ S2 = S and S1 ∩ S2 = ∅
+#[inline]
 pub fn diverge_complement_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
     let p = pred.active_set();
     let s1 = s.intersection(&p);
@@ -525,6 +543,7 @@ pub fn diverge_complement_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
 
 /// LEMMA: Merge restores original
 /// If (S1, S2) came from diverge(S, P), then merge produces S
+#[inline]
 pub fn merge_restore_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
     let p = pred.active_set();
     let s1 = s.intersection(&p);
@@ -537,6 +556,7 @@ pub fn merge_restore_lemma(s: &ProofActiveSet, pred: &Predicate) -> bool {
 /// LEMMA: Shuffle source validity
 /// shuffle_xor on Warp<All> only reads from lanes in All (trivially true)
 /// shuffle_xor on Warp<S> where S ≠ All would read from lanes not in S (unsafe)
+#[inline]
 pub fn shuffle_source_lemma(s: &ProofActiveSet, mask: u32) -> bool {
     if !s.is_all() {
         // Check if any source lane is outside S
