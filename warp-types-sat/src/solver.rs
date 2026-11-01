@@ -147,6 +147,11 @@ pub fn solve(mut db: ClauseDb, num_vars: u32) -> SolveResult {
 /// overshooting. Derived from pivot centrality correlation experiments.
 const DEFAULT_PIVOT_BUMP_SCALE: f64 = 0.5;
 
+/// Conflicts between learned-clause reductions. A parameter of the core since
+/// 2026-11-01 so the deletion path can be exercised on small instances
+/// (`solve_watched_drat_with`, `solve --reduce-interval`).
+pub const DEFAULT_REDUCE_INTERVAL: u64 = 2000;
+
 /// Solve a CNF instance using watched-literal BCP with VSIDS and Luby restarts.
 ///
 /// Full CDCL loop: two-watched-literal BCP, VSIDS branching heuristic with
@@ -175,9 +180,23 @@ pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveSt
 /// I/O error if writing failed; the solve itself is unaffected by it.
 /// See [`crate::proof`].
 pub fn solve_watched_drat(
+    db: ClauseDb,
+    num_vars: u32,
+    out: &mut dyn Write,
+) -> io::Result<SolveResult> {
+    solve_watched_drat_with(db, num_vars, out, DEFAULT_REDUCE_INTERVAL)
+}
+
+/// [`solve_watched_drat`] with the learned-clause reduction interval chosen
+/// by the caller (conflicts between reductions; `DEFAULT_REDUCE_INTERVAL` is
+/// 2000). A small interval makes short solves exercise clause deletion and
+/// compaction, which is what a proof-logging test needs to cover; it is a
+/// diagnostic, not a tuning knob.
+pub fn solve_watched_drat_with(
     mut db: ClauseDb,
     num_vars: u32,
     out: &mut dyn Write,
+    reduce_interval: u64,
 ) -> io::Result<SolveResult> {
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
@@ -191,6 +210,7 @@ pub fn solve_watched_drat(
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        reduce_interval,
         &mut NoTheory,
         &mut writer,
     );
@@ -214,6 +234,7 @@ pub(crate) fn solve_cdcl_core_stats(
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     );
@@ -239,6 +260,7 @@ pub fn solve_watched_budget(
         0.0,
         conflict_limit,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     );
@@ -264,6 +286,7 @@ pub(crate) fn solve_cdcl_core(mut db: ClauseDb, num_vars: u32, mut vsids: Vsids)
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     )
@@ -292,6 +315,7 @@ pub fn solve_watched_trail_gradient(
         boost_scale,
         0,
         0.0,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     )
@@ -318,6 +342,7 @@ pub fn solve_watched_trail_gradient_stats(
         boost_scale,
         conflict_limit,
         0.0,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     );
@@ -351,6 +376,7 @@ pub fn solve_watched_combined(
         gradient_boost,
         conflict_limit,
         pivot_bump_scale,
+        DEFAULT_REDUCE_INTERVAL,
         &mut NoTheory,
         &mut NoProof,
     );
@@ -367,6 +393,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     trail_gradient_boost: f64,
     conflict_limit: u64,
     pivot_bump_scale: f64,
+    reduce_interval: u64,
     theory: &mut T,
     proof: &mut dyn ProofLog,
 ) -> SolveResult {
@@ -407,7 +434,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     // LBD clause deletion with periodic compaction
     db.freeze_original();
     let mut conflicts: u64 = 0;
-    let reduce_interval: u64 = 2000;
+    let reduce_interval: u64 = reduce_interval.max(1);
     let mut next_reduce: u64 = reduce_interval;
 
     // Trail-gradient probe schedule
@@ -525,8 +552,21 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                 // ── Learned clause deletion + compaction ──
                 if conflicts >= next_reduce {
-                    let locked = build_locked_set(&trail);
-                    let deleted = db.reduce_learned(&locked);
+                    let locked =
+                        if crate::proof::fault::active(crate::proof::fault::Fault::EmptyLock) {
+                            HashSet::new()
+                        } else {
+                            build_locked_set(&trail)
+                        };
+                    #[allow(unused_mut)]
+                    let mut deleted = db.reduce_learned(&locked);
+                    #[cfg(test)]
+                    if crate::proof::fault::active(crate::proof::fault::Fault::DeleteLocked) {
+                        // Delete the live reasons on purpose: the compaction
+                        // remap below must refuse (panic), which is the test.
+                        deleted.extend(db.tombstone_learned(&locked));
+                    }
+                    crate::proof::fault::on_reduce(db, &locked, &deleted, proof);
                     for &c in &deleted {
                         proof.delete(db.clause(c).literals);
                     }
@@ -781,7 +821,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         let asserting_lit = analysis.learned[0];
                         let lbd = analysis.lbd;
-                        proof.add(&analysis.learned);
+                        crate::proof::fault::log_learned(proof, &analysis.learned);
                         let cref = db.add_clause(analysis.learned);
                         db.set_lbd(cref, lbd as u16);
                         watches.add_clause(db, cref);
@@ -865,6 +905,7 @@ pub fn solve_with_theory<T: TheorySolver>(
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         theory,
         &mut NoProof,
     )
@@ -889,6 +930,7 @@ pub fn solve_with_theory_stats<T: TheorySolver>(
         0.0,
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         theory,
         &mut NoProof,
     );
@@ -915,6 +957,7 @@ pub fn solve_with_theory_budget<T: TheorySolver>(
         0.0,
         conflict_limit,
         DEFAULT_PIVOT_BUMP_SCALE,
+        DEFAULT_REDUCE_INTERVAL,
         theory,
         &mut NoProof,
     );

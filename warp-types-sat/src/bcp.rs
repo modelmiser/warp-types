@@ -222,6 +222,28 @@ impl ClauseDb {
     /// Strategy: sort by LBD, keep the best half. Standard MiniSat/Glucose.
     ///
     /// Returns CRefs of deleted clauses (for watch list cleanup).
+    /// Test-only: tombstone every LEARNED clause in `crefs`, ignoring the lock
+    /// and the LBD rule. Exists so a test can delete live trail reasons on
+    /// purpose and watch the compaction remap refuse (`proof::fault::Fault::
+    /// DeleteLocked`). Returns the clauses it tombstoned.
+    #[cfg(test)]
+    pub(crate) fn tombstone_learned(&mut self, crefs: &HashSet<CRef>) -> Vec<CRef> {
+        let mut out = Vec::new();
+        for &cref in crefs {
+            if cref < self.original_limit {
+                continue;
+            }
+            let h = self.arena[cref as usize];
+            if header_is_deleted(h) {
+                continue;
+            }
+            self.arena[cref as usize] = make_header(header_len(h), header_lbd(h), true);
+            out.push(cref);
+        }
+        out.sort_unstable();
+        out
+    }
+
     pub(crate) fn reduce_learned(&mut self, locked: &HashSet<CRef>) -> Vec<CRef> {
         let mut candidates: Vec<(CRef, u16)> = Vec::new();
         let mut pos = self.original_limit;

@@ -22,6 +22,42 @@
 //! the *input* formula, so it is checked against the DIMACS file the clause
 //! database was parsed from.
 //!
+//! # Why every logged lemma is RUP (the invariant, stated 2026-11-01)
+//!
+//! A clause is RUP (reverse unit propagation) w.r.t. a clause set if asserting
+//! its negation and propagating to fixpoint yields a conflict. For the
+//! pure-SAT core:
+//!
+//! 1. Each learned clause is the 1-UIP resolvent of the conflict clause and
+//!    trail reasons, every one of which is present in the log at that moment:
+//!    original clauses are never deleted, and learned reasons are locked (3).
+//! 2. Resolution keeps level-0 literals in the clause; minimization then
+//!    removes a literal only when every path through its reason chain ends in
+//!    a clause literal or a level-0 literal. Dropping a level-0 literal is
+//!    RUP only if the checker can re-derive that level-0 unit, so **the
+//!    level-0 reasons must still be in the log**. The `abstract_levels`
+//!    bit-filter in `analyze.rs` is an early abort only; aliasing of levels
+//!    makes it less effective, never more permissive.
+//! 3. `reduce_learned` runs only after a restart has backtracked to level 0,
+//!    so the only reasons alive during a reduce are level-0 reasons, and
+//!    `build_locked_set` locks every propagation reason on the trail. Learned
+//!    units have LBD 1, and clauses with LBD ≤ 2 are never candidates. Hence no
+//!    clause a later lemma depends on through the trail is ever deleted, and
+//!    no single-literal `d` line is ever written (which also keeps the proofs
+//!    independent of `drat-trim`'s decision to ignore unit deletions).
+//! 4. The initial-BCP conflict and a conflict at level 0 emit the empty clause
+//!    directly: unit propagation over the logged set reproduces the solver's
+//!    level-0 trail, so `0` is RUP.
+//! 5. Compaction remaps clause references, not literals; deletions are logged
+//!    from the tombstoned clause before `compact` frees it.
+//!
+//! Each point has a falsifier in [`fault`] / the tests: the lock emptied, a
+//! literal flipped, the empty clause suppressed, a phantom deletion, a wrong
+//! deletion. The strict in-crate checker must reject every one; which of them
+//! `drat-trim` also rejects is recorded in `research/drat-certification.md`,
+//! because a checker that accepts a corrupted proof is a fact about the
+//! checker's semantics, not a pass.
+//!
 //! [`check_drat`] is a forward RUP checker used by the tests: it is an
 //! independent reimplementation of the check (unit propagation over the
 //! clause set, not the solver's watched BCP), but it lives in this crate; an
@@ -29,6 +65,163 @@
 
 use crate::literal::Lit;
 use std::io::{self, Write};
+
+/// Test-only fault injection for the proof log. Every function here is a
+/// no-op (and compiles to nothing) outside `cfg(test)`; under test, a
+/// thread-local selects at most one fault, so the solver on this thread writes
+/// a deliberately corrupted log while behaving normally otherwise. Used to
+/// watch each checker fail (see the module docs).
+pub mod fault {
+    use super::ProofLog;
+    use crate::bcp::{CRef, ClauseDb};
+    use crate::literal::Lit;
+
+    /// The corruptions. See `research/drat-certification.md` §3.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[repr(u8)]
+    pub enum Fault {
+        None = 0,
+        /// `build_locked_set` returns the empty set: reasons may be deleted.
+        EmptyLock = 1,
+        /// The 10th learned clause is logged with its first literal negated.
+        FlipLiteral = 2,
+        /// `proof.empty()` is suppressed: the log never derives `0`.
+        OmitFinalEmpty = 3,
+        /// At the first reduce, a `d` line for a clause that was never added.
+        PhantomDelete = 4,
+        /// At the first reduce, `d` lines for the clauses that were *kept*
+        /// (still in use) instead of the ones deleted.
+        WrongDelete = 5,
+        /// At every reduce, `d` lines for the LOCKED clauses (trail reasons)
+        /// as if they had been deleted, while the solver keeps them. Isolates
+        /// the proof-side question from solver integrity: if a level-0
+        /// reason's deletion is logged, does the checker notice?
+        LogLockedDelete = 6,
+        /// At every reduce, the locked LEARNED clauses are really deleted
+        /// (tombstoned regardless of lock and LBD). The solver's compaction
+        /// remap must then refuse with a panic: this watches the integrity
+        /// guard fail on purpose.
+        DeleteLocked = 7,
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        static FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+        static LEARNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        static REDUCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        static LOCKED_LOGGED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Arm `f` for the current thread; the returned guard disarms it.
+    #[cfg(test)]
+    pub fn arm(f: Fault) -> Armed {
+        FAULT.with(|c| c.set(f as u8));
+        LEARNED.with(|c| c.set(0));
+        REDUCES.with(|c| c.set(0));
+        LOCKED_LOGGED.with(|c| c.set(0));
+        Armed
+    }
+    #[cfg(test)]
+    pub struct Armed;
+    #[cfg(test)]
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            FAULT.with(|c| c.set(0));
+        }
+    }
+
+    #[inline]
+    pub fn active(f: Fault) -> bool {
+        #[cfg(test)]
+        {
+            FAULT.with(|c| c.get()) == f as u8
+        }
+        #[cfg(not(test))]
+        {
+            let _ = f;
+            false
+        }
+    }
+
+    /// Log a learned clause, applying `FlipLiteral` to the 10th one.
+    #[inline]
+    pub fn log_learned(proof: &mut dyn ProofLog, learned: &[Lit]) {
+        #[cfg(test)]
+        {
+            let n = LEARNED.with(|c| {
+                let v = c.get() + 1;
+                c.set(v);
+                v
+            });
+            if active(Fault::FlipLiteral) && n == 10 && !learned.is_empty() {
+                let mut flipped = learned.to_vec();
+                flipped[0] = flipped[0].complement();
+                proof.add(&flipped);
+                return;
+            }
+        }
+        proof.add(learned);
+    }
+
+    /// Hook at a reduce, before the genuine `d` lines are written.
+    #[inline]
+    pub fn on_reduce(
+        db: &ClauseDb,
+        locked: &std::collections::HashSet<CRef>,
+        deleted: &[CRef],
+        proof: &mut dyn ProofLog,
+    ) {
+        #[cfg(test)]
+        {
+            let n = REDUCES.with(|c| {
+                let v = c.get() + 1;
+                c.set(v);
+                v
+            });
+            if active(Fault::LogLockedDelete) {
+                let mut locked: Vec<CRef> = locked.iter().copied().collect();
+                locked.sort_unstable();
+                for &c in &locked {
+                    proof.delete(db.clause(c).literals);
+                }
+                LOCKED_LOGGED.with(|x| x.set(x.get() + locked.len() as u64));
+            }
+            if n != 1 {
+                return;
+            }
+            if active(Fault::PhantomDelete) {
+                // A clause over the two highest variables that no solve of a
+                // test instance adds: 50 literals wide, all positive.
+                let nv = db.max_variable();
+                let phantom: Vec<Lit> = (0..nv.min(49)).map(Lit::pos).collect();
+                proof.delete(&phantom);
+            }
+            if active(Fault::WrongDelete) {
+                // Delete (in the log only) every live learned clause that was
+                // NOT deleted — the ones the solver keeps using.
+                let kept: Vec<CRef> = db
+                    .iter_crefs()
+                    .filter(|c| !deleted.contains(c) && !db.clause(*c).literals.is_empty())
+                    .collect();
+                let start = kept.len().saturating_sub(deleted.len().max(8));
+                for &c in &kept[start..] {
+                    proof.delete(db.clause(c).literals);
+                }
+            }
+        }
+        #[cfg(not(test))]
+        {
+            let _ = (db, locked, deleted, proof);
+        }
+    }
+
+    /// Number of locked-clause deletions `LogLockedDelete` has written on this
+    /// thread since `arm`. Zero means the fault was vacuous on that instance.
+    #[cfg(test)]
+    pub fn locked_logged() -> u64 {
+        LOCKED_LOGGED.with(|c| c.get())
+    }
+}
 
 /// Receiver for proof steps. The solver core calls these as it runs.
 pub trait ProofLog {
@@ -38,6 +231,9 @@ pub trait ProofLog {
     fn delete(&mut self, lits: &[Lit]);
     /// The solver concluded UNSAT: the empty clause is derivable.
     fn empty(&mut self) {
+        if fault::active(fault::Fault::OmitFinalEmpty) {
+            return;
+        }
         self.add(&[]);
     }
 }
@@ -269,7 +465,7 @@ mod tests {
     use super::*;
     use crate::bench::{generate_3sat_phase_transition, pigeonhole_dimacs};
     use crate::dimacs::parse_dimacs_str;
-    use crate::solver::{solve_watched, solve_watched_drat, SolveResult};
+    use crate::solver::{solve_watched, solve_watched_drat, solve_watched_drat_with, SolveResult};
 
     fn cnf_ints(text: &str) -> Vec<Vec<i64>> {
         text.lines()
@@ -400,21 +596,319 @@ mod tests {
         assert_eq!(String::from_utf8(buf).unwrap(), "0\n");
     }
 
-    /// Checks PHP(6) and PHP(7) proofs with an external DRAT checker when one
-    /// is available (`DRAT_TRIM=/path/to/drat-trim` or `drat-trim` on PATH);
-    /// otherwise prints that it was skipped. The in-crate checker is not the
-    /// real test; this is.
-    #[test]
-    fn external_drat_trim_if_present() {
-        let bin = std::env::var("DRAT_TRIM").ok().or_else(|| {
+    /// Locate drat-trim: `DRAT_TRIM` (must then work — no silent skip) or PATH.
+    fn drat_trim_bin() -> Option<String> {
+        std::env::var("DRAT_TRIM").ok().or_else(|| {
             std::env::var_os("PATH").and_then(|p| {
                 std::env::split_paths(&p)
                     .map(|d| d.join("drat-trim"))
                     .find(|f| f.is_file())
                     .map(|f| f.to_string_lossy().into_owned())
             })
-        });
-        let Some(bin) = bin else {
+        })
+    }
+
+    /// Run drat-trim with extra args; returns its `s ...` verdict line, or
+    /// `None` when no checker is configured.
+    fn drat_trim_verdict(tag: &str, cnf: &str, proof: &str, extra: &[&str]) -> Option<String> {
+        let bin = drat_trim_bin()?;
+        let dir =
+            std::env::temp_dir().join(format!("warp-types-sat-drat-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = dir.join("i.cnf");
+        let d = dir.join("i.drat");
+        std::fs::write(&c, cnf).unwrap();
+        std::fs::write(&d, proof).unwrap();
+        let out = std::process::Command::new(&bin)
+            .arg(&c)
+            .arg(&d)
+            .args(extra)
+            .output()
+            .expect("DRAT_TRIM is set or drat-trim is on PATH but it did not run");
+        let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
+        Some(if text.contains("s NOT VERIFIED") {
+            "s NOT VERIFIED".to_string()
+        } else if text.contains("s VERIFIED") {
+            "s VERIFIED".to_string()
+        } else {
+            format!("(no verdict; exit {:?})", out.status.code())
+        })
+    }
+
+    #[test]
+    fn reduce_interval_knob_brings_deletions_into_php6() {
+        // Default interval: PHP(6) never reaches a reduce, so no `d` lines.
+        let text = pigeonhole_dimacs(6);
+        let (r, proof) = drat_for(&text);
+        assert_eq!(r, SolveResult::Unsat);
+        assert!(
+            !proof.lines().any(|l| l.starts_with("d ")),
+            "default has no deletions"
+        );
+        // Interval 50: deletions happen and the proof still checks.
+        let inst = parse_dimacs_str(&text).unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let r = solve_watched_drat_with(inst.db, inst.num_vars, &mut buf, 50).unwrap();
+        assert_eq!(r, SolveResult::Unsat);
+        let proof = String::from_utf8(buf).unwrap();
+        let dels = proof.lines().filter(|l| l.starts_with("d ")).count();
+        assert!(dels > 0, "interval 50 should delete on PHP(6)");
+        assert!(
+            !proof
+                .lines()
+                .any(|l| { l.starts_with("d ") && l.split_whitespace().count() == 3 }),
+            "no single-literal deletion may ever be written"
+        );
+        let steps = parse_drat(&proof).unwrap();
+        assert_eq!(check_drat(&cnf_ints(&text), &steps), Ok(()));
+        eprintln!("reduce_interval=50 on PHP(6): {dels} deletions; proof checks");
+    }
+
+    /// Each fault must be rejected by the strict checker; drat-trim's verdicts
+    /// are recorded (not asserted) because some faults are invisible to its
+    /// semantics by design. See research/drat-certification.md §3.
+    fn run_fault_on(f: fault::Fault, text: &str) -> (Option<SolveResult>, String, u64) {
+        let inst = parse_dimacs_str(text).unwrap();
+        let _armed = fault::arm(f);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            solve_watched_drat_with(inst.db, inst.num_vars, &mut buf, 50).unwrap()
+        }))
+        .ok();
+        let logged = fault::locked_logged();
+        (r, String::from_utf8(buf).unwrap(), logged)
+    }
+
+    fn run_fault(f: fault::Fault) -> (Option<SolveResult>, String) {
+        let (r, p, _) = run_fault_on(f, &pigeonhole_dimacs(6));
+        (r, p)
+    }
+
+    fn strict_verdict_on(text: &str, proof: &str) -> Result<(), String> {
+        let steps = parse_drat(proof).map_err(|e| format!("parse: {e}"))?;
+        check_drat(&cnf_ints(text), &steps)
+    }
+
+    fn strict_verdict(proof: &str) -> Result<(), String> {
+        strict_verdict_on(&pigeonhole_dimacs(6), proof)
+    }
+
+    fn record(f: fault::Fault, r: &Option<SolveResult>, proof: &str, strict: &Result<(), String>) {
+        record_on("PHP(6)", &pigeonhole_dimacs(6), f, r, proof, strict);
+    }
+
+    fn record_on(
+        name: &str,
+        text: &str,
+        f: fault::Fault,
+        r: &Option<SolveResult>,
+        proof: &str,
+        strict: &Result<(), String>,
+    ) {
+        let dt = drat_trim_verdict(&format!("{f:?}-{name}"), text, proof, &[]);
+        let dtf = drat_trim_verdict(&format!("{f:?}-{name}-f"), text, proof, &["-f"]);
+        eprintln!(
+            "FAULT {f:?} on {name}: solver={} strict={} drat-trim={} drat-trim-f={}",
+            match r {
+                Some(x) => format!("{x:?}").chars().take(5).collect::<String>(),
+                None => "PANIC".into(),
+            },
+            match strict {
+                Ok(()) => "ACCEPT".to_string(),
+                Err(e) => format!("REJECT({e})"),
+            },
+            dt.as_deref().unwrap_or("n/a"),
+            dtf.as_deref().unwrap_or("n/a"),
+        );
+    }
+
+    #[test]
+    fn fault_none_is_clean() {
+        let (r, proof) = run_fault(fault::Fault::None);
+        assert_eq!(r, Some(SolveResult::Unsat));
+        assert_eq!(strict_verdict(&proof), Ok(()));
+    }
+
+    #[test]
+    fn fault_flip_literal_is_rejected() {
+        let (r, proof) = run_fault(fault::Fault::FlipLiteral);
+        let v = strict_verdict(&proof);
+        record(fault::Fault::FlipLiteral, &r, &proof, &v);
+        assert!(v.as_ref().unwrap_err().contains("not RUP"), "{v:?}");
+    }
+
+    #[test]
+    fn fault_omit_final_empty_is_rejected() {
+        let (r, proof) = run_fault(fault::Fault::OmitFinalEmpty);
+        let v = strict_verdict(&proof);
+        record(fault::Fault::OmitFinalEmpty, &r, &proof, &v);
+        assert_eq!(r, Some(SolveResult::Unsat));
+        assert!(v.as_ref().unwrap_err().contains("empty clause"), "{v:?}");
+    }
+
+    #[test]
+    fn fault_phantom_delete_is_rejected() {
+        let (r, proof) = run_fault(fault::Fault::PhantomDelete);
+        let v = strict_verdict(&proof);
+        record(fault::Fault::PhantomDelete, &r, &proof, &v);
+        assert!(v.as_ref().unwrap_err().contains("absent"), "{v:?}");
+    }
+
+    #[test]
+    fn fault_wrong_delete_is_rejected() {
+        let (r, proof) = run_fault(fault::Fault::WrongDelete);
+        let v = strict_verdict(&proof);
+        record(fault::Fault::WrongDelete, &r, &proof, &v);
+        assert!(
+            v.is_err(),
+            "deleting live clauses from the log must break a later lemma: {v:?}"
+        );
+    }
+
+    /// A small corpus on which the lock-related faults are tried. PHP(6)
+    /// alone turned out to be vacuous for them (2026-11-01: no locked
+    /// LBD > 2 reason at any reduce), so the test sweeps.
+    fn lock_corpus() -> Vec<(String, String)> {
+        let mut v = vec![
+            ("PHP(6)".to_string(), pigeonhole_dimacs(6)),
+            ("PHP(7)".to_string(), pigeonhole_dimacs(7)),
+        ];
+        for seed in 0..40u64 {
+            let db = generate_3sat_phase_transition(60, seed);
+            let text = crate::bench::db_to_dimacs(&db, 60);
+            let inst = parse_dimacs_str(&text).unwrap();
+            if solve_watched(inst.db, inst.num_vars) == SolveResult::Unsat {
+                v.push((format!("r3sat60/s{seed}"), text));
+            }
+        }
+        for seed in 0..6u64 {
+            let db = generate_3sat_phase_transition(120, seed);
+            let text = crate::bench::db_to_dimacs(&db, 120);
+            let inst = parse_dimacs_str(&text).unwrap();
+            if solve_watched(inst.db, inst.num_vars) == SolveResult::Unsat {
+                v.push((format!("r3sat120/s{seed}"), text));
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn fault_empty_lock_is_vacuous_on_small_instances_but_never_unsound() {
+        // A forgotten lock. Finding (2026-11-01): on this corpus it never
+        // bites — the LBD ≤ 2 keep rule retains every level-0 reason that
+        // occurs, so no live reason is ever in the deleted half — which means
+        // small-instance tests would NOT catch a forgotten lock. Recorded in
+        // research/drat-certification.md. What this test asserts is the
+        // soundness half: whenever the solver completes, the proof is valid.
+        let mut panics = 0;
+        let mut completed_valid = 0;
+        let mut completed_invalid = 0;
+        for (name, text) in lock_corpus() {
+            let (r, proof, _) = run_fault_on(fault::Fault::EmptyLock, &text);
+            match r {
+                None => panics += 1,
+                Some(_) => {
+                    let v = strict_verdict_on(&text, &proof);
+                    if v.is_ok() {
+                        completed_valid += 1;
+                    } else {
+                        completed_invalid += 1;
+                        record_on(&name, &text, fault::Fault::EmptyLock, &r, &proof, &v);
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "FAULT EmptyLock over corpus: panics={panics} completed_valid={completed_valid} \
+             completed_invalid={completed_invalid}"
+        );
+        assert_eq!(
+            completed_invalid, 0,
+            "a completed solve must still log a valid proof"
+        );
+    }
+
+    #[test]
+    fn fault_delete_locked_trips_the_compaction_guard() {
+        // Really delete live reasons: `Trail::remap_reasons` must panic on
+        // every instance where the locked set was non-empty at a reduce.
+        let mut panics = 0;
+        let mut vacuous = 0;
+        let mut survived = Vec::new();
+        for (name, text) in lock_corpus() {
+            let (_, _, logged) = run_fault_on(fault::Fault::LogLockedDelete, &text);
+            let (r, _, _) = run_fault_on(fault::Fault::DeleteLocked, &text);
+            match (logged, r) {
+                (0, _) => vacuous += 1,
+                (_, None) => panics += 1,
+                (_, Some(_)) => survived.push(name),
+            }
+        }
+        eprintln!(
+            "FAULT DeleteLocked over corpus: panics={panics} vacuous={vacuous} survived={survived:?}"
+        );
+        assert!(panics > 0, "the compaction guard never fired");
+        assert!(
+            survived.is_empty(),
+            "live reasons were deleted and the solver did not refuse: {survived:?}"
+        );
+    }
+
+    #[test]
+    fn fault_log_locked_delete_proof_semantics() {
+        // Deletion of locked (level-0 reason) clauses is LOGGED but not done.
+        // Prediction: strict checker REJECTS wherever a later lemma needs such
+        // a reason; drat-trim default ACCEPTS (ignores pseudo-unit deletions).
+        let mut vacuous = 0;
+        let mut rejected = 0;
+        let mut accepted_nonvacuous = 0;
+        let mut dt_accepts = 0;
+        let mut dt_runs = 0;
+        for (name, text) in lock_corpus() {
+            let (r, proof, logged) = run_fault_on(fault::Fault::LogLockedDelete, &text);
+            assert_eq!(
+                r,
+                Some(SolveResult::Unsat),
+                "{name}: solver must be unaffected"
+            );
+            if logged == 0 {
+                vacuous += 1;
+                continue;
+            }
+            let v = strict_verdict_on(&text, &proof);
+            if v.is_err() {
+                rejected += 1;
+            } else {
+                accepted_nonvacuous += 1;
+            }
+            if let Some(dt) = drat_trim_verdict(&format!("LLD-{name}"), &text, &proof, &[]) {
+                dt_runs += 1;
+                if dt == "s VERIFIED" {
+                    dt_accepts += 1;
+                }
+            }
+            eprintln!(
+                "FAULT LogLockedDelete on {name}: logged={logged} strict={}",
+                if v.is_ok() { "ACCEPT" } else { "REJECT" }
+            );
+        }
+        eprintln!(
+            "FAULT LogLockedDelete over corpus: vacuous={vacuous} strict_rejected={rejected} \
+             strict_accepted_nonvacuous={accepted_nonvacuous} drat-trim accepted {dt_accepts}/{dt_runs}"
+        );
+        assert!(
+            rejected > 0,
+            "logging the deletion of level-0 reasons never broke a proof on the corpus"
+        );
+    }
+
+    /// Checks PHP(6) and PHP(7) proofs with an external DRAT checker when one
+    /// is available (`DRAT_TRIM=/path/to/drat-trim` or `drat-trim` on PATH);
+    /// otherwise prints that it was skipped. The in-crate checker is not the
+    /// real test; this is.
+    #[test]
+    fn external_drat_trim_if_present() {
+        let Some(bin) = drat_trim_bin() else {
             eprintln!("external_drat_trim_if_present: SKIPPED (no drat-trim; set DRAT_TRIM)");
             return;
         };

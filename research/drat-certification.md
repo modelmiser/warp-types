@@ -1,0 +1,111 @@
+# Certifying warp-types-sat's UNSAT answers — pre-registration and log
+
+**Registered 2026-11-01, before any run.** Owner's instruction: "run the rewritten prompt" — the plan as revised after
+the five-seat panel (`~/staging/2026-11-01-cert-plan-review/panel/`, four families). This file is append-only;
+corrections go in dated brackets. Rules: `feedback_preregistration_append_only`, `feedback_check_that_cannot_fail`.
+
+## 0. What is being certified, and what is not
+
+**Certified interface:** `solver::solve_watched_drat` and the CLI `solve --drat FILE`, pure SAT (`NoTheory`),
+`Unsat` answers only. A certificate is per instance: it says *this* UNSAT answer is correct, not that the solver is
+sound. **Not certified:** `Sat` answers (checked against the original file bytes by an independent script — that is
+a model check, not a certificate); `Unknown`; every other entry point (`solve`, `solve_watched`, `hybrid_solve`,
+DPLL(T)); theory lemmas, which the logger records but which are not RUP over the CNF.
+
+## 1. Pipeline, pinned
+
+- `drat-trim` — github.com/marijnheule/drat-trim, commit `2e3b2dc0ecf938addbd779d42877b6ed69d9a985`, built
+  `gcc -std=c99 -O2` 2026-11-01 (`~/staging/2026-11-01-drat-trim/drat-trim/`). Roles: (a) default backward mode →
+  `s VERIFIED` on DRAT; (b) `-L` → LRAT; (c) `-v -W` → exits on the first ignored deletion (unit-deletion
+  independence); (d) `-f` forward mode as a second DRAT semantics (still ignores top-level unit deletions,
+  `drat-trim.c:820`).
+- `lrat-check` — same repo and commit (`lrat-check.c`), built 2026-11-01. Checks the LRAT against the CNF.
+- `cake_lpr` — the verified LRAT checker (Tan, Heule, Myreen, TACAS 2021). **Not yet built on this machine**; the
+  clone is the owner's to run (classifier). Until it is in, the LRAT leg rests on `lrat-check` alone, and that is
+  stated wherever a result is reported.
+- `kissat` 4.0.1 (bundled with Kani 0.67.0, `~/.kani/kani-0.67.0/bin/kissat`) — **a debugger, not an oracle**: run
+  on every instance to *detect* disagreement; disagreements are adjudicated by certificates and model checks, then
+  reduced.
+- In-crate `proof::check_drat` — strict active-set semantics (honours every deletion, rejects deletion of an absent
+  clause). Author-written; counts as a *different semantics*, not as independent evidence.
+- Standard cited: SAT Competition 2023 rules, Main track — every UNSAT answer must come with a DRAT proof (text or
+  binary) that `drat-trim` verifies; since 2023 proofs are also trimmed to LRAT and checked with `cake_lpr`
+  (competition organisers' description; the exact rules page is to be quoted in the log when fetched — until then
+  this is "a verified-LRAT pipeline", not "the standard").
+- Every artefact row records: CNF SHA-256, proof SHA-256, tool, exit code, verdict line.
+
+## 2. Invariant (the corrected statement, to be written into `proof.rs` and tested)
+
+Every clause `proof.add` logs is RUP w.r.t. the clauses present in the log at that moment, because:
+1. The learned clause is the 1-UIP resolvent of the conflict clause and trail reasons, all of which are in the
+   database at that moment (originals are never deleted; learned reasons are locked — see 3).
+2. Resolution keeps level-0 literals in the clause (`analyze.rs` ~280); minimization then removes a literal only
+   if every path through its reason chain ends in a clause literal or a level-0 literal. Removing a level-0 literal
+   is RUP only if the checker can re-derive the level-0 unit — i.e. **the level-0 reasons must still be present**.
+3. `reduce_learned` runs only after a restart has backtracked to level 0, so the only reasons alive during a reduce
+   are level-0 reasons, and `build_locked_set` locks every `Reason::Propagation` on the trail. Learned units have
+   LBD 1 and clauses with LBD ≤ 2 are never deletion candidates. Hence no clause a later lemma depends on through
+   the trail is ever deleted. (The `abstract_levels >> (level % 64)` filter is an early-abort only; aliasing makes
+   it less effective, never more permissive — panel Grok's contrary claim was checked and is wrong.)
+4. The initial-BCP conflict and the level-0 conflict emit `0` directly: RUP because unit propagation over the
+   logged set reproduces the solver's level-0 trail (originals present; level-0 learned units logged).
+5. Compaction remaps CRefs, not literals; deletions are logged from the tombstoned clause *before* compaction.
+
+## 3. Falsifiers — each oracle watched to fail
+
+Test-only fault knobs (thread-local, `cfg(test)`), each producing a corrupted log from an otherwise normal solve:
+
+| fault | what it does | expected: strict `check_drat` | expected: `drat-trim` default | expected: `drat-trim -f` |
+|---|---|---|---|---|
+| F1 `EmptyLock` | `build_locked_set` returns ∅ | REJECT (or solver panics on dangling reason — record which) | **ACCEPT** (ignores unit/pseudo-unit deletions) — prediction | likely ACCEPT |
+| F2 `FlipLiteral` | first literal of the 10th learned clause negated in the log only | REJECT | REJECT | REJECT |
+| F3 `OmitFinalEmpty` | `proof.empty()` suppressed | REJECT (no empty clause) | REJECT (no conflict found) | REJECT |
+| F4 `PhantomDelete` | at the first reduce, one `d` line for a clause never added | REJECT (absent) | ACCEPT with warning — prediction | ACCEPT with warning |
+| F5 `WrongDelete` | at the first reduce, `d` lines for the *kept* candidates instead of the deleted ones | REJECT if a later lemma needs one | likely REJECT | likely REJECT |
+
+File-level negative controls (independent of the crate): a valid proof with (a) one literal of a core lemma flipped,
+(b) the final `0` removed, (c) an original clause deleted at line 1 — through the full external pipeline; every
+checker must reject (a) and (b); (c) is expected to be *accepted* by `drat-trim` if the clause is a unit and
+rejected otherwise — recorded, not scored.
+
+**A fault a checker accepts is a finding about that checker's semantics, recorded as such; it is not a pass.**
+
+## 4. Corpus and coverage
+
+- Knob: `reduce_interval` becomes a parameter (default 2000); the CLI exposes `--reduce-interval N` (documented as
+  a diagnostic). Campaign runs use 50 so most UNSAT runs delete.
+- Families, fixed seeds, exact commands logged: random 3-SAT n ∈ {150, 200, 250} at 4.26; PHP(6), PHP(7), PHP(8);
+  parity chains k ∈ {20, 40, 80}; Tseitin on random 3-regular graphs (odd charge → UNSAT); planted-SAT 3-SAT; and
+  `cnfuzz` output if the owner installs cnfuzzdd (otherwise an in-house structured fuzzer, declared as such).
+- **Coverage metric:** fraction of UNSAT runs whose proof has ≥ 1 `d` line. **Below 50 % the campaign is invalid.**
+- Every SAT model: checked by `tools/cert-campaign.py`'s own DIMACS reader against the original file bytes.
+- Every UNSAT proof: drat-trim default, `-v -W`, `-f`, `-L` → `lrat-check` (and `cake_lpr` when present).
+
+## 5. Expected outcomes (written before running)
+
+- E1: 100 % of genuine proofs accepted by every checker in the pipeline. **Kill: any rejection of a genuine proof
+  stops the campaign; the instance is reduced (cnfdd if present, else bisection over clauses) and the cause found
+  before anything else runs.**
+- E2: 0 single-literal `d` lines in any proof; `drat-trim -v -W` clean on all. (Units have LBD 1.)
+- E3: d-line coverage ≥ 50 % with `--reduce-interval 50`; with the default 2000, coverage well below 50 % (this is
+  the panel's point, measured).
+- E4: 0 SAT-model failures; 0 kissat disagreements. **Kill: any model failure stops the campaign.**
+- E5: F2, F3 rejected by every checker; F4 accepted-with-warning by drat-trim and rejected by `check_drat`;
+  F1 accepted by drat-trim default (prediction), rejected by `check_drat` or solver panic.
+- E6: proof logging overhead to `/dev/null` ≤ 25 % of solve time on PHP(7); to a file somewhat more.
+- Error-sign ledger kept: every surprise recorded with its direction relative to "the solver is sound".
+
+## 6. Log (append-only)
+
+- 2026-11-01 — **Falsifiers run (in-crate, `cargo test proof::tests::fault_*` with `DRAT_TRIM` set; PHP(6) at interval 50 unless noted). Against the §3 predictions:**
+  | fault | strict `check_drat` | `drat-trim` default | `drat-trim -f` | vs prediction |
+  |---|---|---|---|---|
+  | F2 FlipLiteral | REJECT (step 10 not RUP) | NOT VERIFIED | NOT VERIFIED | as predicted |
+  | F3 OmitFinalEmpty | REJECT (no empty clause) | **VERIFIED** | **VERIFIED** | **wrong**: drat-trim derives the conflict itself when the final clause set propagates to ⊥; the trailing `0` is a convention, not evidence. Recorded as checker semantics. |
+  | F4 PhantomDelete | REJECT (absent clause) | VERIFIED | VERIFIED | as predicted (ignored; warning only under `-v`) |
+  | F5 WrongDelete | REJECT (step 129 not RUP) | NOT VERIFIED | NOT VERIFIED | as predicted |
+  | F1 EmptyLock, corpus of 21 (PHP(6), PHP(7), 13 UNSAT r3sat n=60, 6 UNSAT r3sat n=120) | 21/21 completed, 21/21 proofs VALID | — | — | **wrong**: predicted REJECT-or-panic; it was **vacuous** on every instance. The LBD ≤ 2 keep rule retains every level-0 reason that occurred, so no live reason was ever in the deleted half. Consequence recorded: a *forgotten lock would not be caught by small-instance tests*. Soundness held throughout. |
+  | F6 LogLockedDelete (new, proof-side isolate) | 13 non-vacuous: **12 REJECT, 1 ACCEPT** | **13/13 VERIFIED** | — | as predicted for drat-trim: it ignores (pseudo-)unit deletions, so deleting a level-0 reason *in the log* is invisible to it; only the strict semantics sees it. The 1 ACCEPT is an instance where no later lemma needed the logged-deleted reason. |
+  | F7 DeleteLocked (new, solver-integrity isolate) | — | — | — | 13/13 non-vacuous instances **PANIC** in `Trail::remap_reasons` ("live trail reason CRef … not found"); 8 vacuous. The guard is live. |
+  Error-sign ledger: two predictions wrong (F3, F1), both in the direction of *overestimating what the pipeline would catch*. Same sign as before. `drat-trim` accepting F3/F4/F6 means: of the seven corruptions, the external checker sees three (F2, F5, and F7 only via the solver dying). The in-crate strict checker sees six. **A certificate from this pipeline says "the UNSAT answer is correct"; it does not say "the deletions were logged correctly" — that property is covered by the strict checker and nothing else.**
+  Also: `reduce_interval` knob measured — PHP(6) at 2000: 0 `d` lines; at 50: 667 `d` lines, proof checks. 227 crate tests pass; clippy clean.
