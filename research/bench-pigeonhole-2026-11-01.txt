@@ -1,0 +1,94 @@
+Gnuplot not found, using plotters backend
+Benchmarking pigeonhole/cdcl/4
+Benchmarking pigeonhole/cdcl/4: Warming up for 3.0000 s
+Benchmarking pigeonhole/cdcl/4: Collecting 20 samples in estimated 2.0031 s (71k iterations)
+Benchmarking pigeonhole/cdcl/4: Analyzing
+pigeonhole/cdcl/4       time:   [28.207 µs 28.228 µs 28.256 µs]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high severe
+Benchmarking pigeonhole/cdcl/5
+Benchmarking pigeonhole/cdcl/5: Warming up for 3.0000 s
+Benchmarking pigeonhole/cdcl/5: Collecting 20 samples in estimated 2.0324 s (9870 iterations)
+Benchmarking pigeonhole/cdcl/5: Analyzing
+pigeonhole/cdcl/5       time:   [205.41 µs 205.63 µs 205.85 µs]
+Benchmarking pigeonhole/cdcl/6
+Benchmarking pigeonhole/cdcl/6: Warming up for 3.0000 s
+Benchmarking pigeonhole/cdcl/6: Collecting 20 samples in estimated 2.2285 s (1260 iterations)
+Benchmarking pigeonhole/cdcl/6: Analyzing
+pigeonhole/cdcl/6       time:   [1.7708 ms 1.7730 ms 1.7754 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking pigeonhole/gradient/4
+Benchmarking pigeonhole/gradient/4: Warming up for 3.0000 s
+Benchmarking pigeonhole/gradient/4: Collecting 20 samples in estimated 2.0006 s (3780 iterations)
+Benchmarking pigeonhole/gradient/4: Analyzing
+pigeonhole/gradient/4   time:   [532.30 µs 534.03 µs 536.09 µs]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking pigeonhole/gradient/5
+Benchmarking pigeonhole/gradient/5: Warming up for 3.0000 s
+Benchmarking pigeonhole/gradient/5: Collecting 20 samples in estimated 2.1999 s (2310 iterations)
+Benchmarking pigeonhole/gradient/5: Analyzing
+pigeonhole/gradient/5   time:   [946.69 µs 947.43 µs 948.41 µs]
+Benchmarking pigeonhole/gradient/6
+Benchmarking pigeonhole/gradient/6: Warming up for 3.0000 s
+Benchmarking pigeonhole/gradient/6: Collecting 20 samples in estimated 2.2548 s (1470 iterations)
+Benchmarking pigeonhole/gradient/6: Analyzing
+pigeonhole/gradient/6   time:   [1.5356 ms 1.5387 ms 1.5426 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+
+Benchmarking pigeonhole/hybrid/4
+Benchmarking pigeonhole/hybrid/4: Warming up for 3.0000 s
+Benchmarking pigeonhole/hybrid/4: Collecting 20 samples in estimated 2.1150 s (3780 iterations)
+Benchmarking pigeonhole/hybrid/4: Analyzing
+pigeonhole/hybrid/4     time:   [559.54 µs 563.72 µs 568.15 µs]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) high mild
+  2 (10.00%) high severe
+Benchmarking pigeonhole/hybrid/5
+Benchmarking pigeonhole/hybrid/5: Warming up for 3.0000 s
+Benchmarking pigeonhole/hybrid/5: Collecting 20 samples in estimated 2.2098 s (1890 iterations)
+Benchmarking pigeonhole/hybrid/5: Analyzing
+pigeonhole/hybrid/5     time:   [1.1625 ms 1.1633 ms 1.1645 ms]
+Found 4 outliers among 20 measurements (20.00%)
+  1 (5.00%) high mild
+  3 (15.00%) high severe
+Benchmarking pigeonhole/hybrid/6
+Benchmarking pigeonhole/hybrid/6: Warming up for 3.0000 s
+Benchmarking pigeonhole/hybrid/6: Collecting 20 samples in estimated 2.1286 s (630 iterations)
+Benchmarking pigeonhole/hybrid/6: Analyzing
+pigeonhole/hybrid/6     time:   [3.3765 ms 3.3777 ms 3.3793 ms]
+
+Benchmarking pigeonhole/hybrid-default/4
+Benchmarking pigeonhole/hybrid-default/4: Warming up for 3.0000 s
+
+Warning: Unable to complete 20 samples in 2.0s. You may wish to increase target time to 3.7s, enable flat sampling, or reduce sample count to 10.
+Benchmarking pigeonhole/hybrid-default/4: Collecting 20 samples in estimated 3.7289 s (210 iterations)
+Benchmarking pigeonhole/hybrid-default/4: Analyzing
+pigeonhole/hybrid-default/4
+                        time:   [17.789 ms 17.799 ms 17.810 ms]
+Benchmarking pigeonhole/hybrid-default/5
+Benchmarking pigeonhole/hybrid-default/5: Warming up for 3.0000 s
+Benchmarking pigeonhole/hybrid-default/5: Collecting 20 samples in estimated 2.5244 s (80 iterations)
+Benchmarking pigeonhole/hybrid-default/5: Analyzing
+pigeonhole/hybrid-default/5
+                        time:   [31.537 ms 31.552 ms 31.568 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+Benchmarking pigeonhole/hybrid-default/6
+Benchmarking pigeonhole/hybrid-default/6: Warming up for 3.0000 s
+Benchmarking pigeonhole/hybrid-default/6: Collecting 20 samples in estimated 2.0997 s (40 iterations)
+Benchmarking pigeonhole/hybrid-default/6: Analyzing
+pigeonhole/hybrid-default/6
+                        time:   [52.430 ms 52.489 ms 52.557 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+
+
+real	1m26.288s
+user	2m18.043s
+sys	0m0.525s
+exit=0

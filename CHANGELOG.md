@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+- **Correction — `warp-types-sat/README.md` "Performance expectations".** The pigeonhole table's "Pure CDCL"
+  column was produced by `solver::solve`, the basic-BCP reference path, while the hybrid columns ran
+  `hybrid_solve`, whose CDCL phase is the watched-literal core (`solve_cdcl_core`). The headline
+  "65× on PHP(6)" was therefore measuring two BCP implementations against each other, not the gradient
+  warm-start. Re-paired like-for-like against `solver::solve_watched`, the hybrid is *slower* than pure
+  CDCL at PHP(4), PHP(5) and PHP(6), and its CDCL phase does about the same number of conflicts
+  (E1 sweep, 2026-11-01: PHP(6) 579 vs 558; UNSAT random 3-SAT median 1.05×). The claim that fewer gradient
+  iterations give better warm-starts on UNSAT was a separate artefact: both hybrids run the watched core and
+  differ mainly in gradient wall time (conflicts: median ratio 0.98×, range 0.62–1.43). The claim entered in
+  `471804155` (2026-04-18) and is carried by tags v0.3.2–v0.4.3; it reaches archived copies only through the
+  next release. The
+  table is replaced with the like-for-like numbers; `benches/cardinality.rs`, `benches/random_3sat.rs` and
+  `benches/satlib_sweep.rs` now call `solve_watched` for their CDCL column and say so. The `solve` CLI
+  (`src/bin/solve.rs`) still calls `solver::solve`; left unchanged here, flagged for a separate decision. Found while running the pre-registered E1
+  experiment (`research/gpu-sat-partition.md`); the typestate claims of the parent crate are not affected.
+  Cross-vendor reviewed before publication (see the research log).
+
 ## [0.4.3] — 2026-10-18
 
 - Release corresponding to tag `v0.4.3`, Zenodo DOI 10.5281/zenodo.23457876 (concept DOI 10.5281/zenodo.19040615); crates.io `warp-types 0.4.3` (`warp-types-builder` stays 0.3.3).

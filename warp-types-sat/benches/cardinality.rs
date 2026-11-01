@@ -7,11 +7,18 @@
 //!
 //! Three columns per input family:
 //!
-//! - **`/cdcl`** — pure `solver::solve` (CDCL).
+//! - **`/cdcl`** — pure `solver::solve_watched` (CDCL with two-watched-literal
+//!   BCP, VSIDS, Luby restarts) — the same core `hybrid_solve` runs after its
+//!   gradient phase, so the comparison is like-for-like. Until 2026-11-01 this
+//!   column called `solver::solve`, the basic-BCP reference path, which is
+//!   ~100× slower on PHP(6) and made the hybrid look 65× faster than CDCL; it
+//!   was measuring the BCP implementation, not the gradient warm-start.
 //! - **`/gradient`** — pure `gradient::gradient_search` with the
 //!   `enhanced` preset (momentum + clause-weight EMA).
 //! - **`/hybrid`** — `gradient::hybrid_solve`, which seeds VSIDS phase
 //!   hints + initial activities from gradient confidence, then runs CDCL.
+//! - **`/hybrid-default`** — the same with the library-default `GradientConfig`
+//!   (pigeonhole only), so the config sensitivity is on the record.
 //!
 //! Two input families:
 //!
@@ -105,7 +112,7 @@ fn bench_pigeonhole_cdcl(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = solver::solve(black_box(inst.db), black_box(inst.num_vars));
+                let _ = solver::solve_watched(black_box(inst.db), black_box(inst.num_vars));
             });
         });
     }
@@ -143,6 +150,21 @@ fn bench_pigeonhole_hybrid(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pigeonhole_hybrid_default(c: &mut Criterion) {
+    let cfg = gradient::GradientConfig::default();
+    let mut group = c.benchmark_group("pigeonhole/hybrid-default");
+    for &n in &[4u32, 5, 6] {
+        let cnf = pigeonhole(n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
+            b.iter(|| {
+                let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
+                let _ = gradient::hybrid_solve(black_box(inst.db), black_box(inst.num_vars), &cfg);
+            });
+        });
+    }
+    group.finish();
+}
+
 // ─── Parity ────────────────────────────────────────────────────────────
 
 fn bench_parity_cdcl(c: &mut Criterion) {
@@ -152,7 +174,7 @@ fn bench_parity_cdcl(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(k), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = solver::solve(black_box(inst.db), black_box(inst.num_vars));
+                let _ = solver::solve_watched(black_box(inst.db), black_box(inst.num_vars));
             });
         });
     }
@@ -195,6 +217,7 @@ criterion_group!(
     bench_pigeonhole_cdcl,
     bench_pigeonhole_gradient,
     bench_pigeonhole_hybrid,
+    bench_pigeonhole_hybrid_default,
     bench_parity_cdcl,
     bench_parity_gradient,
     bench_parity_hybrid,

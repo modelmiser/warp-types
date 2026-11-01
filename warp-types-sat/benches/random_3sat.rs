@@ -52,6 +52,8 @@ fn generate_random_3cnf(num_vars: u32, seed: u64) -> String {
 const SIZES: &[u32] = &[50, 75, 100];
 const SEED: u64 = 0xDEADBEEF;
 
+// CDCL column = `solve_watched`, the watched-literal VSIDS core (since 2026-11-01;
+// previously `solver::solve`, the basic path — see the crate README's correction).
 fn bench_our_solver(c: &mut Criterion) {
     let mut group = c.benchmark_group("random_3sat/warp-types-sat");
     for &n in SIZES {
@@ -59,7 +61,7 @@ fn bench_our_solver(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &cnf, |b, cnf| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-                let _ = solver::solve(black_box(inst.db), black_box(inst.num_vars));
+                let _ = solver::solve_watched(black_box(inst.db), black_box(inst.num_vars));
             });
         });
     }
@@ -98,7 +100,7 @@ mod peer {
     fn solve_warp(cnf: &str) -> bool {
         use warp_types_sat::solver::SolveResult;
         let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-        matches!(solver::solve(inst.db, inst.num_vars), SolveResult::Sat(_))
+        matches!(solver::solve_watched(inst.db, inst.num_vars), SolveResult::Sat(_))
     }
 
     fn solve_batsat(cnf: &str) -> bool {

@@ -119,7 +119,7 @@ fn bench_satlib(c: &mut Criterion) {
         group.bench_function("warp-types-sat", |b| {
             b.iter(|| {
                 let inst = dimacs::parse_dimacs_str(&cnf).expect("parse");
-                let _ = solver::solve(black_box(inst.db), black_box(inst.num_vars));
+                let _ = solver::solve_watched(black_box(inst.db), black_box(inst.num_vars));
             });
         });
 

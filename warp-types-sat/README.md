@@ -14,7 +14,7 @@ in-process — no FFI, no subprocess, no serialization at layer boundaries.
 If you're building a verification tool in Rust, the end-to-end pipeline
 avoids the Z3/CVC5 bindings tax even if the underlying SAT is slower.
 
-**Cardinality-heavy instances via the gradient solver.** `src/gradient.rs`
+**The gradient solver (research path — see *Performance expectations* before relying on it).** `src/gradient.rs`
 follows the FastFourierSAT line (Kyrillidis et al.) — gradient-descent
 reformulation with clause-weight EMA on violation frequency. `src/gpu_gradient.rs`
 puts per-lane loss + butterfly-reduce + ballot on GPU via `warp-types`.
@@ -85,30 +85,58 @@ errors."
 **CDCL baseline is batsat/splr-class, not Kissat-class.** Peer-solver
 comparison numbers pending (see `benches/README.md` for scaffolding).
 
-**Hybrid gradient + CDCL on the advertised niche** (UNSAT pigeonhole,
-where resolution-based CDCL faces exponential lower bounds):
+**Hybrid gradient + CDCL on pigeonhole (UNSAT), like-for-like.** `cargo bench
+-p warp-types-sat --bench cardinality -- pigeonhole`, criterion 20 samples ×
+2 s, release, 2026-11-01. Every column parses the same DIMACS; the CDCL
+column is `solver::solve_watched`, the same watched-literal core that
+`hybrid_solve` runs after its gradient phase.
 
-| n | Pure CDCL | `hybrid_solve` (default config) | `hybrid_solve` (tuned `num_starts=8, max_iters=100`) |
-|---|-----------|--------------------------------|------------------------------------------------------|
-| 4 | 1.44 ms   | 30.0 ms (0.05×, **loses**)     | 1.00 ms (1.4×) |
-| 5 | 17.2 ms   | 58.1 ms (0.3×, **loses**)      | 2.03 ms (8.5×) |
-| 6 | 336 ms    | 93.2 ms (**3.6×**)             | 5.18 ms (**65×**) |
+| n | Pure CDCL (`solve_watched`) | gradient only (bounded budget, gives up) | `hybrid_solve` (tuned `num_starts=8, max_iters=100`) | `hybrid_solve` (default config) |
+|---|------------------------------|-------------------------------------------|------------------------------------------------------|----------------------------------|
+| 4 | 28.2 µs | 534 µs | 564 µs (0.05×) | 17.8 ms (0.002×) |
+| 5 | 206 µs  | 947 µs | 1.16 ms (0.18×) | 31.6 ms (0.007×) |
+| 6 | 1.77 ms | 1.54 ms | 3.38 ms (0.52×) | 52.5 ms (0.03×) |
 
-All 12 runs verified returning `Unsat` — CDCL's completeness preserved;
-gradient contributes VSIDS phase hints and initial activities, CDCL
-closes the UNSAT proof from a warm start. Median of 3 runs on an
-isolcpus E-core at 4100 MHz; criterion 20-sample CV < 1%.
+The hybrid is slower than pure CDCL at every size, by roughly the cost of
+its gradient phase. The warm-start has no consistent effect on the CDCL work either. Conflicts
+in the CDCL phase, hybrid vs pure: 25 vs 35 on PHP(4), 111 vs 117 on PHP(5),
+579 vs 558 on PHP(6), 4,341 vs 2,754 on PHP(7); on the 29 UNSAT random
+3-SAT instances at the phase transition (n = 100–200) the median ratio is
+1.05× and the hybrid does fewer conflicts on 31 % of them. Default- and
+tuned-config hybrids differ in gradient cost far more than in conflicts
+(median ratio 0.98×, range 0.62–1.43; PHP(7) 2,710 vs 4,341), so the gap
+between those two columns is mostly gradient wall time. All CDCL and hybrid
+runs return `Unsat`; the gradient-only column returns no answer on its
+bounded budget (it cannot prove UNSAT). Machine: 16-core desktop, run pinned
+to 6 cores under `nice`; criterion output in
+`research/bench-pigeonhole-2026-11-01.txt`, conflict data in
+`research/e1-cubes-2026-11-01.csv`, both at this repository's root.
 
-**Read this table carefully.** At smaller sizes the default-config
-gradient overhead exceeds the CDCL savings (default hybrid loses to
-pure CDCL at PHP(4) and PHP(5)). The advantage only materializes
-once CDCL's resolution search gets expensive enough to amortize the
-gradient work. Counter-intuitively, **fewer gradient iterations give
-better warm-starts on UNSAT instances** — over-converged gradient
-commits confidently to wrong polarities (no satisfying assignment
-exists by construction), which CDCL then has to backtrack through.
-Tuning matters; treat these numbers as guidance to measure on your
-own workload, not a drop-in competition setup.
+**Correction (2026-11-01).** From April to October 2026 this table read
+"Pure CDCL 336 ms → `hybrid_solve` 5.18 ms (**65×**) at PHP(6)", with a
+paragraph inferring that fewer gradient iterations give better UNSAT
+warm-starts. The "Pure CDCL" column was produced by `solver::solve`, the basic
+reference solver (no watched literals, no VSIDS, no restarts), while the
+hybrid columns ran the watched-literal VSIDS core — the 65× was the gap
+between two solvers, not the gradient. The warm-start inference was a
+separate artefact: both hybrids use the watched core, and what differed
+between them was gradient wall time, not CDCL conflicts. The claim entered
+in commit `471804155` (2026-04-18) and is carried by tags v0.3.2 through
+v0.4.3 and their archived copies, which this edit cannot change; it reaches
+them only through the next release. Found while running a pre-registered
+experiment (`research/gpu-sat-partition.md`, E1); `benches/cardinality.rs`,
+`benches/random_3sat.rs` and `benches/satlib_sweep.rs` now call
+`solve_watched` for their CDCL column. Note that `src/bin/solve.rs` (the
+`solve` CLI) still calls `solver::solve`, the slow path; changing the
+binary's solver is a separate decision.
+
+In the three families measured so far (pigeonhole n = 4–7, random 3-SAT
+n = 100–200, parity chains) the gradient warm-start shows no consistent
+reduction in CDCL work. What the gradient path is for, in this crate: it is the GPU-executed
+kernel that exercises `warp-types` (`src/gpu_gradient.rs`), and an
+incomplete solver that finds models on easy SAT instances (the parity
+chains are solved in the gradient phase without CDCL). Treat it as a
+research path, and measure on your own workload before relying on it.
 
 Peer-solver comparison (`batsat`/`splr` on random 3-SAT) is the
 remaining Tier-2 follow-up — until published, read the CDCL column

@@ -14,10 +14,13 @@ the top-level README for the rationale.
   disagree on SAT/UNSAT. Primary signal: does our CDCL performance
   regress between releases?
 - `cardinality.rs` — pigeonhole PHP(n) and parity XOR chains.
-  Cardinality-heavy instances where the gradient path should shine.
-  Currently measures the CDCL path only; gradient-path benches land
-  once that public API stabilizes. Primary signal: does
-  `gradient::solve` beat CDCL on pigeonhole?
+  Four columns per family: `cdcl` (`solver::solve_watched`), `gradient`
+  (`gradient::gradient_search`), `hybrid` (tuned config) and, for
+  pigeonhole, `hybrid-default`. Primary signal: does the gradient
+  warm-start reduce CDCL time like-for-like? (As of 2026-11-01 it does
+  not; see the crate README's correction note. Until then the `cdcl`
+  column ran `solver::solve`, the basic path, which produced the
+  retracted 65×.)
 - `satlib_sweep.rs` — auto-discovering sweep over user-provided
   SATLIB `*.cnf` instances. Drop files into `benches/satlib/`
   (gitignored); see `benches/satlib/README.md` for the fetch
