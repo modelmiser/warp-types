@@ -187,14 +187,20 @@ proves nothing.
 - **Gradient solver** (`gradient.rs`, `gpu_gradient.rs`) — gradient-descent
   reformulation; GPU path via `warp-types` behind `feature = "gpu"`
 - **DRAT proof output** (`proof.rs`) — `solver::solve_watched_drat(db, n, &mut out)`
-  writes every learned clause, every deletion and the final empty clause in
-  DRAT text, checkable against the input DIMACS with `drat-trim` or `cake_lpr`.
-  Pure SAT only: theory lemmas are logged but are not RUP, so a DPLL(T) proof
-  will not check. Added 2026-11-01; the crate's own forward RUP checker
-  (`proof::check_drat`) covers PHP(3–7) and random UNSAT 3-SAT in the tests,
-  and the external-checker test (runs when `drat-trim` is on `PATH` or named
-  by `DRAT_TRIM`) passed with `drat-trim` on PHP(6) and PHP(7): `s VERIFIED`,
-  2,616 of 2,755 PHP(7) lemmas in core, 0 RAT lemmas
+  and `solve --drat FILE` write every learned clause, every deletion and the
+  final empty clause in DRAT text. Pure SAT only: theory lemmas are logged
+  but are not RUP, so a DPLL(T) proof will not check. **Checked, 2026-11-01:**
+  114 UNSAT proofs from six families (random 3-SAT n = 150–250, PHP(6–8), <!-- unguarded: 114 — campaign tally, research/cert-campaign-2026-11-01/ -->
+  parity, Tseitin, planted, cnfuzz), at the default reduction interval and at
+  50, all verified by `drat-trim` (backward and forward), and their LRAT by
+  `lrat-check` and by the formally verified `cake_lpr`; 68/68 SAT models
+  checked against the original file bytes; no single-literal deletion in
+  ~3.9 M deletion lines. A certificate says *this* UNSAT answer is correct;
+  it does not say the solver is sound in general, and `drat-trim` does not
+  check that deletions were logged faithfully (it ignores unit deletions and
+  trims non-core lemmas) — the in-crate strict checker does, and the fault
+  tests in `proof.rs` show which checker sees which corruption. Full record:
+  `research/drat-certification.md`; runner: `tools/cert-campaign.py`
 
 ## License
 

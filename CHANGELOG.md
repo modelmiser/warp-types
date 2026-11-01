@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- **UNSAT proofs certified through a verified-LRAT pipeline; the proof logger has falsifiers.** `solve_watched_drat_with(db,
+  n, out, reduce_interval)` and `solve --reduce-interval N` (diagnostic; default 2000) so short solves exercise clause
+  deletion; `solve_watched_with` is the no-proof twin for like-for-like timing. `proof.rs` states the RUP invariant
+  (reductions only at level 0, every trail reason locked, LBD ≤ 2 never deleted, minimization depends on level-0
+  reasons staying present) and carries a test-only `fault` module with seven corruptions. Campaign
+  (`tools/cert-campaign.py`, record in `research/drat-certification.md`): 114 UNSAT proofs, six families, all
+  verified by `drat-trim` (backward and forward), `lrat-check` and `cake_lpr`; 68/68 SAT models valid against file
+  bytes; kissat agreed on 182/182 verdicts; logging overhead +10–17 % to `/dev/null`. Found and recorded: `drat-trim`
+  accepts a proof without the final `0`, ignores phantom and unit deletions and checks only core lemmas in backward
+  mode, so three of the seven corruptions pass it and are caught only by the strict in-crate checker; a forgotten
+  reason lock would not be caught by small-instance tests (vacuous on a 21-instance corpus); `cake_lpr`'s verdict is
+  a verdict on `drat-trim`'s LRAT. `solve --drat` now refuses to overwrite its own input.
 - **`solve --drat <file>`.** The CLI can write a DRAT proof: `solve --drat proof.drat problem.cnf` runs
   `solve_watched_drat` and writes the proof to the file (flag position free; `--drat` without a path, a second
   `--drat`, an unknown `--flag`, or a missing CNF print usage and exit 1; an unwritable proof path exits 1 with the

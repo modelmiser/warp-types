@@ -1,0 +1,13 @@
+name,mode,median_s,min_s,reps
+php7,none,0.0509,0.0508,5
+php7,devnull,0.0598,0.0595,5
+php7,file,0.0606,0.0602,5
+php8,none,0.3204,0.3200,5
+php8,devnull,0.3739,0.3735,5
+php8,file,0.3808,0.3778,5
+r3sat_n200_s0,none,0.3533,0.3533,5
+r3sat_n200_s0,devnull,0.3912,0.3909,5
+r3sat_n200_s0,file,0.3951,0.3935,5
+r3sat_n250_s0,none,0.6704,0.6700,5
+r3sat_n250_s0,devnull,0.7423,0.7413,5
+r3sat_n250_s0,file,0.7506,0.7478,5
