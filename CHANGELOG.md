@@ -10,7 +10,8 @@
   (unit propagation over the clause set, independent of the solver's watched BCP) used by the tests: PHP(3)–PHP(7)
   (PHP(7) crosses the deletion threshold, so its proof carries `d` lines), and the UNSAT instances among 40 random
   3-SAT seeds at n = 60, all verified; a further test runs `drat-trim` when it is on `PATH` or named by `DRAT_TRIM`
-  and is skipped otherwise. Pure SAT only: a DPLL(T) proof contains theory lemmas that are not RUP and will not
+  and is skipped otherwise — run 2026-11-01 with drat-trim (marijnheule/drat-trim, HEAD): PHP(6) and PHP(7) both `s VERIFIED`
+  (PHP(7): 3,778-line proof, 2,616 of 2,755 lemmas in core, 0 RAT lemmas, 0.065 s). Pure SAT only: a DPLL(T) proof contains theory lemmas that are not RUP and will not
   check. `SolveResult` now derives `Clone, PartialEq, Eq`. No change to the solve path or its answers.
 - **Peer comparison re-measured** (`warp-types-sat/benches/README.md`): the April 2026 table (our solver 35–88× behind
   `batsat`, explained as "we do not implement watched literals") was measured with `solver::solve`, the basic path.
