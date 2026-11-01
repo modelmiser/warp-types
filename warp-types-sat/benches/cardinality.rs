@@ -26,8 +26,9 @@
 //!   for resolution-based CDCL (exponential lower bound). Pure gradient
 //!   runs its budget without finding a solution (there isn't one), so
 //!   the measurement is "gradient gives up on a bounded budget" vs.
-//!   "CDCL takes exponentially long to prove UNSAT." Any time we beat
-//!   CDCL here with the gradient or hybrid column, that is the pitch.
+//!   "CDCL takes exponentially long to prove UNSAT." Measured like-for-like
+//!   (2026-11-01) the hybrid does not beat `solve_watched` at any n here; see
+//!   the crate README's correction before reading a win into this group.
 //!
 //! - **Parity XOR chains**: stacked `a ≠ b` constraints. SAT. Measures
 //!   whether gradient converges to a satisfying alternating assignment

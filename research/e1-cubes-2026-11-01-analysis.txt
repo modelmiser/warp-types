@@ -34,3 +34,10 @@ instances: 67 total, 33 UNSAT, 34 SAT; rows 1407
   default: gradient_sat on 18/306 cube runs; median conflicts when CDCL ran: 979.0
 
 == wall time (s) by config/method: {('none', 'cdcl'): 2.8, ('tuned', 'hybrid'): 3.9, ('tuned', 'cubes'): 61.2, ('default', 'hybrid'): 34.6, ('default', 'cubes'): 351.4}
+
+NOTE 2026-11-01 (cross-vendor panel, Q7): the CSV's `gradient_sat` column for the no-cube hybrid rows
+(method=hybrid, d=0) was computed as `conflicts == 0 && SAT`, which is wrong for a CDCL solve by pure
+propagation. Rows 129 and 139 (parity40, tuned and default) read `true` but show decisions=1,
+propagations=40: CDCL ran. Only parity10 and parity20 (rows 87, 108: decisions=0, propagations=0) are
+gradient-phase solves. The CSV is left as recorded; the generator (`examples/e1_cubes.rs`) now tests
+`decisions == 0 && propagations == 0 && SAT`. The cube rows (d>0) were flagged correctly by `hybrid_solve_cubes`.

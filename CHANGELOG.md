@@ -12,6 +12,16 @@
   3-SAT seeds at n = 60, all verified; a further test runs `drat-trim` when it is on `PATH` or named by `DRAT_TRIM`
   and is skipped otherwise. Pure SAT only: a DPLL(T) proof contains theory lemmas that are not RUP and will not
   check. `SolveResult` now derives `Clone, PartialEq, Eq`. No change to the solve path or its answers.
+- **Peer comparison re-measured** (`warp-types-sat/benches/README.md`): the April 2026 table (our solver 35–88× behind
+  `batsat`, explained as "we do not implement watched literals") was measured with `solver::solve`, the basic path.
+  With `solve_watched`, random 3-SAT at the phase transition (n = 50–100) runs ~1.7× slower than `batsat` 0.6 and
+  ~2× faster than `splr` 0.17, flat over the range; log in `research/bench-random3sat-peers-2026-11-01.txt`. The
+  crate README's "peer numbers pending" sentence now states the measured ratios. Also from the 2026-11-01
+  cross-vendor panel: the pigeonhole table names its gradient configs (`enhanced()` + 8×100 vs library default);
+  the correction paragraph gives the default/tuned conflict range (0.62×–1.43×) instead of "not CDCL conflicts";
+  parity chains: k = 10 and 20 are gradient-phase solves, k = 40 still runs CDCL (the E1 example's `gradient_sat`
+  flag was `conflicts == 0 && SAT`, now also requires zero decisions and propagations); `solve_watched`'s doc
+  comment said Luby base 100, the core uses 32.
 - **`solve` CLI (`warp-types-sat/src/bin/solve.rs`) now runs `solver::solve_watched`**, the watched-literal
   VSIDS core, instead of `solver::solve`, the basic reference solver it had called since it was written.
   Same input, same output format; answers unchanged where the old binary returned one. Measured 2026-11-01
@@ -32,7 +42,8 @@
   table is replaced with the like-for-like numbers; `benches/cardinality.rs`, `benches/random_3sat.rs` and
   `benches/satlib_sweep.rs` now call `solve_watched` for their CDCL column and say so. Found while running the pre-registered E1
   experiment (`research/gpu-sat-partition.md`); the typestate claims of the parent crate are not affected.
-  Cross-vendor reviewed before publication (see the research log).
+  Cross-vendor reviewed 2026-11-01 by three Cursor seats (GPT-5.6, Grok 4.7, Gemini 3.7); the two refuting seats'
+  verified findings are applied in the follow-up commit (see the research log, 2026-11-01 panel entry).
 
 ## [0.4.3] — 2026-10-18
 

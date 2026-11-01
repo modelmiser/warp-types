@@ -136,7 +136,11 @@ fn main() {
                 s.decisions,
                 s.propagations,
                 (tag(&r) == "UNSAT") as u8,
-                s.conflicts == 0 && tag(&r) == "SAT",
+                // hybrid_solve_stats returns all-zero stats only when the gradient
+                // phase found the model (gradient.rs); conflicts == 0 alone also
+                // matches a CDCL solve by pure propagation (parity k=40: 1 decision,
+                // 40 propagations). Fixed 2026-11-01 after the cross-vendor panel.
+                s.decisions == 0 && s.propagations == 0 && tag(&r) == "SAT",
                 ms
             );
             // Cubes: hypothesis + two controls, every d.

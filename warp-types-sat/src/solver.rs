@@ -151,7 +151,7 @@ const DEFAULT_PIVOT_BUMP_SCALE: f64 = 0.5;
 ///
 /// Full CDCL loop: two-watched-literal BCP, VSIDS branching heuristic with
 /// phase saving + pivot-augmented bumps, Luby restart policy (base interval
-/// 100 conflicts).
+/// 32 conflicts, `LubyRestarts::new(32)` in the core).
 pub fn solve_watched(db: ClauseDb, num_vars: u32) -> SolveResult {
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);

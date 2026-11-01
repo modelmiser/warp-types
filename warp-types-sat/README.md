@@ -82,8 +82,11 @@ errors."
 
 ## Performance expectations
 
-**CDCL baseline is batsat/splr-class, not Kissat-class.** Peer-solver
-comparison numbers pending (see `benches/README.md` for scaffolding).
+**CDCL baseline is batsat/splr-class, not Kissat-class.** Measured
+2026-11-01 on random 3-SAT at the phase transition (n = 50–100):
+`solve_watched` is ~1.7× slower than `batsat` 0.6 and ~2× faster than
+`splr` 0.17, flat over that range (`benches/README.md`, criterion log in
+`research/bench-random3sat-peers-2026-11-01.txt`).
 
 **Hybrid gradient + CDCL on pigeonhole (UNSAT), like-for-like.** `cargo bench
 -p warp-types-sat --bench cardinality -- pigeonhole`, criterion 20 samples ×
@@ -91,7 +94,7 @@ comparison numbers pending (see `benches/README.md` for scaffolding).
 column is `solver::solve_watched`, the same watched-literal core that
 `hybrid_solve` runs after its gradient phase.
 
-| n | Pure CDCL (`solve_watched`) | gradient only (bounded budget, gives up) | `hybrid_solve` (tuned `num_starts=8, max_iters=100`) | `hybrid_solve` (default config) |
+| n | Pure CDCL (`solve_watched`) | gradient only (`enhanced()`, `num_starts=8, max_iters=100`; bounded budget, gives up) | `hybrid_solve` (tuned: `enhanced()`, `num_starts=8, max_iters=100`) | `hybrid_solve` (`GradientConfig::default()`: 32 × 1000, no momentum, no clause weights) |
 |---|------------------------------|-------------------------------------------|------------------------------------------------------|----------------------------------|
 | 4 | 28.2 µs | 534 µs | 564 µs (0.05×) | 17.8 ms (0.002×) |
 | 5 | 206 µs  | 947 µs | 1.16 ms (0.18×) | 31.6 ms (0.007×) |
@@ -119,8 +122,9 @@ warm-starts. The "Pure CDCL" column was produced by `solver::solve`, the basic
 reference solver (no watched literals, no VSIDS, no restarts), while the
 hybrid columns ran the watched-literal VSIDS core — the 65× was the gap
 between two solvers, not the gradient. The warm-start inference was a
-separate artefact: both hybrids use the watched core, and what differed
-between them was gradient wall time, not CDCL conflicts. The claim entered
+separate artefact: both hybrids use the watched core, and their timing gap
+was mostly gradient wall time; across the 33 UNSAT instances their CDCL
+conflicts had median ratio 0.98× but ranged from 0.62× to 1.43×. The claim entered
 in commit `471804155` (2026-04-18) and is carried by tags v0.3.2 through
 v0.4.3 and their archived copies, which this edit cannot change; it reaches
 them only through the next release. Found while running a pre-registered
@@ -134,13 +138,14 @@ In the three families measured so far (pigeonhole n = 4–7, random 3-SAT
 n = 100–200, parity chains) the gradient warm-start shows no consistent
 reduction in CDCL work. What the gradient path is for, in this crate: it is the GPU-executed
 kernel that exercises `warp-types` (`src/gpu_gradient.rs`), and an
-incomplete solver that finds models on easy SAT instances (the parity
-chains are solved in the gradient phase without CDCL). Treat it as a
+incomplete solver that finds models on easy SAT instances (parity chains
+k = 10 and k = 20 are solved in the gradient phase with no CDCL decision;
+at k = 40 CDCL still runs: 1 decision, 40 propagations, 0 conflicts). Treat it as a
 research path, and measure on your own workload before relying on it.
 
-Peer-solver comparison (`batsat`/`splr` on random 3-SAT) is the
-remaining Tier-2 follow-up — until published, read the CDCL column
-here as a within-solver reference, not a cross-solver claim.
+The peer comparison above (`batsat`/`splr`) is a three-point curve on one
+instance family; read the CDCL column in the pigeonhole table as a
+within-solver reference, not a cross-solver claim.
 
 ## Usage
 
