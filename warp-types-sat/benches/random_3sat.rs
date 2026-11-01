@@ -100,7 +100,10 @@ mod peer {
     fn solve_warp(cnf: &str) -> bool {
         use warp_types_sat::solver::SolveResult;
         let inst = dimacs::parse_dimacs_str(cnf).expect("parse");
-        matches!(solver::solve_watched(inst.db, inst.num_vars), SolveResult::Sat(_))
+        matches!(
+            solver::solve_watched(inst.db, inst.num_vars),
+            SolveResult::Sat(_)
+        )
     }
 
     fn solve_batsat(cnf: &str) -> bool {
