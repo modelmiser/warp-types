@@ -126,9 +126,9 @@ v0.4.3 and their archived copies, which this edit cannot change; it reaches
 them only through the next release. Found while running a pre-registered
 experiment (`research/gpu-sat-partition.md`, E1); `benches/cardinality.rs`,
 `benches/random_3sat.rs` and `benches/satlib_sweep.rs` now call
-`solve_watched` for their CDCL column. Note that `src/bin/solve.rs` (the
-`solve` CLI) still calls `solver::solve`, the slow path; changing the
-binary's solver is a separate decision.
+`solve_watched` for their CDCL column, and the `solve` CLI
+(`src/bin/solve.rs`) now runs `solve_watched` too (it had called
+`solver::solve` since it was written).
 
 In the three families measured so far (pigeonhole n = 4–7, random 3-SAT
 n = 100–200, parity chains) the gradient warm-start shows no consistent
@@ -149,7 +149,9 @@ cargo run --bin solve -- problem.cnf
 ```
 
 Reads DIMACS CNF, prints `s SATISFIABLE` or `s UNSATISFIABLE` with the
-variable assignment in standard SAT competition format.
+variable assignment in standard SAT competition format. Runs
+`solver::solve_watched`, the watched-literal VSIDS core (since 2026-11-01;
+earlier builds ran the basic reference solver `solver::solve`).
 
 ## What's inside
 

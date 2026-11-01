@@ -31,7 +31,7 @@ fn main() {
         instance.num_vars, instance.num_clauses,
     );
 
-    match warp_types_sat::solver::solve(instance.db, instance.num_vars) {
+    match warp_types_sat::solver::solve_watched(instance.db, instance.num_vars) {
         warp_types_sat::solver::SolveResult::Sat(assign) => {
             println!("s SATISFIABLE");
             print!("v");

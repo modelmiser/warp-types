@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- **`solve` CLI (`warp-types-sat/src/bin/solve.rs`) now runs `solver::solve_watched`**, the watched-literal
+  VSIDS core, instead of `solver::solve`, the basic reference solver it had called since it was written.
+  Same input, same output format; answers unchanged where the old binary returned one. Measured 2026-11-01
+  (release, one core): PHP(6) 173 ms → 6 ms, PHP(7) 2.79 s → 38 ms; planted random 3-SAT with 300 and 1,000
+  variables, which the old binary did not finish in 120 s, now returns a model in under 25 ms (models checked
+  clause-by-clause against the input). The core is the one `benches/` and `hybrid_solve` already used.
 - **Correction — `warp-types-sat/README.md` "Performance expectations".** The pigeonhole table's "Pure CDCL"
   column was produced by `solver::solve`, the basic-BCP reference path, while the hybrid columns ran
   `hybrid_solve`, whose CDCL phase is the watched-literal core (`solve_cdcl_core`). The headline
@@ -14,8 +20,7 @@
   `471804155` (2026-04-18) and is carried by tags v0.3.2–v0.4.3; it reaches archived copies only through the
   next release. The
   table is replaced with the like-for-like numbers; `benches/cardinality.rs`, `benches/random_3sat.rs` and
-  `benches/satlib_sweep.rs` now call `solve_watched` for their CDCL column and say so. The `solve` CLI
-  (`src/bin/solve.rs`) still calls `solver::solve`; left unchanged here, flagged for a separate decision. Found while running the pre-registered E1
+  `benches/satlib_sweep.rs` now call `solve_watched` for their CDCL column and say so. Found while running the pre-registered E1
   experiment (`research/gpu-sat-partition.md`); the typestate claims of the parent crate are not affected.
   Cross-vendor reviewed before publication (see the research log).
 
