@@ -491,32 +491,192 @@ pub fn hybrid_solve(
     num_vars: u32,
     config: &GradientConfig,
 ) -> crate::solver::SolveResult {
-    use crate::solver::SolveResult;
-    use crate::vsids::Vsids;
+    hybrid_solve_stats(db, num_vars, config).0
+}
+
+/// `hybrid_solve` with CDCL statistics (conflicts, decisions, propagations).
+///
+/// Same algorithm; the stats are those of the CDCL phase only (zeroed when the
+/// gradient phase finds a model and CDCL never runs).
+pub fn hybrid_solve_stats(
+    db: ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+) -> (crate::solver::SolveResult, crate::solver::SolveStats) {
+    use crate::solver::{SolveResult, SolveStats};
 
     // Phase 1: gradient search
     let grad = gradient_search(&db, num_vars, config);
 
     if let Some(assign) = grad.assignment {
-        return SolveResult::Sat(assign);
+        return (SolveResult::Sat(assign), SolveStats::default());
     }
 
-    // Phase 2-3: warm-start VSIDS from gradient confidence
-    let mut vsids = Vsids::new(num_vars);
-    if let Some(ref x) = grad.best_continuous {
+    // Phase 2-4: warm-start VSIDS from gradient confidence, then CDCL.
+    let vsids = warm_started_vsids(&db, num_vars, grad.best_continuous.as_deref());
+    crate::solver::solve_cdcl_core_stats(db, num_vars, vsids)
+}
+
+/// Build a VSIDS warm-started from a continuous gradient solution.
+///
+/// Phase hint: rounded polarity. Activity hint: confidence `|x - 0.5|` scaled
+/// to be comparable with clause-occurrence initialization (~12.8 per var at
+/// ratio 4.267). Then blended with clause-occurrence counts.
+fn warm_started_vsids(db: &ClauseDb, num_vars: u32, x: Option<&[f64]>) -> crate::vsids::Vsids {
+    let mut vsids = crate::vsids::Vsids::new(num_vars);
+    if let Some(x) = x {
         for (v, &val) in x.iter().enumerate() {
-            // Phase hint: gradient's rounded polarity suggestion.
             vsids.set_phase(v as u32, val >= 0.5);
-            // Activity hint: confidence (|val - 0.5|) scaled to be comparable
-            // with clause-occurrence initialization (~12.8 per var at ratio 4.267).
             vsids.set_initial_activity(v as u32, (val - 0.5).abs() * 20.0);
         }
     }
-    // Blend with clause-occurrence counts for structural awareness.
-    vsids.initialize_from_clauses(&db);
+    vsids.initialize_from_clauses(db);
+    vsids
+}
 
-    // Phase 4: CDCL with warm-started VSIDS (watched literals + restarts)
-    crate::solver::solve_cdcl_core(db, num_vars, vsids)
+// ─── E1: cubes on gradient confidence ─────────────────────────────────
+//
+// Pre-registered in `research/gpu-sat-partition.md` §3 (2026-11-01). After the
+// gradient phase, pick `d` variables by a selector, form the 2^d cubes, solve
+// each cube with a warm-started CDCL on a FRESH clause database (no lemma
+// sharing — that is a separate mechanism), and declare UNSAT only when every
+// cube is UNSAT. The GaloisSAT scheme. The three selectors exist so the
+// controls can run: `Random` (is confidence doing any work?) and
+// `MostConfident` (the sign flip) beside `LeastConfident` (the hypothesis).
+
+/// Which variables become cube variables.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CubeSelector {
+    /// The `d` variables with the smallest confidence `|x - 0.5|` (the hypothesis).
+    LeastConfident,
+    /// The `d` variables with the largest confidence (the sign-flip control).
+    MostConfident,
+    /// `d` variables chosen uniformly at random with this seed (the "is confidence
+    /// doing the work?" control). Independent of the gradient result.
+    Random { seed: u64 },
+}
+
+/// Aggregate statistics for a cube solve.
+#[derive(Debug, Default, Clone)]
+pub struct CubeStats {
+    /// Number of cubes actually solved (≤ 2^d; fewer when a SAT cube stops the run).
+    pub cubes_solved: usize,
+    /// Cubes that came back UNSAT.
+    pub cubes_unsat: usize,
+    /// Sum of CDCL conflicts over all solved cubes — the pre-registered primary metric.
+    pub total_conflicts: u64,
+    /// Sum of CDCL decisions over all solved cubes.
+    pub total_decisions: u64,
+    /// Sum of CDCL propagations over all solved cubes.
+    pub total_propagations: u64,
+    /// True when the gradient phase found a model and no cube was solved.
+    pub gradient_sat: bool,
+    /// The cube variables, in selection order.
+    pub cube_vars: Vec<u32>,
+}
+
+/// Copy the ORIGINAL clauses of `db` into a fresh database (no learned clauses).
+fn clone_original(db: &ClauseDb) -> ClauseDb {
+    let mut fresh = ClauseDb::new();
+    for cref in db.iter_crefs() {
+        if db.is_deleted(cref) {
+            continue;
+        }
+        fresh.add_clause(db.clause(cref).literals.to_vec());
+    }
+    fresh
+}
+
+/// Deterministic splitmix64 — local so the Random selector needs no dependency.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Choose the cube variables.
+fn select_cube_vars(x: &[f64], num_vars: u32, d: usize, sel: CubeSelector) -> Vec<u32> {
+    let n = num_vars as usize;
+    let d = d.min(n);
+    match sel {
+        CubeSelector::LeastConfident | CubeSelector::MostConfident => {
+            let mut idx: Vec<usize> = (0..n).collect();
+            // Stable sort on confidence; ties broken by variable index (deterministic).
+            idx.sort_by(|&a, &b| {
+                let ca = (x[a] - 0.5).abs();
+                let cb = (x[b] - 0.5).abs();
+                ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if sel == CubeSelector::MostConfident {
+                idx.reverse();
+            }
+            idx.into_iter().take(d).map(|v| v as u32).collect()
+        }
+        CubeSelector::Random { seed } => {
+            // Partial Fisher–Yates for d distinct variables.
+            let mut state = seed ^ 0xD1B5_4A32_D192_ED03;
+            let mut pool: Vec<u32> = (0..num_vars).collect();
+            for i in 0..d {
+                let j = i + (splitmix64(&mut state) as usize) % (n - i);
+                pool.swap(i, j);
+            }
+            pool.truncate(d);
+            pool
+        }
+    }
+}
+
+/// Gradient → 2^d cubes → warm-started CDCL per cube (fresh database each).
+///
+/// Returns the overall result and the aggregate [`CubeStats`]. With `d == 0`
+/// this is `hybrid_solve_stats` on one cube. If the gradient phase finds a
+/// model, no cube is solved (`gradient_sat = true`).
+pub fn hybrid_solve_cubes(
+    db: &ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+    d: usize,
+    selector: CubeSelector,
+) -> (crate::solver::SolveResult, CubeStats) {
+    use crate::literal::Lit;
+    use crate::solver::SolveResult;
+
+    let mut stats = CubeStats::default();
+    let grad = gradient_search(db, num_vars, config);
+    if let Some(assign) = grad.assignment {
+        stats.gradient_sat = true;
+        return (SolveResult::Sat(assign), stats);
+    }
+    let x: Vec<f64> = grad
+        .best_continuous
+        .unwrap_or_else(|| vec![0.5; num_vars as usize]);
+    let cube_vars = select_cube_vars(&x, num_vars, d, selector);
+    stats.cube_vars = cube_vars.clone();
+    let d = cube_vars.len();
+
+    let mut saw_unknown = false;
+    for mask in 0u64..(1u64 << d) {
+        let mut cube_db = clone_original(db);
+        for (i, &v) in cube_vars.iter().enumerate() {
+            let positive = (mask >> i) & 1 == 1;
+            cube_db.add_clause(vec![if positive { Lit::pos(v) } else { Lit::neg(v) }]);
+        }
+        let vsids = warm_started_vsids(&cube_db, num_vars, Some(&x));
+        let (res, s) = crate::solver::solve_cdcl_core_stats(cube_db, num_vars, vsids);
+        stats.cubes_solved += 1;
+        stats.total_conflicts += s.conflicts;
+        stats.total_decisions += s.decisions;
+        stats.total_propagations += s.propagations;
+        match res {
+            SolveResult::Sat(assign) => return (SolveResult::Sat(assign), stats),
+            SolveResult::Unsat => stats.cubes_unsat += 1,
+            SolveResult::Unknown => saw_unknown = true,
+        }
+    }
+    let result = if saw_unknown { SolveResult::Unknown } else { SolveResult::Unsat };
+    (result, stats)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────
@@ -921,5 +1081,83 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cube_tests {
+    use super::*;
+    use crate::bench::{generate_3sat_phase_transition, parity_chain_dimacs, pigeonhole_dimacs};
+    use crate::dimacs::parse_dimacs_str;
+    use crate::solver::{self, SolveResult};
+
+    fn cfg() -> GradientConfig {
+        GradientConfig { num_starts: 8, max_iters: 100, ..GradientConfig::enhanced() }
+    }
+
+    fn satisfies(db: &ClauseDb, assign: &[bool]) -> bool {
+        let opt: Vec<Option<bool>> = assign.iter().map(|&b| Some(b)).collect();
+        db.iter_crefs().all(|c| db.clause(c).literals.iter().any(|l| l.eval(&opt) == Some(true)))
+    }
+
+    #[test]
+    fn php4_unsat_under_every_selector() {
+        let inst = parse_dimacs_str(&pigeonhole_dimacs(4)).unwrap();
+        for sel in [CubeSelector::LeastConfident, CubeSelector::MostConfident, CubeSelector::Random { seed: 7 }] {
+            let (res, st) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 3, sel);
+            assert!(matches!(res, SolveResult::Unsat), "{sel:?}");
+            assert_eq!(st.cubes_solved, 8, "{sel:?}");
+            assert_eq!(st.cubes_unsat, 8, "{sel:?}");
+            assert_eq!(st.cube_vars.len(), 3);
+            assert!(!st.gradient_sat);
+        }
+    }
+
+    #[test]
+    fn cube_vars_are_distinct_and_selectors_differ() {
+        let x: Vec<f64> = (0..10).map(|i| i as f64 / 10.0).collect(); // confidence grows away from 0.5 at both ends
+        let least = select_cube_vars(&x, 10, 3, CubeSelector::LeastConfident);
+        let most = select_cube_vars(&x, 10, 3, CubeSelector::MostConfident);
+        let rnd = select_cube_vars(&x, 10, 3, CubeSelector::Random { seed: 1 });
+        for v in [&least, &most, &rnd] {
+            let mut s = v.clone();
+            s.sort();
+            s.dedup();
+            assert_eq!(s.len(), 3);
+        }
+        assert!(least.contains(&5) || least.contains(&4)); // x = 0.5 / 0.4 are least confident
+        assert!(most.contains(&0) || most.contains(&9)); // x = 0.0 / 0.9 are most confident
+        assert_ne!(least, most);
+    }
+
+    #[test]
+    fn sat_instances_return_models() {
+        let inst = parse_dimacs_str(&parity_chain_dimacs(20)).unwrap();
+        let (res, _) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 3, CubeSelector::LeastConfident);
+        match res {
+            SolveResult::Sat(a) => assert!(satisfies(&inst.db, &a), "parity20"),
+            other => panic!("parity20: expected Sat, got {other:?}"),
+        }
+        // random 3-SAT: whatever pure CDCL says, cubes must agree.
+        for seed in 0..6u64 {
+            let db = generate_3sat_phase_transition(40, seed);
+            let (pure, _) = solver::solve_watched_stats(clone_original(&db), 40);
+            let (cubes, st) = hybrid_solve_cubes(&db, 40, &cfg(), 4, CubeSelector::LeastConfident);
+            match (pure, cubes) {
+                (SolveResult::Sat(_), SolveResult::Sat(a)) => assert!(satisfies(&db, &a)),
+                (SolveResult::Unsat, SolveResult::Unsat) => assert_eq!(st.cubes_unsat, 16),
+                (p, c) => panic!("seed {seed}: pure {p:?} vs cubes {c:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn d0_is_one_cube_and_agrees_with_hybrid() {
+        let inst = parse_dimacs_str(&pigeonhole_dimacs(4)).unwrap();
+        let (res, st) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 0, CubeSelector::LeastConfident);
+        assert!(matches!(res, SolveResult::Unsat));
+        assert_eq!(st.cubes_solved, 1);
+        let (h, _) = hybrid_solve_stats(clone_original(&inst.db), inst.num_vars, &cfg());
+        assert!(matches!(h, SolveResult::Unsat));
     }
 }

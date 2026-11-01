@@ -213,6 +213,74 @@ pub fn bench_suite() -> Vec<(BenchResult, BenchResult)> {
 // Tests (run with --release --nocapture for meaningful timing)
 // ============================================================================
 
+// ============================================================================
+// Structured instance generators (DIMACS text) — shared by benches/examples
+// ============================================================================
+
+/// Pigeonhole CNF: "n+1 pigeons into n holes" (UNSAT for every n ≥ 1).
+/// Variables x_{i,j} = pigeon i is in hole j (1-indexed). Same encoding as
+/// `benches/cardinality.rs`.
+pub fn pigeonhole_dimacs(n: u32) -> String {
+    let pigeons = n + 1;
+    let holes = n;
+    let var = |i: u32, j: u32| -> i32 { ((i - 1) * holes + j) as i32 };
+    let mut clauses: Vec<Vec<i32>> = Vec::new();
+    for i in 1..=pigeons {
+        clauses.push((1..=holes).map(|j| var(i, j)).collect());
+    }
+    for j in 1..=holes {
+        for i in 1..=pigeons {
+            for k in (i + 1)..=pigeons {
+                clauses.push(vec![-var(i, j), -var(k, j)]);
+            }
+        }
+    }
+    dimacs_text(pigeons * holes, &clauses)
+}
+
+/// Parity chain: k XOR-2 constraints in CNF (2 clauses per XOR). SAT for every k.
+pub fn parity_chain_dimacs(k: u32) -> String {
+    let mut clauses: Vec<Vec<i32>> = Vec::new();
+    for i in 1..=k {
+        let a = i as i32;
+        let b = (i + 1) as i32;
+        clauses.push(vec![a, b]);
+        clauses.push(vec![-a, -b]);
+    }
+    dimacs_text(k + 1, &clauses)
+}
+
+fn dimacs_text(num_vars: u32, clauses: &[Vec<i32>]) -> String {
+    let mut out = format!("p cnf {} {}\n", num_vars, clauses.len());
+    for c in clauses {
+        for l in c {
+            out.push_str(&format!("{} ", l));
+        }
+        out.push_str("0\n");
+    }
+    out
+}
+
+/// Serialize the ORIGINAL (non-deleted) clauses of a database as DIMACS text,
+/// so generated instances can be re-parsed identically by every method under test.
+pub fn db_to_dimacs(db: &ClauseDb, num_vars: u32) -> String {
+    let clauses: Vec<Vec<i32>> = db
+        .iter_crefs()
+        .filter(|&c| !db.is_deleted(c))
+        .map(|c| {
+            db.clause(c)
+                .literals
+                .iter()
+                .map(|l| {
+                    let v = l.var() as i32 + 1;
+                    if l.is_negated() { -v } else { v }
+                })
+                .collect()
+        })
+        .collect();
+    dimacs_text(num_vars, &clauses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

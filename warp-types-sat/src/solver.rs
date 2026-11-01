@@ -164,7 +164,7 @@ pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveSt
 }
 
 /// Internal CDCL solver with stats.
-fn solve_cdcl_core_stats(
+pub(crate) fn solve_cdcl_core_stats(
     mut db: ClauseDb,
     num_vars: u32,
     mut vsids: Vsids,
