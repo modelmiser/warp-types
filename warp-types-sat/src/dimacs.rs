@@ -105,8 +105,14 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
         let trimmed = line.trim();
 
         // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with('c') || trimmed.starts_with('%') {
+        if trimmed.is_empty() || trimmed.starts_with('c') {
             continue;
+        }
+        // `%` ends the input (SATLIB convention: files close with a `%` line
+        // followed by a lone `0`). Skipping the `%` line and reading on would
+        // turn that `0` into an empty clause and make every such file UNSAT.
+        if trimmed.starts_with('%') {
+            break;
         }
 
         // Header line
@@ -153,10 +159,11 @@ pub fn parse_dimacs(reader: impl BufRead) -> Result<DimacsInstance, DimacsError>
                 .map_err(|_| DimacsError::BadLiteral(token.to_string()))?;
 
             if val == 0 {
-                // End of clause
-                if !current_clause.is_empty() {
-                    db.add_clause(std::mem::take(&mut current_clause));
-                }
+                // End of clause. An empty clause (a `0` with no literals
+                // before it) is a real clause — the formula is UNSAT — and
+                // must reach the database; until 2026-11-01 it was dropped
+                // here and such files were answered SAT.
+                db.add_clause(std::mem::take(&mut current_clause));
             } else {
                 let abs_val = val.unsigned_abs();
                 if abs_val > u32::MAX as u64 {
@@ -243,6 +250,51 @@ p cnf 3 1
         let inst = parse_dimacs_str(cnf).unwrap();
         assert_eq!(inst.db.len(), 1);
         assert_eq!(inst.db.clause(0).literals.len(), 3);
+    }
+
+    #[test]
+    fn parse_empty_clause_is_kept_and_unsat() {
+        // A bare `0` is the empty clause; the instance is UNSAT by definition.
+        let inst = parse_dimacs_str("p cnf 2 2\n1 2 0\n0\n").unwrap();
+        assert_eq!(inst.db.len(), 2);
+        assert!(inst
+            .db
+            .iter_crefs()
+            .any(|c| inst.db.clause(c).literals.is_empty()));
+        let text = "p cnf 2 2\n1 2 0\n0\n";
+        let i = parse_dimacs_str(text).unwrap();
+        assert!(matches!(
+            crate::solver::solve(i.db, i.num_vars),
+            crate::solver::SolveResult::Unsat
+        ));
+        let i = parse_dimacs_str(text).unwrap();
+        assert!(matches!(
+            crate::solver::solve_watched(i.db, i.num_vars),
+            crate::solver::SolveResult::Unsat
+        ));
+        let i = parse_dimacs_str(text).unwrap();
+        assert!(matches!(
+            crate::gradient::hybrid_solve(
+                i.db,
+                i.num_vars,
+                &crate::gradient::GradientConfig::default()
+            ),
+            crate::solver::SolveResult::Unsat
+        ));
+        // Empty clause on the same line as a real one, and a `0 0` run.
+        let i = parse_dimacs_str("p cnf 1 2\n1 0 0\n").unwrap();
+        assert_eq!(i.db.len(), 2);
+    }
+
+    #[test]
+    fn percent_line_ends_input_satlib_style() {
+        // SATLIB uf*.cnf files end with `%` then `0`; the `0` is not a clause.
+        let inst = parse_dimacs_str("p cnf 2 1\n1 -2 0\n%\n0\n").unwrap();
+        assert_eq!(inst.db.len(), 1);
+        assert!(matches!(
+            crate::solver::solve_watched(inst.db, inst.num_vars),
+            crate::solver::SolveResult::Sat(_)
+        ));
     }
 
     #[test]

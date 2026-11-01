@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **Fix: the DIMACS parser dropped empty clauses.** `dimacs::parse_dimacs` added a clause on `0` only when it had
+  literals, so a CNF containing a bare `0` line — the empty clause, UNSAT by definition — parsed as if the line were
+  absent, and the solver answered `Sat` (`p cnf 2 2 / 1 2 0 / 0` → `Sat`). Empty clauses now reach the database and
+  every entry point (`solve`, `solve_watched`, `hybrid_solve`) returns `Unsat` on them. With that change a `%` line
+  now ends the input instead of being skipped as a comment: SATLIB `uf*.cnf` files close with `%` then a lone `0`,
+  which would otherwise have become an empty clause and made every such file UNSAT. Found while writing the DRAT
+  tests on 2026-11-01; two parser tests added.
 - **DRAT proof output for `warp-types-sat`** (`src/proof.rs`; `solver::solve_watched_drat(db, num_vars, &mut impl Write)
   -> io::Result<SolveResult>`). The CDCL core now takes a `&mut dyn ProofLog` and reports every learned clause
   before it is added, every clause `reduce_learned` drops before compaction frees it, every theory lemma it adds,
