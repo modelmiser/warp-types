@@ -387,9 +387,10 @@ mod tests {
 
     #[test]
     fn empty_input_clause_is_a_one_line_proof() {
-        // Built directly: the DIMACS parser does not produce an empty clause
-        // from a bare `0` line (see dimacs.rs), so the core's own check is
-        // exercised through the database.
+        // Built directly rather than parsed, so this test exercises the
+        // core's own empty-clause check and does not depend on the parser
+        // (which keeps empty clauses since 2026-11-01; dimacs.rs has its
+        // own test for that).
         let mut db = crate::bcp::ClauseDb::new();
         db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
         db.add_clause(vec![]);

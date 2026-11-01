@@ -19,6 +19,24 @@ fn usage(prog: &str) -> ! {
     process::exit(1);
 }
 
+/// True when `proof` names the same file as `cnf`. The proof file may not
+/// exist yet, so compare the canonical parent directory plus file name.
+fn same_file(cnf: &str, proof: &str) -> bool {
+    use std::path::Path;
+    let canon = |p: &str| -> Option<std::path::PathBuf> {
+        let p = Path::new(p);
+        let parent = p
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Some(fs::canonicalize(parent).ok()?.join(p.file_name()?))
+    };
+    match (canon(cnf), canon(proof)) {
+        (Some(a), Some(b)) => a == b,
+        _ => cnf == proof,
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let prog = args.first().map(String::as_str).unwrap_or("solve");
@@ -47,6 +65,12 @@ fn main() {
     let Some(cnf_path) = cnf_path else {
         usage(prog)
     };
+    if let Some(d) = &drat_path {
+        if same_file(&cnf_path, d) {
+            eprintln!("Error: --drat path {d} is the input CNF; refusing to overwrite it");
+            process::exit(1);
+        }
+    }
 
     let contents = fs::read_to_string(&cnf_path).unwrap_or_else(|e| {
         eprintln!("Error reading {}: {}", cnf_path, e);
