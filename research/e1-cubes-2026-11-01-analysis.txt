@@ -1,0 +1,36 @@
+instances: 67 total, 33 UNSAT, 34 SAT; rows 1407
+
+== UNSAT: median conflict ratio cubes/hybrid (no-cube), per config, d, selector  [n = instances with hybrid conflicts > 0]
+  config=tuned
+    d=3: least= 1.95 (n=33, frac<1   3%)   most= 1.48 (n=33, frac<1   9%)   random= 1.85 (n=33, frac<1   6%)   
+    d=5: least= 3.17 (n=33, frac<1   3%)   most= 2.46 (n=33, frac<1   0%)   random= 2.53 (n=33, frac<1   6%)   
+    d=7: least= 5.02 (n=33, frac<1   3%)   most= 4.08 (n=33, frac<1   3%)   random= 4.45 (n=33, frac<1   3%)   
+  config=default
+    d=3: least= 2.36 (n=33, frac<1   6%)   most= 1.47 (n=33, frac<1   3%)   random= 2.00 (n=33, frac<1   3%)   
+    d=5: least= 4.60 (n=33, frac<1   0%)   most= 2.36 (n=33, frac<1   0%)   random= 2.85 (n=33, frac<1   3%)   
+    d=7: least= 8.55 (n=33, frac<1   3%)   most= 4.06 (n=33, frac<1   3%)   random= 4.32 (n=33, frac<1   3%)   
+
+== UNSAT: hybrid vs pure CDCL conflicts (sanity: does warm-start still help?)
+  tuned: median hybrid/cdcl = 1.05 (n=33)
+  default: median hybrid/cdcl = 1.01 (n=33)
+
+== Named UNSAT instances (tuned): conflicts by method
+  php4: cdcl=35, hybrid=25, d3/least=25, d3/most=30, d3/random=29, d5/least=20, d5/most=26, d5/random=20, d7/least=19, d7/most=12, d7/random=15
+  php5: cdcl=117, hybrid=111, d3/least=151, d3/most=163, d3/random=146, d5/least=163, d5/most=183, d5/random=189, d7/least=197, d7/most=176, d7/random=187
+  php6: cdcl=558, hybrid=579, d3/least=826, d3/most=827, d3/random=762, d5/least=887, d5/most=919, d5/random=924, d7/least=913, d7/most=989, d7/random=973
+  php7: cdcl=2754, hybrid=4341, d3/least=4746, d3/most=3902, d3/random=3919, d5/least=4372, d5/most=5265, d5/random=4048, d7/least=4811, d7/most=7625, d7/random=5163
+
+== VERDICT (pre-registered thresholds)
+  php6 kill check (tuned): least-cubes max conflicts 913 vs hybrid 579 -> KILL
+  least (tuned) median ratio by d: {3: 1.945733834182989, 5: 3.1691810344827585, 7: 5.017563117453348}
+  H1 (<=0.7 at some d): False   NULL (>=0.9 at every d): True
+  controls d=3: least 1.95 | random 1.85 (differ) | most 1.48 (SIGN FLIP: most-confident beats least)
+  controls d=5: least 3.17 | random 2.53 (differ) | most 2.46 (SIGN FLIP: most-confident beats least)
+  controls d=7: least 5.02 | random 4.45 (differ) | most 4.08 (SIGN FLIP: most-confident beats least)
+  overall: KILLED (php6)
+
+== SAT instances (separate): share solved by the gradient phase, and conflicts when CDCL ran
+  tuned: gradient_sat on 27/306 cube runs; median conflicts when CDCL ran: 991
+  default: gradient_sat on 18/306 cube runs; median conflicts when CDCL ran: 979.0
+
+== wall time (s) by config/method: {('none', 'cdcl'): 2.8, ('tuned', 'hybrid'): 3.9, ('tuned', 'cubes'): 61.2, ('default', 'hybrid'): 34.6, ('default', 'cubes'): 351.4}
