@@ -98,9 +98,12 @@ def run(cmd, timeout):
         return -9, "TIMEOUT", time.time() - t
 
 def verdict(out):
+    """drat-trim: `s VERIFIED` / `s NOT VERIFIED`; lrat-check: `c VERIFIED` or `c FAILED`/`c ERROR` and
+    exit 0 either way (so the exit code is useless); cake_lpr: `s VERIFIED UNSAT` or an error message."""
     out = out.replace("\r", "\n")
     if "s NOT VERIFIED" in out: return "NOT VERIFIED"
-    if "s VERIFIED" in out: return "VERIFIED"
+    if "s VERIFIED" in out or "\nc VERIFIED" in out or out.startswith("c VERIFIED"): return "VERIFIED"
+    if "c FAILED" in out or "c ERROR" in out: return "NOT VERIFIED"
     if "s UNSATISFIABLE" in out: return "UNSAT"
     if "s SATISFIABLE" in out: return "SAT"
     if "s UNKNOWN" in out: return "UNKNOWN"
@@ -135,10 +138,12 @@ def model_ok(cnf_path, solver_out):
 
 def corrupt(proof_text, kind):
     lines = [l for l in proof_text.split("\n") if l.strip()]
-    if kind == "flip":  # flip first literal of the last non-empty add
-        for i in range(len(lines) - 1, -1, -1):
-            if not lines[i].startswith("d") and lines[i].strip() != "0":
-                toks = lines[i].split(); toks[0] = str(-int(toks[0])); lines[i] = " ".join(toks); break
+    if kind == "flip":  # flip the first literal of a lemma one third of the way in (the last lemmas
+        # are often RUP either way, the formula being contradictory by then)
+        adds = [i for i, l in enumerate(lines) if not l.startswith("d") and l.strip() != "0"]
+        if adds:
+            i = adds[len(adds) // 3]
+            toks = lines[i].split(); toks[0] = str(-int(toks[0])); lines[i] = " ".join(toks)
     elif kind == "drop0":
         lines = [l for l in lines if l.strip() != "0"]
     elif kind == "delorig":  # pretend the first original clause was deleted before anything
@@ -154,6 +159,7 @@ def main():
     ap.add_argument("--reduce-interval", type=int, default=50); ap.add_argument("--seeds", type=int, default=8)
     ap.add_argument("--solve-timeout", type=int, default=120); ap.add_argument("--check-timeout", type=int, default=300)
     ap.add_argument("--negatives", type=int, default=6); ap.add_argument("--timing-reps", type=int, default=5)
+    ap.add_argument("--timing-only", action="store_true", help="skip the corpus; reuse CNFs already in --out")
     a = ap.parse_args()
     out = Path(a.out); (out / "cnf").mkdir(parents=True, exist_ok=True); (out / "proof").mkdir(exist_ok=True)
 
@@ -178,7 +184,7 @@ def main():
     cols = ["name", "cnf_sha", "vars", "clauses", "solve", "solve_s", "kissat", "agree", "model",
             "proof_sha", "proof_lines", "d_lines", "unit_d_lines", "dt_default", "dt_s", "dt_vW_exit", "dt_vW_ignoring",
             "dt_forward", "lrat_lines", "lrat_check", "cake_lpr"]
-    for name, gen in inst:
+    for name, gen in ([] if a.timing_only else inst):
         cnf = out / "cnf" / f"{name}.cnf"; gen(cnf)
         nv, clauses = read_cnf_bytes(cnf)
         row = dict.fromkeys(cols, ""); row.update(name=name, cnf_sha=sha(cnf), vars=nv, clauses=len(clauses))
@@ -234,12 +240,16 @@ def main():
     for name in ("php7", "php8", f"r3sat_n200_s0", f"r3sat_n250_s0"):
         cnf = out / "cnf" / f"{name}.cnf"
         if not cnf.exists(): continue
-        for mode, extra in (("none", []), ("devnull", ["--drat", "/dev/null", "--reduce-interval", str(a.reduce_interval)]),
+        for mode, extra in (("none", ["--reduce-interval", str(a.reduce_interval)]), ("devnull", ["--drat", "/dev/null", "--reduce-interval", str(a.reduce_interval)]),
                             ("file", ["--drat", str(out / "proof" / f"{name}.timing.drat"), "--reduce-interval", str(a.reduce_interval)])):
             ts = [run([a.solve] + extra + [str(cnf)], a.solve_timeout)[2] for _ in range(a.timing_reps)]
             timing.append(dict(name=name, mode=mode, median_s=f"{statistics.median(ts):.4f}", min_s=f"{min(ts):.4f}", reps=a.timing_reps))
 
     # write
+    if a.timing_only:
+        with open(out / "timing.csv", "w", newline="") as f:
+            wr = csv.DictWriter(f, fieldnames=["name", "mode", "median_s", "min_s", "reps"]); wr.writeheader(); wr.writerows(timing)
+        print(open(out / "timing.csv").read()); return
     with open(out / "results.csv", "w", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=cols); wr.writeheader(); wr.writerows(rows)
     with open(out / "negatives.csv", "w", newline="") as f:

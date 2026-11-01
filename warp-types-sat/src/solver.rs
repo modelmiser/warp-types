@@ -170,6 +170,28 @@ pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveSt
     solve_cdcl_core_stats(db, num_vars, vsids)
 }
 
+/// [`solve_watched`] with the learned-clause reduction interval chosen by
+/// the caller; no proof. Exists so a timing comparison against
+/// [`solve_watched_drat_with`] is like-for-like (same search, logging off).
+pub fn solve_watched_with(db: ClauseDb, num_vars: u32, reduce_interval: u64) -> SolveResult {
+    let mut db = db;
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        reduce_interval,
+        &mut NoTheory,
+        &mut NoProof,
+    )
+}
+
 /// Solve a pure-SAT instance and write a DRAT proof to `out`.
 ///
 /// Every learned clause, every deleted clause and (on `Unsat`) the empty

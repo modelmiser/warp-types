@@ -8,8 +8,8 @@
 //!
 //! `--reduce-interval N` sets the conflicts between learned-clause reductions
 //! (default 2000). A diagnostic: a small N makes short solves exercise clause
-//! deletion, which is what proof-logging coverage needs. Only honoured with
-//! `--drat` (the plain path keeps the library default).
+//! deletion, which is what proof-logging coverage needs. Honoured with and
+//! without `--drat`, so timings of the two are like-for-like.
 //!
 //! Note: loads the entire file into memory via `fs::read_to_string`.
 //! Not suitable for adversarial input without external size limits.
@@ -102,7 +102,11 @@ fn main() {
     );
 
     let result = match drat_path {
-        None => warp_types_sat::solver::solve_watched(instance.db, instance.num_vars),
+        None => warp_types_sat::solver::solve_watched_with(
+            instance.db,
+            instance.num_vars,
+            reduce_interval,
+        ),
         Some(path) => {
             let file = fs::File::create(&path).unwrap_or_else(|e| {
                 eprintln!("Error creating {}: {}", path, e);
