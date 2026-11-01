@@ -151,12 +151,17 @@ within-solver reference, not a cross-solver claim.
 
 ```bash
 cargo run --bin solve -- problem.cnf
+cargo run --bin solve -- --drat proof.drat problem.cnf   # also write a DRAT proof
 ```
 
 Reads DIMACS CNF, prints `s SATISFIABLE` or `s UNSATISFIABLE` with the
 variable assignment in standard SAT competition format. Runs
 `solver::solve_watched`, the watched-literal VSIDS core (since 2026-11-01;
-earlier builds ran the basic reference solver `solver::solve`).
+earlier builds ran the basic reference solver `solver::solve`). With
+`--drat FILE` the run goes through `solve_watched_drat` and writes a DRAT
+proof of an UNSATISFIABLE answer to FILE; check it with
+`drat-trim problem.cnf proof.drat`. On SATISFIABLE the file is written but
+proves nothing.
 
 ## What's inside
 

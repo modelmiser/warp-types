@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- **`solve --drat <file>`.** The CLI can write a DRAT proof: `solve --drat proof.drat problem.cnf` runs
+  `solve_watched_drat` and writes the proof to the file (flag position free; `--drat` without a path, a second
+  `--drat`, an unknown `--flag`, or a missing CNF print usage and exit 1; an unwritable proof path exits 1 with the
+  I/O error). Verified 2026-11-01 with `drat-trim` on PHP(6) and PHP(7) written by the binary: `s VERIFIED`. Without
+  the flag the binary is unchanged.
 - **Fix: the DIMACS parser dropped empty clauses.** `dimacs::parse_dimacs` added a clause on `0` only when it had
   literals, so a CNF containing a bare `0` line — the empty clause, UNSAT by definition — parsed as if the line were
   absent, and the solver answered `Sat` (`p cnf 2 2 / 1 2 0 / 0` → `Sat`). Empty clauses now reach the database and

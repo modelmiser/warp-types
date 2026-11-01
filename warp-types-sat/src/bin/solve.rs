@@ -1,23 +1,55 @@
 //! CLI entry point: solve a DIMACS CNF file.
 //!
-//! Usage: cargo run -p warp-types-sat --bin solve -- <file.cnf>
+//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat>] <file.cnf>
+//!
+//! `--drat FILE` writes a DRAT proof of an UNSATISFIABLE answer to FILE
+//! (checkable with `drat-trim FILE.cnf FILE.drat`). On SATISFIABLE the file is
+//! still written but proves nothing. See `warp_types_sat::proof`.
 //!
 //! Note: loads the entire file into memory via `fs::read_to_string`.
 //! Not suitable for adversarial input without external size limits.
 
 use std::env;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::process;
+
+fn usage(prog: &str) -> ! {
+    eprintln!("Usage: {prog} [--drat <proof.drat>] <file.cnf>");
+    process::exit(1);
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <file.cnf>", args[0]);
-        process::exit(1);
+    let prog = args.first().map(String::as_str).unwrap_or("solve");
+    let mut drat_path: Option<String> = None;
+    let mut cnf_path: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--drat" => {
+                i += 1;
+                if i >= args.len() || drat_path.is_some() {
+                    usage(prog);
+                }
+                drat_path = Some(args[i].clone());
+            }
+            a if a.starts_with("--") => usage(prog),
+            a => {
+                if cnf_path.is_some() {
+                    usage(prog);
+                }
+                cnf_path = Some(a.to_string());
+            }
+        }
+        i += 1;
     }
+    let Some(cnf_path) = cnf_path else {
+        usage(prog)
+    };
 
-    let contents = fs::read_to_string(&args[1]).unwrap_or_else(|e| {
-        eprintln!("Error reading {}: {}", args[1], e);
+    let contents = fs::read_to_string(&cnf_path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", cnf_path, e);
         process::exit(1);
     });
 
@@ -31,7 +63,30 @@ fn main() {
         instance.num_vars, instance.num_clauses,
     );
 
-    match warp_types_sat::solver::solve_watched(instance.db, instance.num_vars) {
+    let result = match drat_path {
+        None => warp_types_sat::solver::solve_watched(instance.db, instance.num_vars),
+        Some(path) => {
+            let file = fs::File::create(&path).unwrap_or_else(|e| {
+                eprintln!("Error creating {}: {}", path, e);
+                process::exit(1);
+            });
+            let mut out = BufWriter::new(file);
+            let r = warp_types_sat::solver::solve_watched_drat(
+                instance.db,
+                instance.num_vars,
+                &mut out,
+            )
+            .and_then(|r| out.flush().map(|_| r))
+            .unwrap_or_else(|e| {
+                eprintln!("Error writing proof to {}: {}", path, e);
+                process::exit(1);
+            });
+            eprintln!("c DRAT proof written to {}", path);
+            r
+        }
+    };
+
+    match result {
         warp_types_sat::solver::SolveResult::Sat(assign) => {
             println!("s SATISFIABLE");
             print!("v");
