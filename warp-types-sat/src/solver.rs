@@ -5,11 +5,13 @@
 //! through it, backtracking retracts through it. No ghost assignments.
 
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::time::Instant;
 
 use crate::analyze::{self, AnalyzeWork, ConflictProfile};
 use crate::bcp::{self, BcpResult, CRef, ClauseDb};
 use crate::literal::Lit;
+use crate::proof::{DratWriter, NoProof, ProofLog};
 use crate::restart::LubyRestarts;
 use crate::session;
 use crate::theory::{NoTheory, TheoryContext, TheoryResult, TheorySolver};
@@ -18,7 +20,7 @@ use crate::vsids::Vsids;
 use crate::watch;
 
 /// Result of solving a SAT instance.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveResult {
     /// Satisfiable. Contains the variable assignment (index = var, value = polarity).
     Sat(Vec<bool>),
@@ -163,6 +165,39 @@ pub fn solve_watched_stats(db: ClauseDb, num_vars: u32) -> (SolveResult, SolveSt
     solve_cdcl_core_stats(db, num_vars, vsids)
 }
 
+/// Solve a pure-SAT instance and write a DRAT proof to `out`.
+///
+/// Every learned clause, every deleted clause and (on `Unsat`) the empty
+/// clause are written in DRAT text format against the input formula's
+/// variables (1-based, as in DIMACS), so the proof checks with `drat-trim` or
+/// `cake_lpr` against the DIMACS file `db` was parsed from. On `Sat` or
+/// `Unknown` the log is still written but proves nothing. Returns the first
+/// I/O error if writing failed; the solve itself is unaffected by it.
+/// See [`crate::proof`].
+pub fn solve_watched_drat(
+    mut db: ClauseDb,
+    num_vars: u32,
+    out: &mut dyn Write,
+) -> io::Result<SolveResult> {
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let mut writer = DratWriter::new(out);
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        &mut NoTheory,
+        &mut writer,
+    );
+    writer.finish()?;
+    Ok(result)
+}
+
 /// Internal CDCL solver with stats.
 pub(crate) fn solve_cdcl_core_stats(
     mut db: ClauseDb,
@@ -180,6 +215,7 @@ pub(crate) fn solve_cdcl_core_stats(
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
         &mut NoTheory,
+        &mut NoProof,
     );
     (result, stats)
 }
@@ -204,6 +240,7 @@ pub fn solve_watched_budget(
         conflict_limit,
         DEFAULT_PIVOT_BUMP_SCALE,
         &mut NoTheory,
+        &mut NoProof,
     );
     (result, stats)
 }
@@ -228,6 +265,7 @@ pub(crate) fn solve_cdcl_core(mut db: ClauseDb, num_vars: u32, mut vsids: Vsids)
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
         &mut NoTheory,
+        &mut NoProof,
     )
 }
 
@@ -255,6 +293,7 @@ pub fn solve_watched_trail_gradient(
         0,
         0.0,
         &mut NoTheory,
+        &mut NoProof,
     )
 }
 
@@ -280,6 +319,7 @@ pub fn solve_watched_trail_gradient_stats(
         conflict_limit,
         0.0,
         &mut NoTheory,
+        &mut NoProof,
     );
     (result, stats)
 }
@@ -312,6 +352,7 @@ pub fn solve_watched_combined(
         conflict_limit,
         pivot_bump_scale,
         &mut NoTheory,
+        &mut NoProof,
     );
     (result, stats)
 }
@@ -327,9 +368,11 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     conflict_limit: u64,
     pivot_bump_scale: f64,
     theory: &mut T,
+    proof: &mut dyn ProofLog,
 ) -> SolveResult {
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
+            proof.empty();
             return SolveResult::Unsat;
         }
     }
@@ -337,6 +380,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
         return if db.is_empty() {
             SolveResult::Sat(vec![])
         } else {
+            proof.empty();
             SolveResult::Unsat
         };
     }
@@ -380,6 +424,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
             match initial_bcp {
                 BcpResult::Conflict { .. } => {
                     let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                    proof.empty();
                     return SolveResult::Unsat;
                 }
                 BcpResult::Ok => {
@@ -430,6 +475,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                      assignment (unassigned, satisfied, or out-of-range literal)"
                                 );
                                 let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                                proof.empty();
                                 return SolveResult::Unsat;
                             }
                             if trail.len() == trail_before {
@@ -456,6 +502,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                  assignment (unassigned, satisfied, or out-of-range literal)"
                             );
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                            proof.empty();
                             return SolveResult::Unsat;
                         }
                     }
@@ -480,6 +527,9 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                 if conflicts >= next_reduce {
                     let locked = build_locked_set(&trail);
                     let deleted = db.reduce_learned(&locked);
+                    for &c in &deleted {
+                        proof.delete(db.clause(c).literals);
+                    }
                     if !deleted.is_empty() {
                         // Compact db → contiguous CRefs for cache locality
                         let remap = db.compact();
@@ -609,6 +659,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 if lits.is_empty() {
                                     let _ =
                                         propagate.finish_conflict().analyze().backtrack().unsat();
+                                    proof.empty();
                                     return SolveResult::Unsat;
                                 }
                                 // Release check, not debug_assert: a non-falsified
@@ -643,6 +694,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 if max_level == 0 {
                                     let _ =
                                         propagate.finish_conflict().analyze().backtrack().unsat();
+                                    proof.empty();
                                     return SolveResult::Unsat;
                                 }
                                 if max_level < trail.current_level() {
@@ -659,6 +711,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 }
                                 // Add the theory conflict clause to the DB and
                                 // enter conflict resolution at its own level.
+                                proof.add(&lits);
                                 let cref = db.add_clause(lits);
                                 watches.add_clause(db, cref);
                                 bcp_result = BcpResult::Conflict { clause: cref };
@@ -678,6 +731,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
+                            proof.empty();
                             return SolveResult::Unsat;
                         }
 
@@ -711,6 +765,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
+                            proof.empty();
                             return SolveResult::Unsat;
                         }
 
@@ -726,6 +781,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         let asserting_lit = analysis.learned[0];
                         let lbd = analysis.lbd;
+                        proof.add(&analysis.learned);
                         let cref = db.add_clause(analysis.learned);
                         db.set_lbd(cref, lbd as u16);
                         watches.add_clause(db, cref);
@@ -810,6 +866,7 @@ pub fn solve_with_theory<T: TheorySolver>(
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
         theory,
+        &mut NoProof,
     )
 }
 
@@ -833,6 +890,7 @@ pub fn solve_with_theory_stats<T: TheorySolver>(
         0,
         DEFAULT_PIVOT_BUMP_SCALE,
         theory,
+        &mut NoProof,
     );
     (result, stats)
 }
@@ -858,6 +916,7 @@ pub fn solve_with_theory_budget<T: TheorySolver>(
         conflict_limit,
         DEFAULT_PIVOT_BUMP_SCALE,
         theory,
+        &mut NoProof,
     );
     (result, stats)
 }

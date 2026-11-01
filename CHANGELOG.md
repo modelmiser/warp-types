@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- **DRAT proof output for `warp-types-sat`** (`src/proof.rs`; `solver::solve_watched_drat(db, num_vars, &mut impl Write)
+  -> io::Result<SolveResult>`). The CDCL core now takes a `&mut dyn ProofLog` and reports every learned clause
+  before it is added, every clause `reduce_learned` drops before compaction frees it, every theory lemma it adds,
+  and the empty clause at each `Unsat` return; the ordinary entry points pass a no-op logger. `DratWriter` emits
+  DRAT text against the input formula's 1-based variables. `proof::check_drat` is an in-crate forward RUP checker
+  (unit propagation over the clause set, independent of the solver's watched BCP) used by the tests: PHP(3)–PHP(7)
+  (PHP(7) crosses the deletion threshold, so its proof carries `d` lines), and the UNSAT instances among 40 random
+  3-SAT seeds at n = 60, all verified; a further test runs `drat-trim` when it is on `PATH` or named by `DRAT_TRIM`
+  and is skipped otherwise. Pure SAT only: a DPLL(T) proof contains theory lemmas that are not RUP and will not
+  check. `SolveResult` now derives `Clone, PartialEq, Eq`. No change to the solve path or its answers.
 - **`solve` CLI (`warp-types-sat/src/bin/solve.rs`) now runs `solver::solve_watched`**, the watched-literal
   VSIDS core, instead of `solver::solve`, the basic reference solver it had called since it was written.
   Same input, same output format; answers unchanged where the old binary returned one. Measured 2026-11-01

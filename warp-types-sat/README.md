@@ -25,8 +25,8 @@ before real-hardware execution.
 
 **Reading and learning CDCL with legible types.** Watched literals, 1-UIP
 with minimization, VSIDS with phase saving, Luby restarts, LBD-based clause
-deletion — a clean first-pass CDCL with the phases surfaced in the type
-system for auditability. Used as the reference SAT core in Sol (typed
+deletion, DRAT proof output — a clean first-pass CDCL with the phases surfaced
+in the type system for auditability. Used as the reference SAT core in Sol (typed
 verification front-end).
 
 ## What this is NOT trying to be
@@ -176,6 +176,14 @@ earlier builds ran the basic reference solver `solver::solve`).
   for SMT integration
 - **Gradient solver** (`gradient.rs`, `gpu_gradient.rs`) — gradient-descent
   reformulation; GPU path via `warp-types` behind `feature = "gpu"`
+- **DRAT proof output** (`proof.rs`) — `solver::solve_watched_drat(db, n, &mut out)`
+  writes every learned clause, every deletion and the final empty clause in
+  DRAT text, checkable against the input DIMACS with `drat-trim` or `cake_lpr`.
+  Pure SAT only: theory lemmas are logged but are not RUP, so a DPLL(T) proof
+  will not check. Added 2026-11-01; the crate's own forward RUP checker
+  (`proof::check_drat`) covers PHP(3–7) and random UNSAT 3-SAT in the tests,
+  and an external-checker test runs when `drat-trim` is on `PATH` or named by
+  `DRAT_TRIM`
 
 ## License
 
