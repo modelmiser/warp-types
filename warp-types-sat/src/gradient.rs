@@ -675,7 +675,11 @@ pub fn hybrid_solve_cubes(
             SolveResult::Unknown => saw_unknown = true,
         }
     }
-    let result = if saw_unknown { SolveResult::Unknown } else { SolveResult::Unsat };
+    let result = if saw_unknown {
+        SolveResult::Unknown
+    } else {
+        SolveResult::Unsat
+    };
     (result, stats)
 }
 
@@ -1092,18 +1096,31 @@ mod cube_tests {
     use crate::solver::{self, SolveResult};
 
     fn cfg() -> GradientConfig {
-        GradientConfig { num_starts: 8, max_iters: 100, ..GradientConfig::enhanced() }
+        GradientConfig {
+            num_starts: 8,
+            max_iters: 100,
+            ..GradientConfig::enhanced()
+        }
     }
 
     fn satisfies(db: &ClauseDb, assign: &[bool]) -> bool {
         let opt: Vec<Option<bool>> = assign.iter().map(|&b| Some(b)).collect();
-        db.iter_crefs().all(|c| db.clause(c).literals.iter().any(|l| l.eval(&opt) == Some(true)))
+        db.iter_crefs().all(|c| {
+            db.clause(c)
+                .literals
+                .iter()
+                .any(|l| l.eval(&opt) == Some(true))
+        })
     }
 
     #[test]
     fn php4_unsat_under_every_selector() {
         let inst = parse_dimacs_str(&pigeonhole_dimacs(4)).unwrap();
-        for sel in [CubeSelector::LeastConfident, CubeSelector::MostConfident, CubeSelector::Random { seed: 7 }] {
+        for sel in [
+            CubeSelector::LeastConfident,
+            CubeSelector::MostConfident,
+            CubeSelector::Random { seed: 7 },
+        ] {
             let (res, st) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 3, sel);
             assert!(matches!(res, SolveResult::Unsat), "{sel:?}");
             assert_eq!(st.cubes_solved, 8, "{sel:?}");
@@ -1133,7 +1150,13 @@ mod cube_tests {
     #[test]
     fn sat_instances_return_models() {
         let inst = parse_dimacs_str(&parity_chain_dimacs(20)).unwrap();
-        let (res, _) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 3, CubeSelector::LeastConfident);
+        let (res, _) = hybrid_solve_cubes(
+            &inst.db,
+            inst.num_vars,
+            &cfg(),
+            3,
+            CubeSelector::LeastConfident,
+        );
         match res {
             SolveResult::Sat(a) => assert!(satisfies(&inst.db, &a), "parity20"),
             other => panic!("parity20: expected Sat, got {other:?}"),
@@ -1154,7 +1177,13 @@ mod cube_tests {
     #[test]
     fn d0_is_one_cube_and_agrees_with_hybrid() {
         let inst = parse_dimacs_str(&pigeonhole_dimacs(4)).unwrap();
-        let (res, st) = hybrid_solve_cubes(&inst.db, inst.num_vars, &cfg(), 0, CubeSelector::LeastConfident);
+        let (res, st) = hybrid_solve_cubes(
+            &inst.db,
+            inst.num_vars,
+            &cfg(),
+            0,
+            CubeSelector::LeastConfident,
+        );
         assert!(matches!(res, SolveResult::Unsat));
         assert_eq!(st.cubes_solved, 1);
         let (h, _) = hybrid_solve_stats(clone_original(&inst.db), inst.num_vars, &cfg());

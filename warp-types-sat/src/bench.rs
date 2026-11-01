@@ -273,7 +273,11 @@ pub fn db_to_dimacs(db: &ClauseDb, num_vars: u32) -> String {
                 .iter()
                 .map(|l| {
                     let v = l.var() as i32 + 1;
-                    if l.is_negated() { -v } else { v }
+                    if l.is_negated() {
+                        -v
+                    } else {
+                        v
+                    }
                 })
                 .collect()
         })
