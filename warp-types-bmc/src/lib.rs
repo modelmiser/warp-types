@@ -29,6 +29,7 @@
 //! via Tseitin) is handled by the `unroll` module; the phase-typed session
 //! ensures the correct sequencing of model → unroll → encode → check.
 
+pub mod aiger;
 pub mod checker;
 pub mod model;
 pub mod phase;

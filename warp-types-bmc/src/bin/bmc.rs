@@ -1,7 +1,10 @@
 //! BMC command-line tool.
 //!
-//! Checks safety properties on simple transition systems.
-//! Currently demonstrates the phase-typed BMC loop on built-in examples.
+//! `bmc <file.aig|aag> [--max-depth N] [--budget C]` runs bounded model checking
+//! on an AIGER safety instance (one bad literal or one output) and prints a
+//! verdict line: `s SAT depth=K` (counterexample), `s BOUNDED_SAFE depth=N`,
+//! or `s EXHAUSTED depth=K`. With no arguments it demonstrates the
+//! phase-typed BMC loop on built-in examples.
 
 use warp_types_bmc::{check, BmcResult, TransitionSystem};
 use warp_types_sat::literal::Lit;
@@ -64,7 +67,84 @@ fn safe_constant() -> TransitionSystem {
     sys
 }
 
+fn run_aiger(args: &[String]) {
+    let mut path: Option<&str> = None;
+    let mut max_depth: u32 = 1000;
+    let mut budget: u64 = 0;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--max-depth" => {
+                i += 1;
+                max_depth = args
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| usage());
+            }
+            "--budget" => {
+                i += 1;
+                budget = args
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| usage());
+            }
+            a if a.starts_with("--") => usage(),
+            a => {
+                if path.is_some() {
+                    usage();
+                }
+                path = Some(a);
+            }
+        }
+        i += 1;
+    }
+    let Some(path) = path else { usage() };
+    let aig = warp_types_bmc::aiger::read_file(path).unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+    let (sys, _) = warp_types_bmc::aiger::lower(&aig).unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+    eprintln!(
+        "c {}: M={} I={} L={} A={} B={} C={} -> {} state vars, {} init / {} transition clauses",
+        path,
+        aig.max_var,
+        aig.inputs.len(),
+        aig.latches.len(),
+        aig.ands.len(),
+        aig.bad.len(),
+        aig.constraints.len(),
+        sys.num_state_vars(),
+        sys.initial().len(),
+        sys.transition().len()
+    );
+    let t = std::time::Instant::now();
+    let result = check(&sys, max_depth, budget);
+    let secs = t.elapsed().as_secs_f64();
+    match result {
+        BmcResult::CounterexampleFound { depth, .. } => {
+            println!("s SAT depth={depth} time={secs:.3}")
+        }
+        BmcResult::BoundedSafe { max_depth } => {
+            println!("s BOUNDED_SAFE depth={max_depth} time={secs:.3}")
+        }
+        BmcResult::Exhausted { depth } => println!("s EXHAUSTED depth={depth} time={secs:.3}"),
+    }
+}
+
+fn usage() -> ! {
+    eprintln!("Usage: bmc [<file.aig|aag> [--max-depth N] [--budget C]]");
+    std::process::exit(1);
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        run_aiger(&args);
+        return;
+    }
     println!("warp-types-bmc: Phase-typed Bounded Model Checker\n");
 
     // Example 1: counter that reaches bad state at depth 3
