@@ -1,9 +1,11 @@
 //! BMC command-line tool.
 //!
-//! `bmc <file.aig|aag> [--max-depth N] [--budget C]` runs bounded model checking
+//! `bmc <file.aig|aag> [--max-depth N] [--budget C] [--trace OUT]` runs bounded model checking
 //! on an AIGER safety instance (one bad literal or one output) and prints a
 //! verdict line: `s SAT depth=K` (counterexample), `s BOUNDED_SAFE depth=N`,
-//! or `s EXHAUSTED depth=K`. With no arguments it demonstrates the
+//! or `s EXHAUSTED depth=K`. `--trace OUT` writes a counterexample as
+//! `step aiger-literal value` lines (inputs every step, latches at step 0) for
+//! `tools/replay-trace.py`. With no arguments it demonstrates the
 //! phase-typed BMC loop on built-in examples.
 
 use warp_types_bmc::{check, BmcResult, TransitionSystem};
@@ -71,9 +73,14 @@ fn run_aiger(args: &[String]) {
     let mut path: Option<&str> = None;
     let mut max_depth: u32 = 1000;
     let mut budget: u64 = 0;
+    let mut trace_path: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--trace" => {
+                i += 1;
+                trace_path = Some(args.get(i).cloned().unwrap_or_else(|| usage()));
+            }
             "--max-depth" => {
                 i += 1;
                 max_depth = args
@@ -103,7 +110,7 @@ fn run_aiger(args: &[String]) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
-    let (sys, _) = warp_types_bmc::aiger::lower(&aig).unwrap_or_else(|e| {
+    let (sys, lw) = warp_types_bmc::aiger::lower(&aig).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
@@ -124,8 +131,17 @@ fn run_aiger(args: &[String]) {
     let result = check(&sys, max_depth, budget);
     let secs = t.elapsed().as_secs_f64();
     match result {
-        BmcResult::CounterexampleFound { depth, .. } => {
-            println!("s SAT depth={depth} time={secs:.3}")
+        BmcResult::CounterexampleFound { depth, trace } => {
+            println!("s SAT depth={depth} time={secs:.3}");
+            if let Some(tp) = &trace_path {
+                let mut out = String::new();
+                warp_types_bmc::aiger::write_trace(&aig, &lw, &trace, path, &mut out);
+                std::fs::write(tp, out).unwrap_or_else(|e| {
+                    eprintln!("Error writing {tp}: {e}");
+                    std::process::exit(1);
+                });
+                eprintln!("c trace written to {tp}");
+            }
         }
         BmcResult::BoundedSafe { max_depth } => {
             println!("s BOUNDED_SAFE depth={max_depth} time={secs:.3}")
@@ -135,7 +151,7 @@ fn run_aiger(args: &[String]) {
 }
 
 fn usage() -> ! {
-    eprintln!("Usage: bmc [<file.aig|aag> [--max-depth N] [--budget C]]");
+    eprintln!("Usage: bmc [<file.aig|aag> [--max-depth N] [--budget C] [--trace OUT]]");
     std::process::exit(1);
 }
 

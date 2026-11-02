@@ -34,28 +34,47 @@ def main():
     ap.add_argument("--timeout", type=int, default=60); ap.add_argument("--max-kb", type=int, default=20)
     ap.add_argument("--max-depth", type=int, default=1000); ap.add_argument("--max-frames", type=int, default=1000)
     a = ap.parse_args()
-    out = Path(a.out); (out / "inv").mkdir(parents=True, exist_ok=True)
+    out = Path(a.out); (out / "inv").mkdir(parents=True, exist_ok=True); (out / "trace").mkdir(exist_ok=True)
+    replay = Path(__file__).with_name("replay-trace.py")
     abc = {r["name"]: r for r in csv.DictReader(open(a.abc_csv))}
     files = sorted(p for p in Path(a.aigs).glob("*.aig") if p.stat().st_size < a.max_kb * 1024)
     cols = ["name", "bytes", "abc_bmc3", "abc_bmc3_depth", "abc_bmc3_s", "abc_pdr", "abc_pdr_depth", "abc_pdr_s",
-            "our_bmc", "our_bmc_depth", "our_bmc_s", "our_pdr", "our_pdr_depth_or_frame", "our_pdr_clauses", "our_pdr_s",
-            "inv_check", "depth_match", "verdict_consistent"]
+            "our_bmc", "our_bmc_depth", "our_bmc_s", "bmc_replay", "our_pdr", "our_pdr_depth_or_frame", "our_pdr_clauses", "our_pdr_s",
+            "pdr_replay", "inv_check", "depth_match", "verdict_consistent"]
     rows, kills = [], []
     for f in files:
         name = f.stem; ref = abc.get(name, {})
         row = dict.fromkeys(cols, ""); row.update(name=name, bytes=f.stat().st_size,
             abc_bmc3=ref.get("bmc3_verdict", ""), abc_bmc3_depth=ref.get("bmc3_depth", ""), abc_bmc3_s=ref.get("bmc3_s", ""),
             abc_pdr=ref.get("pdr_verdict", ""), abc_pdr_depth=ref.get("pdr_depth", ""), abc_pdr_s=ref.get("pdr_s", ""))
-        # our BMC
-        rc, so, se, t = run([a.bmc, str(f), "--max-depth", str(a.max_depth)], a.timeout)
+        # our BMC (+ independent replay of any counterexample)
+        btr = out / "trace" / f"{name}.bmc.trace"
+        if btr.exists(): btr.unlink()
+        rc, so, se, t = run([a.bmc, str(f), "--max-depth", str(a.max_depth), "--trace", str(btr)], a.timeout)
         v, kv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_bmc"] = v; row["our_bmc_depth"] = kv.get("depth", ""); row["our_bmc_s"] = f"{t:.2f}"
+        if v == "SAT":
+            if not btr.exists():
+                row["bmc_replay"] = "MISSING"; kills.append(f"{name}: BMC said SAT but wrote no trace")
+            else:
+                rc2, so2, se2, _ = run([sys.executable, str(replay), "--aig", str(f), "--trace", str(btr)], 600)
+                row["bmc_replay"] = so2.strip().split("\n")[-1] if so2.strip() else f"ERROR {se2.strip()[:80]}"
+                if not row["bmc_replay"].startswith("REPLAYED"): kills.append(f"{name}: BMC counterexample does not replay: {row['bmc_replay']}")
         # our PDR (a stale invariant file from an earlier run must never be checked: remove first)
         inv = out / "inv" / f"{name}.inv"
         if inv.exists(): inv.unlink()
-        rc, so, se, t = run([a.pdr, str(f), "--max-frames", str(a.max_frames), "--invariant", str(inv)], a.timeout)
+        ptr = out / "trace" / f"{name}.pdr.trace"
+        if ptr.exists(): ptr.unlink()
+        rc, so, se, t = run([a.pdr, str(f), "--max-frames", str(a.max_frames), "--invariant", str(inv), "--trace", str(ptr)], a.timeout)
         pv, pkv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_pdr"] = pv; row["our_pdr_depth_or_frame"] = pkv.get("depth", pkv.get("frame", "")); row["our_pdr_clauses"] = pkv.get("clauses", ""); row["our_pdr_s"] = f"{t:.2f}"
+        if pv == "SAT":
+            if not ptr.exists():
+                row["pdr_replay"] = "MISSING"; kills.append(f"{name}: PDR said SAT but wrote no trace")
+            else:
+                rc2, so2, se2, _ = run([sys.executable, str(replay), "--aig", str(f), "--trace", str(ptr)], 600)
+                row["pdr_replay"] = so2.strip().split("\n")[-1] if so2.strip() else f"ERROR {se2.strip()[:80]}"
+                if not row["pdr_replay"].startswith("REPLAYED"): kills.append(f"{name}: PDR counterexample does not replay: {row['pdr_replay']}")
         if pv == "UNSAT" and not inv.exists():
             row["inv_check"] = "MISSING"; kills.append(f"{name}: PDR said UNSAT but wrote no invariant file")
         if pv == "UNSAT" and inv.exists():
@@ -86,7 +105,7 @@ def main():
         elif (abc_says_sat or abc_says_unsat) and (ours_says_sat or ours_says_unsat):
             row["verdict_consistent"] = "True"
         rows.append(row)
-        print(f"{name:26s} bmc {row['our_bmc']:12s}@{row['our_bmc_depth']:>4s} {row['our_bmc_s']:>6s}s | pdr {row['our_pdr']:9s}@{row['our_pdr_depth_or_frame']:>4s} {row['our_pdr_s']:>6s}s {row['inv_check'][:9]:9s} | abc bmc3 {row['abc_bmc3']}@{row['abc_bmc3_depth']} pdr {row['abc_pdr']}@{row['abc_pdr_depth']} | match={row['depth_match']} cons={row['verdict_consistent']}", flush=True)
+        print(f"{name:26s} bmc {row['our_bmc']:12s}@{row['our_bmc_depth']:>4s} {row['our_bmc_s']:>6s}s {row['bmc_replay'][:8]:8s} | pdr {row['our_pdr']:9s}@{row['our_pdr_depth_or_frame']:>4s} {row['our_pdr_s']:>6s}s {row['inv_check'][:9]:9s} | abc bmc3 {row['abc_bmc3']}@{row['abc_bmc3_depth']} pdr {row['abc_pdr']}@{row['abc_pdr_depth']} | match={row['depth_match']} cons={row['verdict_consistent']}", flush=True)
         if kills:
             print("KILL:", kills[-1], flush=True); break
     with open(out / "results.csv", "w", newline="") as fh:
@@ -103,6 +122,7 @@ def main():
         return f"median {med:.1f}x, min {xs[0]:.1f}x, max {xs[-1]:.1f}x (ABC times include ~40 ms process start-up; ratios on sub-0.1 s instances are not meaningful)"
     summ = [f"# bmc-pdr-campaign summary ({n} instances < {a.max_kb} KB, our timeout {a.timeout}s per crate; the ABC reference used its own caps — see abc.csv/run-abc.sh — so coverage is not like-for-like)",
             f"BMC: ours SAT {len(bmc_sat)} (ABC bmc3 SAT {len(abc_sat)}); depth agreement on the {len(both_sat)} both-SAT: {sum(1 for r in both_sat if r['depth_match']=='True')}/{len(both_sat)}; ours BOUNDED_SAFE {sum(1 for r in rows if r['our_bmc']=='BOUNDED_SAFE')}, TIMEOUT {sum(1 for r in rows if r['our_bmc']=='TIMEOUT')}",
+            f"BMC counterexamples replayed through the AIG by tools/replay-trace.py: {sum(1 for r in bmc_sat if r['bmc_replay'].startswith('REPLAYED'))}/{len(bmc_sat)}; PDR counterexamples replayed: {sum(1 for r in rows if r['our_pdr']=='SAT' and r['pdr_replay'].startswith('REPLAYED'))}/{sum(1 for r in rows if r['our_pdr']=='SAT')}",
             f"BMC time ours/ABC on both-SAT: {ratio(both_sat, 'our_bmc_s', 'abc_bmc3_s')}",
             f"PDR: ours UNSAT {len(pdr_unsat)} (ABC pdr UNSAT {len(abc_unsat)}), ours SAT {sum(1 for r in rows if r['our_pdr']=='SAT')}, EXHAUSTED {sum(1 for r in rows if r['our_pdr']=='EXHAUSTED')}, TIMEOUT {sum(1 for r in rows if r['our_pdr']=='TIMEOUT')}",
             f"PDR invariants certified by independent check: {sum(1 for r in pdr_unsat if r['inv_check'].startswith('CERTIFIED'))}/{len(pdr_unsat)}; fences that are the property clause alone (P inductive, frame of 1 clause): {sum(1 for r in pdr_unsat if r['our_pdr_clauses']=='1')}",

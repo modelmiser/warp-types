@@ -68,6 +68,7 @@ fn invariant_discovery() -> TransitionSystem {
 fn run_aiger(args: &[String]) {
     let mut path: Option<&str> = None;
     let mut inv_path: Option<&str> = None;
+    let mut trace_path: Option<&str> = None;
     let mut max_frames: u32 = 1000;
     let mut budget: u64 = 0;
     let mut i = 0;
@@ -86,6 +87,10 @@ fn run_aiger(args: &[String]) {
                     .get(i)
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| usage());
+            }
+            "--trace" => {
+                i += 1;
+                trace_path = Some(args.get(i).map(String::as_str).unwrap_or_else(|| usage()));
             }
             "--invariant" => {
                 i += 1;
@@ -159,8 +164,17 @@ fn run_aiger(args: &[String]) {
                 eprintln!("c invariant written to {out}");
             }
         }
-        PdrResult::CounterexampleFound { depth, .. } => {
-            println!("s SAT depth={depth} time={secs:.3}")
+        PdrResult::CounterexampleFound { depth, trace } => {
+            println!("s SAT depth={depth} time={secs:.3}");
+            if let Some(tp) = trace_path {
+                let mut out = String::new();
+                warp_types_bmc::aiger::write_trace(&aig, &lw, trace, path, &mut out);
+                std::fs::write(tp, out).unwrap_or_else(|e| {
+                    eprintln!("Error writing {tp}: {e}");
+                    std::process::exit(1);
+                });
+                eprintln!("c trace written to {tp}");
+            }
         }
         PdrResult::Exhausted { frames_explored } => {
             println!("s EXHAUSTED frames={frames_explored} time={secs:.3}")
@@ -169,7 +183,9 @@ fn run_aiger(args: &[String]) {
 }
 
 fn usage() -> ! {
-    eprintln!("Usage: pdr [<file.aig|aag> [--max-frames N] [--budget C] [--invariant OUT]]");
+    eprintln!(
+        "Usage: pdr [<file.aig|aag> [--max-frames N] [--budget C] [--invariant OUT] [--trace OUT]]"
+    );
     std::process::exit(1);
 }
 

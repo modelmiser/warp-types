@@ -363,6 +363,34 @@ impl Lowering {
     }
 }
 
+/// Write a counterexample trace in a replayable form: for every step the
+/// value of every AIGER input, and at step 0 the value of every latch (needed
+/// only for uninitialised latches, written for all). One line per
+/// assignment: `<step> <aiger-literal> <0|1>`. `tools/replay-trace.py`
+/// re-simulates the AIG from reset with these inputs and checks that the bad
+/// literal is true at the last step and the constraints hold throughout.
+pub fn write_trace(aig: &Aig, lw: &Lowering, trace: &[Vec<bool>], path: &str, out: &mut String) {
+    let val = |step: &Vec<bool>, aiger_lit: u32| -> u8 {
+        let l = lw.lit(aiger_lit);
+        let v = step[l.var() as usize];
+        u8::from(if l.is_negated() { !v } else { v })
+    };
+    out.push_str(&format!(
+        "c counterexample trace for {path}: depth {}; lines are `step aiger-literal value`\n",
+        trace.len().saturating_sub(1)
+    ));
+    if let Some(first) = trace.first() {
+        for la in &aig.latches {
+            out.push_str(&format!("0 {} {}\n", la.lit, val(first, la.lit)));
+        }
+    }
+    for (k, step) in trace.iter().enumerate() {
+        for &i in &aig.inputs {
+            out.push_str(&format!("{k} {i} {}\n", val(step, i)));
+        }
+    }
+}
+
 /// Which literal the lowering treats as the bad state.
 fn bad_literal(aig: &Aig) -> Result<u32, AigerError> {
     match (aig.bad.len(), aig.outputs.len()) {
@@ -387,8 +415,11 @@ pub fn lower(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
     };
     let mut sys = TransitionSystem::new(n);
 
-    // Constant true: initial and next.
+    // Constant true: initial, and on both sides of T (the current-side unit
+    // keeps PDR from exploring predecessor states with the constant false;
+    // added 2026-11-02 after the panel — semantically neutral, see the log).
     sys.add_initial(vec![Lit::pos(lw.const_var)]);
+    sys.add_transition(vec![Lit::pos(lw.const_var)]);
     sys.add_transition(vec![Lit::pos(lw.const_var + n)]);
 
     // Latches.
@@ -550,6 +581,37 @@ mod tests {
         assert_eq!(aig.constraints, vec![5]);
         let (sys, _) = lower(&aig).unwrap();
         assert!(matches!(check(&sys, 8, 0), BmcResult::BoundedSafe { .. }));
+    }
+
+    #[test]
+    fn constant_unit_on_both_sides_of_t() {
+        let (sys, lw) = lower(&counter()).unwrap();
+        let n = sys.num_state_vars();
+        let has = |v: u32| {
+            sys.transition()
+                .iter()
+                .any(|c| c.lits.len() == 1 && c.lits[0] == Lit::pos(v))
+        };
+        assert!(has(lw.const_var));
+        assert!(has(lw.const_var + n));
+    }
+
+    #[test]
+    fn trace_writer_lists_inputs_per_step_and_latches_at_zero() {
+        // Counter has 2 latches and no inputs: 2 lines, both step 0.
+        let aig = counter();
+        let (sys, lw) = lower(&aig).unwrap();
+        let trace = match check(&sys, 10, 0) {
+            BmcResult::CounterexampleFound { trace, .. } => trace,
+            r => panic!("{r:?}"),
+        };
+        let mut out = String::new();
+        write_trace(&aig, &lw, &trace, "counter", &mut out);
+        let lines: Vec<&str> = out.lines().filter(|l| !l.starts_with('c')).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.starts_with("0 ")));
+        // Reset is 0 for both latches, so step-0 latch values are 0.
+        assert!(lines.iter().all(|l| l.ends_with(" 0")));
     }
 
     #[test]
