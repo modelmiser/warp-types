@@ -45,6 +45,10 @@ if ! cargo build --release -p warp-types-sat --features gpu --example lrat_check
 fi
 log "build time: $(( $(date +%s) - t0 ))s"
 BIN=/tmp/warp-types/target/release/examples/lrat_check
+# A PTX module with undefined externs (a panic path the compiler could not
+# prove dead) fails to LOAD, so no kernel runs — seen 2026-11-02. Check first.
+PTX=$(ls -t /tmp/warp-types/target/release/build/warp-types-sat/*/out/kernels.ptx | head -1)
+log "ptx: $(grep -m1 '^.target' "$PTX")  entries=$(grep -c '.visible .entry' "$PTX")  externs=$(grep -c '\.extern' "$PTX")  panic_calls=$(grep -c panic_fmt "$PTX")"
 
 log "=== (0) Diagnostic: one full run on the smallest binary proof (stdout+stderr, backtrace on) ==="
 f=$(ls /tmp/lrat-corpus/*.blrat | xargs ls -S | tail -1); base=$(basename "$f" .blrat)

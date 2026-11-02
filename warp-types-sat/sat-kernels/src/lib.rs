@@ -449,8 +449,14 @@ pub fn lrat_check_lemmas(
                     break;
                 }
                 // Exactly one free literal in the warp: find its lane, broadcast it.
+                // `& 31` keeps the lane provably in range: without it the
+                // compiler keeps `broadcast_lane`'s bounds assert for the
+                // (unreachable) `voted == 0` case, and that assert drags
+                // `core::panicking::panic_fmt` and `Display::fmt` into the
+                // PTX as undefined externs — the module then fails to LOAD,
+                // before any lemma is checked (RunPod H200, 2026-11-02).
                 let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
-                let src = voted.trailing_zeros();
+                let src = voted.trailing_zeros() & 31;
                 let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
                 if !lrat_insert(table_keys, table_stamps, base, stamp, -unit) {
                     code = 5;
