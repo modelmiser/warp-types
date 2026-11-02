@@ -245,14 +245,10 @@ impl WarpBuilder {
             cmd.arg("--features").arg(feat);
         }
 
-        // After `--`, pass rustc flags: emit assembly (PTX for nvptx64)
-        // -C target-cpu sets the SM architecture, which determines the PTX ISA
-        // version. Without this, LLVM defaults to sm_30 / PTX 3.2, which lacks
-        // shfl.sync (requires PTX 6.0 / sm_70+).
-        cmd.arg("--")
-            .arg("--emit=asm")
-            .arg("-C")
-            .arg(format!("target-cpu={}", self.sm_arch));
+        // After `--`, pass rustc flags for the kernel crate itself: emit
+        // assembly (PTX for nvptx64). `-C target-cpu` is NOT passed here any
+        // more — see RUSTFLAGS below.
+        cmd.arg("--").arg("--emit=asm");
 
         // Select the toolchain via env var (works inside build scripts). This is
         // the kernel crate's own pin when it has one — see `resolve_toolchain`;
@@ -281,7 +277,22 @@ impl WarpBuilder {
         cmd.env_remove("CARGO_BUILD_TARGET_DIR");
         cmd.env_remove("RUSTC_WRAPPER");
         cmd.env_remove("RUSTC_WORKSPACE_WRAPPER");
-        cmd.env("RUSTFLAGS", "--cfg warp_kernel_build");
+        // -C target-cpu sets the SM architecture, which determines the PTX ISA
+        // version. Without it LLVM defaults to sm_30 / PTX 3.2, which lacks
+        // shfl.sync (PTX 6.0 / sm_70+). It goes through RUSTFLAGS, not after
+        // `--`, so that EVERY compilation unit of the device build — `core`
+        // and `compiler_builtins` from `-Z build-std`, `warp-types`, and the
+        // kernel crate — is compiled for the same architecture. rustc treats
+        // `-C target-cpu` as an ABI-affecting target modifier and refuses a
+        // crate graph where the kernel crate has it and its dependencies do
+        // not ("mixing `-Ctarget-cpu` will cause an ABI mismatch"); passing it
+        // only to the final crate (as this builder did until 2026-11-02) is
+        // exactly that graph. With `--target` set, RUSTFLAGS does not reach
+        // host artifacts (build scripts, the `warp_kernel` proc macro).
+        cmd.env(
+            "RUSTFLAGS",
+            format!("--cfg warp_kernel_build -C target-cpu={}", self.sm_arch),
+        );
 
         let output = cmd
             .output()

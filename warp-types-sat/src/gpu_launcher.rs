@@ -393,3 +393,60 @@ pub struct GpuIterState {
     num_vars: u32,
     num_var_batches: u32,
 }
+
+// ─── LRAT lemma checking on the device ────────────────────────────────
+
+impl GpuContext {
+    /// Check every lemma of a flat LRAT proof on the device with
+    /// `sat-kernels::lrat_check_lemmas`; returns one code per lemma (the
+    /// `lrat_warp::LemmaCode` numbering). `blocks` warps run grid-stride
+    /// over the lemmas; each gets a `LRAT_TABLE`-slot scratch table.
+    ///
+    /// Everything about the verdict (earliest failing lemma, the empty
+    /// clause) is decided on the host from the codes, as for the SimWarp
+    /// path — this method is the device half only.
+    pub fn check_lrat_codes(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        blocks: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+        let s = &self.stream;
+        let n = fp.lemma_clause.len() as u32;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let blocks = blocks.max(1).min(n);
+        let lits = s.clone_htod(&fp.lits)?;
+        let clause_start = s.clone_htod(&fp.clause_start)?;
+        let deleted_at = s.clone_htod(&fp.deleted_at)?;
+        let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
+        let lemma_step = s.clone_htod(&fp.lemma_step)?;
+        let hint_start = s.clone_htod(&fp.hint_start)?;
+        let hints = s.clone_htod(&fp.hints)?;
+        let table_keys: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
+        let table_stamps: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
+        let codes: CudaSlice<u8> = s.alloc_zeros(n as usize)?;
+        unsafe {
+            s.launch_builder(&self.kernels.lrat_check_lemmas)
+                .arg(&lits)
+                .arg(&clause_start)
+                .arg(&deleted_at)
+                .arg(&lemma_clause)
+                .arg(&lemma_step)
+                .arg(&hint_start)
+                .arg(&hints)
+                .arg(&table_keys)
+                .arg(&table_stamps)
+                .arg(&codes)
+                .arg(&n)
+                .arg(&blocks)
+                .launch(LaunchConfig {
+                    grid_dim: (blocks, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(s.clone_dtoh(&codes)?)
+    }
+}

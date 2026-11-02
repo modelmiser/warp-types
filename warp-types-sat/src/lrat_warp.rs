@@ -430,6 +430,34 @@ pub fn check_warp_codes(fp: &FlatProof) -> Vec<LemmaCode> {
         .collect()
 }
 
+/// Device path (feature `gpu`): codes from `sat-kernels::lrat_check_lemmas`,
+/// combined on the host exactly as the SimWarp codes are.
+#[cfg(feature = "gpu")]
+pub fn check_warp_gpu(
+    ctx: &crate::gpu_launcher::GpuContext,
+    cnf: &[Vec<i32>],
+    proof: &Proof,
+    blocks: u32,
+) -> Result<Verdict, crate::gpu_launcher::GpuError> {
+    let fp = match flatten(cnf, proof) {
+        Ok(fp) => fp,
+        Err(e) => return Ok(e.as_verdict()),
+    };
+    let raw = ctx.check_lrat_codes(&fp, blocks)?;
+    let codes: Vec<LemmaCode> = raw
+        .iter()
+        .map(|&c| match c {
+            0 => LemmaCode::Ok,
+            1 => LemmaCode::NotUnit,
+            2 => LemmaCode::NoConflict,
+            3 => LemmaCode::DeletedHint,
+            4 => LemmaCode::ForwardHint,
+            _ => LemmaCode::TableOverflow,
+        })
+        .collect();
+    Ok(combine(&fp, &codes))
+}
+
 /// Host-side combination: earliest failing lemma wins; verified iff all
 /// lemmas up to the first empty one are `Ok` and such a lemma exists.
 pub fn combine(fp: &FlatProof, codes: &[LemmaCode]) -> Verdict {

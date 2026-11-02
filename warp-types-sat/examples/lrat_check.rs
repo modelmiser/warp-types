@@ -58,6 +58,27 @@ fn main() {
         println!("s DISAGREE");
         std::process::exit(3);
     }
+    #[cfg(feature = "gpu")]
+    if std::env::var_os("LRAT_GPU").is_some() {
+        let ctx = warp_types_sat::gpu_launcher::GpuContext::new().expect("GPU context");
+        let blocks: u32 = std::env::var("LRAT_GPU_BLOCKS")
+            .ok()
+            .and_then(|b| b.parse().ok())
+            .unwrap_or(4096);
+        let t6 = Instant::now();
+        let g = warp_types_sat::lrat_warp::check_warp_gpu(&ctx, &cnf, &proof, blocks)
+            .expect("GPU check");
+        let t7 = Instant::now();
+        println!(
+            "c gpu({}; {blocks} blocks) {:.3}s  {g:?}",
+            ctx.device_name(),
+            (t7 - t6).as_secs_f64()
+        );
+        if g.is_verified() != seq.is_verified() {
+            println!("s DISAGREE-GPU");
+            std::process::exit(3);
+        }
+    }
     println!(
         "s {}",
         if seq.is_verified() {
