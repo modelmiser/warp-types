@@ -66,7 +66,10 @@ publication; its corrections are in the log.
   we take 0.00–41.23 s; the ratio runs from under 4× to about 1,100×. Cubes
   range over every gate and input in this lowering, there is no
   cone-of-influence reduction, and generalisation is per literal.
-- 95 of 119 instances time out at 60 s.
+- 95 of 119 instances time out at 60 s, with or without cone-of-influence
+  reduction at the lowering (the instances arrive cone-reduced); the
+  remedy is inside the engine — cubes over latches rather than over every
+  gate — and is not done.
 
 What a passed check means: *this* invariant, for *this* instance and this
 lowering, is inductive and implies the property, as judged by separately

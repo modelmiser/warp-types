@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Toolchain pin: `nightly-2026-09-15` → `nightly-2026-10-28`** (rustc 1.101.0-nightly), after the full CI matrix passed
+  with the pin unedited; no code change.
 - **`solve --certify`** (with `--drat`): runs `drat-trim` on the written proof before answering and prints
   `s UNSATISFIABLE` only on `s VERIFIED`; otherwise `s UNKNOWN`, reason on stderr, exit 2. Fail-closed — a missing
   checker, a checker that cannot run, or one that says `s NOT VERIFIED` all yield UNKNOWN (each case exercised).
@@ -18,7 +20,9 @@
   with the property clause removed**; 4 counterexamples at ABC's depths; **every counterexample (21 BMC, 4 PDR) replays through the AIG under an
   independent simulator** (`--trace` on both binaries, `tools/replay-trace.py`); no verdict disagreement; ABC proves
   these in tens of milliseconds where we take up to 41 s; 91/95 of 119 time out at 60 s; a second run with the
-  constant-true unit on both sides of T reproduced everything. A pre-registered comparison
+  constant-true unit on both sides of T reproduced everything, and a third with **cone-of-influence reduction**
+  (`aiger::lower_coi`, now the CLI default; `--no-coi` keeps the full AIG) reproduced every verdict and depth and
+  moved two constant-false instances from timeout to bounded-safe — the corpus is already cone-reduced. A pre-registered comparison
   with ABC caught an AIGER constant-polarity bug before the campaign. Cross-vendor reviewed (five seats, four
   families); the panel's corrections are applied here and in the research log. Both crate READMEs carry the
   numbers and what the check does and does not establish.

@@ -45,10 +45,14 @@ five-seat, four-family cold panel before publication.
   the first reference ran under build contention; the numbers did not move.
   On smaller instances ABC's process start-up dominates and ratios are
   meaningless. The two sides had different caps (ABC 30 s, ours 60 s).
-- 91 of 119 instances time out at 60 s. The honest size band for this crate
-  today is small AIGs: there is no inprocessing, the whole CNF is rebuilt at
-  every depth, and every gate is a state variable in the lowering
-  (`src/aiger.rs` documents the encoding).
+- 89 of 119 instances time out at 60 s (91 before cone-of-influence
+  reduction, which is now the default lowering; `--no-coi` keeps the full
+  AIG). A third full run with it reproduced every verdict and depth; the
+  competition instances are already cone-reduced, so it changed two
+  constant-false instances from timeout to bounded-safe and little else.
+  The honest size band for this crate today is small AIGs: there is no
+  inprocessing, the whole CNF is rebuilt at every depth, and every kept gate
+  is a state variable in the lowering (`src/aiger.rs` documents it).
 
 ## What's inside
 
@@ -57,7 +61,7 @@ five-seat, four-family cold panel before publication.
 - **Transition system** (`model.rs`) — `TransitionSystem` with initial states, transitions, and safety property in CNF
 - **Unrolling** (`unroll.rs`) — time-indexed variable encoding, Tseitin property negation
 - **Checker** (`checker.rs`) — BMC loop: unroll → encode → SAT oracle → deepen or report
-- **AIGER** (`aiger.rs`) — binary/ASCII reader and lowering into `TransitionSystem` (every AIG variable a state variable, gates defined at every step, constraints at every step)
+- **AIGER** (`aiger.rs`) — binary/ASCII reader and lowering into `TransitionSystem` (cone of influence of the bad literal and constraints by default; every kept AIG variable a state variable, gates defined at every step, constraints at every step; trace writer for `tools/replay-trace.py`)
 
 ## License
 
