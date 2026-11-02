@@ -15,8 +15,10 @@
   instances under 20 KB (60 s each; ABC 1.01 at its own 30 s caps as reference): BMC counterexample depths agree
   with `bmc3` on 21/21 both-found instances (21 of ABC's 26 found; 0.95–25× ABC's wall time where either side took ≥ 0.1 s, ABC re-timed on idle cores); PDR proves 20 — 13 of them
   by the property clause alone, 7 non-trivial fences — and **all 20 invariants pass the independent check, also
-  with the property clause removed**; 4 counterexamples at ABC's depths; no verdict disagreement; ABC proves these
-  in tens of milliseconds where we take up to 41 s; 91/95 of 119 time out at 60 s. A pre-registered comparison
+  with the property clause removed**; 4 counterexamples at ABC's depths; **every counterexample (21 BMC, 4 PDR) replays through the AIG under an
+  independent simulator** (`--trace` on both binaries, `tools/replay-trace.py`); no verdict disagreement; ABC proves
+  these in tens of milliseconds where we take up to 41 s; 91/95 of 119 time out at 60 s; a second run with the
+  constant-true unit on both sides of T reproduced everything. A pre-registered comparison
   with ABC caught an AIGER constant-polarity bug before the campaign. Cross-vendor reviewed (five seats, four
   families); the panel's corrections are applied here and in the research log. Both crate READMEs carry the
   numbers and what the check does and does not establish.

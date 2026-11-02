@@ -52,8 +52,12 @@ publication; its corrections are in the log.
   inductive (consecution), and the empty invariant (safety) before it was
   believed. The crate's own reading of the files is checked semantically by
   the BMC crate's 21-of-21 counterexample-depth agreement with ABC.
-- 4 counterexamples, each at exactly the depth ABC's `bmc3` reports. No
-  verdict disagrees with ABC on any instance.
+- 4 counterexamples, each at exactly the depth ABC's `bmc3` reports, and
+  each replays through the AIG under an independent simulator
+  (`pdr --trace`, `tools/replay-trace.py`). No verdict disagrees with ABC on
+  any instance. A second full run with the constant-true unit on both sides
+  of the transition relation reproduced every verdict, depth and
+  certificate (`run2-*` in the data directory).
 - Coverage: ABC proves 55 of these instances in 30 s; 16 of our 20 are
   among them (29 %). Of the other four, three are outputs ABC declines as
   trivial in 10 ms; one (`shift1add262144`) ABC left unknown at 30 s and we
@@ -68,9 +72,8 @@ What a passed check means: *this* invariant, for *this* instance and this
 lowering, is inductive and implies the property, as judged by separately
 written software on an independent solver. It is not a proof that the engine
 is sound in general, it says nothing about the instances that timed out,
-counterexample traces are depth-matched but not replayed, and the checker is
-ordinary Python, not a verified checker (the HWMCC witness-circuit format and
-Certifaiger were not used).
+and the checker and the replayer are ordinary Python, not verified checkers
+(the HWMCC witness-circuit format and Certifaiger were not used).
 
 ## What's inside
 

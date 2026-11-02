@@ -29,7 +29,10 @@ pre-registration: `research/bmc-pdr-aiger.md` and
 five-seat, four-family cold panel before publication.
 
 - **Counterexample depth agrees with ABC on every instance both found: 21 of
-  21**, depths 0 to 85, plus `6s319r` at depth 158 in a 300 s retry. A
+  21**, depths 0 to 85, plus `6s319r` at depth 158 and `irstdme6` at 53 in a
+  300 s retry. **Every counterexample replays**: `bmc --trace` writes the
+  inputs per step and `tools/replay-trace.py` re-simulates the AIG from reset
+  with its own parser and simulator, 21 of 21 (run 2). A
   pre-registered comparison with ABC caught a real bug on the smoke test:
   AIGER's constant literals were mapped with inverted polarity, and two
   instances ABC refutes at depth 3 came back BOUNDED_SAFE.
