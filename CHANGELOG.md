@@ -12,12 +12,14 @@
   `tools/check-invariant.py` certifies such an invariant with its own encoding and kissat (initiation,
   consecution, safety); `tools/bmc-pdr-campaign.py` runs both crates over HWMCC17 against an ABC reference.
   Pre-registration and results: `research/bmc-pdr-aiger.md`. **Measured 2026-11-01** on the 119 HWMCC17
-  instances under 20 KB (60 s each) against ABC 1.01: BMC counterexample depths agree with `bmc3` on 21/21
-  both-found instances (coverage 21 of ABC's 26; 0.95–23× ABC's time where either side took ≥ 0.1 s); PDR proves
-  20 (ABC 55) and **all 20 invariants pass the independent check**, 4 counterexamples at ABC's depths, no verdict
-  disagreement, median 282× slower than ABC `pdr` on both-proved instances; 91/95 of 119 time out at 60 s. The
-  pre-registered depth control caught an AIGER constant-polarity bug before the campaign. Both crate READMEs carry
-  the numbers and what the check does and does not establish.
+  instances under 20 KB (60 s each; ABC 1.01 at its own 30 s caps as reference): BMC counterexample depths agree
+  with `bmc3` on 21/21 both-found instances (21 of ABC's 26 found; 0.95–25× ABC's wall time where either side took ≥ 0.1 s, ABC re-timed on idle cores); PDR proves 20 — 13 of them
+  by the property clause alone, 7 non-trivial fences — and **all 20 invariants pass the independent check, also
+  with the property clause removed**; 4 counterexamples at ABC's depths; no verdict disagreement; ABC proves these
+  in tens of milliseconds where we take up to 41 s; 91/95 of 119 time out at 60 s. A pre-registered comparison
+  with ABC caught an AIGER constant-polarity bug before the campaign. Cross-vendor reviewed (five seats, four
+  families); the panel's corrections are applied here and in the research log. Both crate READMEs carry the
+  numbers and what the check does and does not establish.
 - **UNSAT proofs certified through a verified-LRAT pipeline; the proof logger has falsifiers.** `solve_watched_drat_with(db,
   n, out, reduce_interval)` and `solve --reduce-interval N` (diagnostic; default 2000) so short solves exercise clause
   deletion; `solve_watched_with` is the no-proof twin for like-for-like timing. `proof.rs` states the RUP invariant

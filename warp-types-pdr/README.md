@@ -31,30 +31,46 @@ strengthening.
 ## Measured and checked (2026-11-01)
 
 HWMCC 2017 single-property set, files under 20 KB (119 instances), 60 s per
-instance, ABC 1.01 `pdr` (30 s) as the reference. Record, data, and the 20
-invariants: `research/bmc-pdr-aiger.md` and
-`research/bmc-pdr-hwmcc17-2026-11-01/` at the repository root.
+instance for us; ABC 1.01 `pdr` with a 30 s cap as the reference (so coverage
+is not like-for-like). Record, data, and the 20 invariants:
+`research/bmc-pdr-aiger.md` and `research/bmc-pdr-hwmcc17-2026-11-01/` at the
+repository root. Reviewed by a five-seat, four-family cold panel before
+publication; its corrections are in the log.
 
-- **20 proofs, and every one of the 20 invariants passed the independent <!-- unguarded: 20 — campaign count, research/bmc-pdr-hwmcc17-2026-11-01/ -->
-  check** (initiation, consecution, safety all UNSAT under kissat on an
-  independent encoding). Invariant sizes: one clause on 13 instances, up to
-  588 clauses (`bob2`). The checker was watched to reject a flipped literal
-  and the property-only fence before it was believed.
+- **20 instances proved; all 20 invariants pass the independent check, and
+  pass it again with the property clause removed** (so each frame alone is
+  inductive and implies the property). <!-- unguarded: 20 — campaign count, research/bmc-pdr-hwmcc17-2026-11-01/ -->
+  **13 of the 20 are the property clause itself** — the property was already
+  inductive, the frame holds one clause — and two of those have a
+  constant-false bad output. **7 are non-trivial fences**: `bj08aut82` (224
+  frame clauses), `bob2` (588), `bobcount` (395), `intel001` (257),
+  `nusmvsyncarb5p2` (162), `pdtpmsarbiter` (132), `shift1add262144` (126).
+- The checker (`tools/check-invariant.py`) is separately written software on
+  an independent solver (kissat), not an independent reading of the format:
+  it mirrors the crate's AIGER conventions. It was watched to reject a
+  flipped literal (initiation), the property alone where the property is not
+  inductive (consecution), and the empty invariant (safety) before it was
+  believed. The crate's own reading of the files is checked semantically by
+  the BMC crate's 21-of-21 counterexample-depth agreement with ABC.
 - 4 counterexamples, each at exactly the depth ABC's `bmc3` reports. No
   verdict disagrees with ABC on any instance.
-- Coverage: ABC proves 55 of these instances in 30 s; we prove 20 in 60 s,
-  four of them instances ABC left unknown at its budget.
-- Speed: on the 16 instances both prove, ABC takes tens of milliseconds and we
-  take 0.1–41 s (median ratio 282×, worst 1,129×). Cubes range over every
-  gate in this lowering, and generalisation is per literal.
+- Coverage: ABC proves 55 of these instances in 30 s; 16 of our 20 are
+  among them (29 %). Of the other four, three are outputs ABC declines as
+  trivial in 10 ms; one (`shift1add262144`) ABC left unknown at 30 s and we
+  prove in 2.1 s.
+- Speed: on the 16 instances both prove, ABC takes tens of milliseconds and
+  we take 0.00–41.23 s; the ratio runs from under 4× to about 1,100×. Cubes
+  range over every gate and input in this lowering, there is no
+  cone-of-influence reduction, and generalisation is per literal.
 - 95 of 119 instances time out at 60 s.
 
 What a passed check means: *this* invariant, for *this* instance and this
-lowering, is inductive and implies the property, as judged by independent
-software on an independent solver. It is not a proof that the engine is
-sound in general, it says nothing about the instances that timed out, and
-the checker is ordinary Python, not a verified checker (the HWMCC
-witness-circuit format and Certifaiger were not used).
+lowering, is inductive and implies the property, as judged by separately
+written software on an independent solver. It is not a proof that the engine
+is sound in general, it says nothing about the instances that timed out,
+counterexample traces are depth-matched but not replayed, and the checker is
+ordinary Python, not a verified checker (the HWMCC witness-circuit format and
+Certifaiger were not used).
 
 ## What's inside
 

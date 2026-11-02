@@ -22,23 +22,30 @@ Without one, runs built-in examples: a 2-bit counter that reaches a bad state
 ## Measured (2026-11-01)
 
 First run on real instances: the HWMCC 2017 single-property set, files under
-20 KB (119 instances), 60 s per instance, against ABC 1.01 `bmc3` (30 s,
-1000 frames) as the reference. Record, data and pre-registration:
-`research/bmc-pdr-aiger.md` and `research/bmc-pdr-hwmcc17-2026-11-01/` at the
-repository root.
+20 KB (119 instances), 60 s per instance for us; ABC 1.01 `bmc3` (30 s, 1000
+frames) as the reference, so coverage is not like-for-like. Record, data and
+pre-registration: `research/bmc-pdr-aiger.md` and
+`research/bmc-pdr-hwmcc17-2026-11-01/` at the repository root. Reviewed by a
+five-seat, four-family cold panel before publication.
 
 - **Counterexample depth agrees with ABC on every instance both found: 21 of
-  21**, depths 0 to 85. This was the pre-registered control, and it caught a
-  real bug on the smoke test (AIGER constant literals mapped with inverted
-  polarity made two refutable instances look safe).
+  21**, depths 0 to 85, plus `6s319r` at depth 158 in a 300 s retry. A
+  pre-registered comparison with ABC caught a real bug on the smoke test:
+  AIGER's constant literals were mapped with inverted polarity, and two
+  instances ABC refutes at depth 3 came back BOUNDED_SAFE.
 - Coverage: ABC found 26 counterexamples in its budget; we found 21 of those
-  and none it did not. The five we missed are deep (depth 53–168).
-- Time on the seven instances where either side took at least 0.1 s: from
-  0.95× to 23× ABC's wall time. On smaller ones ABC's process start-up
-  dominates and ratios are meaningless.
+  at 60 s and none it did not. The five we missed are deep (depth 53–168).
+- Time, on the seven both-found instances where either side took at least
+  0.1 s: 0.95× to 25× ABC's wall time (`beemadd4b1` 17.3 s vs 18.1 s;
+  `prodcellp4` and `productioncellp0` 2.0 s and 1.7 s vs 0.08 s). ABC was
+  re-timed on idle cores, three runs, minimum taken, after the panel noted
+  the first reference ran under build contention; the numbers did not move.
+  On smaller instances ABC's process start-up dominates and ratios are
+  meaningless. The two sides had different caps (ABC 30 s, ours 60 s).
 - 91 of 119 instances time out at 60 s. The honest size band for this crate
-  today is small AIGs; there is no inprocessing and every gate is a state
-  variable in the lowering (`src/aiger.rs` documents the encoding).
+  today is small AIGs: there is no inprocessing, the whole CNF is rebuilt at
+  every depth, and every gate is a state variable in the lowering
+  (`src/aiger.rs` documents the encoding).
 
 ## What's inside
 

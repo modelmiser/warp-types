@@ -50,18 +50,28 @@ def main():
         rc, so, se, t = run([a.bmc, str(f), "--max-depth", str(a.max_depth)], a.timeout)
         v, kv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_bmc"] = v; row["our_bmc_depth"] = kv.get("depth", ""); row["our_bmc_s"] = f"{t:.2f}"
-        # our PDR
+        # our PDR (a stale invariant file from an earlier run must never be checked: remove first)
         inv = out / "inv" / f"{name}.inv"
+        if inv.exists(): inv.unlink()
         rc, so, se, t = run([a.pdr, str(f), "--max-frames", str(a.max_frames), "--invariant", str(inv)], a.timeout)
         pv, pkv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_pdr"] = pv; row["our_pdr_depth_or_frame"] = pkv.get("depth", pkv.get("frame", "")); row["our_pdr_clauses"] = pkv.get("clauses", ""); row["our_pdr_s"] = f"{t:.2f}"
+        if pv == "UNSAT" and not inv.exists():
+            row["inv_check"] = "MISSING"; kills.append(f"{name}: PDR said UNSAT but wrote no invariant file")
         if pv == "UNSAT" and inv.exists():
             rc, so, se, t = run([sys.executable, str(Path(__file__).with_name("check-invariant.py")), "--aig", str(f), "--inv", str(inv), "--kissat", a.kissat], 600)
             row["inv_check"] = so.strip().split("\n")[-1] if so.strip() else f"ERROR {se.strip()[:80]}"
             if not row["inv_check"].startswith("CERTIFIED"):
                 kills.append(f"{name}: PDR invariant REJECTED by independent check: {row['inv_check']}")
         # controls
-        ours_sat_depths = [d for d in (row["our_bmc_depth"] if row["our_bmc"] == "SAT" else "",) if d]
+        # (a) both found a counterexample: depths must be identical
+        # (b) we exhausted depth N without one while ABC found one at d <= N: a missed counterexample (the
+        #     smoke-test failure mode of 2026-11-01), kill
+        # (c) we found one at depth d while ABC reports none within F >= d frames: a spurious one, kill
+        if row["our_bmc"] == "BOUNDED_SAFE" and row["abc_bmc3"] == "SAT" and row["abc_bmc3_depth"] and int(row["abc_bmc3_depth"]) <= int(row["our_bmc_depth"] or 0):
+            kills.append(f"{name}: ours BOUNDED_SAFE to depth {row['our_bmc_depth']} but ABC bmc3 has a counterexample at {row['abc_bmc3_depth']}")
+        if row["our_bmc"] == "SAT" and row["abc_bmc3"] == "UNKNOWN" and row["abc_bmc3_depth"] and int(row["our_bmc_depth"]) <= int(row["abc_bmc3_depth"]):
+            kills.append(f"{name}: ours SAT at depth {row['our_bmc_depth']} but ABC bmc3 saw no counterexample within {row['abc_bmc3_depth']} frames")
         if row["our_bmc"] == "SAT" and row["abc_bmc3"] == "SAT":
             row["depth_match"] = str(row["our_bmc_depth"] == row["abc_bmc3_depth"])
             if row["depth_match"] == "False":
@@ -87,12 +97,15 @@ def main():
     both_sat = [r for r in rows if r["our_bmc"] == "SAT" and r["abc_bmc3"] == "SAT"]
     def ratio(rs, ok, ak):
         xs = [float(r[ok]) / max(float(r[ak]), 1e-3) for r in rs if r[ok] and r[ak]]
-        xs.sort(); return (f"median {xs[len(xs)//2]:.1f}x, min {xs[0]:.1f}x, max {xs[-1]:.1f}x") if xs else "n/a"
-    summ = [f"# bmc-pdr-campaign summary ({n} instances < {a.max_kb} KB, timeout {a.timeout}s)",
+        xs.sort()
+        if not xs: return "n/a"
+        med = xs[len(xs)//2] if len(xs) % 2 else (xs[len(xs)//2 - 1] + xs[len(xs)//2]) / 2
+        return f"median {med:.1f}x, min {xs[0]:.1f}x, max {xs[-1]:.1f}x (ABC times include ~40 ms process start-up; ratios on sub-0.1 s instances are not meaningful)"
+    summ = [f"# bmc-pdr-campaign summary ({n} instances < {a.max_kb} KB, our timeout {a.timeout}s per crate; the ABC reference used its own caps — see abc.csv/run-abc.sh — so coverage is not like-for-like)",
             f"BMC: ours SAT {len(bmc_sat)} (ABC bmc3 SAT {len(abc_sat)}); depth agreement on the {len(both_sat)} both-SAT: {sum(1 for r in both_sat if r['depth_match']=='True')}/{len(both_sat)}; ours BOUNDED_SAFE {sum(1 for r in rows if r['our_bmc']=='BOUNDED_SAFE')}, TIMEOUT {sum(1 for r in rows if r['our_bmc']=='TIMEOUT')}",
             f"BMC time ours/ABC on both-SAT: {ratio(both_sat, 'our_bmc_s', 'abc_bmc3_s')}",
             f"PDR: ours UNSAT {len(pdr_unsat)} (ABC pdr UNSAT {len(abc_unsat)}), ours SAT {sum(1 for r in rows if r['our_pdr']=='SAT')}, EXHAUSTED {sum(1 for r in rows if r['our_pdr']=='EXHAUSTED')}, TIMEOUT {sum(1 for r in rows if r['our_pdr']=='TIMEOUT')}",
-            f"PDR invariants certified by independent check: {sum(1 for r in pdr_unsat if r['inv_check'].startswith('CERTIFIED'))}/{len(pdr_unsat)}; empty invariants (P inductive): {sum(1 for r in pdr_unsat if r['our_pdr_clauses']=='0')}",
+            f"PDR invariants certified by independent check: {sum(1 for r in pdr_unsat if r['inv_check'].startswith('CERTIFIED'))}/{len(pdr_unsat)}; fences that are the property clause alone (P inductive, frame of 1 clause): {sum(1 for r in pdr_unsat if r['our_pdr_clauses']=='1')}",
             f"PDR time ours/ABC on both-UNSAT: {ratio([r for r in pdr_unsat if r['abc_pdr']=='UNSAT'], 'our_pdr_s', 'abc_pdr_s')}",
             f"verdict contradictions: {sum(1 for r in rows if r['verdict_consistent']=='False')}; kills: {kills if kills else 'none'}"]
     (out / "summary.md").write_text("\n".join(summ) + "\n"); print("\n".join(summ))
