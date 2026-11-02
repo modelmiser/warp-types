@@ -291,3 +291,177 @@ pub fn grad_norm_reduce(
         *output.add(bid as usize) = batch_sum.get();
     }
 }
+
+// ============================================================================
+// Kernel 5: LRAT lemma checking — one warp per lemma (grid-stride)
+//
+// Device layout = `warp_types_sat::lrat_warp::FlatProof`. Each block is one
+// warp; block `b` checks lemmas `b, b + num_blocks, …`. Per hint clause the
+// lanes stride over the literals, count the ones not falsified under the
+// lemma's running assignment, `reduce_sum` the counts, and if the total is
+// one, `ballot` finds the lane that owns the unit and `broadcast_lane`
+// hands its literal to the warp. Total zero is the conflict that makes the
+// lemma RUP; two or more is a failure.
+//
+// The running assignment is an open-addressing table in a per-block global
+// scratch region (`TABLE` slots of key + stamp). Every lane performs every
+// insert — identical writes to identical slots — so no lane ever has to
+// read another lane's write and no warp barrier is needed; the stamp is the
+// lemma index + 1, so the table needs no clearing between lemmas.
+//
+// Control flow at every collective is warp-uniform: admissibility, the
+// total and the verdict are computed from the same global data by all lanes.
+// Codes: 0 Ok, 1 NotUnit, 2 NoConflict, 3 DeletedHint, 4 ForwardHint,
+// 5 TableOverflow (same numbering as `lrat_warp::LemmaCode`).
+// ============================================================================
+
+/// Open-addressing table capacity per block (power of two).
+pub const LRAT_TABLE: u32 = 4096;
+
+#[inline(always)]
+fn lrat_code(l: i32) -> u32 {
+    ((l.unsigned_abs()) << 1) | (l < 0) as u32
+}
+
+#[inline(always)]
+fn lrat_hash(k: u32) -> u32 {
+    k.wrapping_mul(0x9E37_79B1) & (LRAT_TABLE - 1)
+}
+
+/// Is literal `l` falsified in this block's table (stamp-qualified)?
+#[inline(always)]
+unsafe fn lrat_falsified(keys: *const u32, stamps: *const u32, base: u32, stamp: u32, l: i32) -> bool {
+    let k = lrat_code(l) + 1;
+    let mut i = lrat_hash(k);
+    loop {
+        let idx = (base + i) as usize;
+        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
+            return false;
+        }
+        if *keys.add(idx) == k {
+            return true;
+        }
+        i = (i + 1) & (LRAT_TABLE - 1);
+    }
+}
+
+/// Mark literal `l` false. Returns false when the table is full.
+#[inline(always)]
+unsafe fn lrat_insert(keys: *mut u32, stamps: *mut u32, base: u32, stamp: u32, l: i32) -> bool {
+    let k = lrat_code(l) + 1;
+    let mut i = lrat_hash(k);
+    let mut probes = 0u32;
+    loop {
+        let idx = (base + i) as usize;
+        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
+            *keys.add(idx) = k;
+            *stamps.add(idx) = stamp;
+            return true;
+        }
+        if *keys.add(idx) == k {
+            return true;
+        }
+        i = (i + 1) & (LRAT_TABLE - 1);
+        probes += 1;
+        if probes >= LRAT_TABLE - 1 {
+            return false;
+        }
+    }
+}
+
+/// Check lemmas `block_id, block_id + num_blocks, …` of a flat LRAT proof.
+///
+/// Grid: (num_blocks, 1, 1), Block: (32, 1, 1). `table_keys`/`table_stamps`
+/// hold `num_blocks * LRAT_TABLE` entries each, zeroed by the host once.
+/// `codes[i]` receives lemma `i`'s code.
+#[warp_kernel]
+pub fn lrat_check_lemmas(
+    lits: *const i32,
+    clause_start: *const u32,
+    deleted_at: *const u32,
+    lemma_clause: *const u32,
+    lemma_step: *const u32,
+    hint_start: *const u32,
+    hints: *const u32,
+    table_keys: *mut u32,
+    table_stamps: *mut u32,
+    codes: *mut u8,
+    num_lemmas: u32,
+    num_blocks: u32,
+) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let bid = warp_types::gpu::block_id_x();
+    let lane = warp_types::gpu::thread_id_x();
+    let base = bid * LRAT_TABLE;
+    let mut i = bid;
+    while i < num_lemmas {
+        let stamp = i + 1;
+        let lemma_dense = *lemma_clause.add(i as usize);
+        let lstep = *lemma_step.add(i as usize);
+        let ls = *clause_start.add(lemma_dense as usize);
+        let le = *clause_start.add(lemma_dense as usize + 1);
+        let mut code: u8 = 2; // NoConflict unless a hint conflicts
+        // Lemma literals are false. Every lane inserts (identical writes).
+        let mut k = ls;
+        while k < le {
+            if !lrat_insert(table_keys, table_stamps, base, stamp, *lits.add(k as usize)) {
+                code = 5;
+                break;
+            }
+            k += 1;
+        }
+        if code != 5 {
+            let hs = *hint_start.add(i as usize);
+            let he = *hint_start.add(i as usize + 1);
+            let mut h = hs;
+            while h < he {
+                let hc = *hints.add(h as usize);
+                // Admissibility — the same test in every lane.
+                if hc >= lemma_dense {
+                    code = 4;
+                    break;
+                }
+                if *deleted_at.add(hc as usize) < lstep {
+                    code = 3;
+                    break;
+                }
+                let cs = *clause_start.add(hc as usize);
+                let ce = *clause_start.add(hc as usize + 1);
+                // Each lane strides over the clause.
+                let mut free = 0u32;
+                let mut last = 0i32;
+                let mut j = cs + lane;
+                while j < ce {
+                    let l = *lits.add(j as usize);
+                    if !lrat_falsified(table_keys, table_stamps, base, stamp, l) {
+                        free += 1;
+                        last = l;
+                    }
+                    j += 32;
+                }
+                let total = warp.reduce_sum(data::PerLane::new(free)).get();
+                if total == 0 {
+                    code = 0; // conflict: RUP
+                    break;
+                }
+                if total >= 2 {
+                    code = 1;
+                    break;
+                }
+                // Exactly one free literal in the warp: find its lane, broadcast it.
+                let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
+                let src = voted.trailing_zeros();
+                let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
+                if !lrat_insert(table_keys, table_stamps, base, stamp, -unit) {
+                    code = 5;
+                    break;
+                }
+                h += 1;
+            }
+        }
+        if lane == 0 {
+            *codes.add(i as usize) = code;
+        }
+        i += num_blocks;
+    }
+}
