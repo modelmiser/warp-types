@@ -207,6 +207,148 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
     Ok(fp)
 }
 
+impl FlatProof {
+    /// Decode binary LRAT straight into the flat layout — no per-step
+    /// allocation, ids mapped through a dense vector. This is the host-side
+    /// cost that the device path pays; the text/`Proof` route exists for the
+    /// reference checker and the tests. Semantics identical to
+    /// [`flatten`]`(cnf, &parse_binary(bytes))`.
+    pub fn from_binary(
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+    ) -> Result<FlatProof, crate::lrat::ParseError> {
+        use crate::lrat::ParseError;
+        let err = |pos: usize, msg: &str| ParseError {
+            line: pos,
+            msg: msg.to_string(),
+        };
+        let n_original = cnf.len() as u32;
+        let mut fp = FlatProof {
+            lits: Vec::with_capacity(bytes.len() / 2),
+            clause_start: Vec::with_capacity(bytes.len() / 8),
+            deleted_at: Vec::with_capacity(bytes.len() / 8),
+            lemma_clause: Vec::new(),
+            lemma_step: Vec::new(),
+            lemma_id: Vec::new(),
+            hint_start: vec![0],
+            hints: Vec::with_capacity(bytes.len() / 4),
+            first_empty: None,
+            n_original,
+        };
+        fp.clause_start.push(0);
+        for c in cnf {
+            fp.lits.extend_from_slice(c);
+            fp.clause_start.push(fp.lits.len() as u32);
+            fp.deleted_at.push(u32::MAX);
+        }
+        // id -> dense index + 1 (0 = absent), grown as ids appear.
+        let mut dense_of: Vec<u32> = vec![0; cnf.len() + 1];
+        for i in 0..cnf.len() {
+            dense_of[i + 1] = i as u32 + 1;
+        }
+        let mut last_id = cnf.len() as u64;
+        let mut pos = 0usize;
+        let mut step_ix = 0usize;
+        #[inline]
+        fn varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
+            let mut x: u64 = 0;
+            let mut shift = 0u32;
+            loop {
+                let b = *bytes.get(*pos)?;
+                *pos += 1;
+                x |= ((b & 0x7f) as u64) << shift;
+                if b & 0x80 == 0 {
+                    return Some(x);
+                }
+                shift += 7;
+                if shift > 63 {
+                    return None;
+                }
+            }
+        }
+        // Hints are recorded as raw ids and resolved after the whole file is
+        // read: a hint may (illegally) name a later id, and the per-lemma
+        // check must be the one to reject it, exactly as `flatten` does.
+        let mut raw_hints: Vec<u64> = Vec::with_capacity(bytes.len() / 4);
+        let mut done = false;
+        while pos < bytes.len() && !done {
+            let tag = bytes[pos];
+            pos += 1;
+            match tag {
+                b'a' => {
+                    let id = varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated id"))? >> 1;
+                    if id <= last_id {
+                        return Err(err(pos, "id not increasing"));
+                    }
+                    last_id = id;
+                    let dense = fp.clause_start.len() as u32 - 1;
+                    if dense_of.len() <= id as usize {
+                        dense_of.resize(id as usize + 1, 0);
+                    }
+                    dense_of[id as usize] = dense + 1;
+                    let lit_start = fp.lits.len();
+                    loop {
+                        let m =
+                            varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated literal"))?;
+                        if m == 0 {
+                            break;
+                        }
+                        let mag = (m >> 1) as i64;
+                        let v = if m & 1 == 1 { -mag } else { mag };
+                        fp.lits
+                            .push(i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?);
+                    }
+                    fp.clause_start.push(fp.lits.len() as u32);
+                    fp.deleted_at.push(u32::MAX);
+                    loop {
+                        let m =
+                            varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated hint"))?;
+                        if m == 0 {
+                            break;
+                        }
+                        if m & 1 == 1 {
+                            return Err(err(pos, "RAT hint (unsupported)"));
+                        }
+                        raw_hints.push(m >> 1);
+                    }
+                    fp.hint_start.push(raw_hints.len() as u32);
+                    fp.lemma_clause.push(dense);
+                    fp.lemma_step.push(step_ix as u32);
+                    fp.lemma_id.push(id);
+                    if fp.lits.len() == lit_start {
+                        fp.first_empty = Some(fp.lemma_clause.len() as u32 - 1);
+                        done = true;
+                    }
+                }
+                b'd' => loop {
+                    let m =
+                        varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated deletion"))?;
+                    if m == 0 {
+                        break;
+                    }
+                    let id = (m >> 1) as usize;
+                    let dense = dense_of.get(id).copied().unwrap_or(0);
+                    if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
+                        return Err(err(pos, "deletion of unknown or already-deleted id"));
+                    }
+                    fp.deleted_at[(dense - 1) as usize] = step_ix as u32;
+                },
+                _ => return Err(err(pos, "expected 'a' or 'd'")),
+            }
+            step_ix += 1;
+        }
+        fp.hints.reserve(raw_hints.len());
+        for &h in &raw_hints {
+            let dense = dense_of.get(h as usize).copied().unwrap_or(0);
+            if dense == 0 {
+                return Err(err(0, "hint names an id that is never added"));
+            }
+            fp.hints.push(dense - 1);
+        }
+        Ok(fp)
+    }
+}
+
 /// Per-lemma outcome from the warp check, as a small code (device-friendly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -639,6 +781,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn flat_decode_matches_flatten() {
+        use crate::lrat::write_binary;
+        let c = parse_cnf_ints(CNF);
+        for text in [
+            "5 2 0 1 2 0\n6 0 5 3 4 0\n",
+            "5 2 0 1 2 0\n5 d 1 2 0\n6 0 5 3 4 0\n",
+            "5 2 0 1 2 0\n5 d 3 0\n6 0 5 3 4 0\n",
+            "5 2 0 1 6 0\n6 0 5 3 4 0\n",
+            "5 2 0 1 2 0\n",
+        ] {
+            let p = parse_text(text).unwrap();
+            let via_flatten = flatten(&c, &p).unwrap();
+            let via_decode = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+            assert_eq!(via_decode.lits, via_flatten.lits, "{text:?}");
+            assert_eq!(via_decode.clause_start, via_flatten.clause_start);
+            assert_eq!(via_decode.deleted_at, via_flatten.deleted_at);
+            assert_eq!(via_decode.lemma_clause, via_flatten.lemma_clause);
+            assert_eq!(via_decode.lemma_step, via_flatten.lemma_step);
+            assert_eq!(via_decode.hint_start, via_flatten.hint_start);
+            assert_eq!(via_decode.hints, via_flatten.hints);
+            assert_eq!(via_decode.first_empty, via_flatten.first_empty);
+            let a = combine(&via_flatten, &check_warp_codes(&via_flatten));
+            let b = combine(&via_decode, &check_warp_codes(&via_decode));
+            assert_eq!(a, b);
+        }
+        // The flat decoder refuses what flatten refuses.
+        let p = parse_text("4 2 0 1 2 0\n").unwrap();
+        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
+        let p = parse_text("5 2 0 -1 2 0\n").unwrap();
+        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
+    }
+
     /// Archive agreement: reference vs warp on every proof under
     /// `LRAT_ARCHIVE_DIRS` (skips when unset).
     #[test]
@@ -676,10 +851,26 @@ mod tests {
                 let r = check_sequential(&cnf, &proof);
                 let w = check_warp(&cnf, &proof);
                 if let Ok(fp) = flatten(&cnf, &proof) {
-                    overflow += check_warp_codes(&fp)
+                    let codes = check_warp_codes(&fp);
+                    overflow += codes
                         .iter()
                         .filter(|&&c| c == LemmaCode::TableOverflow)
                         .count();
+                    // The direct binary decoder must produce the same layout
+                    // and the same verdict as flatten(parse(..)).
+                    let bin = crate::lrat::write_binary(&proof);
+                    let fd = FlatProof::from_binary(&cnf, &bin)
+                        .expect("flat decode of a flatten-able proof");
+                    assert_eq!(fd.hints, fp.hints, "{stem}: flat decode hints differ");
+                    assert_eq!(
+                        fd.deleted_at, fp.deleted_at,
+                        "{stem}: flat decode deletions differ"
+                    );
+                    assert_eq!(
+                        combine(&fd, &check_warp_codes(&fd)),
+                        combine(&fp, &codes),
+                        "{stem}: flat verdict"
+                    );
                 }
                 assert!(same(&r, &w), "{stem}: reference {r:?} vs warp {w:?}");
                 n += 1;

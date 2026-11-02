@@ -39,6 +39,31 @@ fn main() {
     let warp = warp_types_sat::lrat_warp::check_warp(&cnf, &proof);
     let t5 = Instant::now();
     println!("c warp(SimWarp) {:.3}s  {warp:?}", (t5 - t4).as_secs_f64());
+    // Device-path host cost: decode binary straight into the flat layout.
+    if matches!(bytes.first(), Some(b'a') | Some(b'd')) {
+        let tf = Instant::now();
+        match warp_types_sat::lrat_warp::FlatProof::from_binary(&cnf, &bytes) {
+            Ok(fp) => {
+                let tg = Instant::now();
+                let codes = warp_types_sat::lrat_warp::check_warp_codes(&fp);
+                let th = Instant::now();
+                let v = warp_types_sat::lrat_warp::combine(&fp, &codes);
+                println!(
+                    "c flat-decode {:.3}s (lemmas={} hints={} lits={})  simwarp-on-flat {:.3}s  {v:?}",
+                    (tg - tf).as_secs_f64(),
+                    fp.lemma_clause.len(),
+                    fp.hints.len(),
+                    fp.lits.len(),
+                    (th - tg).as_secs_f64()
+                );
+                if v.is_verified() != seq.is_verified() {
+                    println!("s DISAGREE-FLAT");
+                    std::process::exit(3);
+                }
+            }
+            Err(e) => println!("c flat-decode error: {e}"),
+        }
+    }
     if warp.is_verified() != seq.is_verified() {
         println!("s DISAGREE-WARP");
         std::process::exit(3);
