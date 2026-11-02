@@ -11,6 +11,15 @@ fn main() {
         std::process::exit(2);
     }
     let threads: usize = args.get(2).and_then(|t| t.parse().ok()).unwrap_or(1);
+    // `--to-binary OUT` as a 4th argument converts the (text) proof and exits.
+    if args.get(3).map(String::as_str) == Some("--to-binary") {
+        let out = args.get(4).expect("--to-binary needs a path");
+        let bytes = std::fs::read(&args[1]).expect("read proof");
+        let proof = warp_types_sat::lrat::parse_any(&bytes).expect("parse");
+        std::fs::write(out, warp_types_sat::lrat::write_binary(&proof)).expect("write");
+        println!("c wrote binary LRAT to {out}");
+        return;
+    }
     let t0 = Instant::now();
     let cnf = parse_cnf_ints(&std::fs::read_to_string(&args[0]).expect("read cnf"));
     let bytes = std::fs::read(&args[1]).expect("read proof");
@@ -27,6 +36,13 @@ fn main() {
     let t3 = Instant::now();
     let ind = check_independent(&cnf, &proof, threads);
     let t4 = Instant::now();
+    let warp = warp_types_sat::lrat_warp::check_warp(&cnf, &proof);
+    let t5 = Instant::now();
+    println!("c warp(SimWarp) {:.3}s  {warp:?}", (t5 - t4).as_secs_f64());
+    if warp.is_verified() != seq.is_verified() {
+        println!("s DISAGREE-WARP");
+        std::process::exit(3);
+    }
     println!(
         "c read {:.3}s parse {:.3}s sequential {:.3}s independent({threads}) {:.3}s  bytes={} steps={}",
         (t1 - t0).as_secs_f64(),
