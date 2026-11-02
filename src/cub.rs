@@ -190,6 +190,18 @@ impl Warp<All> {
     ///
     /// Equivalent to `__shfl_sync(0xFFFFFFFF, val, src_lane)`.
     /// All lanes receive the value from `src_lane`.
+    ///
+    /// # Panics
+    ///
+    /// If `src_lane >= 32`. **In a device kernel, keep `src_lane` provably in
+    /// range** (`lane & 31`, a constant, or a value the compiler can bound):
+    /// the check below is an `assert!`, so when it cannot be proven dead the
+    /// panic path stays in the PTX and pulls `core::panicking::panic_fmt` and
+    /// `Display::fmt` in as undefined externs — and a module with undefined
+    /// externs fails to *load*, before any kernel runs. A computed lane such
+    /// as `ballot.trailing_zeros()` (32 when the ballot is zero) is the usual
+    /// way in. Found on an H200 on 2026-11-02; see
+    /// `research/gpu-lrat-checker.md`.
     #[inline]
     pub fn broadcast_lane<T: GpuValue + GpuShuffle>(
         &self,
