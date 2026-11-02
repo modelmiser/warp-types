@@ -1,10 +1,17 @@
 //! CLI entry point: solve a DIMACS CNF file.
 //!
-//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat>] [--reduce-interval <n>] <file.cnf>
+//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat>] [--certify] [--reduce-interval <n>] <file.cnf>
 //!
 //! `--drat FILE` writes a DRAT proof of an UNSATISFIABLE answer to FILE
 //! (checkable with `drat-trim FILE.cnf FILE.drat`). On SATISFIABLE the file is
 //! still written but proves nothing. See `warp_types_sat::proof`.
+//!
+//! `--certify` (requires `--drat`) runs an external DRAT checker on the proof
+//! before printing an UNSATISFIABLE verdict: `drat-trim` from `$DRAT_TRIM` or
+//! `PATH`. If the checker is missing, cannot run, or does not print
+//! `s VERIFIED`, the answer is printed as `s UNKNOWN` with the reason on
+//! stderr and the exit status is 2. SATISFIABLE answers are not affected (a
+//! model is its own check). Fail-closed: an absent checker is not a pass.
 //!
 //! `--reduce-interval N` sets the conflicts between learned-clause reductions
 //! (default 2000). A diagnostic: a small N makes short solves exercise clause
@@ -20,7 +27,7 @@ use std::io::{BufWriter, Write};
 use std::process;
 
 fn usage(prog: &str) -> ! {
-    eprintln!("Usage: {prog} [--drat <proof.drat>] [--reduce-interval <n>] <file.cnf>");
+    eprintln!("Usage: {prog} [--drat <proof.drat>] [--certify] [--reduce-interval <n>] <file.cnf>");
     process::exit(1);
 }
 
@@ -42,11 +49,42 @@ fn same_file(cnf: &str, proof: &str) -> bool {
     }
 }
 
+/// Locate drat-trim (`$DRAT_TRIM`, else `PATH`) and run it on `cnf proof`.
+/// Ok only when its output contains `s VERIFIED`.
+fn run_drat_trim(cnf: &str, proof: &str) -> Result<(), String> {
+    let bin = env::var("DRAT_TRIM").ok().or_else(|| {
+        env::var_os("PATH").and_then(|p| {
+            env::split_paths(&p)
+                .map(|d| d.join("drat-trim"))
+                .find(|f| f.is_file())
+                .map(|f| f.to_string_lossy().into_owned())
+        })
+    });
+    let Some(bin) = bin else {
+        return Err("no DRAT checker: set DRAT_TRIM or put drat-trim on PATH".into());
+    };
+    let out = process::Command::new(&bin)
+        .arg(cnf)
+        .arg(proof)
+        .output()
+        .map_err(|e| format!("could not run {bin}: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
+    if text.contains("s VERIFIED") && !text.contains("s NOT VERIFIED") {
+        Ok(())
+    } else {
+        Err(format!(
+            "{bin} did not verify the proof (exit {:?})",
+            out.status.code()
+        ))
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let prog = args.first().map(String::as_str).unwrap_or("solve");
     let mut drat_path: Option<String> = None;
     let mut reduce_interval: u64 = warp_types_sat::solver::DEFAULT_REDUCE_INTERVAL;
+    let mut certify = false;
     let mut cnf_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -58,6 +96,7 @@ fn main() {
                 }
                 drat_path = Some(args[i].clone());
             }
+            "--certify" => certify = true,
             "--reduce-interval" => {
                 i += 1;
                 reduce_interval = args
@@ -79,6 +118,10 @@ fn main() {
     let Some(cnf_path) = cnf_path else {
         usage(prog)
     };
+    if certify && drat_path.is_none() {
+        eprintln!("Error: --certify requires --drat <proof.drat>");
+        process::exit(1);
+    }
     if let Some(d) = &drat_path {
         if same_file(&cnf_path, d) {
             eprintln!("Error: --drat path {d} is the input CNF; refusing to overwrite it");
@@ -101,14 +144,14 @@ fn main() {
         instance.num_vars, instance.num_clauses,
     );
 
-    let result = match drat_path {
+    let result = match &drat_path {
         None => warp_types_sat::solver::solve_watched_with(
             instance.db,
             instance.num_vars,
             reduce_interval,
         ),
         Some(path) => {
-            let file = fs::File::create(&path).unwrap_or_else(|e| {
+            let file = fs::File::create(path).unwrap_or_else(|e| {
                 eprintln!("Error creating {}: {}", path, e);
                 process::exit(1);
             });
@@ -128,6 +171,20 @@ fn main() {
             r
         }
     };
+
+    if certify {
+        if let warp_types_sat::solver::SolveResult::Unsat = result {
+            let proof = drat_path.as_deref().expect("checked above");
+            match run_drat_trim(&cnf_path, proof) {
+                Ok(()) => eprintln!("c certified: drat-trim verified {proof}"),
+                Err(why) => {
+                    eprintln!("c NOT certified: {why}");
+                    println!("s UNKNOWN");
+                    process::exit(2);
+                }
+            }
+        }
+    }
 
     match result {
         warp_types_sat::solver::SolveResult::Sat(assign) => {

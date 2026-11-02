@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- **`solve --certify`** (with `--drat`): runs `drat-trim` on the written proof before answering and prints
+  `s UNSATISFIABLE` only on `s VERIFIED`; otherwise `s UNKNOWN`, reason on stderr, exit 2. Fail-closed — a missing
+  checker, a checker that cannot run, or one that says `s NOT VERIFIED` all yield UNKNOWN (each case exercised).
+  SAT answers are unaffected.
+- **`warp-types-bmc` reads AIGER; `bmc`/`pdr` take files.** New `aiger` module (binary and ASCII, AIGER 1.9 bad /
+  constraints / reset values) lowering an AIG into `TransitionSystem`; `bmc <file.aig>` and `pdr <file.aig>
+  --invariant OUT` print `s` verdict lines, and `pdr` writes its inductive invariant over AIGER literals.
+  `tools/check-invariant.py` certifies such an invariant with its own encoding and kissat (initiation,
+  consecution, safety); `tools/bmc-pdr-campaign.py` runs both crates over HWMCC17 against an ABC reference.
+  Pre-registration and results: `research/bmc-pdr-aiger.md`.
 - **UNSAT proofs certified through a verified-LRAT pipeline; the proof logger has falsifiers.** `solve_watched_drat_with(db,
   n, out, reduce_interval)` and `solve --reduce-interval N` (diagnostic; default 2000) so short solves exercise clause
   deletion; `solve_watched_with` is the no-proof twin for like-for-like timing. `proof.rs` states the RUP invariant

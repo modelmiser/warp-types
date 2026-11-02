@@ -152,6 +152,7 @@ within-solver reference, not a cross-solver claim.
 ```bash
 cargo run --bin solve -- problem.cnf
 cargo run --bin solve -- --drat proof.drat problem.cnf   # also write a DRAT proof
+cargo run --bin solve -- --drat proof.drat --certify problem.cnf   # check it before answering
 ```
 
 Reads DIMACS CNF, prints `s SATISFIABLE` or `s UNSATISFIABLE` with the
@@ -161,7 +162,10 @@ earlier builds ran the basic reference solver `solver::solve`). With
 `--drat FILE` the run goes through `solve_watched_drat` and writes a DRAT
 proof of an UNSATISFIABLE answer to FILE; check it with
 `drat-trim problem.cnf proof.drat`. On SATISFIABLE the file is written but
-proves nothing.
+proves nothing. `--certify` runs `drat-trim` (from `$DRAT_TRIM` or `PATH`) on
+the proof itself and prints `s UNSATISFIABLE` only if it says `s VERIFIED`;
+otherwise `s UNKNOWN`, the reason on stderr, exit status 2. It is
+fail-closed: no checker is not a pass.
 
 ## What's inside
 
