@@ -46,9 +46,14 @@ fi
 log "build time: $(( $(date +%s) - t0 ))s"
 BIN=/tmp/warp-types/target/release/examples/lrat_check
 
+log "=== (0) Diagnostic: one full run on the smallest binary proof (stdout+stderr, backtrace on) ==="
+f=$(ls /tmp/lrat-corpus/*.blrat | xargs ls -S | tail -1); base=$(basename "$f" .blrat)
+RUST_BACKTRACE=1 LRAT_GPU=1 LRAT_GPU_BLOCKS=1024 LRAT_SKIP_SLOW=1 "$BIN" /tmp/lrat-corpus/$base.cnf "$f" 4 2>&1 | tail -40 | tee -a "$R"
+log "diagnostic exit: ${PIPESTATUS[0]}"
+
 log "=== (A) Agreement on the archive: device path vs CPU reference ==="
 mkdir -p /tmp/lrat-archive && tar -xzf /tmp/lrat-corpus/archive-proofs.tgz -C /tmp/lrat-archive
-n=0; ok=0; dis=0; ver=0
+n=0; ok=0; dis=0; ver=0; err=0
 for d in /tmp/lrat-archive/*/; do
     for p in "$d"proof/*.lrat; do
         [ -f "$p" ] || continue
@@ -57,17 +62,20 @@ for d in /tmp/lrat-archive/*/; do
         out=$(LRAT_GPU=1 LRAT_GPU_BLOCKS=1024 LRAT_SKIP_SLOW=1 "$BIN" "$c" "$p" 4 2>&1)
         rc=$?
         n=$((n+1))
-        if echo "$out" | grep -q "DISAGREE"; then dis=$((dis+1)); echo "DISAGREE $b: $(echo "$out" | grep -E '^c gpu|^s ' | tr '\n' ' ')" | tee -a "$R"; else ok=$((ok+1)); fi
+        # A run counts as agreeing ONLY if it printed a verdict line; a crash is an error, not agreement.
+        if ! echo "$out" | grep -q "^s "; then err=$((err+1)); [ $err -le 3 ] && echo "ERROR $b (exit $rc): $(echo "$out" | grep -E 'panicked|Error|error' | head -2 | tr '\n' ' ')" | tee -a "$R"
+        elif echo "$out" | grep -q "DISAGREE"; then dis=$((dis+1)); echo "DISAGREE $b: $(echo "$out" | grep -E '^c gpu|^s ' | tr '\n' ' ')" | tee -a "$R"
+        else ok=$((ok+1)); fi
         echo "$out" | grep -q "^s VERIFIED" && ver=$((ver+1))
     done
 done
-log "archive: $n proofs, $ok agree, $dis disagree, $ver verified"
+log "archive: $n proofs, $ok agree, $dis disagree, ${err:-0} errors, $ver verified"
 # Note: text LRATs take the parse+flatten route; the device path uses the same flat layout.
 
 log "=== (B) Timing on binary proofs ==="
 for f in /tmp/lrat-corpus/*.blrat; do
     base=$(basename "$f" .blrat); c=/tmp/lrat-corpus/$base.cnf
     log "--- $base ($(stat -c %s "$f") bytes) ---"
-    LRAT_GPU=1 LRAT_GPU_BLOCKS=1024,4096,16384 LRAT_SKIP_SLOW=1 "$BIN" "$c" "$f" "$(nproc)" 2>&1 | grep -E "^c read|^c flat|^c gpu|^s " | tee -a "$R"
+    LRAT_GPU=1 LRAT_GPU_BLOCKS=1024,4096,16384 LRAT_SKIP_SLOW=1 "$BIN" "$c" "$f" "$(nproc)" 2>&1 | grep -E "^c read|^c flat|^c gpu|^s |panicked|Error|error" | tee -a "$R"
 done
 log "=== DONE ==="
