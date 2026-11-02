@@ -31,34 +31,88 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let skip_slow = std::env::var_os("LRAT_SKIP_SLOW").is_some();
     let t2 = Instant::now();
-    let seq = check_sequential(&cnf, &proof);
-    let t3 = Instant::now();
     let ind = check_independent(&cnf, &proof, threads);
+    let t3 = Instant::now();
+    // The sequential reference is the slowest CPU pass; LRAT_SKIP_SLOW keeps
+    // only the independent checker as the comparison point (they agree on
+    // every archived proof; the archive test holds them to it).
+    let seq = if skip_slow {
+        ind.clone()
+    } else {
+        check_sequential(&cnf, &proof)
+    };
     let t4 = Instant::now();
-    let warp = warp_types_sat::lrat_warp::check_warp(&cnf, &proof);
+    let warp = if skip_slow {
+        ind.clone()
+    } else {
+        warp_types_sat::lrat_warp::check_warp(&cnf, &proof)
+    };
     let t5 = Instant::now();
-    println!("c warp(SimWarp) {:.3}s  {warp:?}", (t5 - t4).as_secs_f64());
+    if !skip_slow {
+        println!("c warp(SimWarp) {:.3}s  {warp:?}", (t5 - t4).as_secs_f64());
+    }
     // Device-path host cost: decode binary straight into the flat layout.
     if matches!(bytes.first(), Some(b'a') | Some(b'd')) {
         let tf = Instant::now();
         match warp_types_sat::lrat_warp::FlatProof::from_binary(&cnf, &bytes) {
             Ok(fp) => {
                 let tg = Instant::now();
-                let codes = warp_types_sat::lrat_warp::check_warp_codes(&fp);
-                let th = Instant::now();
-                let v = warp_types_sat::lrat_warp::combine(&fp, &codes);
                 println!(
-                    "c flat-decode {:.3}s (lemmas={} hints={} lits={})  simwarp-on-flat {:.3}s  {v:?}",
+                    "c flat-decode {:.3}s (lemmas={} hints={} lits={})",
                     (tg - tf).as_secs_f64(),
                     fp.lemma_clause.len(),
                     fp.hints.len(),
-                    fp.lits.len(),
-                    (th - tg).as_secs_f64()
+                    fp.lits.len()
                 );
-                if v.is_verified() != seq.is_verified() {
-                    println!("s DISAGREE-FLAT");
-                    std::process::exit(3);
+                if !skip_slow {
+                    let codes = warp_types_sat::lrat_warp::check_warp_codes(&fp);
+                    let th = Instant::now();
+                    let v = warp_types_sat::lrat_warp::combine(&fp, &codes);
+                    println!("c simwarp-on-flat {:.3}s  {v:?}", (th - tg).as_secs_f64());
+                    if v.is_verified() != seq.is_verified() {
+                        println!("s DISAGREE-FLAT");
+                        std::process::exit(3);
+                    }
+                }
+                #[cfg(feature = "gpu")]
+                if std::env::var_os("LRAT_GPU").is_some() {
+                    let ctx = warp_types_sat::gpu_launcher::GpuContext::new().expect("GPU context");
+                    let blocks_list: Vec<u32> = std::env::var("LRAT_GPU_BLOCKS")
+                        .ok()
+                        .map(|b| b.split(',').filter_map(|x| x.parse().ok()).collect())
+                        .unwrap_or_else(|| vec![4096]);
+                    for blocks in blocks_list {
+                        let ta = Instant::now();
+                        let raw = ctx.check_lrat_codes(&fp, blocks).expect("GPU check");
+                        let tb = Instant::now();
+                        let codes: Vec<warp_types_sat::lrat_warp::LemmaCode> = raw
+                            .iter()
+                            .map(|&c| match c {
+                                0 => warp_types_sat::lrat_warp::LemmaCode::Ok,
+                                1 => warp_types_sat::lrat_warp::LemmaCode::NotUnit,
+                                2 => warp_types_sat::lrat_warp::LemmaCode::NoConflict,
+                                3 => warp_types_sat::lrat_warp::LemmaCode::DeletedHint,
+                                4 => warp_types_sat::lrat_warp::LemmaCode::ForwardHint,
+                                _ => warp_types_sat::lrat_warp::LemmaCode::TableOverflow,
+                            })
+                            .collect();
+                        let g = warp_types_sat::lrat_warp::combine(&fp, &codes);
+                        let overflow = codes
+                            .iter()
+                            .filter(|&&c| c == warp_types_sat::lrat_warp::LemmaCode::TableOverflow)
+                            .count();
+                        println!(
+                            "c gpu-flat({}; {blocks} blocks) device {:.3}s (upload+launch+download) overflow={overflow}  {g:?}",
+                            ctx.device_name(),
+                            (tb - ta).as_secs_f64()
+                        );
+                        if g.is_verified() != seq.is_verified() {
+                            println!("s DISAGREE-GPU-FLAT");
+                            std::process::exit(3);
+                        }
+                    }
                 }
             }
             Err(e) => println!("c flat-decode error: {e}"),
@@ -69,11 +123,12 @@ fn main() {
         std::process::exit(3);
     }
     println!(
-        "c read {:.3}s parse {:.3}s sequential {:.3}s independent({threads}) {:.3}s  bytes={} steps={}",
+        "c read {:.3}s parse {:.3}s independent({threads}) {:.3}s sequential {:.3}s{}  bytes={} steps={}",
         (t1 - t0).as_secs_f64(),
         (t2 - t1).as_secs_f64(),
         (t3 - t2).as_secs_f64(),
         (t4 - t3).as_secs_f64(),
+        if skip_slow { " (skipped)" } else { "" },
         bytes.len(),
         proof.steps.len()
     );
