@@ -307,35 +307,80 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Aig, AigerError> {
 }
 
 /// How AIGER literals map onto the lowered system's state variables.
-#[derive(Debug, Clone, Copy)]
+///
+/// `var_of[index]` is the state variable of AIG variable `index` (`None` when
+/// the node was dropped by cone-of-influence reduction); `index_of[var]` is
+/// the inverse. The constant-true variable is the last one.
+#[derive(Debug, Clone)]
 pub struct Lowering {
-    /// Number of state variables, `M + 1`.
+    /// Number of state variables (kept nodes + 1).
     pub num_state_vars: u32,
-    /// The state variable that is constrained to `true` (index `M`).
+    /// The state variable that is constrained to `true`.
     pub const_var: u32,
+    var_of: Vec<Option<u32>>,
+    index_of: Vec<u32>,
 }
 
 impl Lowering {
-    /// AIGER literal → current-state [`Lit`].
-    pub fn lit(&self, aiger_lit: u32) -> Lit {
+    /// Full lowering: every AIG variable `1..=M` is state variable `index - 1`.
+    pub fn full(max_var: u32) -> Self {
+        Self::from_keep(&(0..=max_var as usize).map(|i| i != 0).collect::<Vec<_>>())
+    }
+
+    /// Lowering over the AIG variables with `keep[index] == true`.
+    pub fn from_keep(keep: &[bool]) -> Self {
+        let mut var_of = vec![None; keep.len()];
+        let mut index_of = Vec::new();
+        for (index, &k) in keep.iter().enumerate().skip(1) {
+            if k {
+                var_of[index] = Some(index_of.len() as u32);
+                index_of.push(index as u32);
+            }
+        }
+        let const_var = index_of.len() as u32;
+        Lowering {
+            num_state_vars: const_var + 1,
+            const_var,
+            var_of,
+            index_of,
+        }
+    }
+
+    /// Number of AIG variables kept (excluding the constant).
+    pub fn kept(&self) -> usize {
+        self.index_of.len()
+    }
+
+    /// Is AIG variable `index` represented?
+    pub fn keeps(&self, index: u32) -> bool {
+        index == 0 || self.var_of.get(index as usize).is_some_and(|v| v.is_some())
+    }
+
+    /// AIGER literal → current-state [`Lit`], `None` for a dropped node.
+    pub fn try_lit(&self, aiger_lit: u32) -> Option<Lit> {
         let index = aiger_lit >> 1;
         let neg = aiger_lit & 1 == 1;
         if index == 0 {
             // AIGER literal 0 is FALSE and literal 1 is TRUE: the polarity is
             // the reverse of an ordinary variable's, because the constant
             // variable is constrained to true.
-            return if neg {
+            return Some(if neg {
                 Lit::pos(self.const_var)
             } else {
                 Lit::neg(self.const_var)
-            };
+            });
         }
-        let var = index - 1;
-        if neg {
-            Lit::neg(var)
-        } else {
-            Lit::pos(var)
-        }
+        let var = (*self.var_of.get(index as usize)?)?;
+        Some(if neg { Lit::neg(var) } else { Lit::pos(var) })
+    }
+
+    /// AIGER literal → current-state [`Lit`].
+    ///
+    /// # Panics
+    /// If the literal's variable was dropped by cone-of-influence reduction.
+    pub fn lit(&self, aiger_lit: u32) -> Lit {
+        self.try_lit(aiger_lit)
+            .unwrap_or_else(|| panic!("AIGER literal {aiger_lit} is outside the lowered cone"))
     }
     /// AIGER literal → next-state [`Lit`] (shifted by `num_state_vars`).
     pub fn next_lit(&self, aiger_lit: u32) -> Lit {
@@ -347,13 +392,13 @@ impl Lowering {
             Lit::pos(v)
         }
     }
-    /// State variable → AIGER literal (positive polarity); the constant
-    /// variable maps to literal `1`.
+    /// State variable → AIGER literal; the constant variable maps to
+    /// literal `1` (`0` when negated).
     pub fn aiger_lit(&self, lit: Lit) -> u32 {
         let base = if lit.var() == self.const_var {
             1
         } else {
-            2 * (lit.var() + 1)
+            2 * self.index_of[lit.var() as usize]
         };
         if lit.is_negated() {
             base ^ 1
@@ -370,10 +415,16 @@ impl Lowering {
 /// re-simulates the AIG from reset with these inputs and checks that the bad
 /// literal is true at the last step and the constraints hold throughout.
 pub fn write_trace(aig: &Aig, lw: &Lowering, trace: &[Vec<bool>], path: &str, out: &mut String) {
+    // A node outside the lowered cone cannot influence the property or the
+    // constraints, so any value will do for the replay: write 0.
     let val = |step: &Vec<bool>, aiger_lit: u32| -> u8 {
-        let l = lw.lit(aiger_lit);
-        let v = step[l.var() as usize];
-        u8::from(if l.is_negated() { !v } else { v })
+        match lw.try_lit(aiger_lit) {
+            Some(l) => {
+                let v = step[l.var() as usize];
+                u8::from(if l.is_negated() { !v } else { v })
+            }
+            None => 0,
+        }
     };
     out.push_str(&format!(
         "c counterexample trace for {path}: depth {}; lines are `step aiger-literal value`\n",
@@ -403,16 +454,64 @@ fn bad_literal(aig: &Aig) -> Result<u32, AigerError> {
     }
 }
 
-/// Lower an AIG into a [`TransitionSystem`] (see the module docs for the
-/// encoding). Errors if the AIG does not have exactly one bad literal (or,
-/// for pre-1.9 files, exactly one output).
-pub fn lower(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
+/// The cone of influence of the bad literal and the invariant constraints:
+/// `keep[index]` is true for every AIG variable that can reach them through
+/// AND inputs or latch next-state literals. Inputs and gates outside the cone
+/// cannot affect any verdict.
+pub fn cone_of_influence(aig: &Aig) -> Result<Vec<bool>, AigerError> {
     let bad = bad_literal(aig)?;
-    let n = aig.max_var + 1;
-    let lw = Lowering {
-        num_state_vars: n,
-        const_var: aig.max_var,
+    let m = aig.max_var as usize;
+    let mut and_of: Vec<Option<(u32, u32)>> = vec![None; m + 1];
+    for &(lhs, r0, r1) in &aig.ands {
+        and_of[(lhs >> 1) as usize] = Some((r0, r1));
+    }
+    let mut next_of: Vec<Option<u32>> = vec![None; m + 1];
+    for la in &aig.latches {
+        next_of[(la.lit >> 1) as usize] = Some(la.next);
+    }
+    let mut keep = vec![false; m + 1];
+    let mut stack: Vec<u32> = Vec::new();
+    let push = |lit: u32, keep: &mut Vec<bool>, stack: &mut Vec<u32>| {
+        let i = (lit >> 1) as usize;
+        if i != 0 && !keep[i] {
+            keep[i] = true;
+            stack.push(i as u32);
+        }
     };
+    push(bad, &mut keep, &mut stack);
+    for &c in &aig.constraints {
+        push(c, &mut keep, &mut stack);
+    }
+    while let Some(i) = stack.pop() {
+        if let Some((r0, r1)) = and_of[i as usize] {
+            push(r0, &mut keep, &mut stack);
+            push(r1, &mut keep, &mut stack);
+        } else if let Some(nx) = next_of[i as usize] {
+            push(nx, &mut keep, &mut stack);
+        }
+    }
+    Ok(keep)
+}
+
+/// Lower an AIG into a [`TransitionSystem`] (see the module docs for the
+/// encoding), keeping every AIG variable. Errors if the AIG does not have
+/// exactly one bad literal (or, for pre-1.9 files, exactly one output).
+pub fn lower(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
+    bad_literal(aig)?;
+    lower_with(aig, Lowering::full(aig.max_var))
+}
+
+/// Lower only the cone of influence of the bad literal and the constraints
+/// (see [`cone_of_influence`]). Same verdicts and counterexample depths as
+/// [`lower`]; fewer state variables.
+pub fn lower_coi(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
+    let keep = cone_of_influence(aig)?;
+    lower_with(aig, Lowering::from_keep(&keep))
+}
+
+fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), AigerError> {
+    let bad = bad_literal(aig)?;
+    let n = lw.num_state_vars;
     let mut sys = TransitionSystem::new(n);
 
     // Constant true: initial, and on both sides of T (the current-side unit
@@ -424,6 +523,9 @@ pub fn lower(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
 
     // Latches.
     for la in &aig.latches {
+        if !lw.keeps(la.lit >> 1) {
+            continue;
+        }
         match la.reset {
             Reset::Zero => sys.add_initial(vec![lw.lit(la.lit).complement()]),
             Reset::One => sys.add_initial(vec![lw.lit(la.lit)]),
@@ -437,6 +539,9 @@ pub fn lower(aig: &Aig) -> Result<(TransitionSystem, Lowering), AigerError> {
 
     // AND gates: g ↔ a ∧ b at step 0 (initial) and on both sides of T.
     for &(lhs, r0, r1) in &aig.ands {
+        if !lw.keeps(lhs >> 1) {
+            continue;
+        }
         for side in 0..3 {
             let (g, a, b) = match side {
                 0 => (lw.lit(lhs), lw.lit(r0), lw.lit(r1)),
@@ -540,10 +645,7 @@ mod tests {
 
     #[test]
     fn lowering_literal_map_roundtrips() {
-        let lw = Lowering {
-            num_state_vars: 8,
-            const_var: 7,
-        };
+        let lw = Lowering::full(7);
         for aiger_lit in 0..16u32 {
             assert_eq!(
                 lw.aiger_lit(lw.lit(aiger_lit)),
@@ -612,6 +714,49 @@ mod tests {
         assert!(lines.iter().all(|l| l.starts_with("0 ")));
         // Reset is 0 for both latches, so step-0 latch values are 0.
         assert!(lines.iter().all(|l| l.ends_with(" 0")));
+    }
+
+    #[test]
+    fn coi_drops_a_dangling_gate_and_keeps_the_verdict() {
+        // Counter plus a gate 16 = l0 ∧ i (input 2 renumbered) that nothing
+        // reads: M=9 with one input. Encode: input 2; latches 4 (l0), 6 (l1);
+        // gates as in the counter shifted by one variable; dangling 18.
+        let text =
+            "aag 9 1 2 0 6 1\n2\n4 5\n6 17\n8\n8 6 4\n10 7 5\n12 7 4\n14 6 5\n16 15 13\n18 4 2\n";
+        let aig = parse(text.as_bytes()).unwrap();
+        let keep = cone_of_influence(&aig).unwrap();
+        assert!(!keep[9], "gate 18 is outside the cone");
+        assert!(!keep[1], "the input feeds only the dangling gate");
+        let (full, lwf) = lower(&aig).unwrap();
+        let (coi, lwc) = lower_coi(&aig).unwrap();
+        assert_eq!(lwf.kept(), 9);
+        // Kept: l0, l1, bad gate 8, the xor's three gates 12/14/16; dropped:
+        // gate 10 (¬l0 ∧ ¬l1, read by nothing even in the plain counter),
+        // gate 18 and the input.
+        assert!(!keep[5], "gate 10 is read by nothing");
+        assert_eq!(lwc.kept(), 6);
+        assert!(coi.num_state_vars() < full.num_state_vars());
+        let d = |sys: &TransitionSystem| match check(sys, 10, 0) {
+            BmcResult::CounterexampleFound { depth, .. } => depth,
+            r => panic!("{r:?}"),
+        };
+        assert_eq!(d(&full), 3);
+        assert_eq!(d(&coi), 3);
+        // Literal map round-trips on the reduced lowering too.
+        for &lit in &[0u32, 1, 8, 9, 16, 17] {
+            assert_eq!(lwc.aiger_lit(lwc.lit(lit)), lit);
+        }
+        assert!(lwc.try_lit(18).is_none());
+    }
+
+    #[test]
+    fn coi_keeps_constraint_cones() {
+        // Constraint on an otherwise-dangling input keeps it.
+        let text = "aag 9 1 2 0 6 1 1\n2\n4 5\n6 17\n8\n3\n8 6 4\n10 7 5\n12 7 4\n14 6 5\n16 15 13\n18 4 2\n";
+        let aig = parse(text.as_bytes()).unwrap();
+        let keep = cone_of_influence(&aig).unwrap();
+        assert!(keep[1], "constraint literal 3 keeps input 2");
+        assert!(!keep[9]);
     }
 
     #[test]

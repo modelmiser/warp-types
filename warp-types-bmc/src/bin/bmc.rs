@@ -73,10 +73,12 @@ fn run_aiger(args: &[String]) {
     let mut path: Option<&str> = None;
     let mut max_depth: u32 = 1000;
     let mut budget: u64 = 0;
+    let mut coi = true;
     let mut trace_path: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--no-coi" => coi = false,
             "--trace" => {
                 i += 1;
                 trace_path = Some(args.get(i).cloned().unwrap_or_else(|| usage()));
@@ -110,7 +112,12 @@ fn run_aiger(args: &[String]) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
-    let (sys, lw) = warp_types_bmc::aiger::lower(&aig).unwrap_or_else(|e| {
+    let lowered = if coi {
+        warp_types_bmc::aiger::lower_coi(&aig)
+    } else {
+        warp_types_bmc::aiger::lower(&aig)
+    };
+    let (sys, lw) = lowered.unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
@@ -151,7 +158,7 @@ fn run_aiger(args: &[String]) {
 }
 
 fn usage() -> ! {
-    eprintln!("Usage: bmc [<file.aig|aag> [--max-depth N] [--budget C] [--trace OUT]]");
+    eprintln!("Usage: bmc [<file.aig|aag> [--max-depth N] [--budget C] [--trace OUT] [--no-coi]]");
     std::process::exit(1);
 }
 
