@@ -5,6 +5,8 @@
 #   tools/gpu-session.sh run [gpu]    up + run reproduce/runpod-h200.sh + DOWN
 #   tools/gpu-session.sh status       what is running and what it is costing
 #   tools/gpu-session.sh down         terminate every pod on the account
+#   tools/gpu-session.sh cp SRC.. DST copy files to the last `up` pod (DST is a remote dir)
+#   tools/gpu-session.sh ssh [CMD]    open a shell on / run CMD on the last `up` pod
 #
 # WHY THIS EXISTS, and why it is not a CI runner. Hardware demand here is
 # bursty, not continuous: five sessions in the six months to 2026-09, clustered
@@ -149,6 +151,32 @@ PY
     echo "=== verification done; log in $log; terminating ==="
 }
 
+# ssh/scp against the pod recorded by the last `up`. The create response's
+# ssh command is `ssh root@HOST -p PORT [-i KEY]`; on 2026-11-02 one pod came
+# back WITHOUT `-i`, and a driver that parsed the key with a greedy sed got the
+# whole command as its "identity file". Parse each piece defensively and fall
+# back to the pod key.
+pod_ssh_parts() {
+    [ -f "$STATE" ] || die "no pod state at $STATE (run 'up' first)"
+    local cmd; cmd=$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print((p.get("ssh") or {}).get("ssh_command") or "")' "$STATE")
+    [ -n "$cmd" ] || die "no ssh command in $STATE"
+    POD_HOST=$(echo "$cmd" | grep -oE '[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+' | head -1)
+    POD_PORT=$(echo "$cmd" | grep -oE -- '-p [0-9]+' | head -1 | cut -c4-); POD_PORT=${POD_PORT:-22}
+    POD_KEY=$(echo "$cmd" | grep -oE -- '-i [^ ]+' | head -1 | cut -c4-); POD_KEY=${POD_KEY:-$HOME/.ssh/id_pod}
+    [ -n "$POD_HOST" ] || die "could not parse host from: $cmd"
+}
+cmd_cp() {
+    [ $# -ge 2 ] || die "usage: $0 cp SRC.. REMOTE_DIR"
+    pod_ssh_parts
+    local dst="${*: -1}"; set -- "${@:1:$#-1}"
+    ssh -p "$POD_PORT" -i "$POD_KEY" -o StrictHostKeyChecking=accept-new "$POD_HOST" "mkdir -p '$dst'"
+    scp -P "$POD_PORT" -i "$POD_KEY" -o StrictHostKeyChecking=accept-new "$@" "$POD_HOST:$dst/"
+}
+cmd_ssh() {
+    pod_ssh_parts
+    ssh -p "$POD_PORT" -i "$POD_KEY" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 "$POD_HOST" "$@"
+}
+
 need runpodctl; need python3
 # runpodctl reads RUNPOD_API_KEY; the key lives in `pass` (runpod/api), never in a file.
 if [ -z "${RUNPOD_API_KEY:-}" ]; then
@@ -161,5 +189,7 @@ case "${1:-status}" in
     run)    cmd_run "${2:-}" ;;
     down)   cmd_down ;;
     status) cmd_status ;;
+    cp)     shift; cmd_cp "$@" ;;
+    ssh)    shift; cmd_ssh "$@" ;;
     *)      die "usage: $0 {up|run|down|status} [gpu-id]" ;;
 esac
