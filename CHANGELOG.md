@@ -22,7 +22,7 @@
   (`lrat_emit::rup_chain`: implication-graph walk from the final learned clause, reasons in trail order, conflict
   clause last); `--certify` with `--lrat` runs `lrat-check`. `ProofLog` gains defaulted `wants_hints` /
   `add_with_hints` / `delete_ids` / `empty_with_hints`; `proof::LratWriter` (text or binary); `Trail::position_of`.
-  **Measured 2026-11-03** (pre-registered, `research/lrat-from-solver.md`; `tools/lrat-campaign.py`): all 114 UNSAT <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
+  **Measured 2026-11-03** (pre-registered, `research/lrat-from-solver.md`; `tools/lrat-campaign.py`): all 114 UNSAT (54 distinct instances across the corpus's three runs) <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   proofs of the certification corpus verified by `lrat-check`, `cake_lpr` and the in-crate checker, with no
   `drat-trim` in the path. Two predictions missed, both in the design's favour and recorded: logging overhead ≈ 4×
   the DRAT logger's (+14 % text / +10 % binary vs +4 %, after a `CRef`-indexed id table and allocation-free number
@@ -90,7 +90,7 @@
   deletion; `solve_watched_with` is the no-proof twin for like-for-like timing. `proof.rs` states the RUP invariant
   (reductions only at level 0, every trail reason locked, LBD ≤ 2 never deleted, minimization depends on level-0
   reasons staying present) and carries a test-only `fault` module with seven corruptions. Campaign
-  (`tools/cert-campaign.py`, record in `research/drat-certification.md`): 114 UNSAT proofs, six families, all
+  (`tools/cert-campaign.py`, record in `research/drat-certification.md`): 114 UNSAT proofs (54 distinct instances across three runs), six families, all
   verified by `drat-trim` (backward and forward), `lrat-check` and `cake_lpr`; 68/68 SAT models valid against file
   bytes; kissat agreed on 182/182 verdicts; logging overhead +10–17 % to `/dev/null`. Found and recorded: `drat-trim`
   accepts a proof without the final `0`, ignores phantom and unit deletions and checks only core lemmas in backward

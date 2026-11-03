@@ -194,7 +194,7 @@ fail-closed: no checker is not a pass.
   and `solve --drat FILE` write every learned clause, every deletion and the
   final empty clause in DRAT text. Pure SAT only: theory lemmas are logged
   but are not RUP, so a DPLL(T) proof will not check. **Checked, 2026-11-01:**
-  114 UNSAT proofs from six families (random 3-SAT n = 150–250, PHP(6–8), <!-- unguarded: 114 — campaign tally, research/cert-campaign-2026-11-01/ -->
+  114 UNSAT proofs (54 distinct instances across three runs) from six families (random 3-SAT n = 150–250, PHP(6–8), <!-- unguarded: 114 — campaign tally, research/cert-campaign-2026-11-01/ -->
   parity, Tseitin, planted, cnfuzz), at the default reduction interval and at
   50, all verified by `drat-trim` (backward and forward), and their LRAT by
   `lrat-check` and by the formally verified `cake_lpr`; 68/68 SAT models
@@ -213,7 +213,7 @@ fail-closed: no checker is not a pass.
   `--certify` with `--lrat` runs `lrat-check`. Each chain is derived from the
   final learned clause by walking the implication graph and emitting the
   reasons in trail order (`research/lrat-from-solver.md`). **Measured
-  2026-11-03** on the certification corpus: all 114 UNSAT answers' proofs <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
+  2026-11-03** on the certification corpus: all 114 UNSAT answers' proofs (54 distinct instances; the corpus's three runs share instances) <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   verified by `lrat-check`, `cake_lpr` and this crate's checker. Costs, stated
   because the pre-registration predicted better: logging overhead about 3× the
   DRAT logger's (+14 % text, +10 % binary, vs +4 % for DRAT, of solve time on
