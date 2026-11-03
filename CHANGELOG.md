@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **`warp-types-smt`: QF_BV through the certified SAT path** (`SmtSession::bitblast`, `BitBlasted::{solve,
+  solve_lrat, dimacs}`): a complete bit-blaster (ripple-carry add/sub, bitwise ops, extract, concat, equality
+  by bit equivalence, Tseitin) whose UNSAT answers carry an LRAT proof of the written CNF. **Measured
+  2026-11-03** (pre-registered, `research/smt-bitblast.md`): on 1,000 random QF_BV instances the verdict equals
+  Yices 2.7.0's on all — including the 62 the ground-only module leaves as `Sat` — and all 254 UNSAT proofs are <!-- unguarded: 1,000, 62, 254 — tallies, research/smt-bitblast-2026-11-03/ -->
+  accepted by `lrat-check` and `cake_lpr`. The translation itself is not certified; `smt-crosscheck --bitblast
+  --lrat-check --cake-lpr` runs the comparison.
 - **`warp-types-smt` verdicts cross-checked against Yices** (`SmtSession::to_smtlib2`, `smt-crosscheck`): on 1,000
   random QF_UF instances every verdict equals Yices 2.7.0's; on 1,000 random QF_BV instances no `Unsat` is
   contradicted, and the ground-only BV module's incompleteness is measured at 23 % of Yices-unsat instances

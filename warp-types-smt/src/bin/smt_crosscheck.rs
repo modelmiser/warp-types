@@ -1,6 +1,12 @@
 //! smt-crosscheck — our verdicts against an outside SMT solver on random instances.
 //!
 //! Usage: smt-crosscheck --euf N --bv N [--seed S] [--yices PATH] [--out DIR]
+//!                       [--bitblast] [--lrat-check BIN] [--cake-lpr BIN]
+//!
+//! `--bitblast` also decides every BV instance through the bit-blaster
+//! (`SmtSession::bitblast`, complete), which must equal Yices on all of them;
+//! with `--lrat-check` / `--cake-lpr`, every bit-blasted UNSAT writes its
+//! DIMACS and LRAT and the checkers must accept them (kill otherwise).
 //!
 //! Generates random QF_UF instances (checked with `check_sat`, which is
 //! complete for EUF) and random QF_BV instances (checked with `check_sat_bv`,
@@ -86,6 +92,9 @@ fn main() {
     let mut seed = 1u64;
     let mut yices_bin = "yices-smt2".to_string();
     let mut out_dir = "smt-crosscheck-out".to_string();
+    let mut bitblast = false;
+    let mut lrat_check: Option<String> = None;
+    let mut cake_lpr: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -109,6 +118,15 @@ fn main() {
                 i += 1;
                 out_dir = args[i].clone();
             }
+            "--bitblast" => bitblast = true,
+            "--lrat-check" => {
+                i += 1;
+                lrat_check = Some(args[i].clone());
+            }
+            "--cake-lpr" => {
+                i += 1;
+                cake_lpr = Some(args[i].clone());
+            }
             a => {
                 eprintln!("unknown argument {a}");
                 process::exit(1);
@@ -117,10 +135,11 @@ fn main() {
         i += 1;
     }
     fs::create_dir_all(&out_dir).expect("out dir");
-    let mut csv = String::from("kind,index,ours,yices,class\n");
+    let mut csv = String::from("kind,index,ours,yices,class,bitblast,bb_class,proof\n");
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let (mut euf_agree, mut euf_kill, mut euf_unknown) = (0, 0, 0);
     let (mut bv_agree, mut bv_kill, mut bv_incomplete, mut bv_unknown) = (0, 0, 0, 0);
+    let (mut bb_agree, mut bb_kill, mut proofs_ok, mut proofs_bad) = (0, 0, 0, 0);
 
     for k in 0..n_euf {
         let n_vars = 3 + rng.below(4);
@@ -173,7 +192,7 @@ fn main() {
             euf_kill += 1;
             "KILL"
         };
-        csv.push_str(&format!("euf,{k},{o},{y},{class}\n"));
+        csv.push_str(&format!("euf,{k},{o},{y},{class},,,\n"));
         if class == "KILL" {
             eprintln!("KILL: euf_{k}: ours {o}, yices {y} ({path})");
         }
@@ -183,7 +202,7 @@ fn main() {
         let width = rng.pick(&[4u32, 8]);
         let n_vars = 2 + rng.below(3);
         let n_lits = 2 + rng.below(4);
-        let (res, text) = with_session(|session| {
+        let (res, text, blasted) = with_session(|session| {
             let (mut session, s) = session.declare_sort(&format!("BV{width}"));
             let mut terms: Vec<TermId> = Vec::new();
             for v in 0..n_vars {
@@ -221,12 +240,77 @@ fn main() {
                 .assert_formula(formula)
                 .finish_assertions();
             let text = asserted.to_smtlib2().expect("export");
-            (asserted.check_sat_bv(), text)
+            let blasted = if bitblast {
+                let bb = asserted.bitblast().expect("bitblast");
+                let mut proof = Vec::new();
+                let (r, _) = bb.solve_lrat(&mut proof, false).expect("solve");
+                Some((r, bb.dimacs(), proof))
+            } else {
+                None
+            };
+            (asserted.check_sat_bv(), text, blasted)
         });
         let path = format!("{out_dir}/bv_{k}.smt2");
         fs::write(&path, &text).expect("write");
         let y = yices(&yices_bin, &path);
         let o = ours(&res);
+        // Bit-blasted verdict and, on UNSAT, its certificate.
+        let (bb_v, bb_class, proof_class) = match &blasted {
+            None => (String::new(), String::new(), String::new()),
+            Some((r, dimacs, proof)) => {
+                let v = match r {
+                    warp_types_sat::solver::SolveResult::Sat(_) => "sat",
+                    warp_types_sat::solver::SolveResult::Unsat => "unsat",
+                    warp_types_sat::solver::SolveResult::Unknown => "unknown",
+                };
+                let cls = if y == "unknown" || y.starts_with("error") || v == "unknown" {
+                    "unknown"
+                } else if v == y {
+                    bb_agree += 1;
+                    "agree"
+                } else {
+                    bb_kill += 1;
+                    eprintln!("KILL: bv_{k}: bit-blasted {v}, yices {y} ({path})");
+                    "KILL"
+                };
+                let mut pc = String::new();
+                if v == "unsat" && (lrat_check.is_some() || cake_lpr.is_some()) {
+                    let cnf_path = format!("{out_dir}/bv_{k}.cnf");
+                    let lrat_path = format!("{out_dir}/bv_{k}.lrat");
+                    fs::write(&cnf_path, dimacs).expect("write cnf");
+                    fs::write(&lrat_path, proof).expect("write lrat");
+                    let mut ok = true;
+                    if let Some(lc) = &lrat_check {
+                        let o = process::Command::new(lc)
+                            .arg(&cnf_path)
+                            .arg(&lrat_path)
+                            .output()
+                            .expect("lrat-check");
+                        let good = o.status.success()
+                            && String::from_utf8_lossy(&o.stdout).contains("c VERIFIED");
+                        ok &= good;
+                        pc.push_str(if good { "lc:ok " } else { "lc:NOT " });
+                    }
+                    if let Some(ck) = &cake_lpr {
+                        let o = process::Command::new(ck)
+                            .arg(&cnf_path)
+                            .arg(&lrat_path)
+                            .output()
+                            .expect("cake_lpr");
+                        let good = String::from_utf8_lossy(&o.stdout).contains("s VERIFIED");
+                        ok &= good;
+                        pc.push_str(if good { "cake:ok" } else { "cake:NOT" });
+                    }
+                    if ok {
+                        proofs_ok += 1;
+                    } else {
+                        proofs_bad += 1;
+                        eprintln!("KILL: bv_{k}: proof rejected ({pc})");
+                    }
+                }
+                (v.to_string(), cls.to_string(), pc)
+            }
+        };
         let class = if o == "unknown" || y == "unknown" || y.starts_with("error") {
             bv_unknown += 1;
             "unknown"
@@ -240,7 +324,9 @@ fn main() {
             bv_incomplete += 1;
             "incomplete"
         };
-        csv.push_str(&format!("bv,{k},{o},{y},{class}\n"));
+        csv.push_str(&format!(
+            "bv,{k},{o},{y},{class},{bb_v},{bb_class},{proof_class}\n"
+        ));
         if class == "KILL" {
             eprintln!("KILL: bv_{k}: ours {o}, yices {y} ({path})");
         }
@@ -250,7 +336,12 @@ fn main() {
     println!(
         "BV : {n_bv} instances — agree {bv_agree}, incomplete (ours sat, yices unsat) {bv_incomplete}, KILL (ours unsat, yices sat) {bv_kill}, unknown {bv_unknown}"
     );
-    if euf_kill + bv_kill > 0 {
+    if bitblast {
+        println!(
+            "BV bit-blasted: agree with yices {bb_agree}, KILL {bb_kill}; UNSAT proofs accepted {proofs_ok}, rejected {proofs_bad}"
+        );
+    }
+    if euf_kill + bv_kill + bb_kill + proofs_bad > 0 {
         process::exit(1);
     }
 }

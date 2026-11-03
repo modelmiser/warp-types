@@ -1,0 +1,6 @@
+(set-logic QF_BV)
+(define-sort |BV8| () (_ BitVec 8))
+(declare-const |v0| |BV8|)
+(declare-const |v1| |BV8|)
+(assert (and (= (bvor (bvadd (_ bv96 8) (_ bv216 8)) (bvand (_ bv216 8) |v0|)) (_ bv171 8)) (or (= (bvor (bvadd (_ bv96 8) (_ bv216 8)) (bvand (_ bv216 8) |v0|)) (bvadd (_ bv96 8) (_ bv216 8))) (= (bvnot (_ bv171 8)) (bvor (_ bv171 8) (bvand (_ bv216 8) |v0|)))) (=> (distinct (bvnot (_ bv171 8)) |v0|) (= (bvnot (_ bv171 8)) (bvor (_ bv171 8) (bvand (_ bv216 8) |v0|))))))
+(check-sat)

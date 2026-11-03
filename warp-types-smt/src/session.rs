@@ -408,6 +408,15 @@ impl<'s> SmtSession<'s, Asserted> {
     pub fn to_smtlib2(&self) -> Result<String, crate::smtlib::ExportError> {
         crate::smtlib::export(&self.env)
     }
+
+    /// Bit-blast the problem (QF_BV only: every sort with a width, no
+    /// uninterpreted functions) into a clause set that can be solved
+    /// completely and, on UNSAT, certified by an LRAT proof of the CNF it
+    /// writes (`BitBlasted::dimacs`, `BitBlasted::solve_lrat`). Does not
+    /// consume the session. See `research/smt-bitblast.md`.
+    pub fn bitblast(&self) -> Result<crate::bitblast::BitBlasted, crate::bitblast::BitBlastError> {
+        crate::bitblast::bitblast(&self.env)
+    }
 }
 
 // ============================================================================

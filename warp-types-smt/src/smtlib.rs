@@ -34,7 +34,7 @@ fn q(name: &str) -> String {
 }
 
 /// Bitvector width per sort, inferred from the terms.
-fn widths(env: &SmtEnv) -> Result<HashMap<u32, u32>, ExportError> {
+pub(crate) fn widths(env: &SmtEnv) -> Result<HashMap<u32, u32>, ExportError> {
     let mut w: HashMap<u32, u32> = HashMap::new();
     for i in 0..env.arena.len() {
         let e = env.arena.get(TermId(i as u32));

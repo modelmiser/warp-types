@@ -31,6 +31,7 @@
 //! via the DPLL(T) protocol: check after BCP fixpoint, lazy explanation
 //! during conflict analysis, backtrackable union-find.
 
+pub mod bitblast;
 pub mod bv;
 pub mod combine;
 pub mod euf;
@@ -41,6 +42,7 @@ pub mod smtlib;
 pub mod solver;
 pub mod term;
 
+pub use bitblast::{BitBlastError, BitBlasted};
 pub use bv::BvSolver;
 pub use combine::{CombiningSolver, ModuleEquality, ModuleResult, NullModule, TheoryModule};
 pub use euf::EufSolver;

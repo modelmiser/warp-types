@@ -17,7 +17,11 @@ Certifaiger. An UNSAFE answer from PDR comes with a counterexample that replays 
 circuit under *our own* independent simulator at ABC's depth — a second opinion, not an outside
 one. Not certified at all: SAT models (checked by our own runner), DPLL(T) answers (theory lemmas
 are written without a chain and no checker accepts them), BMC `BOUNDED_SAFE` and `EXHAUSTED`,
-PDR `Exhausted`, and the SMT crate's verdicts. All of this was pre-registered, run against
+PDR `Exhausted`, and the SMT crate's EUF verdicts (cross-checked against Yices since the same
+night, `research/smt-crosscheck.md`, not certified). *Added later the same night:* a QF_BV UNSAT
+answer through the new bit-blaster carries an LRAT proof of the bit-blasted CNF that
+`lrat-check` and `cake_lpr` accept (`research/smt-bitblast.md`: 254/254); the translation from
+terms to CNF is ours and uncertified. All of this was pre-registered, run against
 outside references, and read by reviewers from four model families before the public text was
 written; where the text was wrong the first time, the changelog says so.
 

@@ -34,7 +34,20 @@ compares. First run (1,000 + 1,000, Yices 2.7.0; `research/smt-crosscheck.md`): 
 every EUF verdict equal to Yices's; no BV `Unsat` that Yices contradicts; and
 the ground-only BV module's documented incompleteness measured at 23 % of the
 instances Yices calls unsat (ours says `Sat`). This is a verdict cross-check,
-not a certificate: nothing the crate produces can be handed to a proof checker.
+not a certificate.
+
+## QF_BV through the certified SAT path (2026-11-03)
+
+`SmtSession::bitblast` encodes a pure-bitvector problem (every sort with a
+width, no uninterpreted functions) into a `warp-types-sat` clause set:
+`BitBlasted::solve` is complete for QF_BV, unlike the ground-only module, and
+`BitBlasted::solve_lrat` + `BitBlasted::dimacs` give, on UNSAT, an LRAT proof
+of the written CNF that `lrat-check` and `cake_lpr` accept. First run
+(`research/smt-bitblast.md`, 1,000 random instances): bit-blasted verdicts <!-- unguarded: 1,000 — instance count, research/smt-bitblast-2026-11-03/ -->
+equal Yices's on all of them, the 62 the ground module left as `Sat` included, <!-- unguarded: 62 — tally, research/smt-bitblast-2026-11-03/ -->
+and all 254 UNSAT proofs were accepted by both checkers. The certificate covers <!-- unguarded: 254 — tally, research/smt-bitblast-2026-11-03/ -->
+the CNF; the translation from terms to CNF is this crate's and is not itself
+certified. EUF answers remain cross-checked only.
 
 ## Usage
 
