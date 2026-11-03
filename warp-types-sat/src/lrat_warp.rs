@@ -349,6 +349,615 @@ impl FlatProof {
     }
 }
 
+// ============================================================================
+// Parallel binary decode.
+//
+// The device check is ~0.3 s on a 941 MB proof; the one-thread decode above is
+// 3.4–5.9 s, so the decode is the pipeline (research/gpu-lrat-checker.md,
+// Stage 4). Binary LRAT has no index, but it is self-synchronising: in a
+// minimal varint encoding the byte 0x00 occurs ONLY as a terminator, so a step
+// can start only at a byte `a`/`d` that follows a 0x00 (or at offset 0). Not
+// every such byte starts a step — a hint id of 50 encodes as 0x64 = `d` — so a
+// worker that starts at a wrong candidate parses garbage for a step or two and
+// then lands on the true step boundaries. The design makes that harmless:
+//
+//   phase 1 (parallel)   each worker parses from the first candidate in its
+//                        slice to the first step boundary at or past the slice
+//                        end, recording every step's start offset;
+//   phase 2 (sequential) walk the TRUE chain: start at offset 0 (worker 0's
+//                        chain is true by construction); at each slice boundary
+//                        continue from the true chain's current offset — if the
+//                        next worker recorded a step at exactly that offset its
+//                        chain is the true chain from there on (same parser,
+//                        same bytes, same start: same result), otherwise parse
+//                        steps one at a time until it is, or until that slice
+//                        is exhausted;
+//   phase 3 (parallel)   copy literals/hints into the flat arrays at prefix
+//                        offsets; resolve hint ids through the dense map.
+//
+// Correctness therefore does not rest on the 0x00 property at all: the output
+// is, for ANY byte string, what the one-thread decoder produces (the tests
+// hold the two equal on valid proofs, on every truncation and on every
+// single-bit flip of a small proof). The property only decides how much work
+// phase 2 has to do. One step of phase 2 per boundary is the normal case.
+// ============================================================================
+
+/// One parsed step in a worker's local record.
+#[derive(Clone, Copy)]
+struct RawStep {
+    /// Byte offset of the tag.
+    pos: u64,
+    /// `a`: the id. `d`: unused.
+    id: u64,
+    /// `a`: offset just past the id varint (error position for a bad id).
+    pos_after_id: u64,
+    /// `a`: end (exclusive) of this step's literals in the worker's `lits`.
+    lit_end: u32,
+    /// `a`: end (exclusive) of this step's raw hints in the worker's `hints`.
+    hint_end: u32,
+    /// `d`: end (exclusive) of this step's ids in the worker's `dels`.
+    del_end: u32,
+    tag: u8,
+}
+
+/// A worker's output: steps plus the flat local payloads they index.
+#[derive(Default)]
+struct RawChunk {
+    steps: Vec<RawStep>,
+    lits: Vec<i32>,
+    hints: Vec<u64>,
+    /// (id, offset just past its varint) per deletion.
+    dels: Vec<(u64, u64)>,
+    /// Where the chain stopped with a format error, if it did.
+    error: Option<crate::lrat::ParseError>,
+    /// Offset just past the last complete step (the chain's current offset).
+    end: u64,
+    /// If the chain ended with a format error inside an `a` step whose id had
+    /// already been read: (id, offset after the id). The one-thread decoder
+    /// checks the id BEFORE reading on, so a bad id outranks the later format
+    /// error; phase 3a replays that order.
+    partial_add: Option<(u64, u64)>,
+    /// Start in `dels` of the ids read by the interrupted `d` step, for the
+    /// same reason (each id is checked as it is read).
+    partial_del_lo: usize,
+}
+
+#[inline]
+fn varint_at(bytes: &[u8], pos: &mut usize) -> Option<u64> {
+    let mut x: u64 = 0;
+    let mut shift = 0u32;
+    loop {
+        let b = *bytes.get(*pos)?;
+        *pos += 1;
+        x |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            return Some(x);
+        }
+        shift += 7;
+        if shift > 63 {
+            return None;
+        }
+    }
+}
+
+/// Parse one step at `pos` into `out`. Returns the offset after it. Error
+/// positions are exactly the one-thread decoder's (offset after the failing
+/// read) so the two agree on malformed input too.
+fn parse_step(
+    bytes: &[u8],
+    pos: usize,
+    out: &mut RawChunk,
+) -> Result<usize, crate::lrat::ParseError> {
+    use crate::lrat::ParseError;
+    let err = |pos: usize, msg: &str| ParseError {
+        line: pos,
+        msg: msg.to_string(),
+    };
+    let start = pos;
+    let mut pos = pos;
+    let tag = bytes[pos];
+    pos += 1;
+    out.partial_add = None;
+    match tag {
+        b'a' => {
+            let id = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated id"))? >> 1;
+            let pos_after_id = pos;
+            out.partial_add = Some((id, pos_after_id as u64));
+            loop {
+                let m = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated literal"))?;
+                if m == 0 {
+                    break;
+                }
+                let mag = (m >> 1) as i64;
+                let v = if m & 1 == 1 { -mag } else { mag };
+                out.lits
+                    .push(i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?);
+            }
+            loop {
+                let m = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated hint"))?;
+                if m == 0 {
+                    break;
+                }
+                if m & 1 == 1 {
+                    return Err(err(pos, "RAT hint (unsupported)"));
+                }
+                out.hints.push(m >> 1);
+            }
+            out.steps.push(RawStep {
+                pos: start as u64,
+                id,
+                pos_after_id: pos_after_id as u64,
+                lit_end: out.lits.len() as u32,
+                hint_end: out.hints.len() as u32,
+                del_end: out.dels.len() as u32,
+                tag,
+            });
+        }
+        b'd' => {
+            loop {
+                let m = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated deletion"))?;
+                if m == 0 {
+                    break;
+                }
+                out.dels.push((m >> 1, pos as u64));
+            }
+            out.steps.push(RawStep {
+                pos: start as u64,
+                id: 0,
+                pos_after_id: 0,
+                lit_end: out.lits.len() as u32,
+                hint_end: out.hints.len() as u32,
+                del_end: out.dels.len() as u32,
+                tag,
+            });
+        }
+        _ => return Err(err(pos, "expected 'a' or 'd'")),
+    }
+    out.partial_add = None;
+    Ok(pos)
+}
+
+/// Parse steps from `start` until the chain reaches `stop` or beyond, or an
+/// error, or the end of input.
+fn parse_run(bytes: &[u8], start: usize, stop: usize) -> RawChunk {
+    let mut out = RawChunk {
+        end: start as u64,
+        ..Default::default()
+    };
+    let mut pos = start;
+    while pos < stop && pos < bytes.len() {
+        // A step that fails mid-way leaves partial payload behind; roll it back
+        // so the record stays consistent (only the steps vector is consumed).
+        let (nl, nh, nd) = (out.lits.len(), out.hints.len(), out.dels.len());
+        match parse_step(bytes, pos, &mut out) {
+            Ok(next) => {
+                pos = next;
+                out.end = pos as u64;
+            }
+            Err(e) => {
+                out.lits.truncate(nl);
+                out.hints.truncate(nh);
+                out.partial_del_lo = nd; // dels[nd..] belong to the interrupted step
+                out.error = Some(e);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// First plausible step start in `lo..hi`: offset 0, or an `a`/`d` byte that
+/// follows a 0x00. `None` when the slice has no candidate (the previous
+/// worker's chain then simply runs through it).
+fn first_candidate(bytes: &[u8], lo: usize, hi: usize) -> Option<usize> {
+    if lo == 0 {
+        return Some(0);
+    }
+    (lo..hi.min(bytes.len())).find(|&p| bytes[p - 1] == 0 && (bytes[p] == b'a' || bytes[p] == b'd'))
+}
+
+/// A segment of the true chain: steps `step_lo..step_hi` of `chunks[chunk]`.
+struct Segment {
+    chunk: usize,
+    step_lo: usize,
+    step_hi: usize,
+}
+
+impl FlatProof {
+    /// [`FlatProof::from_binary`] on `threads` threads. Identical output and
+    /// identical errors for every input (see the module comment above);
+    /// `threads <= 1` is the one-thread decoder. Peak memory is about twice the
+    /// one-thread decoder's (payloads are decoded into per-worker buffers, then
+    /// copied).
+    pub fn from_binary_par(
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+        threads: usize,
+    ) -> Result<FlatProof, crate::lrat::ParseError> {
+        if threads <= 1 || bytes.len() < 1 << 16 {
+            return FlatProof::from_binary(cnf, bytes);
+        }
+        Self::from_binary_par_chunked(cnf, bytes, threads, bytes.len().div_ceil(threads))
+    }
+
+    /// The worker slice size is a parameter so the tests can force many
+    /// boundaries onto a small proof.
+    pub(crate) fn from_binary_par_chunked(
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+        threads: usize,
+        chunk: usize,
+    ) -> Result<FlatProof, crate::lrat::ParseError> {
+        use crate::lrat::ParseError;
+        let err = |pos: usize, msg: &str| ParseError {
+            line: pos,
+            msg: msg.to_string(),
+        };
+        if bytes.is_empty() {
+            return FlatProof::from_binary(cnf, bytes);
+        }
+        let chunk = chunk.max(1);
+        let n_slices = bytes.len().div_ceil(chunk);
+        let bounds: Vec<(usize, usize)> = (0..n_slices)
+            .map(|i| (i * chunk, ((i + 1) * chunk).min(bytes.len())))
+            .collect();
+
+        // ---- phase 1: parallel speculative parse of every slice ----
+        let mut chunks: Vec<RawChunk> = (0..n_slices).map(|_| RawChunk::default()).collect();
+        std::thread::scope(|sc| {
+            let threads = threads.max(1).min(n_slices);
+            let per = n_slices.div_ceil(threads);
+            let mut rest: &mut [RawChunk] = &mut chunks;
+            let mut first = 0usize;
+            while !rest.is_empty() {
+                let take = per.min(rest.len());
+                let (mine, tail) = rest.split_at_mut(take);
+                rest = tail;
+                let lo = first;
+                first += take;
+                let bounds = &bounds;
+                sc.spawn(move || {
+                    for (k, out) in mine.iter_mut().enumerate() {
+                        let (slo, shi) = bounds[lo + k];
+                        *out = match first_candidate(bytes, slo, shi) {
+                            Some(start) => parse_run(bytes, start, shi),
+                            None => RawChunk {
+                                end: slo as u64,
+                                ..Default::default()
+                            },
+                        };
+                    }
+                });
+            }
+        });
+
+        // ---- phase 2: follow the true chain across slice boundaries ----
+        let mut segments: Vec<Segment> = Vec::with_capacity(n_slices * 2);
+        let mut bridges: Vec<RawChunk> = Vec::new();
+        let mut cur = 0usize; // true chain's current offset
+        let mut pending_error: Option<ParseError> = None;
+        let mut error_chunk: Option<usize> = None; // index into `all` below
+        for (i, c) in chunks.iter().enumerate() {
+            let (_, shi) = bounds[i];
+            if cur >= shi {
+                continue; // an earlier chain already covered this slice
+            }
+            // Does this worker's record contain a step starting at `cur`?
+            let mut at = c.steps.binary_search_by(|s| s.pos.cmp(&(cur as u64))).ok();
+            if at.is_none() {
+                // Bridge: parse steps one at a time until we land on a recorded
+                // step start or leave the slice.
+                let mut b = RawChunk {
+                    end: cur as u64,
+                    ..Default::default()
+                };
+                let mut pos = cur;
+                loop {
+                    if pos >= bytes.len() || pos >= shi {
+                        break;
+                    }
+                    if let Ok(ix) = c.steps.binary_search_by(|s| s.pos.cmp(&(pos as u64))) {
+                        at = Some(ix);
+                        break;
+                    }
+                    let (nl, nh, nd) = (b.lits.len(), b.hints.len(), b.dels.len());
+                    match parse_step(bytes, pos, &mut b) {
+                        Ok(next) => {
+                            pos = next;
+                            b.end = pos as u64;
+                        }
+                        Err(e) => {
+                            b.lits.truncate(nl);
+                            b.hints.truncate(nh);
+                            b.partial_del_lo = nd;
+                            b.error = Some(e);
+                            break;
+                        }
+                    }
+                }
+                let had_error = b.error.clone();
+                cur = b.end as usize;
+                if !b.steps.is_empty() || b.error.is_some() {
+                    let n = b.steps.len();
+                    bridges.push(b);
+                    if n > 0 {
+                        segments.push(Segment {
+                            chunk: n_slices + bridges.len() - 1,
+                            step_lo: 0,
+                            step_hi: n,
+                        });
+                    }
+                }
+                if let Some(e) = had_error {
+                    pending_error = Some(e);
+                    error_chunk = Some(n_slices + bridges.len() - 1);
+                    break;
+                }
+            }
+            if let Some(ix) = at {
+                if ix < c.steps.len() {
+                    segments.push(Segment {
+                        chunk: i,
+                        step_lo: ix,
+                        step_hi: c.steps.len(),
+                    });
+                }
+                cur = c.end as usize;
+                if let Some(e) = &c.error {
+                    pending_error = Some(e.clone());
+                    error_chunk = Some(i);
+                    break;
+                }
+            }
+        }
+        let all: Vec<&RawChunk> = chunks.iter().chain(bridges.iter()).collect();
+
+        // ---- phase 3a: sequential bookkeeping over the true chain ----
+        // (ids increasing, dense map, deletions, first empty clause). This is
+        // one cheap pass over STEPS, not over bytes.
+        let n_original = cnf.len() as u32;
+        let mut n_lemmas = 0usize;
+        let mut n_dels = 0usize;
+        for seg in &segments {
+            let c = all[seg.chunk];
+            for s in &c.steps[seg.step_lo..seg.step_hi] {
+                if s.tag == b'a' {
+                    n_lemmas += 1;
+                } else {
+                    n_dels += 1;
+                }
+            }
+        }
+        let _ = n_dels;
+        let mut fp = FlatProof {
+            lits: Vec::new(),
+            clause_start: Vec::with_capacity(cnf.len() + n_lemmas + 1),
+            deleted_at: Vec::with_capacity(cnf.len() + n_lemmas),
+            lemma_clause: Vec::with_capacity(n_lemmas),
+            lemma_step: Vec::with_capacity(n_lemmas),
+            lemma_id: Vec::with_capacity(n_lemmas),
+            hint_start: Vec::with_capacity(n_lemmas + 1),
+            hints: Vec::new(),
+            first_empty: None,
+            n_original,
+        };
+        let orig_lits: usize = cnf.iter().map(|c| c.len()).sum();
+        fp.clause_start.push(0);
+        let mut acc = 0u32;
+        for c in cnf {
+            acc += c.len() as u32;
+            fp.clause_start.push(acc);
+            fp.deleted_at.push(u32::MAX);
+        }
+        fp.hint_start.push(0);
+        let mut dense_of: Vec<u32> = vec![0; cnf.len() + 1];
+        for i in 0..cnf.len() {
+            dense_of[i + 1] = i as u32 + 1;
+        }
+        let mut last_id = cnf.len() as u64;
+        let mut step_ix = 0u32;
+        // Per true-chain segment: (chunk, step range actually consumed, lit
+        // range, hint range) — phase 3b copies these in parallel.
+        struct Copy {
+            chunk: usize,
+            lit_lo: usize,
+            lit_hi: usize,
+            hint_lo: usize,
+            hint_hi: usize,
+        }
+        let mut copies: Vec<Copy> = Vec::with_capacity(segments.len());
+        let mut lit_total = orig_lits;
+        let mut hint_total = 0usize;
+        let mut done = false;
+        let mut consumed_error = pending_error.take();
+        'segs: for seg in &segments {
+            let c = all[seg.chunk];
+            let steps = &c.steps[seg.step_lo..seg.step_hi];
+            if steps.is_empty() {
+                continue;
+            }
+            let lit_lo = if seg.step_lo == 0 {
+                0
+            } else {
+                c.steps[seg.step_lo - 1].lit_end as usize
+            };
+            let hint_lo = if seg.step_lo == 0 {
+                0
+            } else {
+                c.steps[seg.step_lo - 1].hint_end as usize
+            };
+            let mut del_cursor = if seg.step_lo == 0 {
+                0
+            } else {
+                c.steps[seg.step_lo - 1].del_end as usize
+            };
+            let mut lit_hi = lit_lo;
+            let mut hint_hi = hint_lo;
+            let mut prev_lit_end = lit_lo;
+            for s in steps {
+                if s.tag == b'a' {
+                    if s.id <= last_id {
+                        return Err(err(s.pos_after_id as usize, "id not increasing"));
+                    }
+                    last_id = s.id;
+                    let dense = fp.clause_start.len() as u32 - 1;
+                    if dense_of.len() <= s.id as usize {
+                        dense_of.resize(s.id as usize + 1, 0);
+                    }
+                    dense_of[s.id as usize] = dense + 1;
+                    let n_lits = s.lit_end as usize - prev_lit_end;
+                    prev_lit_end = s.lit_end as usize;
+                    lit_hi = s.lit_end as usize;
+                    hint_hi = s.hint_end as usize;
+                    acc += n_lits as u32;
+                    fp.clause_start.push(acc);
+                    fp.deleted_at.push(u32::MAX);
+                    fp.hint_start
+                        .push((hint_total + (hint_hi - hint_lo)) as u32);
+                    fp.lemma_clause.push(dense);
+                    fp.lemma_step.push(step_ix);
+                    fp.lemma_id.push(s.id);
+                    if n_lits == 0 {
+                        fp.first_empty = Some(fp.lemma_clause.len() as u32 - 1);
+                        done = true;
+                    }
+                } else {
+                    let end = s.del_end as usize;
+                    for &(id, pos_after) in &c.dels[del_cursor..end] {
+                        let dense = dense_of.get(id as usize).copied().unwrap_or(0);
+                        if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
+                            return Err(err(
+                                pos_after as usize,
+                                "deletion of unknown or already-deleted id",
+                            ));
+                        }
+                        fp.deleted_at[(dense - 1) as usize] = step_ix;
+                    }
+                    del_cursor = end;
+                }
+                step_ix += 1;
+                if done {
+                    // Everything after the empty clause is ignored — including
+                    // a format error the one-thread decoder would never reach.
+                    consumed_error = None;
+                    copies.push(Copy {
+                        chunk: seg.chunk,
+                        lit_lo,
+                        lit_hi,
+                        hint_lo,
+                        hint_hi,
+                    });
+                    lit_total += lit_hi - lit_lo;
+                    hint_total += hint_hi - hint_lo;
+                    break 'segs;
+                }
+            }
+            copies.push(Copy {
+                chunk: seg.chunk,
+                lit_lo,
+                lit_hi,
+                hint_lo,
+                hint_hi,
+            });
+            lit_total += lit_hi - lit_lo;
+            hint_total += hint_hi - hint_lo;
+        }
+        if let Some(e) = consumed_error {
+            // The interrupted step: its id / its deletions were checked by the
+            // one-thread decoder before the byte that failed.
+            if let Some(c) = error_chunk.map(|ci| all[ci]) {
+                if let Some((id, pos_after_id)) = c.partial_add {
+                    if id <= last_id {
+                        return Err(err(pos_after_id as usize, "id not increasing"));
+                    }
+                }
+                for &(id, pos_after) in &c.dels[c.partial_del_lo.min(c.dels.len())..] {
+                    let dense = dense_of.get(id as usize).copied().unwrap_or(0);
+                    if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
+                        return Err(err(
+                            pos_after as usize,
+                            "deletion of unknown or already-deleted id",
+                        ));
+                    }
+                    fp.deleted_at[(dense - 1) as usize] = step_ix;
+                }
+            }
+            return Err(e);
+        }
+
+        // ---- phase 3b: parallel copy + hint resolution ----
+        fp.lits = vec![0i32; lit_total];
+        fp.hints = vec![0u32; hint_total];
+        {
+            let mut off = 0usize;
+            for c in cnf {
+                fp.lits[off..off + c.len()].copy_from_slice(c);
+                off += c.len();
+            }
+        }
+        let mut bad_hint = std::sync::atomic::AtomicBool::new(false);
+        {
+            let lits_out = &mut fp.lits;
+            let hints_out = &mut fp.hints;
+            let dense_of = &dense_of;
+            let bad = &mut bad_hint;
+            // Hand each copy its own disjoint destination slice.
+            let mut lit_slices: Vec<&mut [i32]> = Vec::with_capacity(copies.len());
+            let mut hint_slices: Vec<&mut [u32]> = Vec::with_capacity(copies.len());
+            {
+                let mut rest_l: &mut [i32] = &mut lits_out[orig_lits..];
+                let mut rest_h: &mut [u32] = &mut hints_out[..];
+                for cp in &copies {
+                    let (a, b) = rest_l.split_at_mut(cp.lit_hi - cp.lit_lo);
+                    lit_slices.push(a);
+                    rest_l = b;
+                    let (a, b) = rest_h.split_at_mut(cp.hint_hi - cp.hint_lo);
+                    hint_slices.push(a);
+                    rest_h = b;
+                }
+            }
+            let jobs: Vec<(&Copy, &mut [i32], &mut [u32])> = copies
+                .iter()
+                .zip(lit_slices)
+                .zip(hint_slices)
+                .map(|((cp, ls), hs)| (cp, ls, hs))
+                .collect();
+            // At most `threads` workers, each taking a contiguous run of jobs
+            // (the tests force hundreds of tiny slices; one thread per slice
+            // would be a thread storm).
+            let per = jobs.len().div_ceil(threads.max(1)).max(1);
+            let mut it = jobs.into_iter();
+            std::thread::scope(|sc| {
+                let bad: &std::sync::atomic::AtomicBool = bad;
+                let all = &all;
+                loop {
+                    let group: Vec<_> = it.by_ref().take(per).collect();
+                    if group.is_empty() {
+                        break;
+                    }
+                    sc.spawn(move || {
+                        for (cp, ls, hs) in group {
+                            let c = all[cp.chunk];
+                            ls.copy_from_slice(&c.lits[cp.lit_lo..cp.lit_hi]);
+                            for (dst, &h) in hs.iter_mut().zip(&c.hints[cp.hint_lo..cp.hint_hi]) {
+                                let d = dense_of.get(h as usize).copied().unwrap_or(0);
+                                if d == 0 {
+                                    bad.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                *dst = d.wrapping_sub(1);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        if *bad_hint.get_mut() {
+            return Err(err(0, "hint names an id that is never added"));
+        }
+        Ok(fp)
+    }
+}
+
 /// Per-lemma outcome from the warp check, as a small code (device-friendly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -814,6 +1423,177 @@ mod tests {
         assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
     }
 
+    fn assert_flat_eq(a: &FlatProof, b: &FlatProof, what: &str) {
+        assert_eq!(a.lits, b.lits, "{what}: lits");
+        assert_eq!(a.clause_start, b.clause_start, "{what}: clause_start");
+        assert_eq!(a.deleted_at, b.deleted_at, "{what}: deleted_at");
+        assert_eq!(a.lemma_clause, b.lemma_clause, "{what}: lemma_clause");
+        assert_eq!(a.lemma_step, b.lemma_step, "{what}: lemma_step");
+        assert_eq!(a.lemma_id, b.lemma_id, "{what}: lemma_id");
+        assert_eq!(a.hint_start, b.hint_start, "{what}: hint_start");
+        assert_eq!(a.hints, b.hints, "{what}: hints");
+        assert_eq!(a.first_empty, b.first_empty, "{what}: first_empty");
+        assert_eq!(a.n_original, b.n_original, "{what}: n_original");
+    }
+
+    /// Same Result from both decoders — Ok equal field by field, Err equal
+    /// (position and message).
+    fn assert_same_result(
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+        threads: usize,
+        chunk: usize,
+        what: &str,
+    ) {
+        let a = FlatProof::from_binary(cnf, bytes);
+        let b = FlatProof::from_binary_par_chunked(cnf, bytes, threads, chunk);
+        match (a, b) {
+            (Ok(a), Ok(b)) => assert_flat_eq(&a, &b, what),
+            (Err(a), Err(b)) => assert_eq!(a, b, "{what}: error"),
+            (a, b) => panic!(
+                "{what}: sequential {:?} vs parallel {:?}",
+                a.map(|_| ()),
+                b.map(|_| ())
+            ),
+        }
+    }
+
+    /// A format-valid proof over 60 clauses whose lemmas' FIRST hint is often
+    /// clause 50 — encoded 0x64 = `d`, right after the literals' 0x00
+    /// terminator: the one byte pattern that a worker can mistake for a step
+    /// start. Deletions and multi-byte ids/literals are mixed in.
+    fn synthetic_proof(with_empty: bool) -> (Vec<Vec<i32>>, Vec<u8>) {
+        let cnf: Vec<Vec<i32>> = (0..60)
+            .map(|i| vec![(i % 19) + 1, -((i % 23) + 2)])
+            .collect();
+        let mut steps = Vec::new();
+        let mut id = 61u64;
+        let mut live: Vec<u64> = (1..=60).collect();
+        let mut x = 12345u32;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for k in 0..400u32 {
+            let n_lits = (rnd() % 4) as usize; // 0..3 literals (0 only if with_empty at the end)
+            let n_lits = if n_lits == 0 { 1 } else { n_lits };
+            let lits: Vec<i32> = (0..n_lits)
+                .map(|_| {
+                    let v = (rnd() % 300) as i32 + 1; // multi-byte varints past 63
+                    if rnd() % 2 == 0 {
+                        v
+                    } else {
+                        -v
+                    }
+                })
+                .collect();
+            let mut hints: Vec<i64> = Vec::new();
+            if k % 3 != 2 {
+                hints.push(50);
+            }
+            for _ in 0..(rnd() % 4) {
+                hints.push(live[(rnd() as usize) % live.len()] as i64);
+            }
+            steps.push(Step::Add { id, lits, hints });
+            live.push(id);
+            id += 1 + (rnd() % 3) as u64; // gaps in the id sequence
+            if k % 5 == 4 && live.len() > 55 {
+                let mut ids = Vec::new();
+                for _ in 0..1 + rnd() % 3 {
+                    let ix = (rnd() as usize) % live.len();
+                    ids.push(live.swap_remove(ix));
+                }
+                steps.push(Step::Delete { ids });
+            }
+        }
+        if with_empty {
+            steps.push(Step::Add {
+                id,
+                lits: vec![],
+                hints: vec![50, 61],
+            });
+            // Trailing garbage after the empty clause must be ignored by both.
+            steps.push(Step::Delete { ids: vec![999_999] });
+        }
+        (cnf, crate::lrat::write_binary(&Proof { steps }))
+    }
+
+    #[test]
+    fn par_decode_equals_sequential_on_valid_proofs() {
+        for with_empty in [false, true] {
+            let (cnf, bytes) = synthetic_proof(with_empty);
+            // The 'd' mimic really is in the stream: 0x00 then 0x64 somewhere.
+            assert!(bytes.windows(2).any(|w| w == [0, b'd']));
+            for (threads, chunk) in [
+                (2, 5),
+                (3, 7),
+                (4, 64),
+                (8, 1),
+                (16, 1000),
+                (3, bytes.len() + 10),
+            ] {
+                assert_same_result(
+                    &cnf,
+                    &bytes,
+                    threads,
+                    chunk,
+                    &format!("valid t={threads} c={chunk} e={with_empty}"),
+                );
+            }
+            let p = crate::lrat::parse_binary(&bytes).unwrap();
+            let via_flatten = flatten(&cnf, &p).unwrap();
+            let via_par = FlatProof::from_binary_par_chunked(&cnf, &bytes, 4, 9).unwrap();
+            assert_flat_eq(&via_par, &via_flatten, "par vs flatten");
+        }
+    }
+
+    /// Every prefix of the proof: both decoders return the same Result.
+    #[test]
+    fn par_decode_equals_sequential_on_every_truncation() {
+        let (cnf, bytes) = synthetic_proof(true);
+        for cut in 0..bytes.len() {
+            assert_same_result(&cnf, &bytes[..cut], 3, 11, &format!("truncate at {cut}"));
+        }
+    }
+
+    /// Every single-bit flip of the proof (non-minimal varints, stray zero
+    /// bytes, bogus tags, ids out of order, RAT hints …): same Result.
+    #[test]
+    fn par_decode_equals_sequential_on_every_bit_flip() {
+        let (cnf, bytes) = synthetic_proof(false);
+        let mut m = bytes.clone();
+        for i in 0..bytes.len() {
+            for bit in 0..8 {
+                m[i] ^= 1 << bit;
+                assert_same_result(&cnf, &m, 3, 13, &format!("flip byte {i} bit {bit}"));
+                m[i] ^= 1 << bit;
+            }
+        }
+    }
+
+    /// The parallel decoder's own fault: skipping the bridge (trusting a
+    /// worker's first recorded step blindly) must be caught by the valid-proof
+    /// test above — demonstrated here by hand: a worker started on the 'd'
+    /// mimic yields a different step list.
+    #[test]
+    fn mimic_candidate_parses_differently() {
+        let (_, bytes) = synthetic_proof(false);
+        let p = bytes.windows(2).position(|w| w == [0, b'd']).unwrap() + 1;
+        let wrong = parse_run(&bytes, p, p + 1);
+        assert_eq!(
+            wrong.steps[0].tag, b'd',
+            "the mimic parses as a deletion step"
+        );
+        // and the true chain has no step starting there
+        let truth = parse_run(&bytes, 0, bytes.len());
+        assert!(truth
+            .steps
+            .binary_search_by(|s| s.pos.cmp(&(p as u64)))
+            .is_err());
+    }
+
     /// Archive agreement: reference vs warp on every proof under
     /// `LRAT_ARCHIVE_DIRS` (skips when unset).
     #[test]
@@ -861,6 +1641,14 @@ mod tests {
                     let bin = crate::lrat::write_binary(&proof);
                     let fd = FlatProof::from_binary(&cnf, &bin)
                         .expect("flat decode of a flatten-able proof");
+                    let fpar = FlatProof::from_binary_par_chunked(
+                        &cnf,
+                        &bin,
+                        4,
+                        bin.len().div_ceil(4).max(1),
+                    )
+                    .unwrap_or_else(|e| panic!("{stem}: from_binary_par: {e:?}"));
+                    assert_flat_eq(&fpar, &fd, &stem);
                     assert_eq!(fd.hints, fp.hints, "{stem}: flat decode hints differ");
                     assert_eq!(
                         fd.deleted_at, fp.deleted_at,

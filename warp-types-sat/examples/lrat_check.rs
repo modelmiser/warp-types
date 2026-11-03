@@ -55,12 +55,50 @@ fn main() {
     }
     // Device-path host cost: decode binary straight into the flat layout.
     if matches!(bytes.first(), Some(b'a') | Some(b'd')) {
+        let decode_threads: usize = std::env::var("LRAT_DECODE_THREADS")
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(threads);
+        if std::env::var_os("LRAT_DECODE_VERIFY").is_some() {
+            // Hold the parallel decoder to the one-thread decoder on this file.
+            let t0 = Instant::now();
+            let seq = warp_types_sat::lrat_warp::FlatProof::from_binary(&cnf, &bytes);
+            let t1 = Instant::now();
+            let par =
+                warp_types_sat::lrat_warp::FlatProof::from_binary_par(&cnf, &bytes, decode_threads);
+            let t2 = Instant::now();
+            let same = match (&seq, &par) {
+                (Ok(a), Ok(b)) => {
+                    a.lits == b.lits
+                        && a.clause_start == b.clause_start
+                        && a.deleted_at == b.deleted_at
+                        && a.lemma_clause == b.lemma_clause
+                        && a.lemma_step == b.lemma_step
+                        && a.lemma_id == b.lemma_id
+                        && a.hint_start == b.hint_start
+                        && a.hints == b.hints
+                        && a.first_empty == b.first_empty
+                }
+                (Err(a), Err(b)) => a == b,
+                _ => false,
+            };
+            println!(
+                "c decode-verify: sequential {:.3}s parallel({decode_threads}) {:.3}s  {}",
+                (t1 - t0).as_secs_f64(),
+                (t2 - t1).as_secs_f64(),
+                if same { "EQUAL" } else { "DIFFER" }
+            );
+            if !same {
+                println!("s DISAGREE-DECODE");
+                std::process::exit(3);
+            }
+        }
         let tf = Instant::now();
-        match warp_types_sat::lrat_warp::FlatProof::from_binary(&cnf, &bytes) {
+        match warp_types_sat::lrat_warp::FlatProof::from_binary_par(&cnf, &bytes, decode_threads) {
             Ok(fp) => {
                 let tg = Instant::now();
                 println!(
-                    "c flat-decode {:.3}s (lemmas={} hints={} lits={})",
+                    "c flat-decode({decode_threads}) {:.3}s (lemmas={} hints={} lits={})",
                     (tg - tf).as_secs_f64(),
                     fp.lemma_clause.len(),
                     fp.hints.len(),
