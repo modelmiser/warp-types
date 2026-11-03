@@ -75,8 +75,13 @@ What a passed check means: *this* invariant, for *this* instance and this
 lowering, is inductive and implies the property, as judged by separately
 written software on an independent solver. It is not a proof that the engine
 is sound in general, it says nothing about the instances that timed out,
-and the checker and the replayer are ordinary Python, not verified checkers
-(the HWMCC witness-circuit format and Certifaiger were not used).
+and the checker and the replayer are ordinary Python, not verified checkers.
+**Since 2026-11-03 the standard tool checks them too:** `aig-witness` (in
+`warp-types-bmc`) turns each invariant into an HWMCC witness circuit — the
+model verbatim with bad := ¬(Inv ∧ P) — and Certifaiger 10.4.0 reports
+`valid witness` on all 20, and rejects a witness built from the property <!-- unguarded: 20 — campaign count, research/bmc-pdr-hwmcc17-2026-11-01/certifaiger/ -->
+alone (`Inductive check failed`). Witnesses and verdicts are in the data
+directory under `certifaiger/`.
 
 ## What's inside
 

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- **Certifaiger witnesses for PDR proofs** (`warp-types-bmc`): `aiger::write_witness` and the `aig-witness` binary turn a
+  `pdr --invariant` file into an HWMCC witness circuit (the model verbatim with bad := ¬(Inv ∧ P), identity mapping);
+  `aiger::parse_invariant_file`. **Checked 2026-11-03:** all 20 HWMCC17 instances PDR proves are `valid witness` under <!-- unguarded: 20 — tally, research/bmc-pdr-hwmcc17-2026-11-01/certifaiger/ -->
+  Certifaiger 10.4.0 (kissat backend); a witness built from the property alone is rejected (`Inductive check failed`).
+  Record: `research/bmc-pdr-aiger.md`.
 - **LRAT straight from the solver** (`warp-types-sat`): `solve --lrat FILE [--lrat-binary]` and
   `solver::solve_watched_lrat_with` write clause ids and a RUP hint chain per learned clause as the solver runs
   (`lrat_emit::rup_chain`: implication-graph walk from the final learned clause, reasons in trail order, conflict
