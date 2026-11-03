@@ -30,7 +30,7 @@ pub mod frames;
 pub mod phase;
 pub mod session;
 
-pub use checker::{check, PdrResult};
+pub use checker::{check, check_with, PdrOptions, PdrResult};
 pub use cube::Cube;
 pub use frames::{Frame, FrameSequence};
 pub use phase::{CounterexampleFound, Exhausted, Init, Modeled, Phase, Safe};

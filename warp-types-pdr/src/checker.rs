@@ -70,10 +70,36 @@ enum Query<T> {
 
 /// A proof obligation: "block this cube at this frame level."
 struct Obligation {
+    /// The cube to block — over the cube variables only when projecting.
     cube: Cube,
+    /// The full consistent state the cube was taken from (every variable,
+    /// inputs and gates included), kept for the counterexample trace.
+    state: Vec<bool>,
     level: usize,
     /// Index of the parent obligation that spawned this one (for trace reconstruction).
     parent: Option<usize>,
+}
+
+/// Engine options.
+#[derive(Debug, Clone, Copy)]
+pub struct PdrOptions {
+    /// Take cubes over the system's declared cube variables (the latches of
+    /// an AIG) instead of every variable. Inputs and gates are then
+    /// existentially quantified by the SAT queries, which is what every
+    /// production PDR does: a cube over all 1,700 variables of a circuit
+    /// blocks one assignment, a cube over its 60 latches blocks a state.
+    /// Ignored for systems that declare no cube variables. Default on
+    /// (2026-11-03; before that every variable was a cube variable, which is
+    /// the structural reason 95 of 119 small HWMCC17 circuits timed out).
+    pub project_cubes: bool,
+}
+
+impl Default for PdrOptions {
+    fn default() -> Self {
+        PdrOptions {
+            project_cubes: true,
+        }
+    }
 }
 
 /// Run Property-Directed Reachability on a transition system.
@@ -87,7 +113,22 @@ struct Obligation {
 /// - `max_frames`: maximum number of frames before giving up
 /// - `conflict_budget`: SAT conflict budget per query (0 = unlimited)
 pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> PdrResult {
+    check_with(sys, max_frames, conflict_budget, PdrOptions::default())
+}
+
+/// [`check`] with explicit [`PdrOptions`].
+pub fn check_with(
+    sys: &TransitionSystem,
+    max_frames: u32,
+    conflict_budget: u64,
+    opts: PdrOptions,
+) -> PdrResult {
     let n = sys.num_state_vars();
+    let mask: Option<&[bool]> = if opts.project_cubes {
+        sys.cube_vars()
+    } else {
+        None
+    };
 
     session::with_session(|init: PdrSession<'_, Init>| {
         let modeled = init.build_model();
@@ -136,7 +177,7 @@ pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> P
 
             // STRENGTHEN: block all CTIs at the frontier
             loop {
-                let cti = find_cti(sys, &frames, k, conflict_budget);
+                let cti = find_cti(sys, &frames, k, conflict_budget, mask);
                 match cti {
                     Query::Unsat => break, // No more CTIs — frontier is clean
                     Query::Unknown => {
@@ -147,8 +188,8 @@ pub fn check(sys: &TransitionSystem, max_frames: u32, conflict_budget: u64) -> P
                             frames_explored: frames.len(),
                         };
                     }
-                    Query::Sat(cube) => {
-                        match block_cube(sys, &mut frames, cube, k, conflict_budget) {
+                    Query::Sat((cube, state)) => {
+                        match block_cube(sys, &mut frames, cube, state, k, conflict_budget, mask) {
                             BlockResult::Blocked => continue,
                             BlockResult::Counterexample(trace) => {
                                 let _cex = modeled.check_counterexample();
@@ -243,7 +284,8 @@ fn find_cti(
     frames: &FrameSequence,
     level: usize,
     conflict_budget: u64,
-) -> Query<Cube> {
+    mask: Option<&[bool]>,
+) -> Query<(Cube, Vec<bool>)> {
     let n = sys.num_state_vars();
     let num_tseitin = sys.property().len() as u32;
     let total_vars = n + num_tseitin;
@@ -253,12 +295,22 @@ fn find_cti(
     // Frame clauses (current-state)
     add_frame_clauses(&mut db, frames.frame(level), 0);
 
+    // Combinational constraints: without them a frame's gate variables are
+    // free in this query, and every "CTI" is an inconsistent assignment that
+    // then has to be blocked one at a time.
+    for c in sys.comb() {
+        db.add_clause(c.lits.clone());
+    }
+
     // Negated property: ¬P(s)
     add_negated_property(&mut db, sys, 0, n);
 
     let (result, _) = solve_watched_budget(db, total_vars, conflict_budget);
     match result {
-        SolveResult::Sat(assign) => Query::Sat(Cube::from_assignment(&assign, n)),
+        SolveResult::Sat(assign) => {
+            let state = assign[..n as usize].to_vec();
+            Query::Sat((Cube::from_assignment_masked(&assign, n, mask), state))
+        }
         SolveResult::Unsat => Query::Unsat,
         SolveResult::Unknown => Query::Unknown,
     }
@@ -277,7 +329,8 @@ fn check_predecessor(
     cube: &Cube,
     level: usize,
     conflict_budget: u64,
-) -> Query<Cube> {
+    mask: Option<&[bool]>,
+) -> Query<(Cube, Vec<bool>)> {
     let n = sys.num_state_vars();
     let total_vars = 2 * n;
 
@@ -299,7 +352,10 @@ fn check_predecessor(
 
     let (result, _) = solve_watched_budget(db, total_vars, conflict_budget);
     match result {
-        SolveResult::Sat(assign) => Query::Sat(Cube::from_assignment(&assign, n)),
+        SolveResult::Sat(assign) => {
+            let state = assign[..n as usize].to_vec();
+            Query::Sat((Cube::from_assignment_masked(&assign, n, mask), state))
+        }
         SolveResult::Unsat => Query::Unsat,
         SolveResult::Unknown => Query::Unknown,
     }
@@ -315,18 +371,20 @@ fn check_predecessor(
 ///
 /// Uses a min-heap priority queue (lowest level first) to process obligations.
 /// When a cube is blocked, its parent may become blockable too.
+#[allow(clippy::too_many_arguments)]
 fn block_cube(
     sys: &TransitionSystem,
     frames: &mut FrameSequence,
     cube: Cube,
+    state: Vec<bool>,
     level: usize,
     conflict_budget: u64,
+    mask: Option<&[bool]>,
 ) -> BlockResult {
-    let n = sys.num_state_vars();
-
     // Work queue: (level, cube, parent_index) — process lowest level first
     let mut queue: Vec<Obligation> = vec![Obligation {
         cube,
+        state,
         level,
         parent: None,
     }];
@@ -340,7 +398,7 @@ fn block_cube(
             // (i.e., is I ∧ cube SAT?)
             match intersects_initial(sys, &queue[min_idx].cube, conflict_budget) {
                 Query::Sat(()) => {
-                    return BlockResult::Counterexample(reconstruct_trace(&queue, min_idx, n));
+                    return BlockResult::Counterexample(reconstruct_trace(&queue, min_idx));
                 }
                 Query::Unsat => {
                     // Not actually reachable from I — remove this obligation
@@ -358,14 +416,16 @@ fn block_cube(
             &queue[min_idx].cube,
             obl_level - 1,
             conflict_budget,
+            mask,
         );
 
         match predecessor {
-            Query::Sat(pred_cube) => {
+            Query::Sat((pred_cube, pred_state)) => {
                 // Has predecessor — add new obligation at lower level
                 let parent_idx = min_idx;
                 queue.push(Obligation {
                     cube: pred_cube,
+                    state: pred_state,
                     level: obl_level - 1,
                     parent: Some(parent_idx),
                 });
@@ -383,7 +443,7 @@ fn block_cube(
                 // property violation, so it is a real counterexample.
                 match intersects_initial(sys, &queue[min_idx].cube, conflict_budget) {
                     Query::Sat(()) => {
-                        return BlockResult::Counterexample(reconstruct_trace(&queue, min_idx, n));
+                        return BlockResult::Counterexample(reconstruct_trace(&queue, min_idx));
                     }
                     Query::Unknown => return BlockResult::BudgetExhausted,
                     Query::Unsat => {
@@ -394,6 +454,7 @@ fn block_cube(
                             &queue[min_idx].cube,
                             obl_level,
                             conflict_budget,
+                            mask,
                         );
                         frames.add_blocked_clause(obl_level, clause);
                         // Remove the blocked obligation
@@ -450,18 +511,17 @@ fn intersects_initial(sys: &TransitionSystem, cube: &Cube, conflict_budget: u64)
 /// Reconstruct a counterexample trace from the obligation chain.
 /// Follows parent pointers from the initial-state obligation up to the
 /// property-violating state.
-fn reconstruct_trace(
-    obligations: &[Obligation],
-    start_idx: usize,
-    num_state_vars: u32,
-) -> Vec<Vec<bool>> {
+fn reconstruct_trace(obligations: &[Obligation], start_idx: usize) -> Vec<Vec<bool>> {
     // The start_idx is the level-0 obligation (closest to initial states).
     // Follow parent pointers to build the trace from initial to bad state.
+    // Each obligation carries the full consistent state its cube came from
+    // (the cube alone may be latch-projected): consecutive states agree on
+    // the latches by construction (the predecessor query fixed cube').
     let mut trace = Vec::new();
     let mut current = Some(start_idx);
 
     while let Some(idx) = current {
-        trace.push(obligations[idx].cube.to_state_vec(num_state_vars));
+        trace.push(obligations[idx].state.clone());
         current = obligations[idx].parent;
     }
 
@@ -490,6 +550,7 @@ fn generalize(
     cube: &Cube,
     level: usize,
     conflict_budget: u64,
+    mask: Option<&[bool]>,
 ) -> Vec<Lit> {
     let mut reduced_lits = cube.lits.clone();
 
@@ -523,7 +584,14 @@ fn generalize(
         );
         let consecution_ok = level > 0
             && matches!(
-                check_predecessor(sys, frames, &candidate_cube, level - 1, conflict_budget),
+                check_predecessor(
+                    sys,
+                    frames,
+                    &candidate_cube,
+                    level - 1,
+                    conflict_budget,
+                    mask
+                ),
                 Query::Unsat
             );
         if initiation_ok && consecution_ok {
@@ -884,6 +952,81 @@ mod tests {
                 assert!(trace.last().unwrap().iter().all(|&b| b));
             }
             other => panic!("expected CounterexampleFound at depth 7, got {:?}", other),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Latch projection: same verdicts, cubes over latches only
+    // ------------------------------------------------------------------
+
+    /// 2-latch counter in AIGER (l0 toggles, l1 ^= l0; bad = l0 ∧ l1 at
+    /// depth 3) and its safe sibling (l1 := l0; 11 unreachable). Both
+    /// engines must agree with each other and with the known answers, and
+    /// the projected invariant must mention latch variables only.
+    #[test]
+    fn latch_projection_agrees_with_full_cubes() {
+        use warp_types_bmc::aiger::{lower, parse};
+        let unsafe_aig = "aag 6 0 2 0 4 1\n2 3 0\n4 11 0\n12\n6 2 5\n8 3 4\n10 7 9\n12 2 4\n";
+        let safe_aig = "aag 3 0 2 0 1 1\n2 3 0\n4 2 0\n6\n6 2 4\n";
+        for (text, want_cex_depth) in [(unsafe_aig, Some(3)), (safe_aig, None)] {
+            let aig = parse(text.as_bytes()).unwrap();
+            let (sys, lw) = lower(&aig).unwrap();
+            assert!(sys.cube_vars().is_some());
+            let full = check_with(
+                &sys,
+                50,
+                0,
+                PdrOptions {
+                    project_cubes: false,
+                },
+            );
+            let proj = check_with(
+                &sys,
+                50,
+                0,
+                PdrOptions {
+                    project_cubes: true,
+                },
+            );
+            match (want_cex_depth, &full, &proj) {
+                (
+                    Some(d),
+                    PdrResult::CounterexampleFound {
+                        depth: a,
+                        trace: ta,
+                    },
+                    PdrResult::CounterexampleFound {
+                        depth: b,
+                        trace: tb,
+                    },
+                ) => {
+                    assert_eq!((*a, *b), (d, d));
+                    // Full states in both traces: every variable present.
+                    assert!(ta
+                        .iter()
+                        .chain(tb.iter())
+                        .all(|st| st.len() == sys.num_state_vars() as usize));
+                }
+                (
+                    None,
+                    PdrResult::Safe { invariant: ia, .. },
+                    PdrResult::Safe { invariant: ib, .. },
+                ) => {
+                    let mask = sys.cube_vars().unwrap();
+                    for c in ib {
+                        for l in c {
+                            assert!(
+                                mask[l.var() as usize],
+                                "projected invariant mentions non-latch var {} ({})",
+                                l.var(),
+                                lw.aiger_lit(*l)
+                            );
+                        }
+                    }
+                    let _ = ia;
+                }
+                other => panic!("verdicts differ or are wrong: {other:?}"),
+            }
         }
     }
 

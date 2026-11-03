@@ -50,6 +50,29 @@ impl Cube {
         Cube { lits }
     }
 
+    /// [`Cube::from_assignment`] restricted to the variables `mask` marks
+    /// (`None` = all of them): latch projection, see `checker`.
+    pub fn from_assignment_masked(
+        assignment: &[bool],
+        num_state_vars: u32,
+        mask: Option<&[bool]>,
+    ) -> Cube {
+        let Some(mask) = mask else {
+            return Self::from_assignment(assignment, num_state_vars);
+        };
+        let lits: Vec<Lit> = (0..num_state_vars)
+            .filter(|&v| mask[v as usize])
+            .map(|v| {
+                if assignment[v as usize] {
+                    Lit::pos(v)
+                } else {
+                    Lit::neg(v)
+                }
+            })
+            .collect();
+        Cube { lits }
+    }
+
     /// Extract a cube from next-state variables in a SAT assignment.
     /// Maps variables `[offset, offset + num_state_vars)` back to `[0, num_state_vars)`.
     pub fn from_assignment_next_state(assignment: &[bool], num_state_vars: u32) -> Cube {

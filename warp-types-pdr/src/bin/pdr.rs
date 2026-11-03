@@ -71,9 +71,11 @@ fn run_aiger(args: &[String]) {
     let mut trace_path: Option<&str> = None;
     let mut max_frames: u32 = 1000;
     let mut budget: u64 = 0;
+    let mut project = true;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--no-project" => project = false,
             "--max-frames" => {
                 i += 1;
                 max_frames = args
@@ -130,7 +132,22 @@ fn run_aiger(args: &[String]) {
         sys.num_state_vars()
     );
     let t = std::time::Instant::now();
-    let result = check(&sys, max_frames, budget);
+    eprintln!(
+        "c cubes over {}",
+        if project {
+            "latches (projected)"
+        } else {
+            "every variable (--no-project)"
+        }
+    );
+    let result = warp_types_pdr::check_with(
+        &sys,
+        max_frames,
+        budget,
+        warp_types_pdr::PdrOptions {
+            project_cubes: project,
+        },
+    );
     let secs = t.elapsed().as_secs_f64();
     match &result {
         PdrResult::Safe {
@@ -190,7 +207,7 @@ fn run_aiger(args: &[String]) {
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: pdr [<file.aig|aag> [--max-frames N] [--budget C] [--invariant OUT] [--trace OUT]]"
+        "Usage: pdr [<file.aig|aag> [--max-frames N] [--budget C] [--invariant OUT] [--trace OUT] [--no-project]]"
     );
     std::process::exit(1);
 }

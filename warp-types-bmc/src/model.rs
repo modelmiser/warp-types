@@ -70,6 +70,16 @@ pub struct TransitionSystem {
     /// Safety property P(s): CNF over [0, num_state_vars). Satisfied = safe.
     /// BMC checks ¬P, so a SAT result means the property is violated.
     property: Vec<ModelClause>,
+    /// Combinational constraints over the CURRENT state copy alone — gate
+    /// definitions and invariant constraints — that every consistent state
+    /// satisfies. They are a subset of what `initial` and `transition` carry;
+    /// PDR adds them to the queries that would otherwise leave gate variables
+    /// free (a frame ∧ ¬P query has no T in it). Empty for hand-built systems.
+    comb: Vec<ModelClause>,
+    /// The variables PDR's cubes range over (true = in the cube), when the
+    /// system distinguishes state-holding variables (latches) from the rest
+    /// (inputs, gates). `None` = every variable, the pre-2026-11-03 behaviour.
+    cube_vars: Option<Vec<bool>>,
 }
 
 impl TransitionSystem {
@@ -80,7 +90,49 @@ impl TransitionSystem {
             initial: Vec::new(),
             transition: Vec::new(),
             property: Vec::new(),
+            comb: Vec::new(),
+            cube_vars: None,
         }
+    }
+
+    /// Combinational (current-copy) constraints; see the field.
+    pub fn comb(&self) -> &[ModelClause] {
+        &self.comb
+    }
+
+    /// Which variables PDR cubes range over, if the system says.
+    pub fn cube_vars(&self) -> Option<&[bool]> {
+        self.cube_vars.as_deref()
+    }
+
+    /// Add a combinational constraint over current-state variables.
+    ///
+    /// # Panics
+    /// Panics if any literal references a variable outside `[0, num_state_vars)`.
+    pub fn add_comb(&mut self, lits: Vec<Lit>) {
+        for &lit in &lits {
+            assert!(
+                lit.var() < self.num_state_vars,
+                "combinational clause literal references variable {}, but valid \
+                 state variables are [0, {})",
+                lit.var(),
+                self.num_state_vars
+            );
+        }
+        self.comb.push(ModelClause { lits });
+    }
+
+    /// Declare the cube variables (one flag per state variable).
+    ///
+    /// # Panics
+    /// Panics if `mask.len() != num_state_vars`.
+    pub fn set_cube_vars(&mut self, mask: Vec<bool>) {
+        assert_eq!(
+            mask.len(),
+            self.num_state_vars as usize,
+            "cube-variable mask must have one entry per state variable"
+        );
+        self.cube_vars = Some(mask);
     }
 
     /// Number of boolean state variables.

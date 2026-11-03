@@ -661,12 +661,16 @@ fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), A
     sys.add_initial(vec![Lit::pos(lw.const_var)]);
     sys.add_transition(vec![Lit::pos(lw.const_var)]);
     sys.add_transition(vec![Lit::pos(lw.const_var + n)]);
+    sys.add_comb(vec![Lit::pos(lw.const_var)]);
 
-    // Latches.
+    // Latches. They are the cube variables: a PDR cube over latches alone
+    // identifies a state up to its inputs, and the gates follow from both.
+    let mut cube_vars = vec![false; n as usize];
     for la in &aig.latches {
         if !lw.keeps(la.lit >> 1) {
             continue;
         }
+        cube_vars[lw.lit(la.lit).var() as usize] = true;
         match la.reset {
             Reset::Zero => sys.add_initial(vec![lw.lit(la.lit).complement()]),
             Reset::One => sys.add_initial(vec![lw.lit(la.lit)]),
@@ -693,6 +697,9 @@ fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), A
             let c2 = vec![g.complement(), b];
             let c3 = vec![g, a.complement(), b.complement()];
             if side == 0 {
+                sys.add_comb(c1.clone());
+                sys.add_comb(c2.clone());
+                sys.add_comb(c3.clone());
                 sys.add_initial(c1);
                 sys.add_initial(c2);
                 sys.add_initial(c3);
@@ -709,10 +716,12 @@ fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), A
         sys.add_initial(vec![lw.lit(c)]);
         sys.add_transition(vec![lw.lit(c)]);
         sys.add_transition(vec![lw.next_lit(c)]);
+        sys.add_comb(vec![lw.lit(c)]);
     }
 
     // Property: ¬bad.
     sys.add_property(vec![lw.lit(bad).complement()]);
+    sys.set_cube_vars(cube_vars);
     Ok((sys, lw))
 }
 

@@ -33,6 +33,8 @@ def main():
     ap.add_argument("--bmc", required=True); ap.add_argument("--pdr", required=True); ap.add_argument("--kissat", required=True)
     ap.add_argument("--timeout", type=int, default=60); ap.add_argument("--max-kb", type=int, default=20)
     ap.add_argument("--max-depth", type=int, default=1000); ap.add_argument("--max-frames", type=int, default=1000)
+    ap.add_argument("--skip-bmc", action="store_true", help="run only the PDR half (BMC unchanged since run 3)")
+    ap.add_argument("--pdr-extra", default="", help="extra flags for pdr, e.g. --no-project")
     a = ap.parse_args()
     out = Path(a.out); (out / "inv").mkdir(parents=True, exist_ok=True); (out / "trace").mkdir(exist_ok=True)
     replay = Path(__file__).with_name("replay-trace.py")
@@ -50,7 +52,7 @@ def main():
         # our BMC (+ independent replay of any counterexample)
         btr = out / "trace" / f"{name}.bmc.trace"
         if btr.exists(): btr.unlink()
-        rc, so, se, t = run([a.bmc, str(f), "--max-depth", str(a.max_depth), "--trace", str(btr)], a.timeout)
+        rc, so, se, t = (run([a.bmc, str(f), "--max-depth", str(a.max_depth), "--trace", str(btr)], a.timeout) if not a.skip_bmc else (0, "s SKIPPED\n", "", 0.0))
         v, kv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_bmc"] = v; row["our_bmc_depth"] = kv.get("depth", ""); row["our_bmc_s"] = f"{t:.2f}"
         if v == "SAT":
@@ -65,7 +67,7 @@ def main():
         if inv.exists(): inv.unlink()
         ptr = out / "trace" / f"{name}.pdr.trace"
         if ptr.exists(): ptr.unlink()
-        rc, so, se, t = run([a.pdr, str(f), "--max-frames", str(a.max_frames), "--invariant", str(inv), "--trace", str(ptr)], a.timeout)
+        rc, so, se, t = run([a.pdr, str(f), "--max-frames", str(a.max_frames), "--invariant", str(inv), "--trace", str(ptr)] + a.pdr_extra.split(), a.timeout)
         pv, pkv = parse_verdict(so) if rc != -9 else ("TIMEOUT", {})
         row["our_pdr"] = pv; row["our_pdr_depth_or_frame"] = pkv.get("depth", pkv.get("frame", "")); row["our_pdr_clauses"] = pkv.get("clauses", ""); row["our_pdr_s"] = f"{t:.2f}"
         if pv == "SAT":
