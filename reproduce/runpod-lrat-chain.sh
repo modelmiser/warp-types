@@ -23,6 +23,7 @@ ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.' | he
 if ! command -v rustup &>/dev/null; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none >/dev/null 2>&1; fi
 source "$HOME/.cargo/env"
 mkdir -p /tmp/warp-types && tar -xzf /tmp/warp-types.tgz -C /tmp/warp-types && cd /tmp/warp-types
+for g in /tmp/chain/*.gz; do [ -f "$g" ] && gunzip -f "$g"; done
 rustup component add rust-src >/dev/null 2>&1; rustup target add nvptx64-nvidia-cuda >/dev/null 2>&1
 rustc --version | tee -a "$R"
 log "=== Build ==="
@@ -33,8 +34,10 @@ gcc /tmp/chain/lrat-check.c -std=c99 -O2 -o /tmp/chain/lrat-check 2>&1 | tail -2
 SOLVE=target/release/solve; TRIM=target/release/lrat-trim; CHK=target/release/examples/lrat_check
 LC=/tmp/chain/lrat-check; CAKE=/tmp/chain/cake_lpr
 DT=$(( $(nproc) < 32 ? $(nproc) : 32 ))
-now() { date +%s.%N; }
-el() { echo "$2 - $1" | bc; }
+# Milliseconds via shell arithmetic: the pod images have no `bc` (session 1 of
+# this script lost every CPU timing to that).
+now() { date +%s%N; }
+el() { local ms=$(( ($2 - $1) / 1000000 )); printf "%d.%03d" $((ms / 1000)) $((ms % 1000)); }
 
 echo "name,t_solve,bytes_untrimmed,t_trim,bytes_trimmed,t_decode,t_device,gpu_verdict,t_lrat_check,lrat_check,t_cake,cake" > "$CSV"
 log "=== (A) Solver → binary LRAT → trim → device check, per instance (decode threads $DT) ==="
