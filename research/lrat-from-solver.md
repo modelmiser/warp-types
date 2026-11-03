@@ -7,7 +7,7 @@
 ## 1. Why
 
 The certified chain today is `solve --drat` → `drat-trim -L` → a checker. On the
-941 MB-binary proof the checker takes 1.6 s on a GPU pod; `drat-trim` took
+941 MB-binary proof the checker takes 1.6 s on a GPU pod; `drat-trim` took <!-- unguarded: 941 — proof size in MB -->
 **454 s** to produce the LRAT it checks, and `drat-trim` is in the trusted path
 (its output is what `cake_lpr` certifies, not the solver's). Emitting LRAT from
 the solver removes both: the trimmer's time and the trimmer's trust.
@@ -82,3 +82,12 @@ Trimming (emit only what the final proof uses) — that is `drat-trim`'s job and
 different algorithm; RAT/PR; any theory-lemma justification; solving speed.
 
 ## 6. Log (append-only)
+
+- 2026-11-03 — **Built and measured in one sitting** (commit `ad6740e48` + the campaign). Design as in §2, with one correction found by the in-crate oracle before any external run: the conflict during the very first level-0 propagation had its own `proof.empty()` site, which emitted an unjustified empty clause (`unjustified = 1` on a 2-variable hand CNF); it now gets a chain like the others. In-crate oracle (every solve checked by `check_sequential`, `check_independent` and the warp path; text and binary emissions equal): PHP(3–7), parity(3–12), 40 random 3-SAT seeds at n = 60 with reductions every 20 conflicts (deletion + compaction + id remap exercised), three edge CNFs; four faults each flip the verdict (`DropHint`, `ReverseHints`, `WrongId`, `FlipLiteral`). <!-- unguarded: 40, 60, 20, four — test parameters -->
+  **Campaign** (`tools/lrat-campaign.py` over the certification corpus's 182 CNFs, 114 UNSAT; data in `research/lrat-from-solver-2026-11-03/`): <!-- unguarded: 182, 114 — campaign tallies, results.csv -->
+  - **P1 MET: 114/114 solver-emitted LRATs `VERIFIED` by `lrat-check`, 114/114 by `cake_lpr`, 114/114 by our checker.** No `drat-trim` anywhere in that path. <!-- unguarded: 114 — results.csv -->
+  - **P2 MISSED (worse):** logging overhead ratio (LRAT − none)/(DRAT − none), median **4.0×** against the predicted 1.3–2×. In absolute terms on the only family with measurable solve time (r3sat n = 250, median solve 8.8 s): LRAT +20 %, DRAT +6 %. The implication walk per conflict plus the hint bytes is the cost; the prediction under-weighted the walk. Error sign: toward the design's favour.
+  - **P3 partly MET:** emitted bytes / `drat-trim -L` bytes, median **0.96** (PHP 0.95, r3sat n = 150 0.96, Tseitin 0.93) — but **4.4× on r3sat n = 250** (250 MB vs 57 MB): on long runs most learned clauses never reach the final proof, and the trimmer removes them while we keep everything. Within the predicted 1–3× for five families, outside it for the one that matters.
+  - **P4 MISSED:** end to end (solve + `lrat-check`) vs (solve + `drat-trim -L` + `lrat-check`), median **2.8×** (min 1.16 on n = 250, max 4.7 on cnfuzz); predicted ≥ 5× on n ≥ 200, measured 1.9× (n = 200) and 1.2× (n = 250). Why: on proofs *our* solver produces at this scale, `drat-trim` is quick (5 s on the n = 250 proofs) and the solve itself dominates; the 454 s trim that motivated the arc was on kissat's proof of an instance our solver does not finish. Corpus total: 122.7 s against 151.9 s, 1.24×. Error sign: toward the design's favour again — two of two misses in the same direction, which is the tell the house rule names. <!-- unguarded: 250 — instance size n -->
+  - **P5 MET by construction:** the same checker consumed the proofs (`ours` column).
+  **Verdict on the arc.** The trust claim holds and is the real result: an UNSAT answer now comes with a proof that a verified checker accepts, produced by the solver alone. The speed claim does not hold at the scale this solver reaches; it would at kissat's scale, where trimming takes minutes, but that is a claim about a solver we do not have. What the misses point at: untrimmed proofs grow 4× on long runs, so the next step on *this* axis is trimming on the fly (mark reachability from the empty clause backwards, which is `drat-trim`'s backward pass) or emitting binary LRAT by default (half the bytes).

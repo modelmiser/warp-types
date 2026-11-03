@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- **LRAT straight from the solver** (`warp-types-sat`): `solve --lrat FILE [--lrat-binary]` and
+  `solver::solve_watched_lrat_with` write clause ids and a RUP hint chain per learned clause as the solver runs
+  (`lrat_emit::rup_chain`: implication-graph walk from the final learned clause, reasons in trail order, conflict
+  clause last); `--certify` with `--lrat` runs `lrat-check`. `ProofLog` gains defaulted `wants_hints` /
+  `add_with_hints` / `delete_ids` / `empty_with_hints`; `proof::LratWriter` (text or binary); `Trail::position_of`.
+  **Measured 2026-11-03** (pre-registered, `research/lrat-from-solver.md`; `tools/lrat-campaign.py`): all 114 UNSAT <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
+  proofs of the certification corpus verified by `lrat-check`, `cake_lpr` and the in-crate checker, with no
+  `drat-trim` in the path. Two predictions missed, both in the design's favour and recorded: logging overhead ≈ 4×
+  the DRAT logger's, and the end-to-end gain over DRAT + `drat-trim` is 2.8× at the median, 1.2× on the largest
+  instances this solver finishes (untrimmed proofs grow 4× on long runs).
 - **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT; the reference checker follows
   `lrat-check`'s RUP rules — hints in order, deletions honoured, every step checked including those after the empty
   clause, RAT = `Unsupported` — and reports the earliest failing step), `lrat_warp` (one warp per lemma on the

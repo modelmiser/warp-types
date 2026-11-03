@@ -1,0 +1,187 @@
+run1_parity20: s SATISFIABLE — skipped
+run1_parity40: s SATISFIABLE — skipped
+run1_parity80: s SATISFIABLE — skipped
+run1_php6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 42130/46022 P4 4.02
+run1_php7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 279506/295444 P4 2.32
+run1_php8: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.25s lrat 0.29s drat 0.27s trim 0.36s bytes 3222871/2937323 P4 1.97
+run1_planted_n200_s0: s SATISFIABLE — skipped
+run1_planted_n200_s1: s SATISFIABLE — skipped
+run1_planted_n200_s2: s SATISFIABLE — skipped
+run1_planted_n200_s3: s SATISFIABLE — skipped
+run1_planted_n400_s0: s SATISFIABLE — skipped
+run1_planted_n400_s1: s SATISFIABLE — skipped
+run1_planted_n400_s2: s SATISFIABLE — skipped
+run1_planted_n400_s3: s SATISFIABLE — skipped
+run1_r3sat_n150_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 440933/444554 P4 2.26
+run1_r3sat_n150_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 411673/420491 P4 2.40
+run1_r3sat_n150_s2: s SATISFIABLE — skipped
+run1_r3sat_n150_s3: s SATISFIABLE — skipped
+run1_r3sat_n150_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.03s trim 0.08s bytes 527826/542792 P4 2.28
+run1_r3sat_n150_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.06s bytes 351349/367611 P4 2.44
+run1_r3sat_n150_s6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.01s trim 0.06s bytes 253543/266894 P4 2.70
+run1_r3sat_n150_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.01s trim 0.06s bytes 287706/299423 P4 2.58
+run1_r3sat_n200_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.15s lrat 0.19s drat 0.16s trim 0.22s bytes 2998790/2475149 P4 1.73
+run1_r3sat_n200_s1: s SATISFIABLE — skipped
+run1_r3sat_n200_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.12s drat 0.10s trim 0.16s bytes 1927396/1880628 P4 1.92
+run1_r3sat_n200_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.08s lrat 0.10s drat 0.08s trim 0.14s bytes 1603298/1478987 P4 1.93
+run1_r3sat_n200_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.11s drat 0.10s trim 0.16s bytes 1778924/1738592 P4 1.93
+run1_r3sat_n200_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.13s lrat 0.17s drat 0.14s trim 0.21s bytes 2713102/2445720 P4 1.81
+run1_r3sat_n200_s6: s SATISFIABLE — skipped
+run1_r3sat_n200_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.12s lrat 0.16s drat 0.13s trim 0.21s bytes 2462666/2367398 P4 1.84
+run1_r3sat_n250_s0: s SATISFIABLE — skipped
+run1_r3sat_n250_s1: s SATISFIABLE — skipped
+run1_r3sat_n250_s2: s SATISFIABLE — skipped
+run1_r3sat_n250_s3: s SATISFIABLE — skipped
+run1_r3sat_n250_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 16.74s lrat 19.98s drat 17.81s trim 9.12s bytes 249731700/42297997 P4 1.16
+run1_r3sat_n250_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 8.78s lrat 10.54s drat 9.33s trim 4.99s bytes 140899153/32084468 P4 1.18
+run1_r3sat_n250_s6: s SATISFIABLE — skipped
+run1_r3sat_n250_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 1.46s lrat 1.82s drat 1.57s trim 1.27s bytes 28321455/13590488 P4 1.36
+run1_tseitin_v20_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 7881/9193 P4 3.89
+run1_tseitin_v20_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 4918/6048 P4 4.72
+run1_tseitin_v20_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 14357/15252 P4 3.83
+run1_tseitin_v20_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 11197/11592 P4 3.74
+run1_tseitin_v30_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.01s trim 0.05s bytes 127355/141186 P4 3.26
+run1_tseitin_v30_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 14046/13530 P4 3.95
+run1_tseitin_v30_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 107480/117818 P4 3.58
+run1_tseitin_v30_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 29071/32447 P4 3.72
+run1_tseitin_v40_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.06s bytes 301818/328780 P4 2.82
+run1_tseitin_v40_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 124546/125503 P4 3.34
+run1_tseitin_v40_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.02s trim 0.07s bytes 443971/451218 P4 2.82
+run1_tseitin_v40_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.05s bytes 141836/145320 P4 3.10
+run2-default2000_parity20: s SATISFIABLE — skipped
+run2-default2000_parity40: s SATISFIABLE — skipped
+run2-default2000_parity80: s SATISFIABLE — skipped
+run2-default2000_php6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 42130/46022 P4 3.91
+run2-default2000_php7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.07s bytes 279506/295444 P4 2.65
+run2-default2000_php8: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.24s lrat 0.28s drat 0.26s trim 0.35s bytes 3222871/2937323 P4 1.94
+run2-default2000_planted_n200_s0: s SATISFIABLE — skipped
+run2-default2000_planted_n200_s1: s SATISFIABLE — skipped
+run2-default2000_planted_n200_s2: s SATISFIABLE — skipped
+run2-default2000_planted_n200_s3: s SATISFIABLE — skipped
+run2-default2000_planted_n400_s0: s SATISFIABLE — skipped
+run2-default2000_planted_n400_s1: s SATISFIABLE — skipped
+run2-default2000_planted_n400_s2: s SATISFIABLE — skipped
+run2-default2000_planted_n400_s3: s SATISFIABLE — skipped
+run2-default2000_r3sat_n150_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 440933/444554 P4 2.36
+run2-default2000_r3sat_n150_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.06s bytes 411673/420491 P4 2.41
+run2-default2000_r3sat_n150_s2: s SATISFIABLE — skipped
+run2-default2000_r3sat_n150_s3: s SATISFIABLE — skipped
+run2-default2000_r3sat_n150_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.03s trim 0.08s bytes 527826/542792 P4 2.34
+run2-default2000_r3sat_n150_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.07s bytes 351349/367611 P4 2.61
+run2-default2000_r3sat_n150_s6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.06s bytes 253543/266894 P4 2.81
+run2-default2000_r3sat_n150_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.01s trim 0.06s bytes 287706/299423 P4 2.74
+run2-default2000_r3sat_n200_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.15s lrat 0.18s drat 0.16s trim 0.22s bytes 2998790/2475149 P4 1.76
+run2-default2000_r3sat_n200_s1: s SATISFIABLE — skipped
+run2-default2000_r3sat_n200_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.11s drat 0.10s trim 0.16s bytes 1927396/1880628 P4 1.88
+run2-default2000_r3sat_n200_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.08s lrat 0.10s drat 0.08s trim 0.14s bytes 1603298/1478987 P4 1.88
+run2-default2000_r3sat_n200_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.12s drat 0.10s trim 0.16s bytes 1778924/1738592 P4 1.90
+run2-default2000_r3sat_n200_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.13s lrat 0.17s drat 0.14s trim 0.21s bytes 2713102/2445720 P4 1.81
+run2-default2000_r3sat_n200_s6: s SATISFIABLE — skipped
+run2-default2000_r3sat_n200_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.12s lrat 0.15s drat 0.13s trim 0.21s bytes 2462666/2367398 P4 1.90
+run2-default2000_r3sat_n250_s0: s SATISFIABLE — skipped
+run2-default2000_r3sat_n250_s1: s SATISFIABLE — skipped
+run2-default2000_r3sat_n250_s2: s SATISFIABLE — skipped
+run2-default2000_r3sat_n250_s3: s SATISFIABLE — skipped
+run2-default2000_r3sat_n250_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 16.85s lrat 20.00s drat 17.80s trim 9.16s bytes 249731700/42297997 P4 1.17
+run2-default2000_r3sat_n250_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 8.78s lrat 10.56s drat 9.35s trim 5.02s bytes 140899153/32084468 P4 1.18
+run2-default2000_r3sat_n250_s6: s SATISFIABLE — skipped
+run2-default2000_r3sat_n250_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 1.47s lrat 1.83s drat 1.57s trim 1.26s bytes 28321455/13590488 P4 1.35
+run2-default2000_tseitin_v20_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 7881/9193 P4 4.26
+run2-default2000_tseitin_v20_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 4918/6048 P4 3.99
+run2-default2000_tseitin_v20_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 14357/15252 P4 4.23
+run2-default2000_tseitin_v20_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 11197/11592 P4 4.00
+run2-default2000_tseitin_v30_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.01s trim 0.05s bytes 127355/141186 P4 3.44
+run2-default2000_tseitin_v30_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 14046/13530 P4 4.24
+run2-default2000_tseitin_v30_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 107480/117818 P4 3.45
+run2-default2000_tseitin_v30_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 29071/32447 P4 3.84
+run2-default2000_tseitin_v40_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.01s trim 0.06s bytes 301818/328780 P4 2.65
+run2-default2000_tseitin_v40_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 124546/125503 P4 3.25
+run2-default2000_tseitin_v40_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.07s bytes 443971/451218 P4 2.55
+run2-default2000_tseitin_v40_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.05s bytes 141836/145320 P4 3.17
+run3-cake-cnfuzz_cnfuzz_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 2715/10736 P4 3.85
+run3-cake-cnfuzz_cnfuzz_s1: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s10: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 1548/5233 P4 4.39
+run3-cake-cnfuzz_cnfuzz_s11: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s12: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 316/3101 P4 4.05
+run3-cake-cnfuzz_cnfuzz_s13: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 839/7364 P4 3.62
+run3-cake-cnfuzz_cnfuzz_s14: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 3522/20518 P4 4.00
+run3-cake-cnfuzz_cnfuzz_s15: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s16: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 276/5245 P4 3.95
+run3-cake-cnfuzz_cnfuzz_s17: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 520/2382 P4 4.01
+run3-cake-cnfuzz_cnfuzz_s18: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 86/14667 P4 3.93
+run3-cake-cnfuzz_cnfuzz_s19: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 88/16799 P4 3.38
+run3-cake-cnfuzz_cnfuzz_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 51/11711 P4 4.08
+run3-cake-cnfuzz_cnfuzz_s20: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 291/9224 P4 4.16
+run3-cake-cnfuzz_cnfuzz_s21: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 43/6821 P4 4.09
+run3-cake-cnfuzz_cnfuzz_s22: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s23: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 317/23733 P4 3.97
+run3-cake-cnfuzz_cnfuzz_s24: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 242/2263 P4 3.97
+run3-cake-cnfuzz_cnfuzz_s25: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s26: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 73/6252 P4 4.08
+run3-cake-cnfuzz_cnfuzz_s27: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 48/3536 P4 4.46
+run3-cake-cnfuzz_cnfuzz_s28: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.03s lrat 0.03s drat 0.03s trim 0.08s bytes 532220/481069 P4 2.23
+run3-cake-cnfuzz_cnfuzz_s29: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 29852/44018 P4 3.58
+run3-cake-cnfuzz_cnfuzz_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 48/996 P4 4.27
+run3-cake-cnfuzz_cnfuzz_s30: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 6590/26906 P4 3.61
+run3-cake-cnfuzz_cnfuzz_s31: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 229/6530 P4 4.15
+run3-cake-cnfuzz_cnfuzz_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 1030/9211 P4 4.07
+run3-cake-cnfuzz_cnfuzz_s5: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s6: s SATISFIABLE — skipped
+run3-cake-cnfuzz_cnfuzz_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 63/5215 P4 4.17
+run3-cake-cnfuzz_cnfuzz_s8: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 38/2663 P4 4.27
+run3-cake-cnfuzz_cnfuzz_s9: s SATISFIABLE — skipped
+run3-cake-cnfuzz_parity20: s SATISFIABLE — skipped
+run3-cake-cnfuzz_parity40: s SATISFIABLE — skipped
+run3-cake-cnfuzz_parity80: s SATISFIABLE — skipped
+run3-cake-cnfuzz_php6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 42130/46022 P4 4.00
+run3-cake-cnfuzz_php7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 279506/295444 P4 2.40
+run3-cake-cnfuzz_php8: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.25s lrat 0.29s drat 0.27s trim 0.35s bytes 3222871/2937323 P4 1.94
+run3-cake-cnfuzz_planted_n200_s0: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n200_s1: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n200_s2: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n200_s3: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n400_s0: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n400_s1: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n400_s2: s SATISFIABLE — skipped
+run3-cake-cnfuzz_planted_n400_s3: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n150_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.02s trim 0.07s bytes 440933/444554 P4 2.30
+run3-cake-cnfuzz_r3sat_n150_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.07s bytes 411673/420491 P4 2.52
+run3-cake-cnfuzz_r3sat_n150_s2: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n150_s3: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n150_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.03s drat 0.03s trim 0.07s bytes 527826/542792 P4 2.26
+run3-cake-cnfuzz_r3sat_n150_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.06s bytes 351349/367611 P4 2.51
+run3-cake-cnfuzz_r3sat_n150_s6: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.01s trim 0.06s bytes 253543/266894 P4 2.78
+run3-cake-cnfuzz_r3sat_n150_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.02s drat 0.01s trim 0.06s bytes 287706/299423 P4 2.75
+run3-cake-cnfuzz_r3sat_n200_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.15s lrat 0.19s drat 0.16s trim 0.22s bytes 2998790/2475149 P4 1.73
+run3-cake-cnfuzz_r3sat_n200_s1: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n200_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.12s drat 0.10s trim 0.16s bytes 1927396/1880628 P4 1.93
+run3-cake-cnfuzz_r3sat_n200_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.08s lrat 0.10s drat 0.08s trim 0.14s bytes 1603298/1478987 P4 1.91
+run3-cake-cnfuzz_r3sat_n200_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.09s lrat 0.12s drat 0.10s trim 0.16s bytes 1778924/1738592 P4 1.86
+run3-cake-cnfuzz_r3sat_n200_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.13s lrat 0.17s drat 0.14s trim 0.21s bytes 2713102/2445720 P4 1.82
+run3-cake-cnfuzz_r3sat_n200_s6: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n200_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.12s lrat 0.15s drat 0.13s trim 0.21s bytes 2462666/2367398 P4 1.87
+run3-cake-cnfuzz_r3sat_n250_s0: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n250_s1: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n250_s2: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n250_s3: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n250_s4: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 16.78s lrat 19.86s drat 17.79s trim 9.18s bytes 249731700/42297997 P4 1.17
+run3-cake-cnfuzz_r3sat_n250_s5: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 8.80s lrat 10.57s drat 9.34s trim 5.00s bytes 140899153/32084468 P4 1.18
+run3-cake-cnfuzz_r3sat_n250_s6: s SATISFIABLE — skipped
+run3-cake-cnfuzz_r3sat_n250_s7: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 1.47s lrat 1.83s drat 1.58s trim 1.27s bytes 28321455/13590488 P4 1.36
+run3-cake-cnfuzz_tseitin_v20_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 7881/9193 P4 4.05
+run3-cake-cnfuzz_tseitin_v20_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 4918/6048 P4 4.30
+run3-cake-cnfuzz_tseitin_v20_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 14357/15252 P4 4.43
+run3-cake-cnfuzz_tseitin_v20_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.04s bytes 11197/11592 P4 4.28
+run3-cake-cnfuzz_tseitin_v30_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.05s bytes 127355/141186 P4 3.26
+run3-cake-cnfuzz_tseitin_v30_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 14046/13530 P4 4.49
+run3-cake-cnfuzz_tseitin_v30_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 107480/117818 P4 3.48
+run3-cake-cnfuzz_tseitin_v30_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.00s drat 0.00s trim 0.05s bytes 29071/32447 P4 3.92
+run3-cake-cnfuzz_tseitin_v40_s0: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.06s bytes 301818/328780 P4 2.82
+run3-cake-cnfuzz_tseitin_v40_s1: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.00s lrat 0.01s drat 0.00s trim 0.05s bytes 124546/125503 P4 3.32
+run3-cake-cnfuzz_tseitin_v40_s2: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.02s lrat 0.02s drat 0.02s trim 0.07s bytes 443971/451218 P4 2.60
+run3-cake-cnfuzz_tseitin_v40_s3: lrat-check=VERIFIED cake_lpr=VERIFIED ours=s VERIFIED solve 0.01s lrat 0.01s drat 0.01s trim 0.05s bytes 141836/145320 P4 3.00
+
+instances: 114  lrat-check VERIFIED: 114  cake_lpr VERIFIED: 114
+p2_overhead_ratio: median 3.98  min -185.31  max 5044.40
+p3_bytes_ratio: median 0.96  min 0.00  max 5.90
+p4_speedup: median 2.82  min 1.16  max 4.72
