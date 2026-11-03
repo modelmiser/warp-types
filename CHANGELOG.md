@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- **`warp-types-smt` verdicts cross-checked against Yices** (`SmtSession::to_smtlib2`, `smt-crosscheck`): on 1,000
+  random QF_UF instances every verdict equals Yices 2.7.0's; on 1,000 random QF_BV instances no `Unsat` is
+  contradicted, and the ground-only BV module's incompleteness is measured at 23 % of Yices-unsat instances
+  (pre-registered, `research/smt-crosscheck.md`). A verdict cross-check, not a certificate.
 - **PDR: latch-projected cubes** (`PdrOptions::project_cubes`, default on; `pdr --no-project` for the old engine).
   `TransitionSystem` gains combinational clauses (`add_comb`) and a cube-variable mask (`set_cube_vars`); the
   AIGER lowering declares the latches and the property's variable as cube variables and the gate definitions as

@@ -37,6 +37,7 @@ pub mod euf;
 pub mod formula;
 pub mod phase;
 pub mod session;
+pub mod smtlib;
 pub mod solver;
 pub mod term;
 
@@ -46,5 +47,6 @@ pub use euf::EufSolver;
 pub use formula::{AtomId, AtomMap, SmtFormula};
 pub use phase::{Asserted, Declared, Init, Phase, Sat, Unknown, Unsat};
 pub use session::{with_session, SmtSession};
+pub use smtlib::ExportError;
 pub use solver::SmtResult;
 pub use term::{BvOpKind, FuncDecl, FuncId, Sort, SortId, TermArena, TermId, TermKind};

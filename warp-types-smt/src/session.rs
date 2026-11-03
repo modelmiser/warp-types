@@ -401,6 +401,13 @@ impl<'s> SmtSession<'s, Asserted> {
         let module = crate::bv::BvSolver::new(&kinds);
         crate::solver::check_sat_combined(self.env, module)
     }
+
+    /// The problem as an SMT-LIB 2 script (`smtlib::export`), for an outside
+    /// solver to answer the same question (`smt-crosscheck`). Does not consume
+    /// the session.
+    pub fn to_smtlib2(&self) -> Result<String, crate::smtlib::ExportError> {
+        crate::smtlib::export(&self.env)
+    }
 }
 
 // ============================================================================

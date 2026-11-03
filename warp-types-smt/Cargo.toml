@@ -12,6 +12,10 @@ keywords = ["smt", "euf", "solver", "typestate", "verification"]
 categories = ["algorithms", "science"]
 
 [[bin]]
+name = "smt-crosscheck"
+path = "src/bin/smt_crosscheck.rs"
+
+[[bin]]
 name = "smt"
 path = "src/bin/smt.rs"
 

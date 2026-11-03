@@ -26,6 +26,16 @@ Output:
   EUF + BV: UNSAT
 ```
 
+## Checked against an outside solver (2026-11-03)
+
+`SmtSession::to_smtlib2` exports a session's problem as SMT-LIB 2, and
+`smt-crosscheck --euf N --bv N` generates random instances, asks Yices and
+compares. First run (1,000 + 1,000, Yices 2.7.0; `research/smt-crosscheck.md`): <!-- unguarded: 1,000 — instance counts, research/smt-crosscheck-2026-11-03/ -->
+every EUF verdict equal to Yices's; no BV `Unsat` that Yices contradicts; and
+the ground-only BV module's documented incompleteness measured at 23 % of the
+instances Yices calls unsat (ours says `Sat`). This is a verdict cross-check,
+not a certificate: nothing the crate produces can be handed to a proof checker.
+
 ## Usage
 
 ```rust
