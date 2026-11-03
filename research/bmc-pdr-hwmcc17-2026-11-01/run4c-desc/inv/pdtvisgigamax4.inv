@@ -1,0 +1,17 @@
+c inductive invariant from warp-types-pdr for /home/cjb/staging/2026-11-01-hwmcc/pdtvisgigamax4.aig: frame 2, 14 clauses + property; AIGER literals, 0-terminated
+c model fnv1a64 1472678b666ea467
+63 55 47 0
+72 64 55 47 0
+57 51 47 0
+71 69 0
+72 62 51 47 0
+67 55 47 0
+72 69 64 55 47 0
+72 71 64 55 47 0
+55 51 47 0
+67 51 47 0
+64 62 55 51 0
+73 64 62 55 51 0
+55 51 49 0
+67 55 51 0
+99 0

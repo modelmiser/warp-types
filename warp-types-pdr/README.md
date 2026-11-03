@@ -44,9 +44,11 @@ publication; its corrections are in the log.
   invariants pass the independent check and are `valid witness` under
   Certifaiger; all 10 counterexamples replay at ABC's depth.** A pair of proofs
   from the previous engine sit beyond the cap now (`power2bit128` at 67 s,
-  `139452p0` at 129 s); the generalisation order is a per-instance knob of
-  one to two orders of magnitude that has not been tuned (see the log). <!-- unguarded: 36, 10, 20, 4 — campaign counts, research/bmc-pdr-hwmcc17-2026-11-01/run4b-projected/ -->
-  `pdr --no-project` restores the all-variables engine.
+  `139452p0` at 129 s). The order in which the generaliser drops literals
+  moves single instances by one to two orders of magnitude; measured whole
+  (`--cube-order desc`, run 4c) it solves 44 to the default's 46 with 40 in <!-- unguarded: 36, 10, 20, 4, 44, 46, 40 — campaign counts, research/bmc-pdr-hwmcc17-2026-11-01/run4{b,c}-*/ -->
+  common, so it stays a flag and a two-order portfolio (+4 for 2× cores) is
+  deferred. `pdr --no-project` restores the all-variables engine.
 - Run 2 (all-variables engine, kept as the baseline): **20 instances proved; all 20 invariants pass the independent check, and
   pass it again with the property clause removed** (so each frame alone is
   inductive and implies the property). <!-- unguarded: 20 — campaign count, research/bmc-pdr-hwmcc17-2026-11-01/ -->

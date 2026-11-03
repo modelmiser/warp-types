@@ -9,7 +9,9 @@
   2026-11-03** (runs 4/4b, pre-registered in `research/bmc-pdr-aiger.md`): on the 119 small HWMCC17 circuits at
   60 s, **36 proved + 10 refuted, from 20 + 4**; all 36 invariants certified by `tools/check-invariant.py` and by <!-- unguarded: 119, 36, 10, 20, 4 — campaign counts, research/bmc-pdr-hwmcc17-2026-11-01/run4b-projected/ -->
   Certifaiger; all 10 counterexamples replay at ABC's depth; fences 2–70× smaller. Two earlier proofs now exceed
-  the cap; the literal order in generalisation is an untuned, large knob (recorded, parked).
+  the cap. The literal order in generalisation (`PdrOptions::descending_cubes`, `pdr --cube-order asc|desc`) was
+  measured whole: 44 verdicts descending vs 46 ascending, union 50 — below the pre-registered portfolio threshold, <!-- unguarded: 44, 46, 50 — campaign counts, research/bmc-pdr-hwmcc17-2026-11-01/run4c-desc/ -->
+  so it stays a flag.
 - **Certifaiger witnesses for PDR proofs** (`warp-types-bmc`): `aiger::write_witness` and the `aig-witness` binary turn a
   `pdr --invariant` file into an HWMCC witness circuit (the model verbatim with bad := ¬(Inv ∧ P), identity mapping);
   `aiger::parse_invariant_file`. **Checked 2026-11-03:** all 20 HWMCC17 instances PDR proves are `valid witness` under <!-- unguarded: 20 — tally, research/bmc-pdr-hwmcc17-2026-11-01/certifaiger/ -->

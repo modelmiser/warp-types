@@ -1,0 +1,4 @@
+c inductive invariant from warp-types-pdr for /home/cjb/staging/2026-11-01-hwmcc/nusmvreactorp5.aig: frame 3, 1 clauses + property; AIGER literals, 0-terminated
+c model fnv1a64 ea55e3b5f0223440
+295 153 151 149 0
+2745 0
