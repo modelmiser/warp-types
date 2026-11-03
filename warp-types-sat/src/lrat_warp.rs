@@ -53,47 +53,69 @@ pub struct FlatProof {
     pub first_empty: Option<u32>,
     /// Number of original clauses (dense indices `0..n_original`).
     pub n_original: u32,
+    /// A verdict the host reached from the step SEQUENCE alone (an id out of
+    /// order, a bad deletion, a hint naming an id never added, a RAT step),
+    /// at some step E. Only lemmas with step < E are in the arrays; the
+    /// per-lemma check still runs on them, and [`combine`] reports whichever
+    /// failure comes first — the earliest failing step, which is what
+    /// `lrat-check` reports when it stops. (Found by the hint-level
+    /// negatives, 2026-11-02: on a use-after-delete the sequential reference
+    /// names the lemma, a prepass-first path named the later double
+    /// deletion.)
+    pub early: Option<Verdict>,
 }
 
-/// Why flattening refused a proof (these are checked sequentially on the
-/// host because they are about the step sequence, not about any lemma).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FlattenError {
-    IdNotIncreasing { step: usize, id: u64 },
-    UnknownHint { step: usize, id: u64, hint: u64 },
-    BadDeletion { step: usize, id: u64 },
-    RatUnsupported { step: usize, id: u64 },
+/// Step index of a Rejected / Unsupported verdict.
+fn verdict_step(v: &Verdict) -> Option<usize> {
+    match v {
+        Verdict::Rejected { step, .. } | Verdict::Unsupported { step, .. } => Some(*step),
+        _ => None,
+    }
 }
 
-impl FlattenError {
-    /// The reference checker's verdict for the same defect.
-    pub fn as_verdict(&self) -> Verdict {
-        match *self {
-            FlattenError::IdNotIncreasing { step, id } => Verdict::Rejected {
-                step,
-                id,
-                reason: Reason::IdNotIncreasing,
-            },
-            FlattenError::UnknownHint { step, id, hint } => Verdict::Rejected {
-                step,
-                id,
-                reason: Reason::UnknownHint(hint),
-            },
-            FlattenError::BadDeletion { step, id } => Verdict::Rejected {
-                step,
-                id,
-                reason: Reason::BadDeletion(id),
-            },
-            FlattenError::RatUnsupported { step, id } => Verdict::Unsupported { step, id },
+/// Drop lemmas from index `keep` on (after an early verdict at a step the
+/// `keep`-th lemma does not precede), and their clauses: the layout after an
+/// early verdict is exactly "the originals and the kept lemmas", whichever
+/// route built it (flatten adds every lemma's clause before it knows where
+/// it stops; the decoders stop as they go — this makes the two equal).
+fn truncate_lemmas(fp: &mut FlatProof, keep: usize) {
+    fp.lemma_clause.truncate(keep);
+    fp.lemma_step.truncate(keep);
+    fp.lemma_id.truncate(keep);
+    if fp.hint_start.len() > keep + 1 {
+        let h = fp.hint_start[keep] as usize;
+        fp.hint_start.truncate(keep + 1);
+        fp.hints.truncate(h);
+    }
+    let n_clauses = fp.n_original as usize + keep;
+    if fp.clause_start.len() > n_clauses + 1 {
+        fp.clause_start.truncate(n_clauses + 1);
+        fp.lits.truncate(fp.clause_start[n_clauses] as usize);
+        fp.deleted_at.truncate(n_clauses);
+    }
+    if let Some(fe) = fp.first_empty {
+        if fe as usize >= keep {
+            fp.first_empty = None;
         }
     }
 }
 
+/// A hint of lemma `l` (external id `lemma_id`) that names no kept clause:
+/// a forward hint when its id is not below the lemma's (the admissibility
+/// test the reference applies first), unknown otherwise.
+fn missing_hint_reason(hint: u64, lemma_id: u64) -> Reason {
+    if hint >= lemma_id {
+        Reason::ForwardHint(hint)
+    } else {
+        Reason::UnknownHint(hint)
+    }
+}
+
 /// Build the flat layout. Hints that name an id never added at all are
-/// refused here (the warp code has no id table); hints that name a *later*
-/// id or a deleted clause are left to the per-lemma check, which has the
-/// dense index order and the deletion steps to decide them.
-pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenError> {
+/// decided here (the warp code has no id table) and become `early`; hints
+/// that name a *later* id or a deleted clause are left to the per-lemma
+/// check, which has the dense index order and the deletion steps.
+pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> FlatProof {
     let mut fp = FlatProof {
         lits: Vec::new(),
         clause_start: vec![0],
@@ -105,6 +127,7 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
         hints: Vec::new(),
         first_empty: None,
         n_original: cnf.len() as u32,
+        early: None,
     };
     let mut dense_of: HashMap<u64, u32> = HashMap::with_capacity(cnf.len() * 2);
     for (i, c) in cnf.iter().enumerate() {
@@ -117,21 +140,27 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
     // Hints may name ids that are added *later* in the file (a forward hint,
     // rejected per lemma) — resolve ids in a first pass so the dense index
     // exists, then fill hints in a second pass.
+    let mut stop = proof.steps.len(); // steps >= stop are after the early verdict
     for (step_ix, step) in proof.steps.iter().enumerate() {
         match step {
             Step::Delete { .. } => {}
             Step::Add { id, lits, hints } => {
                 if *id <= last_id {
-                    return Err(FlattenError::IdNotIncreasing {
+                    fp.early = Some(Verdict::Rejected {
                         step: step_ix,
                         id: *id,
+                        reason: Reason::IdNotIncreasing,
                     });
+                    stop = step_ix;
+                    break;
                 }
                 if hints.iter().any(|&h| h < 0) {
-                    return Err(FlattenError::RatUnsupported {
+                    fp.early = Some(Verdict::Unsupported {
                         step: step_ix,
                         id: *id,
                     });
+                    stop = step_ix;
+                    break;
                 }
                 last_id = *id;
                 let dense = fp.clause_start.len() as u32 - 1;
@@ -149,15 +178,21 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
         }
     }
     // Deletions and hints.
-    for (step_ix, step) in proof.steps.iter().enumerate() {
+    let mut lemma_ix = 0usize;
+    'steps: for (step_ix, step) in proof.steps.iter().enumerate().take(stop) {
         match step {
             Step::Delete { ids } => {
                 for &d in ids {
-                    let Some(&dense) = dense_of.get(&d) else {
-                        return Err(FlattenError::BadDeletion {
+                    let bad = |fp: &mut FlatProof| {
+                        fp.early = Some(Verdict::Rejected {
                             step: step_ix,
                             id: d,
+                            reason: Reason::BadDeletion(d),
                         });
+                    };
+                    let Some(&dense) = dense_of.get(&d) else {
+                        bad(&mut fp);
+                        break 'steps;
                     };
                     // A deletion of something added later in the file, or
                     // deleted twice, is a bad deletion in the reference too.
@@ -167,10 +202,8 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
                         fp.lemma_step[(dense - fp.n_original) as usize] as usize
                     };
                     if added_at > step_ix || fp.deleted_at[dense as usize] != u32::MAX {
-                        return Err(FlattenError::BadDeletion {
-                            step: step_ix,
-                            id: d,
-                        });
+                        bad(&mut fp);
+                        break 'steps;
                     }
                     fp.deleted_at[dense as usize] = step_ix as u32;
                 }
@@ -178,21 +211,47 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
             Step::Add { id, hints, .. } => {
                 for &h in hints {
                     let Some(&dense) = dense_of.get(&(h as u64)) else {
-                        return Err(FlattenError::UnknownHint {
+                        fp.early = Some(Verdict::Rejected {
                             step: step_ix,
                             id: *id,
-                            hint: h as u64,
+                            reason: missing_hint_reason(h as u64, *id),
                         });
+                        // This lemma is the failing one: keep only earlier ones.
+                        fp.hints.truncate(fp.hint_start[lemma_ix] as usize);
+                        break 'steps;
                     };
                     fp.hints.push(dense);
                 }
                 fp.hint_start.push(fp.hints.len() as u32);
+                lemma_ix += 1;
             }
         }
     }
-    // Every lemma is checked, including those after the first empty one
-    // (`lrat-check`'s rule; see `check_sequential`).
-    Ok(fp)
+    // Third pass: a kept lemma whose hint names a clause that will be
+    // dropped (added after the early verdict's step) fails here, the same
+    // way the decoders — which never saw that id — report it.
+    let limit = fp.n_original as usize + lemma_ix;
+    let mut keep = lemma_ix;
+    'lemmas: for l in 0..lemma_ix {
+        let (hs, he) = (fp.hint_start[l] as usize, fp.hint_start[l + 1] as usize);
+        for &d in &fp.hints[hs..he] {
+            if d as usize >= limit {
+                let hint = dense_id(&fp, d as usize);
+                fp.early = Some(Verdict::Rejected {
+                    step: fp.lemma_step[l] as usize,
+                    id: fp.lemma_id[l],
+                    reason: missing_hint_reason(hint, fp.lemma_id[l]),
+                });
+                keep = l;
+                break 'lemmas;
+            }
+        }
+    }
+    // Lemmas the second pass did not reach (after the early verdict's step)
+    // are dropped; the ones kept are all checked, including any after the
+    // first empty clause (`lrat-check`'s rule; see `check_sequential`).
+    truncate_lemmas(&mut fp, keep);
+    fp
 }
 
 impl FlatProof {
@@ -222,6 +281,7 @@ impl FlatProof {
             hints: Vec::with_capacity(bytes.len() / 4),
             first_empty: None,
             n_original,
+            early: None,
         };
         fp.clause_start.push(0);
         for c in cnf {
@@ -258,14 +318,21 @@ impl FlatProof {
         // read: a hint may (illegally) name a later id, and the per-lemma
         // check must be the one to reject it, exactly as `flatten` does.
         let mut raw_hints: Vec<u64> = Vec::with_capacity(bytes.len() / 4);
-        while pos < bytes.len() {
+        // Structural failures (`early`) stop the decode: nothing after the
+        // failing step can change the verdict, which is the earliest failure.
+        while pos < bytes.len() && fp.early.is_none() {
             let tag = bytes[pos];
             pos += 1;
             match tag {
                 b'a' => {
                     let id = varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated id"))? >> 1;
                     if id <= last_id {
-                        return Err(err(pos, "id not increasing"));
+                        fp.early = Some(Verdict::Rejected {
+                            step: step_ix,
+                            id,
+                            reason: Reason::IdNotIncreasing,
+                        });
+                        break;
                     }
                     if id - last_id > crate::lrat::MAX_ID_GAP {
                         return Err(err(pos, "id gap beyond the checker bound"));
@@ -293,16 +360,21 @@ impl FlatProof {
                     }
                     fp.clause_start.push(fp.lits.len() as u32);
                     fp.deleted_at.push(u32::MAX);
+                    let hint_lo = raw_hints.len();
+                    let mut rat = false;
                     loop {
                         let m =
                             varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated hint"))?;
                         if m == 0 {
                             break;
                         }
-                        if m & 1 == 1 {
-                            return Err(err(pos, "RAT hint (unsupported)"));
-                        }
+                        rat |= m & 1 == 1;
                         raw_hints.push(m >> 1);
+                    }
+                    if rat {
+                        raw_hints.truncate(hint_lo);
+                        fp.early = Some(Verdict::Unsupported { step: step_ix, id });
+                        break;
                     }
                     fp.hint_start.push(raw_hints.len() as u32);
                     fp.lemma_clause.push(dense);
@@ -321,7 +393,12 @@ impl FlatProof {
                     let id = (m >> 1) as usize;
                     let dense = dense_of.get(id).copied().unwrap_or(0);
                     if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
-                        return Err(err(pos, "deletion of unknown or already-deleted id"));
+                        fp.early = Some(Verdict::Rejected {
+                            step: step_ix,
+                            id: id as u64,
+                            reason: Reason::BadDeletion(id as u64),
+                        });
+                        break;
                     }
                     fp.deleted_at[(dense - 1) as usize] = step_ix as u32;
                 },
@@ -330,13 +407,26 @@ impl FlatProof {
             step_ix += 1;
         }
         fp.hints.reserve(raw_hints.len());
-        for &h in &raw_hints {
+        for (k, &h) in raw_hints.iter().enumerate() {
             let dense = dense_of.get(h as usize).copied().unwrap_or(0);
             if dense == 0 {
-                return Err(err(0, "hint names an id that is never added"));
+                // The lemma holding this hint fails here; it precedes any
+                // `early` from the step loop (those lemmas were never kept).
+                let l = fp.hint_start.partition_point(|&s| s as usize <= k) - 1;
+                fp.early = Some(Verdict::Rejected {
+                    step: fp.lemma_step[l] as usize,
+                    id: fp.lemma_id[l],
+                    reason: missing_hint_reason(h, fp.lemma_id[l]),
+                });
+                truncate_lemmas(&mut fp, l);
+                return Ok(fp);
             }
             fp.hints.push(dense - 1);
         }
+        // Normalise: a lemma that ended in an early verdict may have pushed
+        // its clause before the verdict was known.
+        let keep = fp.lemma_clause.len();
+        truncate_lemmas(&mut fp, keep);
         Ok(fp)
     }
 }
@@ -390,6 +480,9 @@ struct RawStep {
     /// `d`: end (exclusive) of this step's ids in the worker's `dels`.
     del_end: u32,
     tag: u8,
+    /// `a`: a negative (RAT) hint was present — an `Unsupported` verdict at
+    /// this step, decided in phase 3a in step order.
+    rat: bool,
 }
 
 /// A worker's output: steps plus the flat local payloads they index.
@@ -468,14 +561,13 @@ fn parse_step(
                 }
                 out.lits.push(l);
             }
+            let mut rat = false;
             loop {
                 let m = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated hint"))?;
                 if m == 0 {
                     break;
                 }
-                if m & 1 == 1 {
-                    return Err(err(pos, "RAT hint (unsupported)"));
-                }
+                rat |= m & 1 == 1;
                 out.hints.push(m >> 1);
             }
             out.steps.push(RawStep {
@@ -486,6 +578,7 @@ fn parse_step(
                 hint_end: out.hints.len() as u32,
                 del_end: out.dels.len() as u32,
                 tag,
+                rat,
             });
         }
         b'd' => {
@@ -504,6 +597,7 @@ fn parse_step(
                 hint_end: out.hints.len() as u32,
                 del_end: out.dels.len() as u32,
                 tag,
+                rat: false,
             });
         }
         _ => return Err(err(pos, "expected 'a' or 'd'")),
@@ -735,6 +829,7 @@ impl FlatProof {
             hints: Vec::new(),
             first_empty: None,
             n_original,
+            early: None,
         };
         let orig_lits: usize = cnf.iter().map(|c| c.len()).sum();
         fp.clause_start.push(0);
@@ -763,8 +858,8 @@ impl FlatProof {
         let mut copies: Vec<Copy> = Vec::with_capacity(segments.len());
         let mut lit_total = orig_lits;
         let mut hint_total = 0usize;
-        let consumed_error = pending_error.take();
-        for seg in &segments {
+        let mut consumed_error = pending_error.take();
+        'segs: for seg in &segments {
             let c = all[seg.chunk];
             let steps = &c.steps[seg.step_lo..seg.step_hi];
             if steps.is_empty() {
@@ -788,16 +883,31 @@ impl FlatProof {
             let mut lit_hi = lit_lo;
             let mut hint_hi = hint_lo;
             let mut prev_lit_end = lit_lo;
+            let mut stopped = false;
             for s in steps {
                 if s.tag == b'a' {
                     if s.id <= last_id {
-                        return Err(err(s.pos_after_id as usize, "id not increasing"));
+                        fp.early = Some(Verdict::Rejected {
+                            step: step_ix as usize,
+                            id: s.id,
+                            reason: Reason::IdNotIncreasing,
+                        });
+                        stopped = true;
+                        break;
                     }
                     if s.id - last_id > crate::lrat::MAX_ID_GAP {
                         return Err(err(
                             s.pos_after_id as usize,
                             "id gap beyond the checker bound",
                         ));
+                    }
+                    if s.rat {
+                        fp.early = Some(Verdict::Unsupported {
+                            step: step_ix as usize,
+                            id: s.id,
+                        });
+                        stopped = true;
+                        break;
                     }
                     last_id = s.id;
                     let dense = fp.clause_start.len() as u32 - 1;
@@ -822,15 +932,21 @@ impl FlatProof {
                     }
                 } else {
                     let end = s.del_end as usize;
-                    for &(id, pos_after) in &c.dels[del_cursor..end] {
+                    for &(id, _pos_after) in &c.dels[del_cursor..end] {
                         let dense = dense_of.get(id as usize).copied().unwrap_or(0);
                         if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
-                            return Err(err(
-                                pos_after as usize,
-                                "deletion of unknown or already-deleted id",
-                            ));
+                            fp.early = Some(Verdict::Rejected {
+                                step: step_ix as usize,
+                                id,
+                                reason: Reason::BadDeletion(id),
+                            });
+                            stopped = true;
+                            break;
                         }
                         fp.deleted_at[(dense - 1) as usize] = step_ix;
+                    }
+                    if stopped {
+                        break;
                     }
                     del_cursor = end;
                 }
@@ -845,34 +961,54 @@ impl FlatProof {
             });
             lit_total += lit_hi - lit_lo;
             hint_total += hint_hi - hint_lo;
+            if stopped {
+                // Nothing after the early verdict is decoded — including a
+                // format error the one-thread decoder would never reach.
+                consumed_error = None;
+                break 'segs;
+            }
         }
         if let Some(e) = consumed_error {
             // The interrupted step: its id / its deletions were checked by the
             // one-thread decoder before the byte that failed.
+            // (A structural failure inside the interrupted step would be an
+            // `early` verdict at that step, reached before the format error.)
+            let mut early_in_partial = false;
             if let Some(c) = error_chunk.map(|ci| all[ci]) {
                 if let Some((id, pos_after_id)) = c.partial_add {
                     if id <= last_id {
-                        return Err(err(pos_after_id as usize, "id not increasing"));
-                    }
-                    if id - last_id > crate::lrat::MAX_ID_GAP {
+                        fp.early = Some(Verdict::Rejected {
+                            step: step_ix as usize,
+                            id,
+                            reason: Reason::IdNotIncreasing,
+                        });
+                        early_in_partial = true;
+                    } else if id - last_id > crate::lrat::MAX_ID_GAP {
                         return Err(err(
                             pos_after_id as usize,
                             "id gap beyond the checker bound",
                         ));
                     }
                 }
-                for &(id, pos_after) in &c.dels[c.partial_del_lo.min(c.dels.len())..] {
-                    let dense = dense_of.get(id as usize).copied().unwrap_or(0);
-                    if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
-                        return Err(err(
-                            pos_after as usize,
-                            "deletion of unknown or already-deleted id",
-                        ));
+                if !early_in_partial {
+                    for &(id, _pos_after) in &c.dels[c.partial_del_lo.min(c.dels.len())..] {
+                        let dense = dense_of.get(id as usize).copied().unwrap_or(0);
+                        if dense == 0 || fp.deleted_at[(dense - 1) as usize] != u32::MAX {
+                            fp.early = Some(Verdict::Rejected {
+                                step: step_ix as usize,
+                                id,
+                                reason: Reason::BadDeletion(id),
+                            });
+                            early_in_partial = true;
+                            break;
+                        }
+                        fp.deleted_at[(dense - 1) as usize] = step_ix;
                     }
-                    fp.deleted_at[(dense - 1) as usize] = step_ix;
                 }
             }
-            return Err(e);
+            if !early_in_partial {
+                return Err(e);
+            }
         }
 
         // ---- phase 3b: parallel copy + hint resolution ----
@@ -885,12 +1021,16 @@ impl FlatProof {
                 off += c.len();
             }
         }
-        let mut bad_hint = std::sync::atomic::AtomicBool::new(false);
+        // Global index of the first hint naming an id never added (usize::MAX
+        // = none) and that id.
+        let mut bad_hint = std::sync::atomic::AtomicUsize::new(usize::MAX);
+        let mut bad_hint_id = std::sync::atomic::AtomicU64::new(0);
         {
             let lits_out = &mut fp.lits;
             let hints_out = &mut fp.hints;
             let dense_of = &dense_of;
             let bad = &mut bad_hint;
+            let bad_id = &mut bad_hint_id;
             // Hand each copy its own disjoint destination slice.
             let mut lit_slices: Vec<&mut [i32]> = Vec::with_capacity(copies.len());
             let mut hint_slices: Vec<&mut [u32]> = Vec::with_capacity(copies.len());
@@ -906,11 +1046,21 @@ impl FlatProof {
                     rest_h = b;
                 }
             }
-            let jobs: Vec<(&Copy, &mut [i32], &mut [u32])> = copies
+            // Each job's global hint offset, for reporting the first bad one.
+            let mut hint_offsets: Vec<usize> = Vec::with_capacity(copies.len());
+            {
+                let mut off = 0usize;
+                for cp in &copies {
+                    hint_offsets.push(off);
+                    off += cp.hint_hi - cp.hint_lo;
+                }
+            }
+            let jobs: Vec<(&Copy, usize, &mut [i32], &mut [u32])> = copies
                 .iter()
+                .zip(hint_offsets)
                 .zip(lit_slices)
                 .zip(hint_slices)
-                .map(|((cp, ls), hs)| (cp, ls, hs))
+                .map(|(((cp, off), ls), hs)| (cp, off, ls, hs))
                 .collect();
             // At most `threads` workers, each taking a contiguous run of jobs
             // (the tests force hundreds of tiny slices; one thread per slice
@@ -918,7 +1068,8 @@ impl FlatProof {
             let per = jobs.len().div_ceil(threads.max(1)).max(1);
             let mut it = jobs.into_iter();
             std::thread::scope(|sc| {
-                let bad: &std::sync::atomic::AtomicBool = bad;
+                let bad: &std::sync::atomic::AtomicUsize = bad;
+                let bad_id: &std::sync::atomic::AtomicU64 = bad_id;
                 let all = &all;
                 loop {
                     let group: Vec<_> = it.by_ref().take(per).collect();
@@ -926,13 +1077,29 @@ impl FlatProof {
                         break;
                     }
                     sc.spawn(move || {
-                        for (cp, ls, hs) in group {
+                        use std::sync::atomic::Ordering::Relaxed;
+                        for (cp, off, ls, hs) in group {
                             let c = all[cp.chunk];
                             ls.copy_from_slice(&c.lits[cp.lit_lo..cp.lit_hi]);
-                            for (dst, &h) in hs.iter_mut().zip(&c.hints[cp.hint_lo..cp.hint_hi]) {
+                            for (k, (dst, &h)) in hs
+                                .iter_mut()
+                                .zip(&c.hints[cp.hint_lo..cp.hint_hi])
+                                .enumerate()
+                            {
                                 let d = dense_of.get(h as usize).copied().unwrap_or(0);
                                 if d == 0 {
-                                    bad.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    let g = off + k;
+                                    // Keep the smallest global index (and its id).
+                                    let mut cur = bad.load(Relaxed);
+                                    while g < cur {
+                                        match bad.compare_exchange_weak(cur, g, Relaxed, Relaxed) {
+                                            Ok(_) => {
+                                                bad_id.store(h, Relaxed);
+                                                break;
+                                            }
+                                            Err(seen) => cur = seen,
+                                        }
+                                    }
                                 }
                                 *dst = d.wrapping_sub(1);
                             }
@@ -941,9 +1108,33 @@ impl FlatProof {
                 }
             });
         }
-        if *bad_hint.get_mut() {
-            return Err(err(0, "hint names an id that is never added"));
+        let first_bad = *bad_hint.get_mut();
+        if first_bad != usize::MAX {
+            // Race on bad_id: two threads may have raced on different indices;
+            // re-read the id at the winning index to be exact.
+            let l = fp.hint_start.partition_point(|&s| s as usize <= first_bad) - 1;
+            let mut h = *bad_hint_id.get_mut();
+            // Re-derive from the source chunk to be independent of the race.
+            {
+                let mut g = 0usize;
+                for cp in &copies {
+                    let n = cp.hint_hi - cp.hint_lo;
+                    if first_bad < g + n {
+                        h = all[cp.chunk].hints[cp.hint_lo + (first_bad - g)];
+                        break;
+                    }
+                    g += n;
+                }
+            }
+            fp.early = Some(Verdict::Rejected {
+                step: fp.lemma_step[l] as usize,
+                id: fp.lemma_id[l],
+                reason: missing_hint_reason(h, fp.lemma_id[l]),
+            });
+            truncate_lemmas(&mut fp, l);
         }
+        let keep = fp.lemma_clause.len();
+        truncate_lemmas(&mut fp, keep);
         Ok(fp)
     }
 }
@@ -1159,10 +1350,7 @@ fn warp_check_lemma(fp: &FlatProof, i: usize, table: &mut LitTable) -> LemmaCode
 /// spirit, so it is surfaced separately by [`check_warp_codes`]; the
 /// agreement tests require that no archive proof overflows.
 pub fn check_warp(cnf: &[Vec<i32>], proof: &Proof) -> Verdict {
-    let fp = match flatten(cnf, proof) {
-        Ok(fp) => fp,
-        Err(e) => return e.as_verdict(),
-    };
+    let fp = flatten(cnf, proof);
     let codes = check_warp_codes(&fp);
     combine(&fp, &codes)
 }
@@ -1184,10 +1372,7 @@ pub fn check_warp_gpu(
     proof: &Proof,
     blocks: u32,
 ) -> Result<Verdict, crate::gpu_launcher::GpuError> {
-    let fp = match flatten(cnf, proof) {
-        Ok(fp) => fp,
-        Err(e) => return Ok(e.as_verdict()),
-    };
+    let fp = flatten(cnf, proof);
     let raw = ctx.check_lrat_codes(&fp, blocks)?;
     let codes: Vec<LemmaCode> = raw
         .iter()
@@ -1243,7 +1428,16 @@ pub fn combine(fp: &FlatProof, codes: &[LemmaCode]) -> Verdict {
                 Reason::ForwardHint(hint_at(&|h| h >= fp.lemma_clause[i] as usize))
             }
         };
-        return Verdict::Rejected { step, id, reason };
+        let lemma_fail = Verdict::Rejected { step, id, reason };
+        // The structural verdict, if any, is at a later step than every kept
+        // lemma — but say so by comparison, not by construction.
+        return match &fp.early {
+            Some(e) if verdict_step(e) < Some(step) => e.clone(),
+            _ => lemma_fail,
+        };
+    }
+    if let Some(e) = &fp.early {
+        return e.clone();
     }
     match fp.first_empty {
         Some(_) => Verdict::Verified {
@@ -1407,8 +1601,9 @@ mod tests {
             "5 2 0 1 2 0\n",
         ] {
             let p = parse_text(text).unwrap();
-            let via_flatten = flatten(&c, &p).unwrap();
+            let via_flatten = flatten(&c, &p);
             let via_decode = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+            assert_eq!(via_decode.early, via_flatten.early, "{text:?}");
             assert_eq!(via_decode.lits, via_flatten.lits, "{text:?}");
             assert_eq!(via_decode.clause_start, via_flatten.clause_start);
             assert_eq!(via_decode.deleted_at, via_flatten.deleted_at);
@@ -1421,14 +1616,150 @@ mod tests {
             let b = combine(&via_decode, &check_warp_codes(&via_decode));
             assert_eq!(a, b);
         }
-        // The flat decoder refuses what flatten refuses.
-        let p = parse_text("4 2 0 1 2 0\n").unwrap();
-        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
-        let p = parse_text("5 2 0 -1 2 0\n").unwrap();
-        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
+        // What flatten decides from the step sequence, the flat decoder
+        // decides the same way (an `early` verdict, not a parse error).
+        for (text, want) in [
+            (
+                "4 2 0 1 2 0\n",
+                Verdict::Rejected {
+                    step: 0,
+                    id: 4,
+                    reason: Reason::IdNotIncreasing,
+                },
+            ),
+            ("5 2 0 -1 2 0\n", Verdict::Unsupported { step: 0, id: 5 }),
+            (
+                "5 2 0 1 9 0\n",
+                Verdict::Rejected {
+                    step: 0,
+                    id: 5,
+                    reason: Reason::ForwardHint(9),
+                },
+            ),
+            (
+                "5 d 9 0\n",
+                Verdict::Rejected {
+                    step: 0,
+                    id: 9,
+                    reason: Reason::BadDeletion(9),
+                },
+            ),
+        ] {
+            let p = parse_text(text).unwrap();
+            let f = flatten(&c, &p);
+            assert_eq!(f.early, Some(want.clone()), "{text:?}: flatten");
+            let d = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+            assert_flat_eq(&d, &f, text);
+            assert_eq!(
+                combine(&f, &check_warp_codes(&f)),
+                want,
+                "{text:?}: combine"
+            );
+            assert_eq!(check_sequential(&c, &p), want, "{text:?}: reference");
+        }
+    }
+
+    /// A hint below the lemma's id that was never added is `UnknownHint`
+    /// (above or equal: `ForwardHint`, the test the reference applies first).
+    #[test]
+    fn unknown_hint_below_lemma_id() {
+        use crate::lrat::{check_independent, check_sequential, write_binary};
+        let c = parse_cnf_ints(CNF);
+        let p = parse_text("6 2 0 1 5 0\n").unwrap();
+        let want = Verdict::Rejected {
+            step: 0,
+            id: 6,
+            reason: Reason::UnknownHint(5),
+        };
+        assert_eq!(check_sequential(&c, &p), want);
+        assert_eq!(check_independent(&c, &p, 2), want);
+        let f = flatten(&c, &p);
+        assert_eq!(f.early, Some(want.clone()));
+        assert_eq!(combine(&f, &check_warp_codes(&f)), want);
+        let d = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+        assert_flat_eq(&d, &f, "unknown hint");
+        let dp = FlatProof::from_binary_par_chunked(&c, &write_binary(&p), 2, 3).unwrap();
+        assert_flat_eq(&dp, &f, "unknown hint (par)");
+    }
+
+    /// Earliest failing step, whichever kind: a lemma using a deleted clause
+    /// precedes the later double deletion; a bad deletion precedes a later
+    /// failing lemma. All paths, same answer (the hint-level negatives found
+    /// the prepass-first paths naming the wrong step, 2026-11-02).
+    #[test]
+    fn earliest_failure_wins_across_kinds() {
+        use crate::lrat::{check_independent, check_sequential, write_binary};
+        let c = parse_cnf_ints(CNF);
+        for (text, want) in [
+            // delete 1, lemma 6 uses 1 (step 2 fails), then 1 deleted again (step 3).
+            (
+                "5 2 0 1 2 0\n5 d 1 0\n6 0 5 1 4 0\n7 d 1 0\n",
+                Verdict::Rejected {
+                    step: 2,
+                    id: 6,
+                    reason: Reason::DeletedHint(1),
+                },
+            ),
+            // bad deletion at step 1 precedes the failing lemma at step 2.
+            (
+                "5 2 0 1 2 0\n5 d 9 0\n6 0 5 1 4 0\n",
+                Verdict::Rejected {
+                    step: 1,
+                    id: 9,
+                    reason: Reason::BadDeletion(9),
+                },
+            ),
+            // failing lemma at step 0 precedes a RAT step at step 1.
+            (
+                "5 2 0 1 3 0\n6 1 0 -2 0\n",
+                Verdict::Rejected {
+                    step: 0,
+                    id: 5,
+                    reason: Reason::NotUnit(3),
+                },
+            ),
+            // unknown hint in lemma at step 1 precedes an id-order error at step 2.
+            (
+                "5 2 0 1 2 0\n6 1 0 99 0\n3 0 5 3 4 0\n",
+                Verdict::Rejected {
+                    step: 1,
+                    id: 6,
+                    reason: Reason::ForwardHint(99),
+                },
+            ),
+        ] {
+            let p = parse_text(text).unwrap();
+            assert_eq!(check_sequential(&c, &p), want, "{text:?}: sequential");
+            assert_eq!(check_independent(&c, &p, 2), want, "{text:?}: independent");
+            let f = flatten(&c, &p);
+            let w = combine(&f, &check_warp_codes(&f));
+            // The warp path does not know the literal in NotUnit.
+            let same = match (&w, &want) {
+                (
+                    Verdict::Rejected {
+                        step: a,
+                        id: b,
+                        reason: Reason::NotUnit(_),
+                    },
+                    Verdict::Rejected {
+                        step: x,
+                        id: y,
+                        reason: Reason::NotUnit(_),
+                    },
+                ) => a == x && b == y,
+                _ => w == want,
+            };
+            assert!(same, "{text:?}: warp {w:?} vs {want:?}");
+            let bin = write_binary(&p);
+            let d = FlatProof::from_binary(&c, &bin).unwrap();
+            assert_flat_eq(&d, &f, text);
+            let dp = FlatProof::from_binary_par_chunked(&c, &bin, 3, 4).unwrap();
+            assert_flat_eq(&dp, &f, text);
+        }
     }
 
     fn assert_flat_eq(a: &FlatProof, b: &FlatProof, what: &str) {
+        assert_eq!(a.early, b.early, "{what}: early");
         assert_eq!(a.lits, b.lits, "{what}: lits");
         assert_eq!(a.clause_start, b.clause_start, "{what}: clause_start");
         assert_eq!(a.deleted_at, b.deleted_at, "{what}: deleted_at");
@@ -1546,31 +1877,14 @@ mod tests {
                 "{text:?}: sequential {seq:?}"
             );
             assert_eq!(ind, seq, "{text:?}: independent");
-            match flatten(&c, &p) {
-                Ok(fp) => {
-                    let w = combine(&fp, &check_warp_codes(&fp));
-                    assert_eq!(w.is_verified(), want_verified, "{text:?}: warp {w:?}");
-                    let fd = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
-                    assert_flat_eq(&fd, &fp, text);
-                    let fpar =
-                        FlatProof::from_binary_par_chunked(&c, &write_binary(&p), 2, 3).unwrap();
-                    assert_flat_eq(&fpar, &fp, text);
-                }
-                Err(e) => {
-                    // flatten refuses what it can see without checking (an
-                    // unknown hint): a rejection, and the direct decoder
-                    // refuses the same file.
-                    assert!(
-                        !want_verified,
-                        "{text:?}: flatten refused a valid proof: {e:?}"
-                    );
-                    assert!(!e.as_verdict().is_verified());
-                    assert!(
-                        FlatProof::from_binary(&c, &write_binary(&p)).is_err(),
-                        "{text:?}"
-                    );
-                }
-            }
+            let fp = flatten(&c, &p);
+            let w = combine(&fp, &check_warp_codes(&fp));
+            assert_eq!(w.is_verified(), want_verified, "{text:?}: warp {w:?}");
+            assert_eq!(w, seq, "{text:?}: warp vs sequential");
+            let fd = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+            assert_flat_eq(&fd, &fp, text);
+            let fpar = FlatProof::from_binary_par_chunked(&c, &write_binary(&p), 2, 3).unwrap();
+            assert_flat_eq(&fpar, &fp, text);
         }
         // RAT after ⊥: Unsupported everywhere, never Verified.
         let p = parse_text("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 -1 0\n").unwrap();
@@ -1582,11 +1896,17 @@ mod tests {
             check_independent(&c, &p, 2),
             Verdict::Unsupported { .. }
         ));
+        let f = flatten(&c, &p);
         assert!(matches!(
-            flatten(&c, &p),
-            Err(FlattenError::RatUnsupported { .. })
+            f.early,
+            Some(Verdict::Unsupported { step: 2, id: 7 })
         ));
-        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
+        assert!(matches!(
+            combine(&f, &check_warp_codes(&f)),
+            Verdict::Unsupported { .. }
+        ));
+        let d = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+        assert_flat_eq(&d, &f, "rat after empty");
     }
 
     /// The SimWarp table refuses the 4,096th literal; the verdict names the
@@ -1602,7 +1922,7 @@ mod tests {
                 hints: vec![1],
             }],
         };
-        let fp = flatten(&cnf, &p).unwrap();
+        let fp = flatten(&cnf, &p);
         let codes = check_warp_codes(&fp);
         assert_eq!(codes[0], LemmaCode::TableOverflow);
         assert!(matches!(
@@ -1620,7 +1940,7 @@ mod tests {
                 hints: vec![1],
             }],
         };
-        let fp = flatten(&cnf, &p).unwrap();
+        let fp = flatten(&cnf, &p);
         assert_ne!(check_warp_codes(&fp)[0], LemmaCode::TableOverflow);
     }
 
@@ -1630,7 +1950,7 @@ mod tests {
     fn combine_fails_closed_on_missing_codes() {
         let c = parse_cnf_ints(CNF);
         let p = parse_text("5 2 0 1 2 0\n6 0 5 3 4 0\n").unwrap();
-        let fp = flatten(&c, &p).unwrap();
+        let fp = flatten(&c, &p);
         assert!(combine(&fp, &check_warp_codes(&fp)).is_verified());
         assert!(matches!(
             combine(&fp, &[LemmaCode::Ok]),
@@ -1673,7 +1993,7 @@ mod tests {
         };
         let bin = write_binary(&p);
         assert!(parse_binary(&bin).is_err());
-        assert!(FlatProof::from_binary(&c, &bin).is_err());
+        assert!(FlatProof::from_binary(&c, &bin).is_err()); // a parse error, not a verdict
         assert_same_result(&c, &bin, 2, 3, "id gap");
         let big = MAX_VAR as i64 + 1;
         assert!(parse_text(&format!("5 {big} 0 1 2 0\n")).is_err());
@@ -1713,7 +2033,7 @@ mod tests {
                 );
             }
             let p = crate::lrat::parse_binary(&bytes).unwrap();
-            let via_flatten = flatten(&cnf, &p).unwrap();
+            let via_flatten = flatten(&cnf, &p);
             let via_par = FlatProof::from_binary_par_chunked(&cnf, &bytes, 4, 9).unwrap();
             assert_flat_eq(&via_par, &via_flatten, "par vs flatten");
         }
@@ -1800,7 +2120,8 @@ mod tests {
                 let cnf = parse_cnf_ints(&cnf_text);
                 let r = check_sequential(&cnf, &proof);
                 let w = check_warp(&cnf, &proof);
-                if let Ok(fp) = flatten(&cnf, &proof) {
+                {
+                    let fp = flatten(&cnf, &proof);
                     let codes = check_warp_codes(&fp);
                     overflow += codes
                         .iter()

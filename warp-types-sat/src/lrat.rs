@@ -609,42 +609,52 @@ struct Prepass {
     /// first empty one.
     lemma_steps: Vec<usize>,
     max_var: usize,
+    /// Structural verdict at a step every kept lemma precedes (see `prepass`).
+    early: Option<Verdict>,
 }
 
-fn prepass(cnf: &[Vec<i32>], proof: &Proof) -> Result<Prepass, Verdict> {
+/// The step sequence alone can decide a verdict (an id out of order, a bad
+/// deletion, a RAT step) at some step E; lemmas before E must still be
+/// checked, and the verdict is the EARLIEST failing step — the sequential
+/// reference's and `lrat-check`'s answer. So the prepass records that
+/// verdict instead of returning it, and keeps only the lemmas before E.
+fn prepass(cnf: &[Vec<i32>], proof: &Proof) -> Prepass {
     let mut arena = build_arena(cnf);
     let mut deleted_at: HashMap<u64, usize> = HashMap::new();
     let mut last_id = cnf.len() as u64;
     let mut lemma_steps = Vec::new();
     let mut first_empty = None;
-    // Every id ever added, with its add step, for ordering checks.
-    for (step_ix, step) in proof.steps.iter().enumerate() {
+    let mut early = None;
+    'steps: for (step_ix, step) in proof.steps.iter().enumerate() {
         match step {
             Step::Delete { ids } => {
                 for &d in ids {
                     if !arena.clauses.contains_key(&d) || deleted_at.contains_key(&d) {
-                        return Err(Verdict::Rejected {
+                        early = Some(Verdict::Rejected {
                             step: step_ix,
                             id: d,
                             reason: Reason::BadDeletion(d),
                         });
+                        break 'steps;
                     }
                     deleted_at.insert(d, step_ix);
                 }
             }
             Step::Add { id, lits, hints } => {
                 if *id <= last_id {
-                    return Err(Verdict::Rejected {
+                    early = Some(Verdict::Rejected {
                         step: step_ix,
                         id: *id,
                         reason: Reason::IdNotIncreasing,
                     });
+                    break;
                 }
                 if hints.iter().any(|&h| h < 0) {
-                    return Err(Verdict::Unsupported {
+                    early = Some(Verdict::Unsupported {
                         step: step_ix,
                         id: *id,
                     });
+                    break;
                 }
                 last_id = *id;
                 lemma_steps.push(step_ix);
@@ -656,13 +666,14 @@ fn prepass(cnf: &[Vec<i32>], proof: &Proof) -> Result<Prepass, Verdict> {
         }
     }
     let max_var = max_var_of_proof(proof, arena.max_var);
-    Ok(Prepass {
+    Prepass {
         arena,
         deleted_at,
         first_empty,
         lemma_steps,
         max_var,
-    })
+        early,
+    }
 }
 
 /// Check one lemma step of a prepassed proof. Independent of every other
@@ -696,10 +707,7 @@ fn check_lemma_independent(
 /// `threads` of them at a time (1 = sequential order, still independent).
 /// Must agree with [`check_sequential`] on every input.
 pub fn check_independent(cnf: &[Vec<i32>], proof: &Proof, threads: usize) -> Verdict {
-    let pp = match prepass(cnf, proof) {
-        Ok(p) => p,
-        Err(v) => return v,
-    };
+    let pp = prepass(cnf, proof);
     let n = pp.lemma_steps.len();
     let threads = threads.max(1).min(n.max(1));
     let chunk = n.div_ceil(threads);
@@ -728,9 +736,13 @@ pub fn check_independent(cnf: &[Vec<i32>], proof: &Proof, threads: usize) -> Ver
             h.join().expect("checker thread panicked");
         }
     });
-    // Earliest failing step wins (so the verdict is deterministic).
+    // Earliest failing step wins (so the verdict is deterministic) — among
+    // the lemma failures and the prepass's structural verdict alike.
     if let Some((step, id, reason)) = firsts.into_iter().flatten().min_by_key(|x| x.0) {
         return Verdict::Rejected { step, id, reason };
+    }
+    if let Some(e) = pp.early {
+        return e;
     }
     let deletions = pp.deleted_at.len();
     match pp.first_empty {
