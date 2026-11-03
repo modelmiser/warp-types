@@ -102,6 +102,15 @@ pub mod fault {
         /// remap must then refuse with a panic: this watches the integrity
         /// guard fail on purpose.
         DeleteLocked = 7,
+        /// LRAT: the first hint of the 10th learned clause's chain is dropped
+        /// (the chain no longer propagates to a conflict).
+        DropHint = 8,
+        /// LRAT: the 10th learned clause's chain is written in reverse (the
+        /// last reason is not unit first).
+        ReverseHints = 9,
+        /// LRAT: the 10th learned clause is written with id + 1 (later hints
+        /// name an id that does not exist / ids go out of order).
+        WrongId = 10,
     }
 
     #[cfg(test)]
@@ -161,6 +170,40 @@ pub mod fault {
             }
         }
         proof.add(learned);
+    }
+
+    /// LRAT twin of [`log_learned`]: a learned clause with its RUP chain.
+    /// Applies `FlipLiteral`, `DropHint`, `ReverseHints` and `WrongId` to the
+    /// 10th learned clause. Returns the id the log assigned.
+    #[inline]
+    pub fn log_learned_hints(proof: &mut dyn ProofLog, learned: &[Lit], hints: &[u64]) -> u64 {
+        #[cfg(test)]
+        {
+            let n = LEARNED.with(|c| {
+                let v = c.get() + 1;
+                c.set(v);
+                v
+            });
+            if n == 10 {
+                if active(Fault::FlipLiteral) && !learned.is_empty() {
+                    let mut flipped = learned.to_vec();
+                    flipped[0] = flipped[0].complement();
+                    return proof.add_with_hints(&flipped, hints);
+                }
+                if active(Fault::DropHint) && !hints.is_empty() {
+                    return proof.add_with_hints(learned, &hints[1..]);
+                }
+                if active(Fault::ReverseHints) {
+                    let mut rev = hints.to_vec();
+                    rev.reverse();
+                    return proof.add_with_hints(learned, &rev);
+                }
+                if active(Fault::WrongId) {
+                    return proof.add_with_wrong_id(learned, hints);
+                }
+            }
+        }
+        proof.add_with_hints(learned, hints)
     }
 
     /// Hook at a reduce, before the genuine `d` lines are written.
@@ -224,6 +267,10 @@ pub mod fault {
 }
 
 /// Receiver for proof steps. The solver core calls these as it runs.
+///
+/// The three defaulted `*_hints` / `*_ids` methods are the LRAT face: a log
+/// that answers `wants_hints()` gets clause ids and RUP chains from the
+/// solver (see `lrat_emit`); a DRAT log never sees them.
 pub trait ProofLog {
     /// A clause was added (learned, or a theory lemma).
     fn add(&mut self, lits: &[Lit]);
@@ -235,6 +282,31 @@ pub trait ProofLog {
             return;
         }
         self.add(&[]);
+    }
+    /// Does this log want clause ids and hint chains (LRAT)?
+    fn wants_hints(&self) -> bool {
+        false
+    }
+    /// A clause added with the ids of the clauses whose unit propagation,
+    /// in this order, refutes its negation. Returns the id assigned to the
+    /// new clause (0 for logs that do not track ids).
+    fn add_with_hints(&mut self, lits: &[Lit], _hints: &[u64]) -> u64 {
+        self.add(lits);
+        0
+    }
+    /// Test hook for `fault::Fault::WrongId`; DRAT logs ignore it.
+    #[doc(hidden)]
+    fn add_with_wrong_id(&mut self, lits: &[Lit], hints: &[u64]) -> u64 {
+        self.add_with_hints(lits, hints)
+    }
+    /// Clauses removed, by id (LRAT); DRAT logs use [`ProofLog::delete`].
+    fn delete_ids(&mut self, _ids: &[u64]) {}
+    /// UNSAT, with the chain refuting the empty clause.
+    fn empty_with_hints(&mut self, hints: &[u64]) {
+        if fault::active(fault::Fault::OmitFinalEmpty) {
+            return;
+        }
+        self.add_with_hints(&[], hints);
     }
 }
 
@@ -314,6 +386,166 @@ impl<W: Write> ProofLog for DratWriter<W> {
     fn delete(&mut self, lits: &[Lit]) {
         self.deletions += 1;
         self.line("d ", lits);
+    }
+}
+
+/// Writes LRAT (text, or binary in the layout `lrat::parse_binary` reads) to
+/// any `Write`. Ids: originals `1..=n_original` in file order (the DIMACS
+/// loader keeps every clause, empty ones included, in order), then every
+/// added clause in emission order. I/O errors are kept and returned by
+/// [`LratWriter::finish`]. A clause added WITHOUT hints (a theory lemma, or a
+/// DRAT-style `add`) is written with an empty chain and counted in
+/// `unjustified`: no checker will accept it, and this writer does not pretend
+/// otherwise. See `research/lrat-from-solver.md`.
+pub struct LratWriter<W: Write> {
+    out: W,
+    err: Option<io::Error>,
+    binary: bool,
+    next_id: u64,
+    last_id: u64,
+    /// Steps written: additions (the empty clause included), deletions (ids),
+    /// additions without a chain.
+    pub additions: u64,
+    pub deletions: u64,
+    pub unjustified: u64,
+    /// Hints written in total (the proof's size driver).
+    pub hints: u64,
+}
+
+impl<W: Write> LratWriter<W> {
+    pub fn new(out: W, n_original: usize, binary: bool) -> Self {
+        LratWriter {
+            out,
+            err: None,
+            binary,
+            next_id: n_original as u64 + 1,
+            last_id: n_original as u64,
+            additions: 0,
+            deletions: 0,
+            unjustified: 0,
+            hints: 0,
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        if self.err.is_some() {
+            return;
+        }
+        if let Err(e) = self.out.write_all(bytes) {
+            self.err = Some(e);
+        }
+    }
+
+    fn varint(buf: &mut Vec<u8>, mut x: u64) {
+        loop {
+            let b = (x & 0x7f) as u8;
+            x >>= 7;
+            if x == 0 {
+                buf.push(b);
+                return;
+            }
+            buf.push(b | 0x80);
+        }
+    }
+
+    fn add_line(&mut self, id: u64, lits: &[Lit], hints: &[u64]) {
+        self.additions += 1;
+        self.hints += hints.len() as u64;
+        if hints.is_empty() {
+            self.unjustified += 1;
+        }
+        if self.binary {
+            let mut b = Vec::with_capacity(8 + lits.len() * 3 + hints.len() * 4);
+            b.push(b'a');
+            Self::varint(&mut b, 2 * id);
+            for &l in lits {
+                let v = dimacs_int(l);
+                Self::varint(&mut b, 2 * v.unsigned_abs() + u64::from(v < 0));
+            }
+            b.push(0);
+            for &h in hints {
+                Self::varint(&mut b, 2 * h);
+            }
+            b.push(0);
+            self.write(&b);
+        } else {
+            let mut s = String::with_capacity(16 + lits.len() * 6 + hints.len() * 8);
+            s.push_str(&id.to_string());
+            for &l in lits {
+                s.push(' ');
+                s.push_str(&dimacs_int(l).to_string());
+            }
+            s.push_str(" 0");
+            for &h in hints {
+                s.push(' ');
+                s.push_str(&h.to_string());
+            }
+            s.push_str(" 0\n");
+            self.write(s.as_bytes());
+        }
+    }
+
+    /// Flush and hand back the writer, or the first I/O error that occurred.
+    pub fn finish(mut self) -> io::Result<W> {
+        if let Some(e) = self.err.take() {
+            return Err(e);
+        }
+        self.out.flush()?;
+        Ok(self.out)
+    }
+}
+
+impl<W: Write> ProofLog for LratWriter<W> {
+    fn add(&mut self, lits: &[Lit]) {
+        self.add_with_hints(lits, &[]);
+    }
+    fn delete(&mut self, _lits: &[Lit]) {
+        // LRAT deletes by id; the solver uses `delete_ids` when `wants_hints`.
+        // A literal-only delete (a DRAT fault hook) has no id here: ignored.
+    }
+    fn wants_hints(&self) -> bool {
+        true
+    }
+    fn add_with_hints(&mut self, lits: &[Lit], hints: &[u64]) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.last_id = id;
+        self.add_line(id, lits, hints);
+        id
+    }
+    fn add_with_wrong_id(&mut self, lits: &[Lit], hints: &[u64]) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.last_id = id;
+        self.add_line(id + 1, lits, hints); // written wrong, tracked right
+        id
+    }
+    fn delete_ids(&mut self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        self.deletions += ids.len() as u64;
+        if self.binary {
+            let mut b = Vec::with_capacity(2 + ids.len() * 4);
+            b.push(b'd');
+            for &i in ids {
+                Self::varint(&mut b, 2 * i);
+            }
+            b.push(0);
+            self.write(&b);
+        } else {
+            // The step id on a `d` line is ignored by every checker; the last
+            // added id is the convention.
+            let mut s = String::with_capacity(8 + ids.len() * 8);
+            s.push_str(&self.last_id.to_string());
+            s.push_str(" d");
+            for &i in ids {
+                s.push(' ');
+                s.push_str(&i.to_string());
+            }
+            s.push_str(" 0\n");
+            self.write(s.as_bytes());
+        }
     }
 }
 

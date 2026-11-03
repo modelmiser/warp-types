@@ -240,6 +240,58 @@ pub fn solve_watched_drat_with(
     Ok(result)
 }
 
+/// What an LRAT-logging solve wrote (sizes, not verdicts).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LratStats {
+    /// Added clauses (the empty clause included), deleted ids, hints in total.
+    pub additions: u64,
+    pub deletions: u64,
+    pub hints: u64,
+    /// Clauses written without a chain (theory lemmas) — a checker rejects
+    /// such a proof; 0 for pure SAT.
+    pub unjustified: u64,
+}
+
+/// [`solve_watched`] with an **LRAT** proof written to `out` as it runs —
+/// clause ids and the RUP chain of every learned clause, so the proof checks
+/// with `lrat-check`, `cake_lpr` or this crate's `lrat` module directly,
+/// with no `drat-trim` pass. `binary` selects the binary LRAT layout. The
+/// chain construction is `lrat_emit::rup_chain`; see
+/// `research/lrat-from-solver.md`.
+pub fn solve_watched_lrat_with(
+    mut db: ClauseDb,
+    num_vars: u32,
+    out: &mut dyn Write,
+    reduce_interval: u64,
+    binary: bool,
+) -> io::Result<(SolveResult, LratStats)> {
+    let mut vsids = Vsids::new(num_vars);
+    vsids.initialize_from_clauses(&db);
+    let n_original = db.iter_crefs().count();
+    let mut writer = crate::proof::LratWriter::new(out, n_original, binary);
+    let result = solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        reduce_interval,
+        &mut NoTheory,
+        &mut writer,
+    );
+    let stats = LratStats {
+        additions: writer.additions,
+        deletions: writer.deletions,
+        hints: writer.hints,
+        unjustified: writer.unjustified,
+    };
+    writer.finish()?;
+    Ok((result, stats))
+}
+
 /// Internal CDCL solver with stats.
 pub(crate) fn solve_cdcl_core_stats(
     mut db: ClauseDb,
@@ -419,9 +471,19 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     theory: &mut T,
     proof: &mut dyn ProofLog,
 ) -> SolveResult {
+    // LRAT: clause ids and a chain per learned clause (None for DRAT / no proof).
+    let mut lrat_ids = if proof.wants_hints() {
+        Some(crate::lrat_emit::LratIds::new(db))
+    } else {
+        None
+    };
+    let mut chain_scratch = crate::lrat_emit::ChainScratch::new(num_vars as usize);
     for cref in db.iter_crefs() {
         if db.clause(cref).literals.is_empty() {
-            proof.empty();
+            match &lrat_ids {
+                Some(ids) => proof.empty_with_hints(&[ids.id(cref)]),
+                None => proof.empty(),
+            }
             return SolveResult::Unsat;
         }
     }
@@ -429,6 +491,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
         return if db.is_empty() {
             SolveResult::Sat(vec![])
         } else {
+            // Clauses over no variables are empty clauses (caught above).
             proof.empty();
             SolveResult::Unsat
         };
@@ -471,9 +534,22 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
         // Theory conflict at level 0 means UNSAT (no backtrack possible).
         loop {
             match initial_bcp {
-                BcpResult::Conflict { .. } => {
+                BcpResult::Conflict { clause } => {
                     let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                    proof.empty();
+                    match &lrat_ids {
+                        Some(ids) => {
+                            let chain = crate::lrat_emit::rup_chain(
+                                &trail,
+                                db,
+                                clause,
+                                &[],
+                                ids,
+                                &mut chain_scratch,
+                            );
+                            proof.empty_with_hints(&chain);
+                        }
+                        None => proof.empty(),
+                    }
                     return SolveResult::Unsat;
                 }
                 BcpResult::Ok => {
@@ -589,13 +665,22 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                         deleted.extend(db.tombstone_learned(&locked));
                     }
                     crate::proof::fault::on_reduce(db, &locked, &deleted, proof);
-                    for &c in &deleted {
-                        proof.delete(db.clause(c).literals);
+                    if let Some(ids) = lrat_ids.as_mut() {
+                        let del_ids: Vec<u64> =
+                            deleted.iter().filter_map(|&c| ids.remove(c)).collect();
+                        proof.delete_ids(&del_ids);
+                    } else {
+                        for &c in &deleted {
+                            proof.delete(db.clause(c).literals);
+                        }
                     }
                     if !deleted.is_empty() {
                         // Compact db → contiguous CRefs for cache locality
                         let remap = db.compact();
                         trail.remap_reasons(&remap);
+                        if let Some(ids) = lrat_ids.as_mut() {
+                            ids.remap(&remap);
+                        }
                         // Rebuild watches from the now-compact database
                         watches = watch::Watches::new(db, num_vars);
                         watches.set_queue_head(trail.len());
@@ -773,8 +858,13 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                                 }
                                 // Add the theory conflict clause to the DB and
                                 // enter conflict resolution at its own level.
-                                proof.add(&lits);
+                                // (No RUP chain exists for a theory lemma: an
+                                // LRAT log writes it unjustified and counts it.)
+                                let theory_id = proof.add_with_hints(&lits, &[]);
                                 let cref = db.add_clause(lits);
+                                if let Some(ids) = lrat_ids.as_mut() {
+                                    ids.insert(cref, theory_id);
+                                }
                                 watches.add_clause(db, cref);
                                 bcp_result = BcpResult::Conflict { clause: cref };
                                 continue;
@@ -793,7 +883,20 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         if trail.current_level() == 0 {
                             let _ = propagate.finish_conflict().analyze().backtrack().unsat();
-                            proof.empty();
+                            match &lrat_ids {
+                                Some(ids) => {
+                                    let chain = crate::lrat_emit::rup_chain(
+                                        &trail,
+                                        db,
+                                        clause,
+                                        &[],
+                                        ids,
+                                        &mut chain_scratch,
+                                    );
+                                    proof.empty_with_hints(&chain);
+                                }
+                                None => proof.empty(),
+                            }
                             return SolveResult::Unsat;
                         }
 
@@ -822,12 +925,28 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                         vsids.decay();
                         stats.vsids_ns += t.elapsed().as_nanos() as u64;
 
+                        // LRAT: the chain is read off the trail as it stands at
+                        // the conflict — before the backtrack below unwinds it.
+                        let lrat_chain = lrat_ids.as_ref().map(|ids| {
+                            crate::lrat_emit::rup_chain(
+                                &trail,
+                                db,
+                                clause,
+                                &analysis.learned,
+                                ids,
+                                &mut chain_scratch,
+                            )
+                        });
+
                         let conflict = propagate.finish_conflict();
                         let analyzed = conflict.analyze();
 
                         if analysis.learned.is_empty() {
                             let _ = analyzed.backtrack().unsat();
-                            proof.empty();
+                            match lrat_chain {
+                                Some(chain) => proof.empty_with_hints(&chain),
+                                None => proof.empty(),
+                            }
                             return SolveResult::Unsat;
                         }
 
@@ -843,8 +962,21 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
 
                         let asserting_lit = analysis.learned[0];
                         let lbd = analysis.lbd;
-                        crate::proof::fault::log_learned(proof, &analysis.learned);
+                        let learned_id = match &lrat_chain {
+                            Some(chain) => Some(crate::proof::fault::log_learned_hints(
+                                proof,
+                                &analysis.learned,
+                                chain,
+                            )),
+                            None => {
+                                crate::proof::fault::log_learned(proof, &analysis.learned);
+                                None
+                            }
+                        };
                         let cref = db.add_clause(analysis.learned);
+                        if let (Some(ids), Some(id)) = (lrat_ids.as_mut(), learned_id) {
+                            ids.insert(cref, id);
+                        }
                         db.set_lbd(cref, lbd as u16);
                         watches.add_clause(db, cref);
                         trail.record_propagation(asserting_lit, cref);

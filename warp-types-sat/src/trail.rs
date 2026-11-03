@@ -224,6 +224,15 @@ impl Trail {
         self.current_level = target_level;
     }
 
+    /// Position of a variable's entry on the trail (O(1)), if assigned.
+    /// Trail order is implication order: every literal a reason clause
+    /// depends on sits at a smaller position than the literal it implies —
+    /// which is what makes a reason chain sorted by position a valid RUP
+    /// hint chain (see `lrat_emit`).
+    pub fn position_of(&self, var: u32) -> Option<usize> {
+        self.var_position.get(var as usize).copied().flatten()
+    }
+
     /// Get the trail entry for a variable (O(1) via position map).
     pub fn entry_for_var(&self, var: u32) -> Option<&TrailEntry> {
         self.var_position
