@@ -426,7 +426,9 @@ impl GpuContext {
         let hints = s.clone_htod(&fp.hints)?;
         let table_keys: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
         let table_stamps: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
-        let codes: CudaSlice<u8> = s.alloc_zeros(n as usize)?;
+        // Pre-filled with `LemmaCode::Unwritten` (6): a lemma the kernel never
+        // wrote must fail, not read as Ok (= 0). Cross-vendor panel 2026-11-02.
+        let codes: CudaSlice<u8> = s.clone_htod(&vec![6u8; n as usize])?;
         unsafe {
             s.launch_builder(&self.kernels.lrat_check_lemmas)
                 .arg(&lits)

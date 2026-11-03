@@ -27,7 +27,7 @@
 //! CPU, and the SimWarp / GPU versions reorganise exactly it. The two
 //! checkers must agree on every input; the tests hold them to that.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// One proof step.
@@ -51,6 +51,16 @@ pub struct Proof {
     pub steps: Vec<Step>,
 }
 
+/// Largest variable index any parser accepts. The reference checkers size a
+/// literal mask by the largest variable, so an unbounded literal (`i32::MIN`)
+/// would be a 34 GB allocation on malformed input (cross-vendor panel,
+/// 2026-11-02). 2^26 variables is a 1 GB mask at worst, proportional to a
+/// problem that size.
+pub const MAX_VAR: u32 = 1 << 26;
+/// Largest gap between consecutive lemma ids any parser accepts; the flat
+/// decoders index ids densely, so one huge id would be one huge allocation.
+pub const MAX_ID_GAP: u64 = 1 << 26;
+
 /// Parse error (format problems; not a proof failure).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
@@ -70,6 +80,7 @@ impl std::error::Error for ParseError {}
 /// starting with `c` are skipped.
 pub fn parse_text(text: &str) -> Result<Proof, ParseError> {
     let mut steps = Vec::new();
+    let mut last_add: Option<u64> = None;
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('c') {
@@ -129,6 +140,15 @@ pub fn parse_text(text: &str) -> Result<Proof, ParseError> {
                     line: n + 1,
                     msg: format!("literal {v} out of range"),
                 })?;
+                if l.unsigned_abs() > MAX_VAR {
+                    return Err(ParseError {
+                        line: n + 1,
+                        msg: format!(
+                            "variable {} beyond the checker bound {MAX_VAR}",
+                            l.unsigned_abs()
+                        ),
+                    });
+                }
                 lits.push(l);
             }
         }
@@ -138,6 +158,15 @@ pub fn parse_text(text: &str) -> Result<Proof, ParseError> {
                 msg: "add step must be `id lits 0 hints 0`".into(),
             });
         }
+        if let Some(prev) = last_add {
+            if id > prev && id - prev > MAX_ID_GAP {
+                return Err(ParseError {
+                    line: n + 1,
+                    msg: format!("id gap {} beyond the checker bound {MAX_ID_GAP}", id - prev),
+                });
+            }
+        }
+        last_add = Some(id);
         steps.push(Step::Add { id, lits, hints });
     }
     Ok(Proof { steps })
@@ -183,6 +212,7 @@ pub fn parse_binary(bytes: &[u8]) -> Result<Proof, ParseError> {
             mag
         }
     };
+    let mut last_add: Option<u64> = None;
     while pos < bytes.len() {
         let tag = bytes[pos];
         pos += 1;
@@ -196,10 +226,20 @@ pub fn parse_binary(bytes: &[u8]) -> Result<Proof, ParseError> {
                         break;
                     }
                     let v = signed(m);
-                    lits.push(i32::try_from(v).map_err(|_| ParseError {
+                    let l = i32::try_from(v).map_err(|_| ParseError {
                         line: pos,
                         msg: format!("literal {v} out of range"),
-                    })?);
+                    })?;
+                    if l.unsigned_abs() > MAX_VAR {
+                        return Err(ParseError {
+                            line: pos,
+                            msg: format!(
+                                "variable {} beyond the checker bound {MAX_VAR}",
+                                l.unsigned_abs()
+                            ),
+                        });
+                    }
+                    lits.push(l);
                 }
                 let mut hints = Vec::new();
                 loop {
@@ -209,6 +249,18 @@ pub fn parse_binary(bytes: &[u8]) -> Result<Proof, ParseError> {
                     }
                     hints.push(signed(m));
                 }
+                if let Some(prev) = last_add {
+                    if id > prev && id - prev > MAX_ID_GAP {
+                        return Err(ParseError {
+                            line: pos,
+                            msg: format!(
+                                "id gap {} beyond the checker bound {MAX_ID_GAP}",
+                                id - prev
+                            ),
+                        });
+                    }
+                }
+                last_add = Some(id);
                 steps.push(Step::Add { id, lits, hints });
             }
             b'd' => {
@@ -334,6 +386,12 @@ pub enum Reason {
     NoConflict,
     /// A deletion named an id that does not exist or is already deleted.
     BadDeletion(u64),
+    /// The warp paths' per-lemma assignment table (4,095 literals) overflowed:
+    /// that path gives no verdict on this lemma.
+    TableOverflow,
+    /// No code was written for this lemma (device did not run, or the code
+    /// vector is the wrong length): fail closed.
+    Unchecked,
 }
 
 impl fmt::Display for Reason {
@@ -343,6 +401,11 @@ impl fmt::Display for Reason {
             Reason::UnknownHint(h) => write!(f, "hint {h} does not exist"),
             Reason::DeletedHint(h) => write!(f, "hint {h} was deleted"),
             Reason::ForwardHint(h) => write!(f, "hint {h} is not earlier than the lemma"),
+            Reason::TableOverflow => write!(
+                f,
+                "assignment table (4,095 literals) overflowed on this path"
+            ),
+            Reason::Unchecked => write!(f, "lemma was not checked (no code written)"),
             Reason::NotUnit(h) => write!(f, "hint {h} is neither unit nor conflicting"),
             Reason::NoConflict => write!(f, "hints exhausted without a conflict"),
             Reason::BadDeletion(h) => write!(f, "deletion of unknown or already-deleted id {h}"),
@@ -460,6 +523,9 @@ pub fn check_sequential(cnf: &[Vec<i32>], proof: &Proof) -> Verdict {
     let mut last_id = cnf.len() as u64;
     let mut lemmas = 0usize;
     let mut deletions = 0usize;
+    let mut empty_seen = false;
+    // Every id ever added: distinguishes a deleted hint from one never added.
+    let mut added: HashSet<u64> = (1..=cnf.len() as u64).collect();
     for (step_ix, step) in proof.steps.iter().enumerate() {
         match step {
             Step::Delete { ids } => {
@@ -502,7 +568,7 @@ pub fn check_sequential(cnf: &[Vec<i32>], proof: &Proof) -> Verdict {
                 // once a valid id, else unknown.
                 if let Err(reason) = r {
                     let reason = match reason {
-                        Reason::UnknownHint(h) if h <= last_id => Reason::DeletedHint(h),
+                        Reason::UnknownHint(h) if added.contains(&h) => Reason::DeletedHint(h),
                         other => other,
                     };
                     return Verdict::Rejected {
@@ -513,14 +579,23 @@ pub fn check_sequential(cnf: &[Vec<i32>], proof: &Proof) -> Verdict {
                 }
                 lemmas += 1;
                 last_id = *id;
+                added.insert(*id);
+                // `lrat-check`'s rule: every step is checked, the empty clause
+                // may come anywhere, and a bad step AFTER it still fails the
+                // proof (its main loop breaks on error, not on the empty
+                // clause; the verdict is "empty seen and no error").
                 if lits.is_empty() {
-                    return Verdict::Verified { lemmas, deletions };
+                    empty_seen = true;
                 }
                 arena.clauses.insert(*id, lits.clone());
             }
         }
     }
-    Verdict::NoEmptyClause { lemmas }
+    if empty_seen {
+        Verdict::Verified { lemmas, deletions }
+    } else {
+        Verdict::NoEmptyClause { lemmas }
+    }
 }
 
 /// Prepass product for the lemma-independent formulation.
@@ -574,9 +649,8 @@ fn prepass(cnf: &[Vec<i32>], proof: &Proof) -> Result<Prepass, Verdict> {
                 last_id = *id;
                 lemma_steps.push(step_ix);
                 arena.clauses.insert(*id, lits.clone());
-                if lits.is_empty() {
+                if lits.is_empty() && first_empty.is_none() {
                     first_empty = Some(step_ix);
-                    break;
                 }
             }
         }

@@ -133,7 +133,8 @@ fn main() {
                                 2 => warp_types_sat::lrat_warp::LemmaCode::NoConflict,
                                 3 => warp_types_sat::lrat_warp::LemmaCode::DeletedHint,
                                 4 => warp_types_sat::lrat_warp::LemmaCode::ForwardHint,
-                                _ => warp_types_sat::lrat_warp::LemmaCode::TableOverflow,
+                                5 => warp_types_sat::lrat_warp::LemmaCode::TableOverflow,
+                                _ => warp_types_sat::lrat_warp::LemmaCode::Unwritten,
                             })
                             .collect();
                         let g = warp_types_sat::lrat_warp::combine(&fp, &codes);

@@ -149,7 +149,6 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
         }
     }
     // Deletions and hints.
-    let mut lemma_ix = 0usize;
     for (step_ix, step) in proof.steps.iter().enumerate() {
         match step {
             Step::Delete { ids } => {
@@ -188,22 +187,11 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> Result<FlatProof, FlattenErro
                     fp.hints.push(dense);
                 }
                 fp.hint_start.push(fp.hints.len() as u32);
-                lemma_ix += 1;
-                if Some(lemma_ix as u32 - 1) == fp.first_empty {
-                    // Lemmas after the first empty one are not checked.
-                    break;
-                }
             }
         }
     }
-    // Truncate lemma arrays to those up to the first empty lemma.
-    if let Some(fe) = fp.first_empty {
-        let keep = fe as usize + 1;
-        fp.lemma_clause.truncate(keep);
-        fp.lemma_step.truncate(keep);
-        fp.lemma_id.truncate(keep);
-        fp.hint_start.truncate(keep + 1);
-    }
+    // Every lemma is checked, including those after the first empty one
+    // (`lrat-check`'s rule; see `check_sequential`).
     Ok(fp)
 }
 
@@ -270,8 +258,7 @@ impl FlatProof {
         // read: a hint may (illegally) name a later id, and the per-lemma
         // check must be the one to reject it, exactly as `flatten` does.
         let mut raw_hints: Vec<u64> = Vec::with_capacity(bytes.len() / 4);
-        let mut done = false;
-        while pos < bytes.len() && !done {
+        while pos < bytes.len() {
             let tag = bytes[pos];
             pos += 1;
             match tag {
@@ -279,6 +266,9 @@ impl FlatProof {
                     let id = varint(bytes, &mut pos).ok_or_else(|| err(pos, "truncated id"))? >> 1;
                     if id <= last_id {
                         return Err(err(pos, "id not increasing"));
+                    }
+                    if id - last_id > crate::lrat::MAX_ID_GAP {
+                        return Err(err(pos, "id gap beyond the checker bound"));
                     }
                     last_id = id;
                     let dense = fp.clause_start.len() as u32 - 1;
@@ -295,8 +285,11 @@ impl FlatProof {
                         }
                         let mag = (m >> 1) as i64;
                         let v = if m & 1 == 1 { -mag } else { mag };
-                        fp.lits
-                            .push(i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?);
+                        let l = i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?;
+                        if l.unsigned_abs() > crate::lrat::MAX_VAR {
+                            return Err(err(pos, "variable beyond the checker bound"));
+                        }
+                        fp.lits.push(l);
                     }
                     fp.clause_start.push(fp.lits.len() as u32);
                     fp.deleted_at.push(u32::MAX);
@@ -315,9 +308,8 @@ impl FlatProof {
                     fp.lemma_clause.push(dense);
                     fp.lemma_step.push(step_ix as u32);
                     fp.lemma_id.push(id);
-                    if fp.lits.len() == lit_start {
+                    if fp.lits.len() == lit_start && fp.first_empty.is_none() {
                         fp.first_empty = Some(fp.lemma_clause.len() as u32 - 1);
-                        done = true;
                     }
                 }
                 b'd' => loop {
@@ -470,8 +462,11 @@ fn parse_step(
                 }
                 let mag = (m >> 1) as i64;
                 let v = if m & 1 == 1 { -mag } else { mag };
-                out.lits
-                    .push(i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?);
+                let l = i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?;
+                if l.unsigned_abs() > crate::lrat::MAX_VAR {
+                    return Err(err(pos, "variable beyond the checker bound"));
+                }
+                out.lits.push(l);
             }
             loop {
                 let m = varint_at(bytes, &mut pos).ok_or_else(|| err(pos, "truncated hint"))?;
@@ -768,9 +763,8 @@ impl FlatProof {
         let mut copies: Vec<Copy> = Vec::with_capacity(segments.len());
         let mut lit_total = orig_lits;
         let mut hint_total = 0usize;
-        let mut done = false;
-        let mut consumed_error = pending_error.take();
-        'segs: for seg in &segments {
+        let consumed_error = pending_error.take();
+        for seg in &segments {
             let c = all[seg.chunk];
             let steps = &c.steps[seg.step_lo..seg.step_hi];
             if steps.is_empty() {
@@ -799,6 +793,12 @@ impl FlatProof {
                     if s.id <= last_id {
                         return Err(err(s.pos_after_id as usize, "id not increasing"));
                     }
+                    if s.id - last_id > crate::lrat::MAX_ID_GAP {
+                        return Err(err(
+                            s.pos_after_id as usize,
+                            "id gap beyond the checker bound",
+                        ));
+                    }
                     last_id = s.id;
                     let dense = fp.clause_start.len() as u32 - 1;
                     if dense_of.len() <= s.id as usize {
@@ -817,9 +817,8 @@ impl FlatProof {
                     fp.lemma_clause.push(dense);
                     fp.lemma_step.push(step_ix);
                     fp.lemma_id.push(s.id);
-                    if n_lits == 0 {
+                    if n_lits == 0 && fp.first_empty.is_none() {
                         fp.first_empty = Some(fp.lemma_clause.len() as u32 - 1);
-                        done = true;
                     }
                 } else {
                     let end = s.del_end as usize;
@@ -836,21 +835,6 @@ impl FlatProof {
                     del_cursor = end;
                 }
                 step_ix += 1;
-                if done {
-                    // Everything after the empty clause is ignored — including
-                    // a format error the one-thread decoder would never reach.
-                    consumed_error = None;
-                    copies.push(Copy {
-                        chunk: seg.chunk,
-                        lit_lo,
-                        lit_hi,
-                        hint_lo,
-                        hint_hi,
-                    });
-                    lit_total += lit_hi - lit_lo;
-                    hint_total += hint_hi - hint_lo;
-                    break 'segs;
-                }
             }
             copies.push(Copy {
                 chunk: seg.chunk,
@@ -869,6 +853,12 @@ impl FlatProof {
                 if let Some((id, pos_after_id)) = c.partial_add {
                     if id <= last_id {
                         return Err(err(pos_after_id as usize, "id not increasing"));
+                    }
+                    if id - last_id > crate::lrat::MAX_ID_GAP {
+                        return Err(err(
+                            pos_after_id as usize,
+                            "id gap beyond the checker bound",
+                        ));
                     }
                 }
                 for &(id, pos_after) in &c.dels[c.partial_del_lo.min(c.dels.len())..] {
@@ -969,6 +959,10 @@ pub enum LemmaCode {
     ForwardHint = 4,
     /// The per-warp assignment table filled up: no verdict from this path.
     TableOverflow = 5,
+    /// No code was written for this lemma. The device code buffer is
+    /// pre-filled with this value, so a lemma the kernel never reached fails
+    /// closed instead of reading as `Ok` (= 0).
+    Unwritten = 6,
 }
 
 /// Fixed-capacity open-addressing set of literal codes (the shared-memory
@@ -1203,7 +1197,8 @@ pub fn check_warp_gpu(
             2 => LemmaCode::NoConflict,
             3 => LemmaCode::DeletedHint,
             4 => LemmaCode::ForwardHint,
-            _ => LemmaCode::TableOverflow,
+            5 => LemmaCode::TableOverflow,
+            _ => LemmaCode::Unwritten,
         })
         .collect();
     Ok(combine(&fp, &codes))
@@ -1212,6 +1207,14 @@ pub fn check_warp_gpu(
 /// Host-side combination: earliest failing lemma wins; verified iff all
 /// lemmas up to the first empty one are `Ok` and such a lemma exists.
 pub fn combine(fp: &FlatProof, codes: &[LemmaCode]) -> Verdict {
+    if codes.len() != fp.lemma_clause.len() {
+        // A short or long code vector means some lemma has no verdict.
+        return Verdict::Rejected {
+            step: 0,
+            id: 0,
+            reason: Reason::Unchecked,
+        };
+    }
     for (i, &c) in codes.iter().enumerate() {
         if c == LemmaCode::Ok {
             continue;
@@ -1230,7 +1233,9 @@ pub fn combine(fp: &FlatProof, codes: &[LemmaCode]) -> Verdict {
         let reason = match c {
             LemmaCode::Ok => unreachable!(),
             LemmaCode::NotUnit => Reason::NotUnit(0),
-            LemmaCode::NoConflict | LemmaCode::TableOverflow => Reason::NoConflict,
+            LemmaCode::NoConflict => Reason::NoConflict,
+            LemmaCode::TableOverflow => Reason::TableOverflow,
+            LemmaCode::Unwritten => Reason::Unchecked,
             LemmaCode::DeletedHint => {
                 Reason::DeletedHint(hint_at(&|h| fp.deleted_at[h] < fp.lemma_step[i]))
             }
@@ -1514,10 +1519,175 @@ mod tests {
                 lits: vec![],
                 hints: vec![50, 61],
             });
-            // Trailing garbage after the empty clause must be ignored by both.
-            steps.push(Step::Delete { ids: vec![999_999] });
+            // A step after the empty clause is still decoded (and checked).
+            steps.push(Step::Delete { ids: vec![live[0]] });
         }
         (cnf, crate::lrat::write_binary(&Proof { steps }))
+    }
+
+    /// `lrat-check`'s rule: a bad step AFTER the empty clause still fails the
+    /// proof, and a RAT step after it is still Unsupported — on every path.
+    #[test]
+    fn steps_after_the_empty_clause_are_checked_on_every_path() {
+        use crate::lrat::{check_independent, check_sequential, write_binary};
+        let c = parse_cnf_ints(CNF);
+        for (text, want_verified) in [
+            ("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 99 0\n", false), // unknown hint after ⊥
+            ("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 1 0\n", false),  // no conflict after ⊥
+            ("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 5 3 0\n", true), // a valid step after ⊥
+            ("5 2 0 1 2 0\n6 0 5 3 4 0\n7 d 5 0\n8 1 0 5 3 0\n", false), // deleted hint after ⊥
+        ] {
+            let p = parse_text(text).unwrap();
+            let seq = check_sequential(&c, &p);
+            let ind = check_independent(&c, &p, 2);
+            assert_eq!(
+                seq.is_verified(),
+                want_verified,
+                "{text:?}: sequential {seq:?}"
+            );
+            assert_eq!(ind, seq, "{text:?}: independent");
+            match flatten(&c, &p) {
+                Ok(fp) => {
+                    let w = combine(&fp, &check_warp_codes(&fp));
+                    assert_eq!(w.is_verified(), want_verified, "{text:?}: warp {w:?}");
+                    let fd = FlatProof::from_binary(&c, &write_binary(&p)).unwrap();
+                    assert_flat_eq(&fd, &fp, text);
+                    let fpar =
+                        FlatProof::from_binary_par_chunked(&c, &write_binary(&p), 2, 3).unwrap();
+                    assert_flat_eq(&fpar, &fp, text);
+                }
+                Err(e) => {
+                    // flatten refuses what it can see without checking (an
+                    // unknown hint): a rejection, and the direct decoder
+                    // refuses the same file.
+                    assert!(
+                        !want_verified,
+                        "{text:?}: flatten refused a valid proof: {e:?}"
+                    );
+                    assert!(!e.as_verdict().is_verified());
+                    assert!(
+                        FlatProof::from_binary(&c, &write_binary(&p)).is_err(),
+                        "{text:?}"
+                    );
+                }
+            }
+        }
+        // RAT after ⊥: Unsupported everywhere, never Verified.
+        let p = parse_text("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 -1 0\n").unwrap();
+        assert!(matches!(
+            check_sequential(&c, &p),
+            Verdict::Unsupported { .. }
+        ));
+        assert!(matches!(
+            check_independent(&c, &p, 2),
+            Verdict::Unsupported { .. }
+        ));
+        assert!(matches!(
+            flatten(&c, &p),
+            Err(FlattenError::RatUnsupported { .. })
+        ));
+        assert!(FlatProof::from_binary(&c, &write_binary(&p)).is_err());
+    }
+
+    /// The SimWarp table refuses the 4,096th literal; the verdict names the
+    /// capacity, not a proof defect.
+    #[test]
+    fn table_overflow_is_reported_as_capacity() {
+        let cnf: Vec<Vec<i32>> = vec![vec![1]];
+        let lits: Vec<i32> = (1..=4096).collect();
+        let p = Proof {
+            steps: vec![Step::Add {
+                id: 2,
+                lits,
+                hints: vec![1],
+            }],
+        };
+        let fp = flatten(&cnf, &p).unwrap();
+        let codes = check_warp_codes(&fp);
+        assert_eq!(codes[0], LemmaCode::TableOverflow);
+        assert!(matches!(
+            combine(&fp, &codes),
+            Verdict::Rejected {
+                reason: Reason::TableOverflow,
+                ..
+            }
+        ));
+        // 4,095 literals fit.
+        let p = Proof {
+            steps: vec![Step::Add {
+                id: 2,
+                lits: (1..=4095).collect(),
+                hints: vec![1],
+            }],
+        };
+        let fp = flatten(&cnf, &p).unwrap();
+        assert_ne!(check_warp_codes(&fp)[0], LemmaCode::TableOverflow);
+    }
+
+    /// `combine` fails closed on a code vector of the wrong length and on an
+    /// unwritten code (the device buffer's pre-fill).
+    #[test]
+    fn combine_fails_closed_on_missing_codes() {
+        let c = parse_cnf_ints(CNF);
+        let p = parse_text("5 2 0 1 2 0\n6 0 5 3 4 0\n").unwrap();
+        let fp = flatten(&c, &p).unwrap();
+        assert!(combine(&fp, &check_warp_codes(&fp)).is_verified());
+        assert!(matches!(
+            combine(&fp, &[LemmaCode::Ok]),
+            Verdict::Rejected {
+                reason: Reason::Unchecked,
+                ..
+            }
+        ));
+        assert!(matches!(
+            combine(&fp, &[LemmaCode::Ok, LemmaCode::Unwritten]),
+            Verdict::Rejected {
+                reason: Reason::Unchecked,
+                ..
+            }
+        ));
+    }
+
+    /// Parser bounds: an id gap or a variable beyond the bound is a parse
+    /// error in every parser, never an allocation.
+    #[test]
+    fn parser_bounds_reject_huge_ids_and_variables() {
+        use crate::lrat::{parse_binary, write_binary, MAX_ID_GAP, MAX_VAR};
+        let c = parse_cnf_ints(CNF);
+        let far = 5 + MAX_ID_GAP + 1;
+        let text = format!("5 2 0 1 2 0\n{far} 0 5 3 4 0\n");
+        assert!(parse_text(&text).is_err());
+        let p = Proof {
+            steps: vec![
+                Step::Add {
+                    id: 5,
+                    lits: vec![2],
+                    hints: vec![1, 2],
+                },
+                Step::Add {
+                    id: far,
+                    lits: vec![],
+                    hints: vec![5, 3, 4],
+                },
+            ],
+        };
+        let bin = write_binary(&p);
+        assert!(parse_binary(&bin).is_err());
+        assert!(FlatProof::from_binary(&c, &bin).is_err());
+        assert_same_result(&c, &bin, 2, 3, "id gap");
+        let big = MAX_VAR as i64 + 1;
+        assert!(parse_text(&format!("5 {big} 0 1 2 0\n")).is_err());
+        let p = Proof {
+            steps: vec![Step::Add {
+                id: 5,
+                lits: vec![big as i32],
+                hints: vec![1],
+            }],
+        };
+        let bin = write_binary(&p);
+        assert!(parse_binary(&bin).is_err());
+        assert!(FlatProof::from_binary(&c, &bin).is_err());
+        assert_same_result(&c, &bin, 2, 3, "big var");
     }
 
     #[test]

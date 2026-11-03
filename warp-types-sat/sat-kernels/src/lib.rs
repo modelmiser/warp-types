@@ -328,44 +328,62 @@ fn lrat_hash(k: u32) -> u32 {
     k.wrapping_mul(0x9E37_79B1) & (LRAT_TABLE - 1)
 }
 
-/// Is literal `l` falsified in this block's table (stamp-qualified)?
+/// Is literal `l` falsified in this block's table (stamp-qualified)? The
+/// probe count is bounded so a full table cannot spin (it cannot BE full —
+/// `lrat_insert` caps occupancy at `LRAT_TABLE - 1` — but a bounded loop is
+/// the property a reader can check).
 #[inline(always)]
 unsafe fn lrat_falsified(keys: *const u32, stamps: *const u32, base: u32, stamp: u32, l: i32) -> bool {
     let k = lrat_code(l) + 1;
     let mut i = lrat_hash(k);
-    loop {
+    let mut probes = 0u32;
+    while probes < LRAT_TABLE {
         let idx = (base + i) as usize;
         if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
             return false;
-        }
-        if *keys.add(idx) == k {
-            return true;
-        }
-        i = (i + 1) & (LRAT_TABLE - 1);
-    }
-}
-
-/// Mark literal `l` false. Returns false when the table is full.
-#[inline(always)]
-unsafe fn lrat_insert(keys: *mut u32, stamps: *mut u32, base: u32, stamp: u32, l: i32) -> bool {
-    let k = lrat_code(l) + 1;
-    let mut i = lrat_hash(k);
-    let mut probes = 0u32;
-    loop {
-        let idx = (base + i) as usize;
-        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
-            *keys.add(idx) = k;
-            *stamps.add(idx) = stamp;
-            return true;
         }
         if *keys.add(idx) == k {
             return true;
         }
         i = (i + 1) & (LRAT_TABLE - 1);
         probes += 1;
-        if probes >= LRAT_TABLE - 1 {
-            return false;
+    }
+    false
+}
+
+/// Mark literal `l` false. `count` is this lemma's occupancy; returns false
+/// (table overflow, code 5) rather than filling the last slot, so a lookup
+/// always finds an empty slot and terminates. Same cap as `SimWarp`'s
+/// `LitTable` (`CAP - 1` = 4,095 literals). The previous version capped
+/// PROBES at 4,095, which still admitted a 4,096th key whenever the hole was
+/// within reach — then the table was full and a miss looped forever
+/// (cross-vendor panel, 2026-11-02).
+#[inline(always)]
+unsafe fn lrat_insert(
+    keys: *mut u32,
+    stamps: *mut u32,
+    base: u32,
+    stamp: u32,
+    l: i32,
+    count: &mut u32,
+) -> bool {
+    let k = lrat_code(l) + 1;
+    let mut i = lrat_hash(k);
+    loop {
+        let idx = (base + i) as usize;
+        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
+            if *count >= LRAT_TABLE - 1 {
+                return false;
+            }
+            *keys.add(idx) = k;
+            *stamps.add(idx) = stamp;
+            *count += 1;
+            return true;
         }
+        if *keys.add(idx) == k {
+            return true;
+        }
+        i = (i + 1) & (LRAT_TABLE - 1);
     }
 }
 
@@ -401,15 +419,22 @@ pub fn lrat_check_lemmas(
         let ls = *clause_start.add(lemma_dense as usize);
         let le = *clause_start.add(lemma_dense as usize + 1);
         let mut code: u8 = 2; // NoConflict unless a hint conflicts
+        let mut count = 0u32; // this lemma's table occupancy (identical in every lane)
         // Lemma literals are false. Every lane inserts (identical writes).
         let mut k = ls;
         while k < le {
-            if !lrat_insert(table_keys, table_stamps, base, stamp, *lits.add(k as usize)) {
+            if !lrat_insert(table_keys, table_stamps, base, stamp, *lits.add(k as usize), &mut count) {
                 code = 5;
                 break;
             }
             k += 1;
         }
+        // Writes before reads. The lanes write identical values to identical
+        // slots, so no lane depends on another's write — but without a
+        // barrier a lane could in principle observe another lane's
+        // key/stamp pair half-updated (two stores, weakly ordered). The
+        // barrier is warp-uniform (`code` is the same in every lane).
+        warp_types::gpu::syncwarp(0xffff_ffff);
         if code != 5 {
             let hs = *hint_start.add(i as usize);
             let he = *hint_start.add(i as usize + 1);
@@ -458,7 +483,9 @@ pub fn lrat_check_lemmas(
                 let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
                 let src = voted.trailing_zeros() & 31;
                 let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-                if !lrat_insert(table_keys, table_stamps, base, stamp, -unit) {
+                let ok = lrat_insert(table_keys, table_stamps, base, stamp, -unit, &mut count);
+                warp_types::gpu::syncwarp(0xffff_ffff);
+                if !ok {
                     code = 5;
                     break;
                 }
