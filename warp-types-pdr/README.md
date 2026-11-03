@@ -37,7 +37,17 @@ is not like-for-like). Record, data, and the 20 invariants:
 repository root. Reviewed by a five-seat, four-family cold panel before
 publication; its corrections are in the log.
 
-- **20 instances proved; all 20 invariants pass the independent check, and
+- **Since 2026-11-03 (run 4b, latch-projected cubes): 36 instances proved
+  and 10 refuted at 60 s, from 20 and 4** — cubes range over the latches
+  and the property's variable instead of every gate, and the frame ∧ ¬P
+  query carries the gate definitions it had been missing. **All 36
+  invariants pass the independent check and are `valid witness` under
+  Certifaiger; all 10 counterexamples replay at ABC's depth.** A pair of proofs
+  from the previous engine sit beyond the cap now (`power2bit128` at 67 s,
+  `139452p0` at 129 s); the generalisation order is a per-instance knob of
+  one to two orders of magnitude that has not been tuned (see the log). <!-- unguarded: 36, 10, 20, 4 — campaign counts, research/bmc-pdr-hwmcc17-2026-11-01/run4b-projected/ -->
+  `pdr --no-project` restores the all-variables engine.
+- Run 2 (all-variables engine, kept as the baseline): **20 instances proved; all 20 invariants pass the independent check, and
   pass it again with the property clause removed** (so each frame alone is
   inductive and implies the property). <!-- unguarded: 20 — campaign count, research/bmc-pdr-hwmcc17-2026-11-01/ -->
   **13 of the 20 are the property clause itself** — the property was already

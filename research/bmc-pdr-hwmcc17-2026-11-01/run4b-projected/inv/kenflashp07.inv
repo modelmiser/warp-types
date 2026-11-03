@@ -1,0 +1,9 @@
+c inductive invariant from warp-types-pdr for /home/cjb/staging/2026-11-01-hwmcc/kenflashp07.aig: frame 1, 6 clauses + property; AIGER literals, 0-terminated
+c model fnv1a64 9f8a18a2f06cde3a
+3419 0
+183 195 3419 0
+181 195 3419 0
+147 3419 0
+132 3419 0
+199 255 0
+3419 0
