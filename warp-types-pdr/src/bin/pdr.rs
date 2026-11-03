@@ -107,7 +107,12 @@ fn run_aiger(args: &[String]) {
         i += 1;
     }
     let Some(path) = path else { usage() };
-    let aig = warp_types_bmc::aiger::read_file(path).unwrap_or_else(|e| {
+    let model_bytes = std::fs::read(path).unwrap_or_else(|e| {
+        eprintln!("Error reading {path}: {e}");
+        std::process::exit(1);
+    });
+    let model_fp = warp_types_bmc::aiger::fingerprint(&model_bytes);
+    let aig = warp_types_bmc::aiger::parse(&model_bytes).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
@@ -147,6 +152,7 @@ fn run_aiger(args: &[String]) {
                      {} clauses + property; AIGER literals, 0-terminated\n",
                     invariant.len()
                 ));
+                text.push_str(&format!("c model fnv1a64 {model_fp:016x}\n"));
                 let mut clauses: Vec<&Vec<_>> = invariant.iter().collect();
                 let prop: Vec<Vec<_>> = sys.property().iter().map(|c| c.lits.clone()).collect();
                 clauses.extend(prop.iter());

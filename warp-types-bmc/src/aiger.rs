@@ -306,6 +306,30 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Aig, AigerError> {
     parse(&std::fs::read(path)?)
 }
 
+/// 64-bit FNV-1a of a file's bytes, as `pdr --invariant` records it and
+/// `aig-witness` checks it: an invariant file names the model it is about,
+/// and a witness built against a different file of the same name is refused
+/// instead of being certified for the wrong circuit. Not cryptographic — a
+/// mix-up detector, which is the failure this guards against.
+pub fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// The `fnv1a64 <hex>` recorded in an invariant file's comment, if any.
+pub fn invariant_file_fingerprint(text: &str) -> Option<u64> {
+    for line in text.lines().take_while(|l| l.starts_with('c')) {
+        if let Some(i) = line.find("fnv1a64 ") {
+            return u64::from_str_radix(line[i + 8..].split_whitespace().next()?, 16).ok();
+        }
+    }
+    None
+}
+
 /// How AIGER literals map onto the lowered system's state variables.
 ///
 /// `var_of[index]` is the state variable of AIG variable `index` (`None` when
