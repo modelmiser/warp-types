@@ -1,0 +1,6 @@
+c inductive invariant from warp-types-pdr for /home/cjb/staging/2026-11-01-hwmcc/pdtvisgray0.aig: frame 2, 3 clauses + property; AIGER literals, 0-terminated
+c model fnv1a64 25cb70d0a0eee52e
+21 0
+15 16 0
+14 17 0
+41 0

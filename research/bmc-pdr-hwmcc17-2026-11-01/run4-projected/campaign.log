@@ -1,0 +1,127 @@
+139442p1                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@3 pdr SAT@3 | match= cons=
+139443p5                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@3 pdr SAT@3 | match= cons=
+139452p0                   bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   1.69s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@4 | match= cons=True
+6s0                        bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@25 pdr UNKNOWN@ | match= cons=
+6s105                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@23 pdr UNKNOWN@ | match= cons=
+6s120                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@139 pdr UNSAT@4 | match= cons=
+6s134                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@168 pdr UNKNOWN@ | match= cons=
+6s185                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@18 pdr UNKNOWN@ | match= cons=
+6s186                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@17 pdr UNKNOWN@ | match= cons=
+6s187                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@15 pdr UNKNOWN@ | match= cons=
+6s269r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@22 pdr UNKNOWN@ | match= cons=
+6s310r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@50 pdr UNKNOWN@ | match= cons=
+6s319r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@158 pdr UNKNOWN@ | match= cons=
+6s365r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@195 pdr UNKNOWN@ | match= cons=
+6s37                       bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@84 pdr UNKNOWN@ | match= cons=
+6s393r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@11 pdr UNKNOWN@ | match= cons=
+6s394r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@16 pdr UNKNOWN@ | match= cons=
+6s4                        bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNKNOWN@ | match= cons=
+6s41                       bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@73 pdr UNKNOWN@ | match= cons=
+6s514r                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@15 pdr UNKNOWN@ | match= cons=
+6s515rb1                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@3 | match= cons=
+abp4p2ff                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@17 pdr SAT@17 | match= cons=
+bc57sensorsp2              bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@104 pdr UNKNOWN@ | match= cons=
+beemadd4b1                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@15 pdr SAT@23 | match= cons=
+beemandrsn6b1              bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@5 pdr UNKNOWN@ | match= cons=
+beemcmbrdg1b1              bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 @ pdr @ | match= cons=
+beemcmbrdg1f1              bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@19 pdr UNKNOWN@ | match= cons=
+beemlmprt8f1               bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@21 pdr SAT@35 | match= cons=
+beemptrsn4b1               bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@15 pdr UNKNOWN@ | match= cons=
+bj08amba2g1                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   4   0.64s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+bj08aut82                  bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.01s CERTIFIED | abc bmc3 UNSAT@8 pdr UNSAT@1 | match= cons=True
+bj08vendingcycle           bmc SKIPPED     @       0.00s          | pdr SAT      @   4   6.26s           | abc bmc3 SAT@4 pdr SAT@5 | match= cons=True
+bob2                       bmc SKIPPED     @       0.00s          | pdr UNSAT    @  11   7.13s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@4 | match= cons=True
+bob3                       bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@27 pdr UNSAT@23 | match= cons=
+bob9234specand             bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.00s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr DECLINED@ | match= cons=
+bobcount                   bmc SKIPPED     @       0.00s          | pdr UNSAT    @  15   1.77s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@13 | match= cons=True
+boblivea                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@93 pdr UNSAT@19 | match= cons=
+boblivear                  bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@92 pdr UNSAT@15 | match= cons=
+bobmiterbm1or              bmc SKIPPED     @       0.00s          | pdr SAT      @   0   0.01s           | abc bmc3 SAT@0 pdr SAT@0 | match= cons=True
+bobsm9234                  bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@20 pdr UNKNOWN@ | match= cons=
+bobsmhdlc3                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@29 pdr UNKNOWN@ | match= cons=
+bobsmi2c                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@15 pdr UNKNOWN@ | match= cons=
+bobsmminiuart              bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@511 pdr UNKNOWN@ | match= cons=
+bobtuint24                 bmc SKIPPED     @       0.00s          | pdr SAT      @   0   0.00s           | abc bmc3 SAT@0 pdr SAT@0 | match= cons=True
+bobunr2p10d40l             bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   5.24s CERTIFIED | abc bmc3 UNKNOWN@897 pdr UNSAT@1 | match= cons=True
+brpp1                      bmc SKIPPED     @       0.00s          | pdr SAT      @   3  31.82s           | abc bmc3 SAT@3 pdr SAT@3 | match= cons=True
+cmudme2                    bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@79 pdr UNKNOWN@ | match= cons=
+counterp0                  bmc SKIPPED     @       0.00s          | pdr SAT      @   9   0.28s           | abc bmc3 SAT@9 pdr SAT@17 | match= cons=True
+csmacdp2                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@7 pdr SAT@7 | match= cons=
+dme6p1                     bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@3 pdr SAT@3 | match= cons=
+dme6p1neg                  bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@2 pdr SAT@2 | match= cons=
+eijkbs1512                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@121 pdr UNSAT@124 | match= cons=
+eijkbs3271                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@15 pdr UNKNOWN@ | match= cons=
+eijkbs6669                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@5 pdr UNKNOWN@ | match= cons=
+eijks1196                  bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   7.26s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+eijks1238                  bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   7.52s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+eijks344                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@9 | match= cons=
+eijks349                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@9 | match= cons=
+eijks386                   bmc SKIPPED     @       0.00s          | pdr UNSAT    @   7  13.05s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@7 | match= cons=True
+eijks444                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@49 pdr UNSAT@61 | match= cons=
+eijks953                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@760 pdr UNSAT@9 | match= cons=
+intel001                   bmc SKIPPED     @       0.00s          | pdr UNSAT    @   5   1.22s CERTIFIED | abc bmc3 UNKNOWN@800 pdr UNSAT@5 | match= cons=True
+intel003                   bmc SKIPPED     @       0.00s          | pdr UNSAT    @   6  47.12s CERTIFIED | abc bmc3 UNKNOWN@458 pdr UNSAT@5 | match= cons=True
+intel026                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@491 pdr UNKNOWN@ | match= cons=
+intel044                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@20 pdr UNKNOWN@ | match= cons=
+intel046                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@20 pdr UNKNOWN@ | match= cons=
+intel047                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@20 pdr UNKNOWN@ | match= cons=
+intel056                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@24 pdr UNSAT@21 | match= cons=
+intel061                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@25 pdr UNSAT@18 | match= cons=
+irstdme6                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@53 pdr SAT@53 | match= cons=
+kenflashp03                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   8.21s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+kenflashp07                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   3.75s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+kenflashp08                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   3.38s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+kenflashp09                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2  14.83s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+kenflashp10                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.01s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+kenflashp13                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.00s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr DECLINED@ | match= cons=
+mutexp0                    bmc SKIPPED     @       0.00s          | pdr SAT      @   7   0.28s           | abc bmc3 SAT@7 pdr SAT@7 | match= cons=True
+ndista128                  bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@24 | match= cons=
+neclabakery001             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@127 pdr UNSAT@41 | match= cons=
+neclaftp5001               bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   0.10s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+neclatcas1a001             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNKNOWN@ | match= cons=
+nusmvbrp                   bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@26 pdr UNSAT@19 | match= cons=
+nusmvdme216                bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@64 pdr UNKNOWN@ | match= cons=
+nusmvguidancep1            bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@4 | match= cons=
+nusmvreactorp3             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@17 | match= cons=
+nusmvreactorp5             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@391 pdr UNSAT@3 | match= cons=
+nusmvsyncarb5p2            bmc SKIPPED     @       0.00s          | pdr UNSAT    @   5   0.03s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@6 | match= cons=True
+nusmvtcasp3                bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@981 pdr UNKNOWN@ | match= cons=
+pcip1                      bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@3 pdr SAT@4 | match= cons=
+pdtfifo1to0                bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@16 pdr UNKNOWN@ | match= cons=
+pdtpmsarbiter              bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   0.45s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+pdtpmsretherrtf            bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@45 pdr UNSAT@55 | match= cons=
+pdtpmsrotate32             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.06s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=
+pdtpmss1269b               bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@7 | match= cons=
+pdtpmsusbphy               bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.01s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@3 | match= cons=
+pdtswvibs8x8p0             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@14 pdr SAT@14 | match= cons=
+pdtswvtma6x4p1             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@621 pdr UNSAT@28 | match= cons=
+pdtswvtma6x6p3             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@57 pdr UNKNOWN@ | match= cons=
+pdtvisblackjack0           bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@18 | match= cons=
+pdtvisgigamax4             bmc SKIPPED     @       0.00s          | pdr UNSAT    @   9  11.82s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+pdtvisgray0                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   2   0.00s CERTIFIED | abc bmc3 UNSAT@32 pdr UNSAT@2 | match= cons=True
+pdtvishuffman1             bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.00s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr DECLINED@ | match= cons=
+pdtvisns2p3                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   9  57.35s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+pdtvisrethersqo0           bmc SKIPPED     @       0.00s          | pdr UNSAT    @   1   0.00s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@1 | match= cons=True
+pdtvisvending00            bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@8 | match= cons=
+power2bit128               bmc SKIPPED     @       0.00s          | pdr UNSAT    @  67  49.00s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@21 | match= cons=True
+prodcellp4                 bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@82 pdr SAT@82 | match= cons=
+productioncellp0           bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.10s           | abc bmc3 SAT@85 pdr SAT@85 | match= cons=
+ringp0                     bmc SKIPPED     @       0.00s          | pdr SAT      @   8   1.05s           | abc bmc3 SAT@8 pdr SAT@8 | match= cons=True
+shift1add262144            bmc SKIPPED     @       0.00s          | pdr UNSAT    @   3   0.19s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNKNOWN@ | match= cons=
+srg5ptimo                  bmc SKIPPED     @       0.00s          | pdr SAT      @   3   0.61s           | abc bmc3 SAT@3 pdr SAT@4 | match= cons=True
+texasifetch1p1             bmc SKIPPED     @       0.00s          | pdr UNSAT    @   4   1.93s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+texasifetch1p8             bmc SKIPPED     @       0.00s          | pdr SAT      @   4   5.90s           | abc bmc3 SAT@4 pdr SAT@4 | match= cons=True
+vis4arbitp1                bmc SKIPPED     @       0.00s          | pdr UNSAT    @   9   7.53s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@6 | match= cons=True
+visarbiter                 bmc SKIPPED     @       0.00s          | pdr UNSAT    @   8   2.97s CERTIFIED | abc bmc3 UNKNOWN@497 pdr UNSAT@6 | match= cons=True
+viselevatorp1              bmc SKIPPED     @       0.00s          | pdr UNSAT    @   6   3.71s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+viselevatorp2              bmc SKIPPED     @       0.00s          | pdr SAT      @   4   3.66s           | abc bmc3 SAT@4 pdr SAT@4 | match= cons=True
+visemodel                  bmc SKIPPED     @       0.00s          | pdr UNSAT    @   4   0.09s CERTIFIED | abc bmc3 UNKNOWN@1000 pdr UNSAT@2 | match= cons=True
+visprodcellp01             bmc SKIPPED     @       0.00s          | pdr TIMEOUT  @      60.02s           | abc bmc3 UNKNOWN@1000 pdr UNSAT@4 | match= cons=
+# bmc-pdr-campaign summary (119 instances < 20 KB, our timeout 60s per crate; the ABC reference used its own caps — see abc.csv/run-abc.sh — so coverage is not like-for-like)
+BMC: ours SAT 0 (ABC bmc3 SAT 26); depth agreement on the 0 both-SAT: 0/0; ours BOUNDED_SAFE 0, TIMEOUT 0
+BMC counterexamples replayed through the AIG by tools/replay-trace.py: 0/0; PDR counterexamples replayed: 10/10
+BMC time ours/ABC on both-SAT: n/a
+PDR: ours UNSAT 33 (ABC pdr UNSAT 55), ours SAT 10, EXHAUSTED 0, TIMEOUT 76
+PDR invariants certified by independent check: 33/33; fences that are the property clause alone (P inductive, frame of 1 clause): 2
+PDR time ours/ABC on both-UNSAT: median 64.5x, min 0.0x, max 1377.2x (ABC times include ~40 ms process start-up; ratios on sub-0.1 s instances are not meaningful)
+verdict contradictions: 0; kills: none

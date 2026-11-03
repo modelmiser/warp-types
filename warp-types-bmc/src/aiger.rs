@@ -719,8 +719,15 @@ fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), A
         sys.add_comb(vec![lw.lit(c)]);
     }
 
-    // Property: ¬bad.
+    // Property: ¬bad. The bad literal's variable is a cube variable too:
+    // with latches alone a cube cannot name "the bad gate is true", so an
+    // already-inductive property (run 2/3: 13 of 20 proofs were the property
+    // clause alone) has to be rediscovered as a latch-level invariant —
+    // `nusmvreactorp5` went from 2.7 s / 1 clause to 94 s / 40 clauses in
+    // run 4 for exactly this reason. With it, the generaliser can reduce a
+    // CTI to ¬bad, which is P, and the fast path is back.
     sys.add_property(vec![lw.lit(bad).complement()]);
+    cube_vars[lw.lit(bad).var() as usize] = true;
     sys.set_cube_vars(cube_vars);
     Ok((sys, lw))
 }

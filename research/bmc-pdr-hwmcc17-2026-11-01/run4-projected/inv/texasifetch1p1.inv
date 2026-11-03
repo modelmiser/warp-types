@@ -1,0 +1,18 @@
+c inductive invariant from warp-types-pdr for /home/cjb/staging/2026-11-01-hwmcc/texasifetch1p1.aig: frame 4, 15 clauses + property; AIGER literals, 0-terminated
+c model fnv1a64 71dfe393cd3c4883
+158 163 165 169 0
+132 163 165 0
+125 0
+115 149 156 0
+113 121 149 156 171 0
+109 143 0
+105 137 145 173 0
+103 169 0
+158 163 167 168 0
+103 165 0
+102 163 164 167 168 0
+159 163 166 168 0
+133 163 164 0
+103 166 0
+103 162 0
+1386 0
