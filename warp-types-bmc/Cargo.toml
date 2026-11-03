@@ -15,6 +15,10 @@ categories = ["algorithms", "science"]
 name = "bmc"
 path = "src/bin/bmc.rs"
 
+[[bin]]
+name = "aig-witness"
+path = "src/bin/aig_witness.rs"
+
 [dependencies]
 warp-types = { path = "..", version = "0.4.0" }
 warp-types-sat = { path = "../warp-types-sat", version = "0.3.0" }

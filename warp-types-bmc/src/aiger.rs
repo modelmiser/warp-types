@@ -414,6 +414,123 @@ impl Lowering {
 /// assignment: `<step> <aiger-literal> <0|1>`. `tools/replay-trace.py`
 /// re-simulates the AIG from reset with these inputs and checks that the bad
 /// literal is true at the last step and the constraints hold throughout.
+/// Parse an invariant file as `pdr --invariant` writes it: comment lines
+/// start with `c`; every other line is one clause over AIGER literals,
+/// `0`-terminated.
+pub fn parse_invariant_file(text: &str) -> Result<Vec<Vec<u32>>, AigerError> {
+    let mut clauses = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('c') {
+            continue;
+        }
+        let mut clause = Vec::new();
+        for tok in t.split_whitespace() {
+            let v: u32 = tok.parse().map_err(|_| {
+                AigerError::Format(format!("invariant line {}: bad literal {tok:?}", n + 1))
+            })?;
+            if v == 0 {
+                break;
+            }
+            clause.push(v);
+        }
+        clauses.push(clause);
+    }
+    Ok(clauses)
+}
+
+/// A Certifaiger witness for an inductive invariant: the model itself, with
+/// its bad signal replaced by `¬(Inv ∧ P)`, where `Inv` is the conjunction of
+/// `clauses` (AIGER literals of the model) and `P` the conjunction of the
+/// model's negated bad signals (outputs, for pre-1.9 files). Inputs, latches,
+/// resets, constraints and gates are kept verbatim and in order, so the
+/// default identity mapping applies and Certifaiger's simulation checks are
+/// trivial; its inductive checks (`R' → P'`, `F' ∧ P'_s → P'_t`) are exactly
+/// initiation and consecution of `Inv ∧ P`, and its safety check `P' → P`
+/// holds by construction. ASCII AIGER 1.9 (`aag M I L O A B C`), one bad.
+/// See `research/bmc-pdr-aiger.md` and Froleyks, Yu & Biere, CAV25.
+/// AND-gate builder over a model's literals, with constant folding.
+struct GateBuilder {
+    next_var: u32,
+    ands: Vec<(u32, u32, u32)>,
+}
+
+impl GateBuilder {
+    fn and2(&mut self, a: u32, b: u32) -> u32 {
+        match (a, b) {
+            (0, _) | (_, 0) => 0,
+            (1, x) | (x, 1) => x,
+            _ if a == b => a,
+            _ if a == (b ^ 1) => 0,
+            _ => {
+                self.next_var += 1;
+                let lhs = 2 * self.next_var;
+                self.ands.push((lhs, a.max(b), a.min(b)));
+                lhs
+            }
+        }
+    }
+    fn and_all(&mut self, lits: &[u32]) -> u32 {
+        lits.iter().fold(1u32, |acc, &l| self.and2(acc, l))
+    }
+}
+
+pub fn write_witness(aig: &Aig, clauses: &[Vec<u32>], model_name: &str) -> String {
+    let mut g = GateBuilder {
+        next_var: aig.max_var,
+        ands: aig.ands.clone(),
+    };
+    let bads: &[u32] = if aig.bad.is_empty() {
+        &aig.outputs
+    } else {
+        &aig.bad
+    };
+    let mut conj: Vec<u32> = Vec::with_capacity(clauses.len() + bads.len());
+    for c in clauses {
+        // clause = ¬ AND(¬l)
+        let negs: Vec<u32> = c.iter().map(|&l| l ^ 1).collect();
+        let not_c = g.and_all(&negs);
+        conj.push(not_c ^ 1);
+    }
+    for &b in bads {
+        conj.push(b ^ 1);
+    }
+    let p_prime = g.and_all(&conj);
+    let bad_prime = p_prime ^ 1;
+    let (next_var, ands) = (g.next_var, g.ands);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "aag {} {} {} 0 {} 1 {}\n",
+        next_var,
+        aig.inputs.len(),
+        aig.latches.len(),
+        ands.len(),
+        aig.constraints.len()
+    ));
+    for &i in &aig.inputs {
+        out.push_str(&format!("{i}\n"));
+    }
+    for l in &aig.latches {
+        match l.reset {
+            Reset::Zero => out.push_str(&format!("{} {} 0\n", l.lit, l.next)),
+            Reset::One => out.push_str(&format!("{} {} 1\n", l.lit, l.next)),
+            Reset::Undefined => out.push_str(&format!("{} {} {}\n", l.lit, l.next, l.lit)),
+        }
+    }
+    out.push_str(&format!("{bad_prime}\n"));
+    for &c in &aig.constraints {
+        out.push_str(&format!("{c}\n"));
+    }
+    for &(lhs, r0, r1) in &ands {
+        out.push_str(&format!("{lhs} {r0} {r1}\n"));
+    }
+    out.push_str(&format!(
+        "c\nWITNESS b0 {model_name}\ninductive invariant from warp-types-pdr: {} clause(s) + property; model kept verbatim (identity mapping)\n",
+        clauses.len()
+    ));
+    out
+}
+
 pub fn write_trace(aig: &Aig, lw: &Lowering, trace: &[Vec<bool>], path: &str, out: &mut String) {
     // A node outside the lowered cone cannot influence the property or the
     // constraints, so any value will do for the replay: write 0.
@@ -578,6 +695,28 @@ fn lower_with(aig: &Aig, lw: Lowering) -> Result<(TransitionSystem, Lowering), A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1-latch toggle with a bad signal that can never fire; the witness
+    /// keeps the model verbatim and adds `¬(Inv ∧ P)` as its single bad.
+    #[test]
+    fn witness_keeps_model_and_adds_invariant_gates() {
+        // aag: M=3 I=1 L=1 O=0 A=1 B=1: latch 2 (reset 0) next = 6 = AND(¬2, 4); bad = 2 ∧ ¬2 = const 0? keep it simple: bad = 0.
+        let model = "aag 3 1 1 0 1 1\n4\n2 6 0\n0\n6 3 4\n";
+        let aig = parse(model.as_bytes()).unwrap();
+        let clauses = vec![vec![3u32], vec![3, 4]]; // ¬latch ; (¬latch ∨ input)
+        let w = write_witness(&aig, &clauses, "model.aag");
+        let waig = parse(w.as_bytes()).unwrap();
+        assert_eq!(waig.inputs, aig.inputs);
+        assert_eq!(waig.latches, aig.latches);
+        assert_eq!(&waig.ands[..aig.ands.len()], &aig.ands[..]);
+        assert_eq!(waig.bad.len(), 1);
+        assert!(waig.ands.len() > aig.ands.len());
+        assert!(w.contains("WITNESS b0 model.aag"));
+        assert_eq!(
+            parse_invariant_file("c comment\n3 0\n3 4 0\n").unwrap(),
+            clauses
+        );
+    }
     use crate::checker::{check, BmcResult};
 
     /// 2-bit counter in ASCII AIGER: latches l0 (bit 0), l1 (bit 1);
