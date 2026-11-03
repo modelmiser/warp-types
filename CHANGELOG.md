@@ -10,7 +10,8 @@
   **Measured 2026-11-03** (pre-registered, `research/lrat-from-solver.md`; `tools/lrat-campaign.py`): all 114 UNSAT <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   proofs of the certification corpus verified by `lrat-check`, `cake_lpr` and the in-crate checker, with no
   `drat-trim` in the path. Two predictions missed, both in the design's favour and recorded: logging overhead ≈ 4×
-  the DRAT logger's, and the end-to-end gain over DRAT + `drat-trim` is 2.8× at the median, 1.2× on the largest
+  the DRAT logger's (+14 % text / +10 % binary vs +4 %, after a `CRef`-indexed id table and allocation-free number
+  formatting — the DRAT writer gained from the latter too), and the end-to-end gain over DRAT + `drat-trim` is 2.8× at the median, 1.2× on the largest
   instances this solver finishes (untrimmed proofs grow 4× on long runs). **`lrat-trim`** (`lrat::trim`,
   `lrat::write_text`) then trims by backward reachability through the hints, linear and without propagation:
   250 MB → 41.5 MB on the largest proofs, within 2 % of `drat-trim -L`'s output size, every trimmed proof verified.

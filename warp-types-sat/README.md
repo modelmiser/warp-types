@@ -215,8 +215,10 @@ fail-closed: no checker is not a pass.
   reasons in trail order (`research/lrat-from-solver.md`). **Measured
   2026-11-03** on the certification corpus: all 114 UNSAT answers' proofs <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   verified by `lrat-check`, `cake_lpr` and this crate's checker. Costs, stated
-  because the pre-registration predicted better: logging overhead about 4× the
-  DRAT logger's (+20 % vs +6 % of solve time on random 3-SAT n = 250); proof <!-- unguarded: 250 — instance size n -->
+  because the pre-registration predicted better: logging overhead about 3× the
+  DRAT logger's (+14 % text, +10 % binary, vs +4 % for DRAT, of solve time on
+  random 3-SAT n = 250, one core; was +20 % before the id table became a
+  vector and the number formatting stopped allocating); proof <!-- unguarded: 250 — instance size n -->
   bytes about equal to `drat-trim -L`'s output on short runs and 4× on long
   ones (nothing is trimmed); end to end against the DRAT + `drat-trim` route
   2.8× faster at the median and 1.2× on the largest instances this solver

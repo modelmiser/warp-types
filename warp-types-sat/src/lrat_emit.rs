@@ -17,49 +17,64 @@
 use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::trail::{Reason, Trail};
-use std::collections::HashMap;
 
-/// `CRef → LRAT id`, for the clauses currently in the database.
+/// `CRef → LRAT id`, for the clauses currently in the database. A `CRef` is
+/// an arena offset, so a plain vector indexed by it (0 = no id) replaces the
+/// hash map that was the single largest cost of the chain walk (every reason
+/// of every conflict is looked up once).
 pub(crate) struct LratIds {
-    map: HashMap<CRef, u64>,
+    ids: Vec<u64>,
 }
 
 impl LratIds {
     /// Originals get `1..=n` in database (= file) order.
     pub(crate) fn new(db: &ClauseDb) -> Self {
-        let mut map = HashMap::new();
+        let mut ids = vec![0u64; db.arena_words() + 1];
         for (i, cref) in db.iter_crefs().enumerate() {
-            map.insert(cref, i as u64 + 1);
+            ids[cref as usize] = i as u64 + 1;
         }
-        LratIds { map }
+        LratIds { ids }
     }
+    #[inline]
     pub(crate) fn id(&self, c: CRef) -> u64 {
-        *self
-            .map
-            .get(&c)
-            .unwrap_or_else(|| panic!("lrat: clause {c} has no id (added without logging?)"))
+        let id = self.ids.get(c as usize).copied().unwrap_or(0);
+        debug_assert!(
+            id != 0,
+            "lrat: clause {c} has no id (added without logging?)"
+        );
+        id
     }
     pub(crate) fn insert(&mut self, c: CRef, id: u64) {
-        self.map.insert(c, id);
+        let c = c as usize;
+        if self.ids.len() <= c {
+            self.ids.resize(c + 1 + self.ids.len() / 2, 0);
+        }
+        self.ids[c] = id;
     }
     pub(crate) fn remove(&mut self, c: CRef) -> Option<u64> {
-        self.map.remove(&c)
+        let slot = self.ids.get_mut(c as usize)?;
+        let id = std::mem::take(slot);
+        (id != 0).then_some(id)
     }
     /// After database compaction: `remap` is `(old, new)` for every surviving
     /// clause (the solver applies the same list to the trail's reasons).
     pub(crate) fn remap(&mut self, remap: &[(CRef, CRef)]) {
-        let mut next = HashMap::with_capacity(remap.len());
+        let max_new = remap.iter().map(|&(_, n)| n as usize).max().unwrap_or(0);
+        let mut next = vec![0u64; max_new + 1];
+        let mut moved = 0usize;
         for &(old, new) in remap {
-            if let Some(id) = self.map.remove(&old) {
-                next.insert(new, id);
+            let id = self.ids.get(old as usize).copied().unwrap_or(0);
+            if id != 0 {
+                next[new as usize] = id;
+                moved += 1;
             }
         }
-        debug_assert!(
-            self.map.is_empty(),
-            "lrat: {} clause(s) with ids were not in the compaction remap",
-            self.map.len()
+        debug_assert_eq!(
+            moved,
+            self.ids.iter().filter(|&&i| i != 0).count(),
+            "lrat: clause(s) with ids were not in the compaction remap"
         );
-        self.map = next;
+        self.ids = next;
     }
 }
 
@@ -122,10 +137,10 @@ pub(crate) fn rup_chain(
             sc.touched.push(v as u32);
             // `l` is false on the trail (the clause's implied literal, if this
             // is a reason, was marked before the clause was pushed).
-            match trail.entry_for_var(v as u32).map(|e| e.reason) {
+            let pos = trail.position_of(v as u32);
+            match pos.map(|p| trail.entries()[p].reason) {
                 Some(Reason::Propagation(r)) => {
-                    let pos = trail.position_of(v as u32).expect("assigned");
-                    sc.out.push((pos, ids.id(r)));
+                    sc.out.push((pos.expect("assigned"), ids.id(r)));
                     sc.stack.push(r);
                 }
                 Some(Reason::Decision) | None => {

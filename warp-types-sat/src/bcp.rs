@@ -445,6 +445,12 @@ impl ClauseDb {
     ///
     /// Walks the arena linearly — O(n) in total. CRef iteration replaces
     /// the old `for i in 0..db.len()` pattern.
+    /// Words in the arena: an exclusive upper bound on every live `CRef`
+    /// (used to size `CRef`-indexed side tables, e.g. LRAT ids).
+    pub(crate) fn arena_words(&self) -> usize {
+        self.arena.len()
+    }
+
     pub(crate) fn iter_crefs(&self) -> CRefIter<'_> {
         CRefIter {
             arena: &self.arena,
