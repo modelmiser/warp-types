@@ -76,10 +76,16 @@ done
 log "archive: $n proofs, $ok agree, $dis disagree, ${err:-0} errors, $ver verified"
 # Note: text LRATs take the parse+flatten route; the device path uses the same flat layout.
 
-log "=== (B) Timing on binary proofs ==="
+log "=== (B) Timing on binary proofs (decode on $(nproc) threads; CPU check on $(nproc) threads) ==="
 for f in /tmp/lrat-corpus/*.blrat; do
     base=$(basename "$f" .blrat); c=/tmp/lrat-corpus/$base.cnf
     log "--- $base ($(stat -c %s "$f") bytes) ---"
     LRAT_GPU=1 LRAT_GPU_BLOCKS=1024,4096,16384 LRAT_SKIP_SLOW=1 "$BIN" "$c" "$f" "$(nproc)" 2>&1 | grep -E "^c read|^c flat|^c gpu|^s |panicked|Error|error" | tee -a "$R"
+done
+
+log "=== (C) Decode scaling on the largest binary proof (parallel decoder held equal to the one-thread decoder) ==="
+f=$(ls -S /tmp/lrat-corpus/*.blrat | head -1); base=$(basename "$f" .blrat); c=/tmp/lrat-corpus/$base.cnf
+for t in 1 8 32 "$(nproc)"; do
+    LRAT_DECODE_THREADS=$t LRAT_DECODE_VERIFY=1 LRAT_SKIP_SLOW=1 "$BIN" "$c" "$f" 1 2>&1 | grep -E "^c decode-verify|^c flat-decode|DISAGREE" | sed "s/^/threads=$t: /" | tee -a "$R"
 done
 log "=== DONE ==="

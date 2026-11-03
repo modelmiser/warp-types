@@ -109,13 +109,16 @@ def main():
             cnf = os.path.join(d, "cnf", stem + ".cnf")
             if not os.path.exists(cnf):
                 continue
-            shutil.copy(cnf, os.path.join(a.out, "cnf", stem + ".cnf"))
+            # Stems repeat across archive dirs (run1 and run2 share instances):
+            # prefix the dir name so mutants never overwrite each other.
+            ustem = f"{os.path.basename(os.path.normpath(d))}_{stem}"
+            shutil.copy(cnf, os.path.join(a.out, "cnf", ustem + ".cnf"))
             steps = parse(open(os.path.join(d, "proof", f)).read())
             for kind in ("hintdrop", "litflip", "fwdhint", "useafterdel"):
                 m = mutate(steps, kind, rng)
                 if m is None:
                     continue
-                name = f"{stem}.{kind}"
+                name = f"{ustem}.{kind}"
                 lp = os.path.join(a.out, "proof", name + ".lrat")
                 open(lp, "w").write(fmt(m))
                 row = {"name": name, "kind": kind, "lrat_check": "", "cake_lpr": "", "ours": ""}
