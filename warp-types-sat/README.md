@@ -222,6 +222,10 @@ fail-closed: no checker is not a pass.
   2.8× faster at the median and 1.2× on the largest instances this solver
   finishes. Pure SAT: a theory lemma is written without a chain and counted
   (`LratStats::unjustified`); such a proof is rejected, by design.
+  **`lrat-trim IN OUT [--binary]`** (`lrat::trim`) keeps only what the empty
+  clause depends on — linear, no propagation, ids unchanged: on the n = 250 <!-- unguarded: 250 — instance size n -->
+  proofs 250 MB → 41.5 MB, the size of `drat-trim -L`'s output (42.3 MB), in
+  2.7 s; all 114 trimmed proofs verify. <!-- unguarded: 114 — campaign tally -->
 - **LRAT proof checker, warp-typed** (`lrat.rs`, `lrat_warp.rs`, `sat-kernels::lrat_check_lemmas`,
   `GpuContext::check_lrat_codes` under `feature = "gpu"`) — reads text and
   binary LRAT. The reference checker follows `lrat-check`'s rules for RUP

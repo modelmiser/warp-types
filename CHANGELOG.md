@@ -11,7 +11,9 @@
   proofs of the certification corpus verified by `lrat-check`, `cake_lpr` and the in-crate checker, with no
   `drat-trim` in the path. Two predictions missed, both in the design's favour and recorded: logging overhead ≈ 4×
   the DRAT logger's, and the end-to-end gain over DRAT + `drat-trim` is 2.8× at the median, 1.2× on the largest
-  instances this solver finishes (untrimmed proofs grow 4× on long runs).
+  instances this solver finishes (untrimmed proofs grow 4× on long runs). **`lrat-trim`** (`lrat::trim`,
+  `lrat::write_text`) then trims by backward reachability through the hints, linear and without propagation:
+  250 MB → 41.5 MB on the largest proofs, within 2 % of `drat-trim -L`'s output size, every trimmed proof verified.
 - **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT; the reference checker follows
   `lrat-check`'s RUP rules — hints in order, deletions honoured, every step checked including those after the empty
   clause, RAT = `Unsupported` — and reports the earliest failing step), `lrat_warp` (one warp per lemma on the

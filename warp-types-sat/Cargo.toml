@@ -15,6 +15,10 @@ categories = ["algorithms", "science"]
 name = "solve"
 path = "src/bin/solve.rs"
 
+[[bin]]
+name = "lrat-trim"
+path = "src/bin/lrat_trim.rs"
+
 [features]
 default = []
 gpu = ["dep:cudarc", "dep:warp-types-builder"]

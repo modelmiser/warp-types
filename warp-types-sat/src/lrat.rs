@@ -285,6 +285,113 @@ pub fn parse_binary(bytes: &[u8]) -> Result<Proof, ParseError> {
     Ok(Proof { steps })
 }
 
+/// Write a proof as LRAT text (the layout [`parse_text`] reads; deletion
+/// lines carry the last added id, which every checker ignores).
+pub fn write_text(proof: &Proof) -> String {
+    let mut s = String::new();
+    let mut last = 0u64;
+    for st in &proof.steps {
+        match st {
+            Step::Add { id, lits, hints } => {
+                last = *id;
+                s.push_str(&id.to_string());
+                for l in lits {
+                    s.push(' ');
+                    s.push_str(&l.to_string());
+                }
+                s.push_str(" 0");
+                for h in hints {
+                    s.push(' ');
+                    s.push_str(&h.to_string());
+                }
+                s.push_str(" 0\n");
+            }
+            Step::Delete { ids } => {
+                s.push_str(&last.to_string());
+                s.push_str(" d");
+                for i in ids {
+                    s.push(' ');
+                    s.push_str(&i.to_string());
+                }
+                s.push_str(" 0\n");
+            }
+        }
+    }
+    s
+}
+
+/// What [`trim`] removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrimStats {
+    pub lemmas_in: usize,
+    pub lemmas_out: usize,
+    pub deletions_in: usize,
+    pub deletions_out: usize,
+}
+
+/// Backward trimming: keep only the lemmas the FIRST empty clause depends
+/// on, transitively through hints, and only the deletions of kept clauses.
+/// Linear in the proof — no propagation, because LRAT already names every
+/// antecedent; this is `drat-trim`'s backward pass without its search. The
+/// trimmed proof is a sub-sequence of the input with the same ids, so it
+/// verifies whenever the input does (a kept lemma's hints are all kept and
+/// all precede it; a deletion is kept only where the input had it). A proof
+/// with no empty clause is returned unchanged. RAT hints (negative) are kept
+/// as they are; checking them is not this module's business.
+pub fn trim(proof: &Proof) -> (Proof, TrimStats) {
+    let mut stats = TrimStats::default();
+    let mut first_empty: Option<usize> = None;
+    for (i, st) in proof.steps.iter().enumerate() {
+        match st {
+            Step::Add { lits, .. } => {
+                stats.lemmas_in += 1;
+                if lits.is_empty() && first_empty.is_none() {
+                    first_empty = Some(i);
+                }
+            }
+            Step::Delete { ids } => stats.deletions_in += ids.len(),
+        }
+    }
+    let Some(end) = first_empty else {
+        stats.lemmas_out = stats.lemmas_in;
+        stats.deletions_out = stats.deletions_in;
+        return (proof.clone(), stats);
+    };
+    // Needed ids: seeded by the empty clause, closed backwards over hints.
+    let mut needed: HashSet<u64> = HashSet::new();
+    if let Step::Add { id, .. } = &proof.steps[end] {
+        needed.insert(*id);
+    }
+    for st in proof.steps[..=end].iter().rev() {
+        if let Step::Add { id, hints, .. } = st {
+            if needed.contains(id) {
+                for &h in hints {
+                    needed.insert(h.unsigned_abs());
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(end + 1);
+    for st in &proof.steps[..=end] {
+        match st {
+            Step::Add { id, .. } => {
+                if needed.contains(id) {
+                    out.push(st.clone());
+                    stats.lemmas_out += 1;
+                }
+            }
+            Step::Delete { ids } => {
+                let kept: Vec<u64> = ids.iter().copied().filter(|i| needed.contains(i)).collect();
+                if !kept.is_empty() {
+                    stats.deletions_out += kept.len();
+                    out.push(Step::Delete { ids: kept });
+                }
+            }
+        }
+    }
+    (Proof { steps: out }, stats)
+}
+
 /// Write a proof in binary LRAT (see [`parse_binary`]).
 pub fn write_binary(proof: &Proof) -> Vec<u8> {
     fn put(out: &mut Vec<u8>, mut m: u64) {
@@ -768,6 +875,36 @@ mod tests {
         let c = parse_cnf_ints(cnf);
         let p = parse_text(proof).unwrap();
         (check_sequential(&c, &p), check_independent(&c, &p, 3))
+    }
+
+    #[test]
+    fn trim_keeps_exactly_the_proof_of_the_empty_clause() {
+        let cnf = parse_cnf_ints(CNF);
+        // Lemma 5 is needed; lemma 6 (a valid but unused lemma) is not;
+        // the deletion of 6 goes with it; the deletion of 1 stays.
+        let p = parse_text("5 2 0 1 2 0\n6 1 0 1 3 0\n6 d 6 0\n6 d 1 0\n7 0 5 3 4 0\n").unwrap();
+        assert!(check_sequential(&cnf, &p).is_verified());
+        let (t, st) = trim(&p);
+        assert_eq!(
+            (
+                st.lemmas_in,
+                st.lemmas_out,
+                st.deletions_in,
+                st.deletions_out
+            ),
+            (3, 2, 2, 1)
+        );
+        assert_eq!(write_text(&t), "5 2 0 1 2 0\n5 d 1 0\n7 0 5 3 4 0\n");
+        assert!(check_sequential(&cnf, &t).is_verified());
+        assert_eq!(check_independent(&cnf, &t, 2), check_sequential(&cnf, &t));
+        // Steps after the first empty clause are dropped; no empty clause → unchanged.
+        let p = parse_text("5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 5 3 0\n").unwrap();
+        assert_eq!(trim(&p).0.steps.len(), 2);
+        let p = parse_text("5 2 0 1 2 0\n").unwrap();
+        assert_eq!(trim(&p).0, p);
+        // Text writer round-trips.
+        let p = parse_text("5 2 0 1 2 0\n5 d 1 2 0\n6 0 5 3 4 0\n").unwrap();
+        assert_eq!(parse_text(&write_text(&p)).unwrap(), p);
     }
 
     #[test]
