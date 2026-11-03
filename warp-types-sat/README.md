@@ -247,10 +247,10 @@ fail-closed: no checker is not a pass.
   reference's. **Speed, same H200 pod, 941 MB binary proof:** device check <!-- unguarded: 941 — proof size in MB -->
   0.27 s including transfer; parallel binary decode 0.9 s on 32 threads
   (4.2 s on one); read 0.45 s — about 1.6 s end to end, against 25 s for the
-  CPU route on the same pod (parse 17.6 s, 96-thread check 7.4 s). On
-  another machine `lrat-check` takes 41.7 s on the 2.06 GB text form of the
-  same proof and `cake_lpr` 80 s on the binary; those are different
-  machines and, for `lrat-check`, a different encoding. Limits: per-lemma
+  CPU route on the same pod (parse 17.6 s, 96-thread check 7.4 s). **Same
+  machine, same proof (415 MB binary / 901 MB text, H200 pod, 2026-11-03):** <!-- unguarded: 415, 901 — proof sizes in MB -->
+  `lrat-check` 20.9 s, `cake_lpr` 21.5 s, our CPU route 11.6 s, device path
+  1.1 s end to end — about 19× the external checkers. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not
   checked on the warp paths); ids and variables above 2^26 are refused at
   parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat

@@ -1,0 +1,73 @@
+=== warp-types certified chain on RunPod ===
+Date: 2026-11-03T09:11:05Z
+NVIDIA H200, 9.0, 595.91.07
+host cores: 128
+rustc 1.101.0-nightly (41089d07a 2026-10-27)
+=== Build ===
+   Compiling criterion v0.5.1
+    Finished `release` profile [optimized] target(s) in 13.43s
+ptx: .target sm_90 externs=0
+=== (A) Solver → binary LRAT → trim → device check, per instance (decode threads 32) ===
+cnfuzz_s0: solve 0.003s trim 0.007s bytes 1233->1208 decode 0.000s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.019s) cake=VERIFIED (0.009s)
+cnfuzz_s10: solve 0.003s trim 0.003s bytes 756->628 decode 0.000s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.018s) cake=VERIFIED (0.008s)
+cnfuzz_s12: solve 0.004s trim 0.004s bytes 155->121 decode 0.000s device 0.010s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.006s)
+cnfuzz_s13: solve 0.003s trim 0.003s bytes 373->231 decode 0.000s device 0.006s gpu=VERIFIED lrat-check=VERIFIED (0.021s) cake=VERIFIED (0.009s)
+cnfuzz_s14: solve 0.003s trim 0.004s bytes 1580->1349 decode 0.000s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.012s)
+cnfuzz_s16: solve 0.003s trim 0.005s bytes 122->122 decode 0.000s device 0.014s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.006s)
+cnfuzz_s17: solve 0.004s trim 0.005s bytes 244->244 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.006s)
+cnfuzz_s18: solve 0.005s trim 0.007s bytes 38->38 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.019s) cake=VERIFIED (0.009s)
+cnfuzz_s19: solve 0.005s trim 0.005s bytes 38->38 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.019s) cake=VERIFIED (0.010s)
+cnfuzz_s2: solve 0.006s trim 0.005s bytes 23->23 decode 0.000s device 0.006s gpu=VERIFIED lrat-check=VERIFIED (0.022s) cake=VERIFIED (0.007s)
+cnfuzz_s20: solve 0.004s trim 0.005s bytes 129->129 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.018s) cake=VERIFIED (0.009s)
+cnfuzz_s21: solve 0.006s trim 0.006s bytes 21->21 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.006s)
+cnfuzz_s23: solve 0.005s trim 0.003s bytes 140->140 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.026s) cake=VERIFIED (0.014s)
+cnfuzz_s24: solve 0.002s trim 0.004s bytes 120->120 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.025s) cake=VERIFIED (0.006s)
+cnfuzz_s26: solve 0.002s trim 0.003s bytes 33->33 decode 0.000s device 0.006s gpu=VERIFIED lrat-check=VERIFIED (0.022s) cake=VERIFIED (0.006s)
+cnfuzz_s27: solve 0.003s trim 0.005s bytes 25->25 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.007s)
+cnfuzz_s28: solve 0.045s trim 0.023s bytes 232633->187662 decode 0.004s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.031s) cake=VERIFIED (0.028s)
+cnfuzz_s29: solve 0.008s trim 0.008s bytes 13217->12467 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.025s) cake=VERIFIED (0.013s)
+cnfuzz_s3: solve 0.003s trim 0.005s bytes 25->25 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.022s) cake=VERIFIED (0.004s)
+cnfuzz_s30: solve 0.006s trim 0.006s bytes 2942->2548 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.013s)
+cnfuzz_s31: solve 0.003s trim 0.004s bytes 103->103 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.008s)
+cnfuzz_s4: solve 0.004s trim 0.006s bytes 459->459 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.022s) cake=VERIFIED (0.008s)
+cnfuzz_s7: solve 0.005s trim 0.005s bytes 30->30 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.024s) cake=VERIFIED (0.005s)
+cnfuzz_s8: solve 0.005s trim 0.006s bytes 19->19 decode 0.000s device 0.012s gpu=VERIFIED lrat-check=VERIFIED (0.022s) cake=VERIFIED (0.007s)
+php6: solve 0.006s trim 0.010s bytes 19052->18786 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.021s) cake=VERIFIED (0.006s)
+php7: solve 0.030s trim 0.016s bytes 120110->118212 decode 0.004s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.029s) cake=VERIFIED (0.014s)
+php8: solve 0.359s trim 0.132s bytes 1445143->1264615 decode 0.007s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.085s) cake=VERIFIED (0.097s)
+r3sat_n150_s0: solve 0.037s trim 0.026s bytes 202122->191206 decode 0.005s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.031s) cake=VERIFIED (0.021s)
+r3sat_n150_s1: solve 0.031s trim 0.023s bytes 191608->181638 decode 0.004s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.031s) cake=VERIFIED (0.018s)
+r3sat_n150_s4: solve 0.032s trim 0.036s bytes 242181->233928 decode 0.004s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.034s) cake=VERIFIED (0.024s)
+r3sat_n150_s5: solve 0.029s trim 0.022s bytes 162926->157377 decode 0.004s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.031s) cake=VERIFIED (0.015s)
+r3sat_n150_s6: solve 0.021s trim 0.015s bytes 117443->113635 decode 0.004s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.027s) cake=VERIFIED (0.014s)
+r3sat_n150_s7: solve 0.024s trim 0.018s bytes 134054->127768 decode 0.005s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.029s) cake=VERIFIED (0.013s)
+r3sat_n200_s0: solve 0.173s trim 0.122s bytes 1431148->1221917 decode 0.006s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.075s) cake=VERIFIED (0.087s)
+r3sat_n200_s2: solve 0.145s trim 0.087s bytes 911952->852275 decode 0.006s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.060s) cake=VERIFIED (0.064s)
+r3sat_n200_s3: solve 0.126s trim 0.066s bytes 757035->686973 decode 0.007s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.053s) cake=VERIFIED (0.054s)
+r3sat_n200_s4: solve 0.147s trim 0.079s bytes 838117->793133 decode 0.007s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.057s) cake=VERIFIED (0.061s)
+r3sat_n200_s5: solve 0.208s trim 0.101s bytes 1315147->1151012 decode 0.006s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.075s) cake=VERIFIED (0.082s)
+r3sat_n200_s7: solve 0.192s trim 0.102s bytes 1172626->1091568 decode 0.006s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.073s) cake=VERIFIED (0.064s)
+r3sat_n250_s4: solve 21.259s trim 5.617s bytes 115271397->19237456 decode 0.034s device 0.015s gpu=VERIFIED lrat-check=VERIFIED (0.850s) cake=VERIFIED (1.242s)
+r3sat_n250_s5: solve 10.905s trim 3.833s bytes 65705373->14506667 decode 0.021s device 0.015s gpu=VERIFIED lrat-check=VERIFIED (0.645s) cake=VERIFIED (0.940s)
+r3sat_n250_s7: solve 1.954s trim 0.926s bytes 13405494->6220877 decode 0.012s device 0.011s gpu=VERIFIED lrat-check=VERIFIED (0.288s) cake=VERIFIED (0.406s)
+tseitin_v20_s0: solve 0.003s trim 0.005s bytes 3426->3412 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.024s) cake=VERIFIED (0.007s)
+tseitin_v20_s1: solve 0.004s trim 0.005s bytes 2261->2261 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.004s)
+tseitin_v20_s2: solve 0.006s trim 0.006s bytes 6154->5708 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.025s) cake=VERIFIED (0.006s)
+tseitin_v20_s3: solve 0.005s trim 0.008s bytes 5036->5036 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.025s) cake=VERIFIED (0.008s)
+tseitin_v30_s0: solve 0.011s trim 0.015s bytes 54252->53048 decode 0.000s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.026s) cake=VERIFIED (0.008s)
+tseitin_v30_s1: solve 0.003s trim 0.004s bytes 6125->5309 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.007s)
+tseitin_v30_s2: solve 0.009s trim 0.011s bytes 46018->45591 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.026s) cake=VERIFIED (0.007s)
+tseitin_v30_s3: solve 0.005s trim 0.006s bytes 12770->12593 decode 0.000s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.023s) cake=VERIFIED (0.007s)
+tseitin_v40_s0: solve 0.020s trim 0.020s bytes 123873->121904 decode 0.003s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.030s) cake=VERIFIED (0.017s)
+tseitin_v40_s1: solve 0.012s trim 0.014s bytes 53347->47981 decode 0.001s device 0.008s gpu=VERIFIED lrat-check=VERIFIED (0.024s) cake=VERIFIED (0.011s)
+tseitin_v40_s2: solve 0.026s trim 0.027s bytes 185406->177490 decode 0.005s device 0.009s gpu=VERIFIED lrat-check=VERIFIED (0.032s) cake=VERIFIED (0.019s)
+tseitin_v40_s3: solve 0.012s trim 0.013s bytes 60484->58440 decode 0.000s device 0.007s gpu=VERIFIED lrat-check=VERIFIED (0.025s) cake=VERIFIED (0.010s)
+=== (B) One large external proof, same machine: lrat-check (text) / cake_lpr (binary) / device (binary) ===
+lrat-check (text, 901259413 bytes): 20.851s 1
+cake_lpr (binary, 415372951 bytes): 21.511s 1
+c flat-decode(32) 0.755s (lemmas=3216163 hints=105674225 lits=53209558)
+c gpu-flat(GPU; 4096 blocks) device 0.130s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c read 0.217s parse 7.256s independent(4) 4.137s sequential 0.000s (skipped)  bytes=415372951 steps=4772350
+c gpu(GPU; 4096 blocks) 3.217s  Verified { lemmas: 3216163, deletions: 3217619 }
+s VERIFIED
+=== DONE ===
