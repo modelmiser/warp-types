@@ -80,6 +80,19 @@ struct Obligation {
     parent: Option<usize>,
 }
 
+/// How cubes are taken from SAT models: which variables, in which order.
+#[derive(Clone, Copy)]
+struct CubeOrder<'a> {
+    mask: Option<&'a [bool]>,
+    descending: bool,
+}
+
+impl CubeOrder<'_> {
+    fn cube(&self, assignment: &[bool], n: u32) -> Cube {
+        Cube::from_assignment_masked_ordered(assignment, n, self.mask, self.descending)
+    }
+}
+
 /// Engine options.
 #[derive(Debug, Clone, Copy)]
 pub struct PdrOptions {
@@ -92,12 +105,17 @@ pub struct PdrOptions {
     /// (2026-11-03; before that every variable was a cube variable, which is
     /// the structural reason 95 of 119 small HWMCC17 circuits timed out).
     pub project_cubes: bool,
+    /// Take cube literals in descending variable order (gates first in an
+    /// AIGER lowering), which is the order `generalize` tries to drop them.
+    /// A measured, untuned knob — see `research/bmc-pdr-aiger.md`.
+    pub descending_cubes: bool,
 }
 
 impl Default for PdrOptions {
     fn default() -> Self {
         PdrOptions {
             project_cubes: true,
+            descending_cubes: false,
         }
     }
 }
@@ -128,6 +146,10 @@ pub fn check_with(
         sys.cube_vars()
     } else {
         None
+    };
+    let order = CubeOrder {
+        mask,
+        descending: opts.descending_cubes,
     };
 
     session::with_session(|init: PdrSession<'_, Init>| {
@@ -177,7 +199,7 @@ pub fn check_with(
 
             // STRENGTHEN: block all CTIs at the frontier
             loop {
-                let cti = find_cti(sys, &frames, k, conflict_budget, mask);
+                let cti = find_cti(sys, &frames, k, conflict_budget, order);
                 match cti {
                     Query::Unsat => break, // No more CTIs — frontier is clean
                     Query::Unknown => {
@@ -189,7 +211,7 @@ pub fn check_with(
                         };
                     }
                     Query::Sat((cube, state)) => {
-                        match block_cube(sys, &mut frames, cube, state, k, conflict_budget, mask) {
+                        match block_cube(sys, &mut frames, cube, state, k, conflict_budget, order) {
                             BlockResult::Blocked => continue,
                             BlockResult::Counterexample(trace) => {
                                 let _cex = modeled.check_counterexample();
@@ -284,7 +306,7 @@ fn find_cti(
     frames: &FrameSequence,
     level: usize,
     conflict_budget: u64,
-    mask: Option<&[bool]>,
+    order: CubeOrder<'_>,
 ) -> Query<(Cube, Vec<bool>)> {
     let n = sys.num_state_vars();
     let num_tseitin = sys.property().len() as u32;
@@ -309,7 +331,7 @@ fn find_cti(
     match result {
         SolveResult::Sat(assign) => {
             let state = assign[..n as usize].to_vec();
-            Query::Sat((Cube::from_assignment_masked(&assign, n, mask), state))
+            Query::Sat((order.cube(&assign, n), state))
         }
         SolveResult::Unsat => Query::Unsat,
         SolveResult::Unknown => Query::Unknown,
@@ -329,7 +351,7 @@ fn check_predecessor(
     cube: &Cube,
     level: usize,
     conflict_budget: u64,
-    mask: Option<&[bool]>,
+    order: CubeOrder<'_>,
 ) -> Query<(Cube, Vec<bool>)> {
     let n = sys.num_state_vars();
     let total_vars = 2 * n;
@@ -354,7 +376,7 @@ fn check_predecessor(
     match result {
         SolveResult::Sat(assign) => {
             let state = assign[..n as usize].to_vec();
-            Query::Sat((Cube::from_assignment_masked(&assign, n, mask), state))
+            Query::Sat((order.cube(&assign, n), state))
         }
         SolveResult::Unsat => Query::Unsat,
         SolveResult::Unknown => Query::Unknown,
@@ -379,7 +401,7 @@ fn block_cube(
     state: Vec<bool>,
     level: usize,
     conflict_budget: u64,
-    mask: Option<&[bool]>,
+    order: CubeOrder<'_>,
 ) -> BlockResult {
     // Work queue: (level, cube, parent_index) — process lowest level first
     let mut queue: Vec<Obligation> = vec![Obligation {
@@ -416,7 +438,7 @@ fn block_cube(
             &queue[min_idx].cube,
             obl_level - 1,
             conflict_budget,
-            mask,
+            order,
         );
 
         match predecessor {
@@ -454,7 +476,7 @@ fn block_cube(
                             &queue[min_idx].cube,
                             obl_level,
                             conflict_budget,
-                            mask,
+                            order,
                         );
                         frames.add_blocked_clause(obl_level, clause);
                         // Remove the blocked obligation
@@ -550,7 +572,7 @@ fn generalize(
     cube: &Cube,
     level: usize,
     conflict_budget: u64,
-    mask: Option<&[bool]>,
+    order: CubeOrder<'_>,
 ) -> Vec<Lit> {
     let mut reduced_lits = cube.lits.clone();
 
@@ -590,7 +612,7 @@ fn generalize(
                     &candidate_cube,
                     level - 1,
                     conflict_budget,
-                    mask
+                    order
                 ),
                 Query::Unsat
             );
@@ -978,6 +1000,7 @@ mod tests {
                 0,
                 PdrOptions {
                     project_cubes: false,
+                    ..PdrOptions::default()
                 },
             );
             let proj = check_with(
@@ -986,6 +1009,7 @@ mod tests {
                 0,
                 PdrOptions {
                     project_cubes: true,
+                    ..PdrOptions::default()
                 },
             );
             match (want_cex_depth, &full, &proj) {

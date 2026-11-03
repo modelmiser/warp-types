@@ -57,19 +57,35 @@ impl Cube {
         num_state_vars: u32,
         mask: Option<&[bool]>,
     ) -> Cube {
-        let Some(mask) = mask else {
-            return Self::from_assignment(assignment, num_state_vars);
+        Self::from_assignment_masked_ordered(assignment, num_state_vars, mask, false)
+    }
+
+    /// [`Cube::from_assignment_masked`] with the literal order chosen:
+    /// ascending variable index (the default) or descending. The order is
+    /// the order in which `generalize` tries to drop literals, and on the
+    /// HWMCC17 circuits it moves single instances by one to two orders of
+    /// magnitude in both directions (research/bmc-pdr-aiger.md, 2026-11-03);
+    /// in an AIGER lowering descending means gates (the property's variable
+    /// among them) are tried first.
+    pub fn from_assignment_masked_ordered(
+        assignment: &[bool],
+        num_state_vars: u32,
+        mask: Option<&[bool]>,
+        descending: bool,
+    ) -> Cube {
+        let pick = |v: u32| {
+            if assignment[v as usize] {
+                Lit::pos(v)
+            } else {
+                Lit::neg(v)
+            }
         };
-        let lits: Vec<Lit> = (0..num_state_vars)
-            .filter(|&v| mask[v as usize])
-            .map(|v| {
-                if assignment[v as usize] {
-                    Lit::pos(v)
-                } else {
-                    Lit::neg(v)
-                }
-            })
-            .collect();
+        let keep = |v: &u32| mask.map_or(true, |m| m[*v as usize]);
+        let lits: Vec<Lit> = if descending {
+            (0..num_state_vars).rev().filter(keep).map(pick).collect()
+        } else {
+            (0..num_state_vars).filter(keep).map(pick).collect()
+        };
         Cube { lits }
     }
 
