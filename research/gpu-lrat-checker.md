@@ -86,7 +86,7 @@ cross-checked against the text form.
 
 RAT/PR lemmas (cake_lpr's LPR); DRAT trimming on the GPU (that is `drat-trim`'s job and a different problem);
 any claim about solving speed. **Where the GPU run happens is the owner's call**: the standing rule sends GPU
-work to RunPod (billable key), and the local RTX 4000 Ada drives the live cockpit's display; nothing here runs on
+work to RunPod (billable key), and the local RTX 4000 Ada drives the live cockpit's display; nothing here runs on [CORRECTED 2026-11-03: the card drives no display — the connected output is the Intel iGPU's HDMI and `xray` does not open the NVIDIA device; the venue rule stood on the owner's RunPod rule, not on this premise.]
 either without a word from the owner. Until then every result is CPU/SimWarp.
 
 ## 6. Log (append-only)
