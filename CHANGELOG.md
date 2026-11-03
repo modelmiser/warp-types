@@ -55,7 +55,8 @@
   reference returns `lrat-check`'s and `cake_lpr`'s verdict every time, and SimWarp, both decoders and the H200
   device path return the reference's; on a 941 MB binary proof, same pod, the device check is 0.27 s including
   transfer, the parallel decode 0.9 s (32 threads), end to end ≈ 1.6 s against 25 s for the CPU route on that pod.
-  Same machine, same 415 MB proof: `lrat-check` 20.9 s, `cake_lpr` 21.5 s, device path 1.1 s (≈ 19×). The whole <!-- unguarded: 415 — proof size in MB -->
+  Same machine, same 415 MB proof: `lrat-check` 20.9 s, `cake_lpr` 21.5 s, device path 1.1 s (≈ 19×); on a <!-- unguarded: 415 — proof size in MB -->
+  workstation RTX 4000 SFF Ada: 16.2 s, 17.4 s, 1.2 s (≈ 13×; `reproduce/local-lrat-chain.sh`). The whole
   producing chain — `solve --lrat-binary` → `lrat-trim` → device check — verified 54/54 corpus instances on one pod, <!-- unguarded: 54 — chain tally, research/lrat-from-solver-2026-11-03/chain/ -->
   with `lrat-check` and `cake_lpr` agreeing on every trimmed proof (`reproduce/runpod-lrat-chain.sh`).
   Limits: lemmas whose assignment exceeds 4,095 literals are `TableOverflow` on the warp paths; ids and variables

@@ -250,7 +250,9 @@ fail-closed: no checker is not a pass.
   CPU route on the same pod (parse 17.6 s, 96-thread check 7.4 s). **Same
   machine, same proof (415 MB binary / 901 MB text, H200 pod, 2026-11-03):** <!-- unguarded: 415, 901 — proof sizes in MB -->
   `lrat-check` 20.9 s, `cake_lpr` 21.5 s, our CPU route 11.6 s, device path
-  1.1 s end to end — about 19× the external checkers. Limits: per-lemma
+  1.1 s end to end — about 19× the external checkers. On a workstation RTX
+  4000 SFF Ada with six CPU threads, same proof: 16.2 s, 17.4 s, 9.2 s and
+  1.2 s — about 13×. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not
   checked on the warp paths); ids and variables above 2^26 are refused at
   parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat
