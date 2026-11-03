@@ -1,0 +1,69 @@
+=== warp-types LRAT checker on RunPod ===
+Date: 2026-11-03T04:37:00Z
+=== GPU ===
+NVIDIA H200, 9.0, 595.91.07, 143771 MiB
+host cores: 96
+SM_ARCH=sm_90
+=== Rust ===
+info: syncing channel updates for nightly-2026-10-28-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-28 for version 1.101.0-nightly (41089d07a 2026-10-27)
+info: downloading 8 components
+warn: the missing active toolchain `nightly-2026-10-28-x86_64-unknown-linux-gnu` has been auto-installed
+warn: auto-installation is deprecated for most `rustup` commands
+warn: scripts relying on this behavior in `rustup` may stop working in the future
+warn: to install the active toolchain, use `rustup install` instead
+warn: see <https://github.com/rust-lang/rustup/issues/4836> for more info
+nightly-2026-10-28-x86_64-unknown-linux-gnu (overridden by '/tmp/warp-types/rust-toolchain.toml')
+rustc 1.101.0-nightly (41089d07a 2026-10-27)
+=== Build (gpu feature, sm_90) ===
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.5.1
+    Finished `release` profile [optimized] target(s) in 16.24s
+build time: 17s
+ptx: .target sm_90  entries=5  externs=0  panic_calls=0
+=== (0) Diagnostic: one full run on the smallest binary proof (stdout+stderr, backtrace on) ===
+c flat-decode(4) 0.106s (lemmas=422266 hints=12773405 lits=5816043)
+c gpu-flat(GPU; 1024 blocks) device 0.030s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c read 0.021s parse 0.827s independent(4) 0.454s sequential 0.000s (skipped)  bytes=43639633 steps=626900
+c sequential:  Verified { lemmas: 422266, deletions: 423486 }
+c independent: Verified { lemmas: 422266, deletions: 423486 }
+c gpu(GPU; 1024 blocks) 0.357s  Verified { lemmas: 422266, deletions: 423486 }
+s VERIFIED
+diagnostic exit: 0
+=== (A) Agreement on the archive: device path vs CPU reference ===
+archive: 632 proofs, 632 agree, 0 disagree, 0 errors, 147 verified
+=== (B) Timing on binary proofs (decode on 96 threads; CPU check on 96 threads) ===
+--- r3sat_n300_s0 (43639633 bytes) ---
+c flat-decode(96) 0.066s (lemmas=422266 hints=12773405 lits=5816043)
+c gpu-flat(GPU; 1024 blocks) device 0.029s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c gpu-flat(GPU; 4096 blocks) device 0.015s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c gpu-flat(GPU; 16384 blocks) device 0.013s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c read 0.022s parse 0.824s independent(96) 0.252s sequential 0.000s (skipped)  bytes=43639633 steps=626900
+c gpu(GPU; 4096 blocks) 0.338s  Verified { lemmas: 422266, deletions: 423486 }
+s VERIFIED
+--- r3sat_n350_s2 (941378742 bytes) ---
+c flat-decode(96) 2.891s (lemmas=6887088 hints=238548901 lits=122648678)
+c gpu-flat(GPU; 1024 blocks) device 0.438s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c gpu-flat(GPU; 4096 blocks) device 0.265s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c gpu-flat(GPU; 16384 blocks) device 0.321s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c read 0.447s parse 17.556s independent(96) 7.350s sequential 0.000s (skipped)  bytes=941378742 steps=10222478
+c gpu(GPU; 4096 blocks) 7.233s  Verified { lemmas: 6887088, deletions: 6888496 }
+s VERIFIED
+--- r3sat_n350_s3 (415372951 bytes) ---
+c flat-decode(96) 0.878s (lemmas=3216163 hints=105674225 lits=53209558)
+c gpu-flat(GPU; 1024 blocks) device 0.190s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c gpu-flat(GPU; 4096 blocks) device 0.117s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c gpu-flat(GPU; 16384 blocks) device 0.115s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c read 0.197s parse 7.953s independent(96) 3.155s sequential 0.000s (skipped)  bytes=415372951 steps=4772350
+c gpu(GPU; 4096 blocks) 3.449s  Verified { lemmas: 3216163, deletions: 3217619 }
+s VERIFIED
+=== (C) Decode scaling on the largest binary proof (parallel decoder held equal to the one-thread decoder) ===
+threads=1: c decode-verify: sequential 5.187s parallel(1) 4.265s  EQUAL
+threads=1: c flat-decode(1) 4.213s (lemmas=6887088 hints=238548901 lits=122648678)
+threads=8: c decode-verify: sequential 5.856s parallel(8) 1.050s  EQUAL
+threads=8: c flat-decode(8) 1.076s (lemmas=6887088 hints=238548901 lits=122648678)
+threads=32: c decode-verify: sequential 5.198s parallel(32) 0.881s  EQUAL
+threads=32: c flat-decode(32) 0.885s (lemmas=6887088 hints=238548901 lits=122648678)
+threads=96: c decode-verify: sequential 5.239s parallel(96) 1.585s  EQUAL
+threads=96: c flat-decode(96) 1.528s (lemmas=6887088 hints=238548901 lits=122648678)
+=== DONE ===

@@ -207,17 +207,32 @@ fail-closed: no checker is not a pass.
   `research/drat-certification.md`; runner: `tools/cert-campaign.py`
 - **LRAT proof checker, warp-typed** (`lrat.rs`, `lrat_warp.rs`, `sat-kernels::lrat_check_lemmas`,
   `GpuContext::check_lrat_codes` under `feature = "gpu"`) — reads text and
-  binary LRAT; the reference checker returns `lrat-check`'s verdict (RAT lemmas
-  are `Unsupported`, never verified); the warp version checks one lemma per
-  warp with `ballot` / `reduce_sum` / `broadcast_lane` and runs unchanged on
-  `SimWarp` and on the device. **Measured 2026-11-02 on an H200** (record and
-  pre-registration: `research/gpu-lrat-checker.md`): verdicts equal to the
-  reference, `lrat-check` and `cake_lpr` on every archived proof; on a 941 MB
-  binary proof the device check is 0.28 s including transfer, the host decode
-  3.4–5.9 s, so end to end it is 6–10× `lrat-check` on the same proof and
-  ≈ 2.7× a CPU pipeline with the same decoder. The check is free; the decode
-  is the remaining cost. `cargo run --release --example lrat_check -- f.cnf
-  f.lrat [threads]`; `--to-binary out.blrat` writes binary LRAT.
+  binary LRAT. The reference checker follows `lrat-check`'s rules for RUP
+  proofs (hints in order, deletions honoured, every step checked, also after
+  the empty clause; a satisfied hint is a no-op; RAT steps are `Unsupported`,
+  never verified) and reports the earliest failing step. The warp
+  formulation checks one lemma per warp with `ballot` / `reduce_sum` /
+  `broadcast_lane`; it is written twice, once on `SimWarp` and once as the
+  nvptx kernel, and the two are held to identical verdicts. **Agreement,
+  2026-11-02** (record: `research/gpu-lrat-checker.md`, data in
+  `research/gpu-lrat-checker-2026-11-02/`): on 632 files — 114 genuine <!-- unguarded: 632, 114, 66, 452 — archive tallies, research/gpu-lrat-checker-2026-11-02/ -->
+  proofs, 66 `drat-trim` outputs from corrupted DRATs (half of them valid
+  refutations), and 452 hint-level mutants of the genuine proofs (a hint
+  dropped, a literal flipped, a forward hint, a use after delete) — the
+  reference returns `lrat-check`'s and `cake_lpr`'s verdict every time, and
+  the simulator, the flat decoders and the H200 device path return the
+  reference's. **Speed, same H200 pod, 941 MB binary proof:** device check <!-- unguarded: 941 — proof size in MB -->
+  0.27 s including transfer; parallel binary decode 0.9 s on 32 threads
+  (4.2 s on one); read 0.45 s — about 1.6 s end to end, against 25 s for the
+  CPU route on the same pod (parse 17.6 s, 96-thread check 7.4 s). On
+  another machine `lrat-check` takes 41.7 s on the 2.06 GB text form of the
+  same proof and `cake_lpr` 80 s on the binary; those are different
+  machines and, for `lrat-check`, a different encoding. Limits: per-lemma
+  assignments above 4,095 literals are reported `TableOverflow` (not
+  checked on the warp paths); ids and variables above 2^26 are refused at
+  parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat
+  [threads]`; `--to-binary out.blrat` writes binary LRAT;
+  `tools/lrat-mutate.py` builds the negatives.
 
 ## License
 

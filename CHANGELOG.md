@@ -2,17 +2,29 @@
 
 ## [Unreleased]
 
-- **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT, `lrat-check`-semantics
-  reference, sequential and lemma-independent), `lrat_warp` (one warp per lemma on the crate's `ballot` /
-  `reduce_sum` / `broadcast_lane`, runnable on `SimWarp`; `FlatProof::from_binary` decodes straight into the
-  device layout), the nvptx kernel `lrat_check_lemmas` in `sat-kernels`, and `GpuContext::check_lrat_codes`
-  behind `feature = "gpu"`; `examples/lrat_check` times every path and `--to-binary` writes binary LRAT that
-  `cake_lpr` accepts. **Measured 2026-11-02** (pre-registered in `research/gpu-lrat-checker.md`): the reference
-  returns `lrat-check`'s and `cake_lpr`'s verdict on all 180 archived proofs (147 genuine, 33 corrupted); the <!-- unguarded: 180, 147, 33 — archive tally, research/gpu-lrat-checker-2026-11-02/ -->
-  SimWarp and H200 device paths return the reference's verdict on all 180; on a 941 MB binary proof the device
-  check takes 0.28 s including transfer, the host decode 3.4–5.9 s, so the pipeline runs 6–10× `lrat-check` on
-  the text form of the same proof and ≈ 2.7× the best CPU pipeline with the same decoder — the check is
-  effectively free, the decode is what is left. RAT lemmas are reported `Unsupported`, never verified.
+- **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT; the reference checker follows
+  `lrat-check`'s RUP rules — hints in order, deletions honoured, every step checked including those after the empty
+  clause, RAT = `Unsupported` — and reports the earliest failing step), `lrat_warp` (one warp per lemma on the
+  crate's `ballot` / `reduce_sum` / `broadcast_lane`, on `SimWarp`; `FlatProof::from_binary` and the parallel
+  `from_binary_par` decode binary LRAT straight into the device layout, held byte-for-byte equal on every truncation
+  and bit flip of a synthetic proof), the nvptx kernel `lrat_check_lemmas` in `sat-kernels` (a second implementation
+  of the same algorithm), `GpuContext::check_lrat_codes` behind `feature = "gpu"`, `examples/lrat_check`, and
+  `tools/lrat-mutate.py` for hint-level negative controls. **Measured 2026-11-02**, pre-registered in
+  `research/gpu-lrat-checker.md`, cross-vendor reviewed (five seats, four families; the first public wording of this
+  entry mislabelled the archive and spliced two machines in its ratios — corrected here, record in the research log):
+  on 632 files (114 genuine proofs, 66 `drat-trim` outputs from corrupted DRATs, 452 hint-level mutants) the <!-- unguarded: 632, 114, 66, 452 — archive tallies, research/gpu-lrat-checker-2026-11-02/ -->
+  reference returns `lrat-check`'s and `cake_lpr`'s verdict every time, and SimWarp, both decoders and the H200
+  device path return the reference's; on a 941 MB binary proof, same pod, the device check is 0.27 s including
+  transfer, the parallel decode 0.9 s (32 threads), end to end ≈ 1.6 s against 25 s for the CPU route on that pod.
+  Limits: lemmas whose assignment exceeds 4,095 literals are `TableOverflow` on the warp paths; ids and variables
+  above 2^26 are refused at parse time.
+- **Fixes from the review of the above** (none shipped in a release): the kernel could store a 4,096th literal and
+  then loop forever on a lookup (occupancy is now capped like the simulator's); the device code buffer was
+  zero-initialised with 0 = Ok, so an unwritten lemma read as passed (now pre-filled `Unwritten`, and `combine`
+  refuses a code vector of the wrong length); no warp barrier between a lemma's inserts and its reads (added);
+  one huge id or literal in a malformed file was one huge allocation (bounded); `TableOverflow` was reported as
+  `NoConflict` (own reason now). `Reason` gains `TableOverflow` and `Unchecked`; `flatten` returns `FlatProof`
+  (its error type is gone — the step sequence's verdict rides along as `FlatProof::early`).
 - **Fix: `WarpBuilder` passed `-C target-cpu` only to the kernel crate**, which current rustc rejects as an ABI
   mismatch against the build-std `core`; it now goes through `RUSTFLAGS` so the whole device graph agrees. The
   `gpu` feature had been building from a cached PTX, so this surfaced only when `sat-kernels` changed.
