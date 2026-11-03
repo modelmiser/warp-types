@@ -1,0 +1,33 @@
+=== run ===
+=== warp-types LRAT checker on RunPod ===
+Date: 2026-11-02T22:56:13Z
+=== GPU ===
+NVIDIA H200, 9.0, 595.91.07, 143771 MiB
+host cores: 192
+SM_ARCH=sm_90
+=== Rust ===
+info: syncing channel updates for nightly-2026-10-28-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-28 for version 1.101.0-nightly (41089d07a 2026-10-27)
+info: downloading 8 components
+warn: the missing active toolchain `nightly-2026-10-28-x86_64-unknown-linux-gnu` has been auto-installed
+warn: auto-installation is deprecated for most `rustup` commands
+warn: scripts relying on this behavior in `rustup` may stop working in the future
+warn: to install the active toolchain, use `rustup install` instead
+warn: see <https://github.com/rust-lang/rustup/issues/4836> for more info
+nightly-2026-10-28-x86_64-unknown-linux-gnu (overridden by '/tmp/warp-types/rust-toolchain.toml')
+rustc 1.101.0-nightly (41089d07a 2026-10-27)
+=== Build (gpu feature, sm_90) ===
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.5.1
+    Finished `release` profile [optimized] target(s) in 12.17s
+build time: 12s
+=== (A) Agreement on the archive: device path vs CPU reference ===
+archive: 180 proofs, 180 agree, 0 disagree, 0 verified
+=== (B) Timing on binary proofs ===
+--- r3sat_n300_s0 (43639633 bytes) ---
+c flat-decode 0.210s (lemmas=422266 hints=12773405 lits=5816043)
+--- r3sat_n350_s2 (941378742 bytes) ---
+c flat-decode 5.745s (lemmas=6887088 hints=238548901 lits=122648678)
+--- r3sat_n350_s3 (415372951 bytes) ---
+c flat-decode 2.188s (lemmas=3216163 hints=105674225 lits=53209558)
+=== DONE ===

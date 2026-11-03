@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT, `lrat-check`-semantics
+  reference, sequential and lemma-independent), `lrat_warp` (one warp per lemma on the crate's `ballot` /
+  `reduce_sum` / `broadcast_lane`, runnable on `SimWarp`; `FlatProof::from_binary` decodes straight into the
+  device layout), the nvptx kernel `lrat_check_lemmas` in `sat-kernels`, and `GpuContext::check_lrat_codes`
+  behind `feature = "gpu"`; `examples/lrat_check` times every path and `--to-binary` writes binary LRAT that
+  `cake_lpr` accepts. **Measured 2026-11-02** (pre-registered in `research/gpu-lrat-checker.md`): the reference
+  returns `lrat-check`'s and `cake_lpr`'s verdict on all 180 archived proofs (147 genuine, 33 corrupted); the <!-- unguarded: 180, 147, 33 — archive tally, research/gpu-lrat-checker-2026-11-02/ -->
+  SimWarp and H200 device paths return the reference's verdict on all 180; on a 941 MB binary proof the device
+  check takes 0.28 s including transfer, the host decode 3.4–5.9 s, so the pipeline runs 6–10× `lrat-check` on
+  the text form of the same proof and ≈ 2.7× the best CPU pipeline with the same decoder — the check is
+  effectively free, the decode is what is left. RAT lemmas are reported `Unsupported`, never verified.
+- **Fix: `WarpBuilder` passed `-C target-cpu` only to the kernel crate**, which current rustc rejects as an ABI
+  mismatch against the build-std `core`; it now goes through `RUSTFLAGS` so the whole device graph agrees. The
+  `gpu` feature had been building from a cached PTX, so this surfaced only when `sat-kernels` changed.
+- **Doc: `broadcast_lane` and device panics.** A `src_lane` the compiler cannot bound keeps the bounds `assert!`
+  alive and its `panic_fmt`/`Display` externs make the PTX module fail to load; the new kernel hit it (`& 31`).
 - **Toolchain pin: `nightly-2026-09-15` → `nightly-2026-10-28`** (rustc 1.101.0-nightly), after the full CI matrix passed
   with the pin unedited; no code change.
 - **`solve --certify`** (with `--drat`): runs `drat-trim` on the written proof before answering and prints

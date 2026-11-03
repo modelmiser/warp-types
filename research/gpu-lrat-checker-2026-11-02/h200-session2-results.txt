@@ -1,0 +1,60 @@
+=== warp-types LRAT checker on RunPod ===
+Date: 2026-11-02T23:05:01Z
+=== GPU ===
+NVIDIA H200, 9.0, 595.91.07, 143771 MiB
+host cores: 128
+SM_ARCH=sm_90
+=== Rust ===
+info: syncing channel updates for nightly-2026-10-28-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-28 for version 1.101.0-nightly (41089d07a 2026-10-27)
+info: downloading 8 components
+warn: the missing active toolchain `nightly-2026-10-28-x86_64-unknown-linux-gnu` has been auto-installed
+warn: auto-installation is deprecated for most `rustup` commands
+warn: scripts relying on this behavior in `rustup` may stop working in the future
+warn: to install the active toolchain, use `rustup install` instead
+warn: see <https://github.com/rust-lang/rustup/issues/4836> for more info
+nightly-2026-10-28-x86_64-unknown-linux-gnu (overridden by '/tmp/warp-types/rust-toolchain.toml')
+rustc 1.101.0-nightly (41089d07a 2026-10-27)
+=== Build (gpu feature, sm_90) ===
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.5.1
+    Finished `release` profile [optimized] target(s) in 12.62s
+build time: 13s
+ptx: .target sm_90  entries=5  externs=0  panic_calls=0
+=== (0) Diagnostic: one full run on the smallest binary proof (stdout+stderr, backtrace on) ===
+c flat-decode 0.267s (lemmas=422266 hints=12773405 lits=5816043)
+c gpu-flat(GPU; 1024 blocks) device 0.030s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c read 0.022s parse 0.909s independent(4) 0.556s sequential 0.000s (skipped)  bytes=43639633 steps=626900
+c sequential:  Verified { lemmas: 422266, deletions: 423486 }
+c independent: Verified { lemmas: 422266, deletions: 423486 }
+c gpu(GPU; 1024 blocks) 0.455s  Verified { lemmas: 422266, deletions: 423486 }
+s VERIFIED
+diagnostic exit: 0
+=== (A) Agreement on the archive: device path vs CPU reference ===
+archive: 180 proofs, 180 agree, 0 disagree, 0 errors, 147 verified
+=== (B) Timing on binary proofs ===
+--- r3sat_n300_s0 (43639633 bytes) ---
+c flat-decode 0.255s (lemmas=422266 hints=12773405 lits=5816043)
+c gpu-flat(GPU; 1024 blocks) device 0.029s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c gpu-flat(GPU; 4096 blocks) device 0.015s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c gpu-flat(GPU; 16384 blocks) device 0.015s (upload+launch+download) overflow=0  Verified { lemmas: 422266, deletions: 423486 }
+c read 0.025s parse 0.903s independent(128) 0.280s sequential 0.000s (skipped)  bytes=43639633 steps=626900
+c gpu(GPU; 4096 blocks) 0.380s  Verified { lemmas: 422266, deletions: 423486 }
+s VERIFIED
+--- r3sat_n350_s2 (941378742 bytes) ---
+c flat-decode 5.879s (lemmas=6887088 hints=238548901 lits=122648678)
+c gpu-flat(GPU; 1024 blocks) device 0.436s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c gpu-flat(GPU; 4096 blocks) device 0.279s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c gpu-flat(GPU; 16384 blocks) device 0.278s (upload+launch+download) overflow=0  Verified { lemmas: 6887088, deletions: 6888496 }
+c read 0.448s parse 17.328s independent(128) 6.931s sequential 0.000s (skipped)  bytes=941378742 steps=10222478
+c gpu(GPU; 4096 blocks) 7.728s  Verified { lemmas: 6887088, deletions: 6888496 }
+s VERIFIED
+--- r3sat_n350_s3 (415372951 bytes) ---
+c flat-decode 3.008s (lemmas=3216163 hints=105674225 lits=53209558)
+c gpu-flat(GPU; 1024 blocks) device 0.192s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c gpu-flat(GPU; 4096 blocks) device 0.124s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c gpu-flat(GPU; 16384 blocks) device 0.123s (upload+launch+download) overflow=0  Verified { lemmas: 3216163, deletions: 3217619 }
+c read 0.217s parse 7.529s independent(128) 2.868s sequential 0.000s (skipped)  bytes=415372951 steps=4772350
+c gpu(GPU; 4096 blocks) 3.538s  Verified { lemmas: 3216163, deletions: 3217619 }
+s VERIFIED
+=== DONE ===

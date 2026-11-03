@@ -205,6 +205,19 @@ fail-closed: no checker is not a pass.
   trims non-core lemmas) — the in-crate strict checker does, and the fault
   tests in `proof.rs` show which checker sees which corruption. Full record:
   `research/drat-certification.md`; runner: `tools/cert-campaign.py`
+- **LRAT proof checker, warp-typed** (`lrat.rs`, `lrat_warp.rs`, `sat-kernels::lrat_check_lemmas`,
+  `GpuContext::check_lrat_codes` under `feature = "gpu"`) — reads text and
+  binary LRAT; the reference checker returns `lrat-check`'s verdict (RAT lemmas
+  are `Unsupported`, never verified); the warp version checks one lemma per
+  warp with `ballot` / `reduce_sum` / `broadcast_lane` and runs unchanged on
+  `SimWarp` and on the device. **Measured 2026-11-02 on an H200** (record and
+  pre-registration: `research/gpu-lrat-checker.md`): verdicts equal to the
+  reference, `lrat-check` and `cake_lpr` on every archived proof; on a 941 MB
+  binary proof the device check is 0.28 s including transfer, the host decode
+  3.4–5.9 s, so end to end it is 6–10× `lrat-check` on the same proof and
+  ≈ 2.7× a CPU pipeline with the same decoder. The check is free; the decode
+  is the remaining cost. `cargo run --release --example lrat_check -- f.cnf
+  f.lrat [threads]`; `--to-binary out.blrat` writes binary LRAT.
 
 ## License
 
