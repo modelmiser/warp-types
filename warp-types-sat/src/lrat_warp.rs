@@ -747,6 +747,46 @@ pub(crate) fn stitch_chunks(
     chunks: Vec<RawChunk>,
     threads: usize,
 ) -> Result<FlatProof, crate::lrat::ParseError> {
+    let plan = stitch_plan(cnf, bytes, bounds, chunks)?;
+    stitch_payloads_host(cnf, plan, threads)
+}
+
+/// A true-chain segment to copy in phase 3b: chunk-local literal and hint
+/// ranges of `chunk` (an index into chunks ++ bridges).
+pub(crate) struct Copy {
+    pub(crate) chunk: usize,
+    pub(crate) lit_lo: usize,
+    pub(crate) lit_hi: usize,
+    pub(crate) hint_lo: usize,
+    pub(crate) hint_hi: usize,
+}
+
+/// Phases 2 and 3a done: everything about the proof except its literal and
+/// hint payloads, plus what phase 3b needs to place them — on the host
+/// ([`stitch_payloads_host`]) or on the device (`decode_device`).
+pub(crate) struct StitchPlan {
+    /// `lits` and `hints` empty; every other field final (before the
+    /// bad-hint truncation phase 3b may still apply).
+    pub(crate) fp: FlatProof,
+    pub(crate) copies: Vec<Copy>,
+    pub(crate) dense_of: Vec<u32>,
+    pub(crate) lit_total: usize,
+    pub(crate) hint_total: usize,
+    pub(crate) orig_lits: usize,
+    pub(crate) chunks: Vec<RawChunk>,
+    pub(crate) bridges: Vec<RawChunk>,
+}
+
+/// Phases 2 and 3a: follow the true chain across slice boundaries (bridging
+/// where a worker was mis-synchronised), then the sequential bookkeeping over
+/// steps (ids increasing, dense map, deletions, first empty clause, earliest
+/// structural verdict).
+pub(crate) fn stitch_plan(
+    cnf: &[Vec<i32>],
+    bytes: &[u8],
+    bounds: &[(usize, usize)],
+    chunks: Vec<RawChunk>,
+) -> Result<StitchPlan, crate::lrat::ParseError> {
     use crate::lrat::ParseError;
     let err = |pos: usize, msg: &str| ParseError {
         line: pos,
@@ -882,13 +922,6 @@ pub(crate) fn stitch_chunks(
         let mut step_ix = 0u32;
         // Per true-chain segment: (chunk, step range actually consumed, lit
         // range, hint range) — phase 3b copies these in parallel.
-        struct Copy {
-            chunk: usize,
-            lit_lo: usize,
-            lit_hi: usize,
-            hint_lo: usize,
-            hint_hi: usize,
-        }
         let mut copies: Vec<Copy> = Vec::with_capacity(segments.len());
         let mut lit_total = orig_lits;
         let mut hint_total = 0usize;
@@ -1044,8 +1077,40 @@ pub(crate) fn stitch_chunks(
                 return Err(e);
             }
         }
+        drop(all);
+        Ok(StitchPlan {
+            fp,
+            copies,
+            dense_of,
+            lit_total,
+            hint_total,
+            orig_lits,
+            chunks,
+            bridges,
+        })
+    }
+}
 
-        // ---- phase 3b: parallel copy + hint resolution ----
+/// Phase 3b on host threads: copy the true chain's literals and hints into
+/// the flat arrays at their prefix offsets, resolving hint ids through the
+/// dense map; the first hint naming an id never added fails its lemma.
+pub(crate) fn stitch_payloads_host(
+    cnf: &[Vec<i32>],
+    plan: StitchPlan,
+    threads: usize,
+) -> Result<FlatProof, crate::lrat::ParseError> {
+    let StitchPlan {
+        mut fp,
+        copies,
+        dense_of,
+        lit_total,
+        hint_total,
+        orig_lits,
+        chunks,
+        bridges,
+    } = plan;
+    let all: Vec<&RawChunk> = chunks.iter().chain(bridges.iter()).collect();
+    {
         fp.lits = vec![0i32; lit_total];
         fp.hints = vec![0u32; hint_total];
         {
@@ -1448,6 +1513,11 @@ pub fn combine(fp: &FlatProof, codes: &[LemmaCode]) -> Verdict {
         let id = fp.lemma_id[i];
         let hint_at = |pred: &dyn Fn(usize) -> bool| -> u64 {
             let (hs, he) = (fp.hint_start[i] as usize, fp.hint_start[i + 1] as usize);
+            if fp.hints.len() < he {
+                // Payloads not on the host (the device-resident route): the
+                // reason stands, the hint id is reported as unknown (0).
+                return 0;
+            }
             fp.hints[hs..he]
                 .iter()
                 .map(|&h| h as usize)

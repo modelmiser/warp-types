@@ -5,8 +5,8 @@
 //! `research/gpu-lrat-decode.md`: the flat proof still lands on the host.
 
 use super::decode_model::host_record;
-use super::{slice_bounds, stitch_chunks, FlatProof, RawChunk, RawStep};
-use crate::gpu_launcher::{DecodeTiming, DeviceSlices, GpuContext, GpuError};
+use super::{slice_bounds, stitch_chunks, stitch_plan, FlatProof, RawChunk, RawStep, StitchPlan};
+use crate::gpu_launcher::{DecodeTiming, DeviceFlatProof, DeviceSlices, GpuContext, GpuError};
 
 /// What the device path reports besides the proof.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,7 +20,12 @@ pub struct DeviceDecodeStats {
 }
 
 /// Build the per-slice records from the device arrays.
-fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> (Vec<RawChunk>, usize, usize) {
+fn chunks_from_device(
+    bytes: &[u8],
+    d: &DeviceSlices,
+) -> (Vec<RawChunk>, Vec<Option<(u32, u32)>>, usize, usize) {
+    let resident = d.d_lits.is_some();
+    let mut bases: Vec<Option<(u32, u32)>> = Vec::with_capacity(d.n_slices);
     let (mut dirty, mut none) = (0usize, 0usize);
     let n = d.n_slices;
     let count = |i: usize, f: usize| -> usize {
@@ -57,10 +62,23 @@ fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> (Vec<RawChunk>, usize, 
                         rat: d.st_rat[s0 + k] != 0,
                     })
                     .collect();
+                bases.push(if resident {
+                    Some((l0 as u32, h0 as u32))
+                } else {
+                    None
+                });
                 chunks.push(RawChunk {
                     steps,
-                    lits: d.lits[l0..l0 + nl].to_vec(),
-                    hints: d.hints[h0..h0 + nh].to_vec(),
+                    lits: if resident {
+                        Vec::new()
+                    } else {
+                        d.lits[l0..l0 + nl].to_vec()
+                    },
+                    hints: if resident {
+                        Vec::new()
+                    } else {
+                        d.hints[h0..h0 + nh].to_vec()
+                    },
                     dels: d.del_id[e0..e0 + ne]
                         .iter()
                         .zip(&d.del_pos[e0..e0 + ne])
@@ -74,6 +92,7 @@ fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> (Vec<RawChunk>, usize, 
             }
             crate::gpu_launcher::DEC_NONE => {
                 none += 1;
+                bases.push(None);
                 chunks.push(RawChunk {
                     end: lo as u64,
                     ..Default::default()
@@ -81,11 +100,12 @@ fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> (Vec<RawChunk>, usize, 
             }
             _ => {
                 dirty += 1;
+                bases.push(None);
                 chunks.push(host_record(bytes, lo, hi));
             }
         }
     }
-    (chunks, dirty, none)
+    (chunks, bases, dirty, none)
 }
 
 impl FlatProof {
@@ -105,12 +125,12 @@ impl FlatProof {
             return Ok((fp, DeviceDecodeStats::default()));
         }
         let d = ctx
-            .decode_lrat_slices(bytes, slice, cooperative, blocks)
+            .decode_lrat_slices(bytes, slice, cooperative, blocks, false)
             .map_err(DeviceDecodeError::Gpu)?;
         let t = std::time::Instant::now();
         let bounds = slice_bounds(bytes.len(), slice as usize);
         debug_assert_eq!(bounds.len(), d.n_slices);
-        let (chunks, dirty, none) = chunks_from_device(bytes, &d);
+        let (chunks, _bases, dirty, none) = chunks_from_device(bytes, &d);
         let fp = stitch_chunks(cnf, bytes, &bounds, chunks, 4).map_err(DeviceDecodeError::Parse)?;
         Ok((
             fp,
@@ -122,6 +142,211 @@ impl FlatProof {
                 host: t.elapsed(),
             },
         ))
+    }
+}
+
+/// Stage times of the resident path beyond the decode kernels.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResidentStats {
+    pub decode: DeviceDecodeStats,
+    /// Host phases 2 + 3a (steps only) and segment-list building.
+    pub plan: std::time::Duration,
+    /// The two gather kernels, extra-buffer upload included.
+    pub gather: std::time::Duration,
+}
+
+impl FlatProof {
+    /// The device-resident route: phase 1 on the device, phases 2 + 3a on the
+    /// host over step records only, phase 3b on the device. Literals and
+    /// hints never reach the host; the returned proof's `meta` has empty
+    /// `lits` / `hints` and the device arrays beside it.
+    pub fn from_binary_device_resident(
+        ctx: &GpuContext,
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+        slice: u32,
+        cooperative: bool,
+        blocks: u32,
+    ) -> Result<(DeviceFlatProof, ResidentStats), DeviceDecodeError> {
+        use crate::gpu_launcher::GatherSeg;
+        if bytes.is_empty() {
+            return Err(DeviceDecodeError::Parse(crate::lrat::ParseError {
+                line: 0,
+                msg: "empty proof".into(),
+            }));
+        }
+        let d = ctx
+            .decode_lrat_slices(bytes, slice, cooperative, blocks, true)
+            .map_err(DeviceDecodeError::Gpu)?;
+        let t = std::time::Instant::now();
+        let bounds = slice_bounds(bytes.len(), slice as usize);
+        let (chunks, bases, dirty, none) = chunks_from_device(bytes, &d);
+        let plan = stitch_plan(cnf, bytes, &bounds, chunks).map_err(DeviceDecodeError::Parse)?;
+        let StitchPlan {
+            mut fp,
+            copies,
+            dense_of,
+            lit_total,
+            hint_total,
+            orig_lits,
+            chunks,
+            bridges,
+        } = plan;
+        let n_slices = chunks.len();
+        // Segment lists: the originals first (from the extra buffer), then
+        // each true-chain segment from the device arrays or, for bridges and
+        // host-parsed slices, from the extra buffer.
+        let mut extra_lits: Vec<i32> = Vec::with_capacity(orig_lits);
+        let mut extra_hints: Vec<u64> = Vec::new();
+        for c in cnf {
+            extra_lits.extend_from_slice(c);
+        }
+        let mut lit_segs: Vec<GatherSeg> = Vec::with_capacity(copies.len() + 1);
+        let mut hint_segs: Vec<GatherSeg> = Vec::with_capacity(copies.len());
+        lit_segs.push(GatherSeg {
+            sel: 1,
+            src: 0,
+            len: orig_lits as u32,
+        });
+        // For reporting a bad hint: where each hint segment's source is.
+        for cp in &copies {
+            let nl = (cp.lit_hi - cp.lit_lo) as u32;
+            let nh = (cp.hint_hi - cp.hint_lo) as u32;
+            let dev = if cp.chunk < n_slices {
+                bases[cp.chunk]
+            } else {
+                None
+            };
+            match dev {
+                Some((lb, hb)) => {
+                    lit_segs.push(GatherSeg {
+                        sel: 0,
+                        src: lb + cp.lit_lo as u32,
+                        len: nl,
+                    });
+                    hint_segs.push(GatherSeg {
+                        sel: 0,
+                        src: hb + cp.hint_lo as u32,
+                        len: nh,
+                    });
+                }
+                None => {
+                    let c = if cp.chunk < n_slices {
+                        &chunks[cp.chunk]
+                    } else {
+                        &bridges[cp.chunk - n_slices]
+                    };
+                    lit_segs.push(GatherSeg {
+                        sel: 1,
+                        src: extra_lits.len() as u32,
+                        len: nl,
+                    });
+                    extra_lits.extend_from_slice(&c.lits[cp.lit_lo..cp.lit_hi]);
+                    hint_segs.push(GatherSeg {
+                        sel: 1,
+                        src: extra_hints.len() as u32,
+                        len: nh,
+                    });
+                    extra_hints.extend_from_slice(&c.hints[cp.hint_lo..cp.hint_hi]);
+                }
+            }
+        }
+        let t_plan = t.elapsed();
+        let t2 = std::time::Instant::now();
+        let raw_lits = d.d_lits.as_ref().expect("resident decode keeps lits");
+        let raw_hints = d.d_hints.as_ref().expect("resident decode keeps hints");
+        let (lits, hints, first_bad) = ctx
+            .gather_lrat_payloads(
+                &lit_segs,
+                &hint_segs,
+                raw_lits,
+                raw_hints,
+                &extra_lits,
+                &extra_hints,
+                &dense_of,
+                lit_total,
+                hint_total,
+                blocks.max(1024),
+            )
+            .map_err(DeviceDecodeError::Gpu)?;
+        let t_gather = t2.elapsed();
+        if let Some(first_bad) = first_bad {
+            // The raw id behind it, from wherever that hint came from.
+            let mut g = 0usize;
+            let mut h = 0u64;
+            for seg in &hint_segs {
+                let n = seg.len as usize;
+                if first_bad < g + n {
+                    let j = seg.src as usize + (first_bad - g);
+                    h = if seg.sel == 0 {
+                        ctx.read_u64_at(raw_hints, j)
+                            .map_err(DeviceDecodeError::Gpu)?
+                    } else {
+                        extra_hints[j]
+                    };
+                    break;
+                }
+                g += n;
+            }
+            let l = fp.hint_start.partition_point(|&s| s as usize <= first_bad) - 1;
+            fp.early = Some(super::Verdict::Rejected {
+                step: fp.lemma_step[l] as usize,
+                id: fp.lemma_id[l],
+                reason: super::missing_hint_reason(h, fp.lemma_id[l]),
+            });
+            super::truncate_lemmas(&mut fp, l);
+        }
+        let keep = fp.lemma_clause.len();
+        super::truncate_lemmas(&mut fp, keep);
+        Ok((
+            DeviceFlatProof {
+                meta: fp,
+                lits,
+                hints,
+            },
+            ResidentStats {
+                decode: DeviceDecodeStats {
+                    n_slices: d.n_slices,
+                    dirty,
+                    none,
+                    timing: d.timing,
+                    host: t_plan + t_gather,
+                },
+                plan: t_plan,
+                gather: t_gather,
+            },
+        ))
+    }
+}
+
+/// [`combine`](super::combine) for a resident proof: the one lemma whose
+/// reason names a hint has its hint range fetched from the device, so the
+/// verdict is the same as the host route's, hint id included.
+pub fn combine_resident(
+    ctx: &GpuContext,
+    dfp: &DeviceFlatProof,
+    codes: &[super::LemmaCode],
+) -> Result<super::Verdict, GpuError> {
+    use super::LemmaCode;
+    let first = codes.iter().position(|&c| c != LemmaCode::Ok);
+    match first {
+        Some(i)
+            if codes.len() == dfp.meta.lemma_clause.len()
+                && matches!(codes[i], LemmaCode::DeletedHint | LemmaCode::ForwardHint) =>
+        {
+            let (hs, he) = (
+                dfp.meta.hint_start[i] as usize,
+                dfp.meta.hint_start[i + 1] as usize,
+            );
+            let mut meta = dfp.meta.clone();
+            meta.hints = vec![0u32; he];
+            if he > hs {
+                let part: Vec<u32> = ctx.stream().clone_dtoh(&dfp.hints.slice(hs..he))?;
+                meta.hints[hs..he].copy_from_slice(&part);
+            }
+            Ok(super::combine(&meta, codes))
+        }
+        _ => Ok(super::combine(&dfp.meta, codes)),
     }
 }
 
@@ -281,6 +506,71 @@ mod tests {
                         coop,
                         &format!("rat {k} s={slice}"),
                     );
+                }
+            }
+        }
+    }
+
+    /// The resident route against the sequential decoder: meta plus the
+    /// downloaded arrays equal, errors equal, verdicts equal through
+    /// `combine_resident` with the resident check.
+    #[test]
+    fn device_resident_equals_sequential() {
+        let Some(ctx) = ctx() else { return };
+        let mut cases: Vec<(Vec<Vec<i32>>, Vec<u8>, String)> = Vec::new();
+        for with_empty in [false, true] {
+            let (cnf, bytes) = synthetic_proof(with_empty);
+            cases.push((cnf.clone(), bytes.clone(), format!("valid e={with_empty}")));
+            for cut in (1..bytes.len()).step_by(7) {
+                cases.push((cnf.clone(), bytes[..cut].to_vec(), format!("cut {cut}")));
+            }
+            let mut m = bytes.clone();
+            for i in (0..bytes.len()).step_by(5) {
+                m[i] ^= 0x80;
+                cases.push((cnf.clone(), m.clone(), format!("flip {i}")));
+                m[i] ^= 0x80;
+            }
+        }
+        for (cnf, bytes, what) in &cases {
+            for coop in [true, false] {
+                for &slice in &[13u32, 4096] {
+                    let a = FlatProof::from_binary(cnf, bytes);
+                    let b =
+                        FlatProof::from_binary_device_resident(&ctx, cnf, bytes, slice, coop, 64);
+                    match (a, b) {
+                        (Ok(a), Ok((dfp, _))) => {
+                            let (l, h) = ctx.download_lrat_payloads(&dfp).unwrap();
+                            let mut m = dfp.meta.clone();
+                            m.lits = l;
+                            m.hints = h;
+                            assert_flat_eq(&a, &m, &format!("{what} s={slice} coop={coop}"));
+                            let codes_host = super::super::check_warp_codes(&a);
+                            let want = super::super::combine(&a, &codes_host);
+                            let raw = ctx.check_lrat_codes_resident(&dfp, 64).unwrap();
+                            let codes: Vec<super::super::LemmaCode> = raw
+                                .iter()
+                                .map(|&c| match c {
+                                    0 => super::super::LemmaCode::Ok,
+                                    1 => super::super::LemmaCode::NotUnit,
+                                    2 => super::super::LemmaCode::NoConflict,
+                                    3 => super::super::LemmaCode::DeletedHint,
+                                    4 => super::super::LemmaCode::ForwardHint,
+                                    5 => super::super::LemmaCode::TableOverflow,
+                                    _ => super::super::LemmaCode::Unwritten,
+                                })
+                                .collect();
+                            let got = super::combine_resident(&ctx, &dfp, &codes).unwrap();
+                            assert_eq!(got, want, "{what} s={slice} coop={coop}: verdict");
+                        }
+                        (Err(a), Err(super::DeviceDecodeError::Parse(b))) => {
+                            assert_eq!(a, b, "{what}: error")
+                        }
+                        (a, b) => panic!(
+                            "{what} s={slice} coop={coop}: sequential {:?} vs resident {:?}",
+                            a.map(|_| ()),
+                            b.map(|_| ()).map_err(|e| e.to_string())
+                        ),
+                    }
                 }
             }
         }

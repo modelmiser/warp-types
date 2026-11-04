@@ -194,6 +194,11 @@ struct Carry {
 
 /// Decode one slice with the warp formulation. `Some(record)` equals
 /// `parse_run(bytes, start, hi)`; `None` = dirty (the caller falls back).
+///
+/// The lane loops index several per-lane arrays by `lane` on purpose: each
+/// body is what one lane of the kernel does, and the kernel is read against
+/// it line by line.
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn decode_slice_model(bytes: &[u8], lo: usize, hi: usize) -> Option<RawChunk> {
     let len = bytes.len();
     let hi = hi.min(len);

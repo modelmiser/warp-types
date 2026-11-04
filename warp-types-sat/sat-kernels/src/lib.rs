@@ -1212,3 +1212,104 @@ pub fn lrat_scan_slices_serial(
         }
     }
 }
+
+// ============================================================================
+// Phase 3b on the device: place the true chain's payloads (stage 3 of
+// research/gpu-lrat-decode.md). The host's stitch produces the segment list
+// (`copies`); each output element finds its segment by binary search over the
+// destination prefix and reads its source — the device's raw decode arrays
+// (`sel = 0`) or the small "extra" buffer the host uploaded for bridges and
+// host-parsed slices (`sel = 1`). Hints are mapped id → dense index through
+// the dense table at the same time; the first hint naming an id never added
+// is recorded by an atomic minimum, as the host's phase 3b does.
+// ============================================================================
+
+/// Segment of output index `i`: the last `k` with `seg_dst[k] <= i`
+/// (`seg_dst[0] == 0`, `n_seg >= 1`).
+#[inline(always)]
+unsafe fn dec_segment_of(seg_dst: *const u32, n_seg: u32, i: u32) -> u32 {
+    let mut lo = 0u32;
+    let mut hi = n_seg;
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if *seg_dst.add(mid as usize) <= i {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// `out[i] = source(segment(i))[seg_src + (i - seg_dst)]` for literals.
+/// Grid: (num_blocks, 1, 1), Block: (32, 1, 1), grid-stride over `n_out`.
+#[allow(clippy::too_many_arguments)]
+#[warp_kernel]
+pub fn lrat_gather_lits(
+    seg_dst: *const u32,
+    seg_src: *const u32,
+    seg_sel: *const u32,
+    n_seg: u32,
+    src0: *const i32,
+    src1: *const i32,
+    out: *mut i32,
+    n_out: u32,
+    num_blocks: u32,
+) {
+    let mut i = warp_types::gpu::block_id_x() * 32 + warp_types::gpu::thread_id_x();
+    let stride = num_blocks * 32;
+    while i < n_out {
+        let k = dec_segment_of(seg_dst, n_seg, i) as usize;
+        let j = (*seg_src.add(k) + (i - *seg_dst.add(k))) as usize;
+        *out.add(i as usize) = if *seg_sel.add(k) == 0 {
+            *src0.add(j)
+        } else {
+            *src1.add(j)
+        };
+        i += stride;
+    }
+}
+
+/// Same gather for hints, mapping each raw id through `dense_of` (0 = never
+/// added): `out[i] = dense - 1`, or `u32::MAX` with `bad = min(bad, i)`.
+#[allow(clippy::too_many_arguments)]
+#[warp_kernel]
+pub fn lrat_gather_hints(
+    seg_dst: *const u32,
+    seg_src: *const u32,
+    seg_sel: *const u32,
+    n_seg: u32,
+    src0: *const u64,
+    src1: *const u64,
+    dense_of: *const u32,
+    dense_len: u32,
+    out: *mut u32,
+    n_out: u32,
+    bad: *mut u32,
+    num_blocks: u32,
+) {
+    let mut i = warp_types::gpu::block_id_x() * 32 + warp_types::gpu::thread_id_x();
+    let stride = num_blocks * 32;
+    while i < n_out {
+        let k = dec_segment_of(seg_dst, n_seg, i) as usize;
+        let j = (*seg_src.add(k) + (i - *seg_dst.add(k))) as usize;
+        let h = if *seg_sel.add(k) == 0 {
+            *src0.add(j)
+        } else {
+            *src1.add(j)
+        };
+        let d = if h < dense_len as u64 {
+            *dense_of.add(h as usize)
+        } else {
+            0
+        };
+        if d == 0 {
+            let a = core::sync::atomic::AtomicU32::from_ptr(bad);
+            a.fetch_min(i, core::sync::atomic::Ordering::Relaxed);
+            *out.add(i as usize) = u32::MAX;
+        } else {
+            *out.add(i as usize) = d - 1;
+        }
+        i += stride;
+    }
+}

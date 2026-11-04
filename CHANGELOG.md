@@ -41,6 +41,23 @@
   instances this solver finishes (untrimmed proofs grow 4× on long runs). **`lrat-trim`** (`lrat::trim`,
   `lrat::write_text`) then trims by backward reachability through the hints, linear and without propagation:
   250 MB → 41.5 MB on the largest proofs, within 2 % of `drat-trim -L`'s output size, every trimmed proof verified.
+- **LRAT binary decode on the device** (`warp-types-sat`, `feature = "gpu"`): `sat-kernels::lrat_scan_slices`
+  decodes binary LRAT with one warp per 4 KB slice — token ends by `ballot`, the role machine by a lane-guarded
+  composition scan over `shuffle_up`, output slots by popcount — in two passes around a host prefix sum; the host
+  stitch (`stitch_plan`) then runs over step records only, `lrat_gather_lits` / `lrat_gather_hints` place the
+  payloads on the device, and `check_lrat_codes_resident` checks them there. Slices the one-thread decoder would
+  reject fall back to it on the host; `lrat_scan_slices_serial` (a thread per slice) is kept as the control. The
+  `SimWarp` model (`lrat_warp::decode_model`) is held slice-for-slice equal to the host parser on every truncation
+  and bit flip of a synthetic proof, long varints, straddling steps and RAT hints across windows, and the device
+  path to the sequential decoder on the same battery and on all 632 archive files, both kernels. **Measured <!-- unguarded: 632 — archive count, research/gpu-lrat-decode.md -->
+  2026-11-03** on the workstation RTX 4000 SFF Ada (pre-registered, `research/gpu-lrat-decode.md`; arrays verified
+  equal to the host decode on both proofs): the 415 MB proof decodes in 0.30 s against 0.90 s on six host threads <!-- unguarded: 415 — proof size in MB -->
+  (kernels 0.08 s; the rest is the upload and the host's walk over 4.8 M step records), and bytes-in-RAM to verdict <!-- unguarded: 4.8 — step count in millions -->
+  falls from 1.19 s to 0.53 s; the 898 MB proof from 2.70 s to 1.43 s. Of the five predictions one was met: the <!-- unguarded: 898 — proof size in MB -->
+  decode missed its 0.25 s by 0.05 s, the pipeline its 0.5 s by 0.03 s, the warp kernel is 1.3× the thread kernel
+  where 2× was predicted (the GPU is ≈ 10× the host threads either way), and the PTX agreed with the model at the
+  first run where a hardware-only defect was predicted. The check kernel, 0.23 s here, is now the largest device
+  stage.
 - **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT; the reference checker follows
   `lrat-check`'s RUP rules — hints in order, deletions honoured, every step checked including those after the empty
   clause, RAT = `Unsupported` — and reports the earliest failing step), `lrat_warp` (one warp per lemma on the

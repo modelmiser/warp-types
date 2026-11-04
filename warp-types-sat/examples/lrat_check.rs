@@ -224,6 +224,104 @@ fn main() {
                         }
                     }
                 }
+                // Device-resident route: decode on the device, plan on the
+                // host over step records, payloads gathered on the device,
+                // check on the resident arrays. LRAT_RESIDENT_VERIFY downloads
+                // the arrays once and compares them with the host decode.
+                #[cfg(feature = "gpu")]
+                if std::env::var_os("LRAT_GPU_RESIDENT").is_some() {
+                    let ctx = warp_types_sat::gpu_launcher::GpuContext::new().expect("GPU context");
+                    let slice: u32 = std::env::var("LRAT_DECODE_SLICES")
+                        .ok()
+                        .and_then(|b| b.split(',').next().and_then(|x| x.parse().ok()))
+                        .unwrap_or(4096);
+                    let reps: usize = std::env::var("LRAT_DECODE_REPS")
+                        .ok()
+                        .and_then(|x| x.parse().ok())
+                        .unwrap_or(1);
+                    let blocks: u32 = std::env::var("LRAT_GPU_BLOCKS")
+                        .ok()
+                        .and_then(|b| b.split(',').next().and_then(|x| x.parse().ok()))
+                        .unwrap_or(4096);
+                    for coop in [true, false] {
+                        let mut best: Option<(
+                            f64,
+                            f64,
+                            warp_types_sat::lrat_warp::decode_device::ResidentStats,
+                            warp_types_sat::lrat::Verdict,
+                        )> = None;
+                        for _ in 0..reps.max(1) {
+                            let ta = Instant::now();
+                            let (dfp, st) =
+                                warp_types_sat::lrat_warp::FlatProof::from_binary_device_resident(
+                                    &ctx, &cnf, &bytes, slice, coop, blocks,
+                                )
+                                .unwrap_or_else(|e| panic!("resident decode: {e}"));
+                            let tb = Instant::now();
+                            let raw = ctx
+                                .check_lrat_codes_resident(&dfp, blocks)
+                                .expect("resident check");
+                            let tc = Instant::now();
+                            let codes: Vec<warp_types_sat::lrat_warp::LemmaCode> = raw
+                                .iter()
+                                .map(|&c| match c {
+                                    0 => warp_types_sat::lrat_warp::LemmaCode::Ok,
+                                    1 => warp_types_sat::lrat_warp::LemmaCode::NotUnit,
+                                    2 => warp_types_sat::lrat_warp::LemmaCode::NoConflict,
+                                    3 => warp_types_sat::lrat_warp::LemmaCode::DeletedHint,
+                                    4 => warp_types_sat::lrat_warp::LemmaCode::ForwardHint,
+                                    5 => warp_types_sat::lrat_warp::LemmaCode::TableOverflow,
+                                    _ => warp_types_sat::lrat_warp::LemmaCode::Unwritten,
+                                })
+                                .collect();
+                            let v = warp_types_sat::lrat_warp::decode_device::combine_resident(
+                                &ctx, &dfp, &codes,
+                            )
+                            .expect("combine");
+                            let (td, tk) = ((tb - ta).as_secs_f64(), (tc - tb).as_secs_f64());
+                            if std::env::var_os("LRAT_RESIDENT_VERIFY").is_some() && best.is_none()
+                            {
+                                let (l, h) = ctx.download_lrat_payloads(&dfp).expect("download");
+                                let mut m = dfp.meta.clone();
+                                m.lits = l;
+                                m.hints = h;
+                                println!(
+                                    "c resident-verify({}) arrays {}",
+                                    if coop { "warp" } else { "thread" },
+                                    if m == fp { "EQUAL" } else { "DIFFERENT" }
+                                );
+                                if m != fp {
+                                    println!("s DISAGREE-GPU-RESIDENT");
+                                    std::process::exit(3);
+                                }
+                            }
+                            if best.as_ref().map_or(true, |(d, k, _, _)| td + tk < d + k) {
+                                best = Some((td, tk, st, v));
+                            }
+                        }
+                        if let Some((td, tk, st, v)) = best {
+                            println!(
+                                "c gpu-resident({}; {} slice={slice} blocks={blocks}) decode {td:.3}s = upload {:.3} + pass1 {:.3} + prefix {:.3} + pass2 {:.3} + download {:.3} + plan {:.3} + gather {:.3}; check {tk:.3}s; bytes→verdict {:.3}s  slices={} dirty={}  {v:?}",
+                                ctx.device_name(),
+                                if coop { "warp" } else { "thread" },
+                                st.decode.timing.upload.as_secs_f64(),
+                                st.decode.timing.pass1.as_secs_f64(),
+                                st.decode.timing.prefix.as_secs_f64(),
+                                st.decode.timing.pass2.as_secs_f64(),
+                                st.decode.timing.download.as_secs_f64(),
+                                st.plan.as_secs_f64(),
+                                st.gather.as_secs_f64(),
+                                td + tk,
+                                st.decode.n_slices,
+                                st.decode.dirty,
+                            );
+                            if v.is_verified() != seq.is_verified() {
+                                println!("s DISAGREE-GPU-RESIDENT-VERDICT");
+                                std::process::exit(3);
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => println!("c flat-decode error: {e}"),
         }

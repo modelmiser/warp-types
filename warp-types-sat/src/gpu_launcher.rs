@@ -239,6 +239,11 @@ impl GpuContext {
     }
 
     /// GPU device name (for diagnostics).
+    /// The context's stream (for small reads beside the kernels).
+    pub fn stream(&self) -> &Arc<CudaStream> {
+        &self.stream
+    }
+
     pub fn device_name(&self) -> String {
         "GPU".to_string()
     }
@@ -467,6 +472,7 @@ impl GpuContext {
         slice: u32,
         cooperative: bool,
         blocks: u32,
+        resident: bool,
     ) -> Result<DeviceSlices, GpuError> {
         use std::time::Instant;
         let s = &self.stream;
@@ -474,7 +480,7 @@ impl GpuContext {
         let slice = slice.max(1);
         let n_slices = (bytes.len() as u64).div_ceil(slice as u64) as u32;
         if n_slices == 0 {
-            return Ok(DeviceSlices::default());
+            return Err(GpuError::Cuda("decode: empty input".into()));
         }
         let t0 = Instant::now();
         let d_bytes = s.clone_htod(bytes)?;
@@ -643,10 +649,20 @@ impl GpuContext {
             st_del_end: s.clone_dtoh(&st_del_end)?,
             st_tag: s.clone_dtoh(&st_tag)?,
             st_rat: s.clone_dtoh(&st_rat)?,
-            lits: s.clone_dtoh(&o_lits)?,
-            hints: s.clone_dtoh(&o_hints)?,
+            lits: if resident {
+                Vec::new()
+            } else {
+                s.clone_dtoh(&o_lits)?
+            },
+            hints: if resident {
+                Vec::new()
+            } else {
+                s.clone_dtoh(&o_hints)?
+            },
             del_id: s.clone_dtoh(&o_del_id)?,
             del_pos: s.clone_dtoh(&o_del_pos)?,
+            d_lits: if resident { Some(o_lits) } else { None },
+            d_hints: if resident { Some(o_hints) } else { None },
             timing: DecodeTiming {
                 upload: t_upload,
                 pass1: t_pass1,
@@ -656,6 +672,200 @@ impl GpuContext {
             },
         };
         Ok(out)
+    }
+}
+
+impl GpuContext {
+    /// Phase 3b on the device: build `lits` (length `lit_total`) and
+    /// `hints` (length `hint_total`, dense indices) from the segment lists.
+    /// `dense_of` is the host's id → dense + 1 table. Returns the arrays and
+    /// the global index of the first hint naming an id never added, if any.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gather_lrat_payloads(
+        &self,
+        lit_segs: &[GatherSeg],
+        hint_segs: &[GatherSeg],
+        raw_lits: &CudaSlice<i32>,
+        raw_hints: &CudaSlice<u64>,
+        extra_lits: &[i32],
+        extra_hints: &[u64],
+        dense_of: &[u32],
+        lit_total: usize,
+        hint_total: usize,
+        blocks: u32,
+    ) -> Result<(CudaSlice<i32>, CudaSlice<u32>, Option<usize>), GpuError> {
+        let s = &self.stream;
+        let blocks = blocks.max(1);
+        let prefix = |segs: &[GatherSeg]| -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            let mut dst = Vec::with_capacity(segs.len().max(1));
+            let mut src = Vec::with_capacity(segs.len().max(1));
+            let mut sel = Vec::with_capacity(segs.len().max(1));
+            let mut acc = 0u32;
+            for g in segs {
+                dst.push(acc);
+                src.push(g.src);
+                sel.push(g.sel);
+                acc += g.len;
+            }
+            if dst.is_empty() {
+                dst.push(0);
+                src.push(0);
+                sel.push(1);
+            }
+            (dst, src, sel)
+        };
+        let (ld, ls, lsel) = prefix(lit_segs);
+        let (hd, hs, hsel) = prefix(hint_segs);
+        let d_ld = s.clone_htod(&ld)?;
+        let d_ls = s.clone_htod(&ls)?;
+        let d_lsel = s.clone_htod(&lsel)?;
+        let d_hd = s.clone_htod(&hd)?;
+        let d_hs = s.clone_htod(&hs)?;
+        let d_hsel = s.clone_htod(&hsel)?;
+        let one_i = [0i32];
+        let one_u = [0u64];
+        let d_xl = s.clone_htod(if extra_lits.is_empty() {
+            &one_i[..]
+        } else {
+            extra_lits
+        })?;
+        let d_xh = s.clone_htod(if extra_hints.is_empty() {
+            &one_u[..]
+        } else {
+            extra_hints
+        })?;
+        let d_dense = s.clone_htod(dense_of)?;
+        let lits: CudaSlice<i32> = s.alloc_zeros(lit_total.max(1))?;
+        let hints: CudaSlice<u32> = s.alloc_zeros(hint_total.max(1))?;
+        let bad: CudaSlice<u32> = s.clone_htod(&[u32::MAX])?;
+        let n_lseg = ld.len() as u32;
+        let n_hseg = hd.len() as u32;
+        let n_l = lit_total as u32;
+        let n_h = hint_total as u32;
+        let dense_len = dense_of.len() as u32;
+        let cfg = LaunchConfig {
+            grid_dim: (blocks, 1, 1),
+            block_dim: (WARP_SIZE, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe {
+            if n_l > 0 {
+                s.launch_builder(&self.kernels.lrat_gather_lits)
+                    .arg(&d_ld)
+                    .arg(&d_ls)
+                    .arg(&d_lsel)
+                    .arg(&n_lseg)
+                    .arg(raw_lits)
+                    .arg(&d_xl)
+                    .arg(&lits)
+                    .arg(&n_l)
+                    .arg(&blocks)
+                    .launch(cfg)?;
+            }
+            if n_h > 0 {
+                s.launch_builder(&self.kernels.lrat_gather_hints)
+                    .arg(&d_hd)
+                    .arg(&d_hs)
+                    .arg(&d_hsel)
+                    .arg(&n_hseg)
+                    .arg(raw_hints)
+                    .arg(&d_xh)
+                    .arg(&d_dense)
+                    .arg(&dense_len)
+                    .arg(&hints)
+                    .arg(&n_h)
+                    .arg(&bad)
+                    .arg(&blocks)
+                    .launch(cfg)?;
+            }
+        }
+        let b: Vec<u32> = s.clone_dtoh(&bad)?;
+        let first_bad = if b[0] == u32::MAX {
+            None
+        } else {
+            Some(b[0] as usize)
+        };
+        Ok((lits, hints, first_bad))
+    }
+
+    /// Both payload arrays of a resident proof (verification only — the point
+    /// of the resident route is that this never happens in the pipeline).
+    pub fn download_lrat_payloads(
+        &self,
+        dfp: &DeviceFlatProof,
+    ) -> Result<(Vec<i32>, Vec<u32>), GpuError> {
+        let s = &self.stream;
+        let n_l = dfp.meta.clause_start.last().copied().unwrap_or(0) as usize;
+        let n_h = dfp.meta.hint_start.last().copied().unwrap_or(0) as usize;
+        let l: Vec<i32> = s.clone_dtoh(&dfp.lits)?;
+        let h: Vec<u32> = s.clone_dtoh(&dfp.hints)?;
+        Ok((
+            l[..n_l.min(l.len())].to_vec(),
+            h[..n_h.min(h.len())].to_vec(),
+        ))
+    }
+
+    /// One element of a device array (for reporting the id behind a bad hint).
+    pub fn read_u64_at(&self, arr: &CudaSlice<u64>, i: usize) -> Result<u64, GpuError> {
+        let v: Vec<u64> = self.stream.clone_dtoh(&arr.slice(i..i + 1))?;
+        Ok(v[0])
+    }
+
+    /// [`GpuContext::check_lrat_codes`] on device-resident literal and hint
+    /// arrays: only the per-lemma index arrays are uploaded.
+    pub fn check_lrat_codes_resident(
+        &self,
+        dfp: &DeviceFlatProof,
+        blocks: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        self.check_lrat_codes_with(&dfp.meta, &dfp.lits, &dfp.hints, blocks)
+    }
+
+    fn check_lrat_codes_with(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        lits: &CudaSlice<i32>,
+        hints: &CudaSlice<u32>,
+        blocks: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+        let s = &self.stream;
+        let n = fp.lemma_clause.len() as u32;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let blocks = blocks.max(1).min(n);
+        let clause_start = s.clone_htod(&fp.clause_start)?;
+        let deleted_at = s.clone_htod(&fp.deleted_at)?;
+        let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
+        let lemma_step = s.clone_htod(&fp.lemma_step)?;
+        let hint_start = s.clone_htod(&fp.hint_start)?;
+        let table_keys: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
+        let table_stamps: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
+        // Pre-filled with `LemmaCode::Unwritten` (6): a lemma the kernel never
+        // wrote must fail, not read as Ok (= 0). Cross-vendor panel 2026-11-02.
+        let codes: CudaSlice<u8> = s.clone_htod(&vec![6u8; n as usize])?;
+        unsafe {
+            s.launch_builder(&self.kernels.lrat_check_lemmas)
+                .arg(lits)
+                .arg(&clause_start)
+                .arg(&deleted_at)
+                .arg(&lemma_clause)
+                .arg(&lemma_step)
+                .arg(&hint_start)
+                .arg(hints)
+                .arg(&table_keys)
+                .arg(&table_stamps)
+                .arg(&codes)
+                .arg(&n)
+                .arg(&blocks)
+                .launch(LaunchConfig {
+                    grid_dim: (blocks, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(s.clone_dtoh(&codes)?)
     }
 }
 
@@ -675,7 +885,6 @@ pub struct DecodeTiming {
 /// against `totals`). Step fields `*_end` are slice-local, as in the host
 /// workers' records. `flags[i]`: 0 clean, 1 dirty (re-parse on the host),
 /// 2 no candidate start.
-#[derive(Debug, Clone, Default)]
 pub struct DeviceSlices {
     pub slice: usize,
     pub n_slices: usize,
@@ -696,5 +905,26 @@ pub struct DeviceSlices {
     pub hints: Vec<u64>,
     pub del_id: Vec<u64>,
     pub del_pos: Vec<u64>,
+    /// With `resident`: the literal and raw-hint arrays stay on the device
+    /// (and `lits` / `hints` above are empty).
+    pub d_lits: Option<CudaSlice<i32>>,
+    pub d_hints: Option<CudaSlice<u64>>,
     pub timing: DecodeTiming,
+}
+
+/// One segment for the device gathers: `len` elements from source `sel`
+/// (0 = the raw decode array, 1 = the host's extra buffer) at `src`.
+#[derive(Debug, Clone, Copy)]
+pub struct GatherSeg {
+    pub sel: u32,
+    pub src: u32,
+    pub len: u32,
+}
+
+/// A flat proof whose literal and hint arrays live on the device; `meta` has
+/// every other field (its `lits` / `hints` are empty).
+pub struct DeviceFlatProof {
+    pub meta: crate::lrat_warp::FlatProof,
+    pub lits: CudaSlice<i32>,
+    pub hints: CudaSlice<u32>,
 }
