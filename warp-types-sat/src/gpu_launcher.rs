@@ -21,6 +21,10 @@ mod sat_gpu_kernels {
 }
 
 const WARP_SIZE: u32 = 32;
+/// Per-slice flags of the device decode (must equal `sat-kernels::DEC_*`).
+pub const DEC_CLEAN: u32 = 0;
+pub const DEC_DIRTY: u32 = 1;
+pub const DEC_NONE: u32 = 2;
 
 /// GPU context holding CUDA device, stream, and loaded kernels.
 ///
@@ -451,4 +455,246 @@ impl GpuContext {
         }
         Ok(s.clone_dtoh(&codes)?)
     }
+    /// Phase 1 of the binary LRAT decode on the device
+    /// (`sat-kernels::lrat_scan_slices`, or the thread-per-slice control when
+    /// `cooperative` is false): upload the bytes, count per slice, prefix the
+    /// counts on the host, write the records, download everything. The
+    /// result is phase-1 records in slice order; `lrat_warp` turns them into
+    /// `RawChunk`s and stitches them exactly as the host workers' records.
+    pub fn decode_lrat_slices(
+        &self,
+        bytes: &[u8],
+        slice: u32,
+        cooperative: bool,
+        blocks: u32,
+    ) -> Result<DeviceSlices, GpuError> {
+        use std::time::Instant;
+        let s = &self.stream;
+        let len = bytes.len() as u64;
+        let slice = slice.max(1);
+        let n_slices = (bytes.len() as u64).div_ceil(slice as u64) as u32;
+        if n_slices == 0 {
+            return Ok(DeviceSlices::default());
+        }
+        let t0 = Instant::now();
+        let d_bytes = s.clone_htod(bytes)?;
+        s.synchronize()?;
+        let t_upload = t0.elapsed();
+        let s_start: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
+        let s_end: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
+        let s_flags: CudaSlice<u32> = s.alloc_zeros(n_slices as usize)?;
+        let mut s_cnt: CudaSlice<u32> = s.alloc_zeros(4 * n_slices as usize)?;
+        // Pass 1 needs the record pointers to exist; one element each.
+        let mut st_pos: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let mut st_id: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let mut st_after: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let mut st_lit_end: CudaSlice<u32> = s.alloc_zeros(1)?;
+        let mut st_hint_end: CudaSlice<u32> = s.alloc_zeros(1)?;
+        let mut st_del_end: CudaSlice<u32> = s.alloc_zeros(1)?;
+        let mut st_tag: CudaSlice<u8> = s.alloc_zeros(1)?;
+        let mut st_rat: CudaSlice<u8> = s.alloc_zeros(1)?;
+        let mut o_lits: CudaSlice<i32> = s.alloc_zeros(1)?;
+        let mut o_hints: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let mut o_del_id: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let mut o_del_pos: CudaSlice<u64> = s.alloc_zeros(1)?;
+        let (grid, num_blocks) = if cooperative {
+            let b = blocks.max(1).min(n_slices);
+            (b, b)
+        } else {
+            (n_slices.div_ceil(WARP_SIZE), 0)
+        };
+        let launch = |pass: u32,
+                      s_cnt: &CudaSlice<u32>,
+                      st_pos: &CudaSlice<u64>,
+                      st_id: &CudaSlice<u64>,
+                      st_after: &CudaSlice<u64>,
+                      st_lit_end: &CudaSlice<u32>,
+                      st_hint_end: &CudaSlice<u32>,
+                      st_del_end: &CudaSlice<u32>,
+                      st_tag: &CudaSlice<u8>,
+                      st_rat: &CudaSlice<u8>,
+                      o_lits: &CudaSlice<i32>,
+                      o_hints: &CudaSlice<u64>,
+                      o_del_id: &CudaSlice<u64>,
+                      o_del_pos: &CudaSlice<u64>|
+         -> Result<(), GpuError> {
+            let f = if cooperative {
+                &self.kernels.lrat_scan_slices
+            } else {
+                &self.kernels.lrat_scan_slices_serial
+            };
+            unsafe {
+                s.launch_builder(f)
+                    .arg(&d_bytes)
+                    .arg(&len)
+                    .arg(&slice)
+                    .arg(&n_slices)
+                    .arg(&num_blocks)
+                    .arg(&pass)
+                    .arg(&s_start)
+                    .arg(&s_end)
+                    .arg(&s_flags)
+                    .arg(s_cnt)
+                    .arg(st_pos)
+                    .arg(st_id)
+                    .arg(st_after)
+                    .arg(st_lit_end)
+                    .arg(st_hint_end)
+                    .arg(st_del_end)
+                    .arg(st_tag)
+                    .arg(st_rat)
+                    .arg(o_lits)
+                    .arg(o_hints)
+                    .arg(o_del_id)
+                    .arg(o_del_pos)
+                    .launch(LaunchConfig {
+                        grid_dim: (grid, 1, 1),
+                        block_dim: (WARP_SIZE, 1, 1),
+                        shared_mem_bytes: 0,
+                    })?;
+            }
+            Ok(())
+        };
+        let t1 = Instant::now();
+        launch(
+            1,
+            &s_cnt,
+            &st_pos,
+            &st_id,
+            &st_after,
+            &st_lit_end,
+            &st_hint_end,
+            &st_del_end,
+            &st_tag,
+            &st_rat,
+            &o_lits,
+            &o_hints,
+            &o_del_id,
+            &o_del_pos,
+        )?;
+        s.synchronize()?;
+        let t_pass1 = t1.elapsed();
+        // ---- host prefix over the per-slice counts ----
+        let t2 = Instant::now();
+        let counts: Vec<u32> = s.clone_dtoh(&s_cnt)?;
+        let flags: Vec<u32> = s.clone_dtoh(&s_flags)?;
+        let mut offs = vec![0u32; counts.len()];
+        let mut tot = [0u32; 4];
+        for i in 0..n_slices as usize {
+            for f in 0..4 {
+                offs[4 * i + f] = tot[f];
+                tot[f] = tot[f]
+                    .checked_add(counts[4 * i + f])
+                    .ok_or_else(|| GpuError::Cuda("decode: more than 2^32 records".into()))?;
+            }
+        }
+        s_cnt = s.clone_htod(&offs)?;
+        let t_prefix = t2.elapsed();
+        // ---- pass 2 into exactly-sized arrays ----
+        let n_steps = tot[0].max(1) as usize;
+        let n_lits = tot[1].max(1) as usize;
+        let n_hints = tot[2].max(1) as usize;
+        let n_dels = tot[3].max(1) as usize;
+        st_pos = s.alloc_zeros(n_steps)?;
+        st_id = s.alloc_zeros(n_steps)?;
+        st_after = s.alloc_zeros(n_steps)?;
+        st_lit_end = s.alloc_zeros(n_steps)?;
+        st_hint_end = s.alloc_zeros(n_steps)?;
+        st_del_end = s.alloc_zeros(n_steps)?;
+        st_tag = s.alloc_zeros(n_steps)?;
+        st_rat = s.alloc_zeros(n_steps)?;
+        o_lits = s.alloc_zeros(n_lits)?;
+        o_hints = s.alloc_zeros(n_hints)?;
+        o_del_id = s.alloc_zeros(n_dels)?;
+        o_del_pos = s.alloc_zeros(n_dels)?;
+        let t3 = Instant::now();
+        launch(
+            2,
+            &s_cnt,
+            &st_pos,
+            &st_id,
+            &st_after,
+            &st_lit_end,
+            &st_hint_end,
+            &st_del_end,
+            &st_tag,
+            &st_rat,
+            &o_lits,
+            &o_hints,
+            &o_del_id,
+            &o_del_pos,
+        )?;
+        s.synchronize()?;
+        let t_pass2 = t3.elapsed();
+        let t4 = Instant::now();
+        let out = DeviceSlices {
+            slice: slice as usize,
+            n_slices: n_slices as usize,
+            starts: s.clone_dtoh(&s_start)?,
+            ends: s.clone_dtoh(&s_end)?,
+            flags,
+            offs,
+            totals: tot,
+            st_pos: s.clone_dtoh(&st_pos)?,
+            st_id: s.clone_dtoh(&st_id)?,
+            st_after: s.clone_dtoh(&st_after)?,
+            st_lit_end: s.clone_dtoh(&st_lit_end)?,
+            st_hint_end: s.clone_dtoh(&st_hint_end)?,
+            st_del_end: s.clone_dtoh(&st_del_end)?,
+            st_tag: s.clone_dtoh(&st_tag)?,
+            st_rat: s.clone_dtoh(&st_rat)?,
+            lits: s.clone_dtoh(&o_lits)?,
+            hints: s.clone_dtoh(&o_hints)?,
+            del_id: s.clone_dtoh(&o_del_id)?,
+            del_pos: s.clone_dtoh(&o_del_pos)?,
+            timing: DecodeTiming {
+                upload: t_upload,
+                pass1: t_pass1,
+                prefix: t_prefix,
+                pass2: t_pass2,
+                download: t4.elapsed(),
+            },
+        };
+        Ok(out)
+    }
+}
+
+/// Stage times of [`GpuContext::decode_lrat_slices`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DecodeTiming {
+    pub upload: std::time::Duration,
+    pub pass1: std::time::Duration,
+    pub prefix: std::time::Duration,
+    pub pass2: std::time::Duration,
+    pub download: std::time::Duration,
+}
+
+/// Phase-1 records from the device, slice-major: slice `i` owns steps
+/// `offs[4i]..offs[4i] + count`, and so on for lits / hints / dels (the
+/// counts are the differences between consecutive offsets, the last one
+/// against `totals`). Step fields `*_end` are slice-local, as in the host
+/// workers' records. `flags[i]`: 0 clean, 1 dirty (re-parse on the host),
+/// 2 no candidate start.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceSlices {
+    pub slice: usize,
+    pub n_slices: usize,
+    pub starts: Vec<u64>,
+    pub ends: Vec<u64>,
+    pub flags: Vec<u32>,
+    pub offs: Vec<u32>,
+    pub totals: [u32; 4],
+    pub st_pos: Vec<u64>,
+    pub st_id: Vec<u64>,
+    pub st_after: Vec<u64>,
+    pub st_lit_end: Vec<u32>,
+    pub st_hint_end: Vec<u32>,
+    pub st_del_end: Vec<u32>,
+    pub st_tag: Vec<u8>,
+    pub st_rat: Vec<u8>,
+    pub lits: Vec<i32>,
+    pub hints: Vec<u64>,
+    pub del_id: Vec<u64>,
+    pub del_pos: Vec<u64>,
+    pub timing: DecodeTiming,
 }

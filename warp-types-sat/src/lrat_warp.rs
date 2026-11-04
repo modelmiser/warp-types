@@ -31,7 +31,7 @@ const WARP: usize = 32;
 
 /// Device-friendly proof layout. All indices are dense (0-based); `u32::MAX`
 /// in `deleted_at` means "never deleted".
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlatProof {
     /// All clause literals, originals first then lemmas in proof order.
     pub lits: Vec<i32>,
@@ -466,45 +466,45 @@ impl FlatProof {
 
 /// One parsed step in a worker's local record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RawStep {
+pub(crate) struct RawStep {
     /// Byte offset of the tag.
-    pos: u64,
+    pub(crate) pos: u64,
     /// `a`: the id. `d`: unused.
-    id: u64,
+    pub(crate) id: u64,
     /// `a`: offset just past the id varint (error position for a bad id).
-    pos_after_id: u64,
+    pub(crate) pos_after_id: u64,
     /// `a`: end (exclusive) of this step's literals in the worker's `lits`.
-    lit_end: u32,
+    pub(crate) lit_end: u32,
     /// `a`: end (exclusive) of this step's raw hints in the worker's `hints`.
-    hint_end: u32,
+    pub(crate) hint_end: u32,
     /// `d`: end (exclusive) of this step's ids in the worker's `dels`.
-    del_end: u32,
-    tag: u8,
+    pub(crate) del_end: u32,
+    pub(crate) tag: u8,
     /// `a`: a negative (RAT) hint was present — an `Unsupported` verdict at
     /// this step, decided in phase 3a in step order.
-    rat: bool,
+    pub(crate) rat: bool,
 }
 
 /// A worker's output: steps plus the flat local payloads they index.
 #[derive(Default, Debug, PartialEq, Eq)]
-struct RawChunk {
-    steps: Vec<RawStep>,
-    lits: Vec<i32>,
-    hints: Vec<u64>,
+pub(crate) struct RawChunk {
+    pub(crate) steps: Vec<RawStep>,
+    pub(crate) lits: Vec<i32>,
+    pub(crate) hints: Vec<u64>,
     /// (id, offset just past its varint) per deletion.
-    dels: Vec<(u64, u64)>,
+    pub(crate) dels: Vec<(u64, u64)>,
     /// Where the chain stopped with a format error, if it did.
-    error: Option<crate::lrat::ParseError>,
+    pub(crate) error: Option<crate::lrat::ParseError>,
     /// Offset just past the last complete step (the chain's current offset).
-    end: u64,
+    pub(crate) end: u64,
     /// If the chain ended with a format error inside an `a` step whose id had
     /// already been read: (id, offset after the id). The one-thread decoder
     /// checks the id BEFORE reading on, so a bad id outranks the later format
     /// error; phase 3a replays that order.
-    partial_add: Option<(u64, u64)>,
+    pub(crate) partial_add: Option<(u64, u64)>,
     /// Start in `dels` of the ids read by the interrupted `d` step, for the
     /// same reason (each id is checked as it is read).
-    partial_del_lo: usize,
+    pub(crate) partial_del_lo: usize,
 }
 
 #[inline]
@@ -1173,6 +1173,9 @@ pub(crate) fn stitch_chunks(
     }
 }
 
+#[cfg(feature = "gpu")]
+#[path = "lrat_decode_device.rs"]
+pub mod decode_device;
 #[path = "lrat_decode_model.rs"]
 pub mod decode_model;
 

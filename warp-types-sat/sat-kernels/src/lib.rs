@@ -498,3 +498,717 @@ pub fn lrat_check_lemmas(
         i += num_blocks;
     }
 }
+
+// ============================================================================
+// LRAT binary decode on the device (research/gpu-lrat-decode.md).
+//
+// Two kernels with the same inputs and outputs, so the host can time one
+// against the other:
+//   lrat_scan_slices        — a WARP per slice: 32 bytes per window, one byte
+//                             per lane; token ends by ballot, the role machine
+//                             by a lane-guarded composition scan, output slots
+//                             by popcount. The transcription of
+//                             `lrat_warp::decode_model::decode_slice_model`.
+//   lrat_scan_slices_serial — a THREAD per slice running the one-thread parse
+//                             (the control: "a GPU without the warp").
+//
+// Both run in two passes selected by `pass`: 1 counts per slice (steps,
+// literals, hints, deletion ids) and records the start, the end and a flag;
+// the host prefix-sums the counts into offsets; 2 walks again and writes the
+// step records and payloads at those offsets. A slice on which the one-thread
+// decoder would raise a ParseError (bad tag, varint over 10 bytes, literal out
+// of range, bytes running out mid-step) is flagged DIRTY with zero counts and
+// left to the host; a slice without a candidate start is flagged NONE.
+// ============================================================================
+
+/// Per-slice flag values.
+pub const DEC_CLEAN: u32 = 0;
+pub const DEC_DIRTY: u32 = 1;
+pub const DEC_NONE: u32 = 2;
+
+const DEC_S_TAG: u32 = 0;
+const DEC_S_ID: u32 = 1;
+const DEC_S_LITS: u32 = 2;
+const DEC_S_HINTS: u32 = 3;
+const DEC_S_DELS: u32 = 4;
+const DEC_S_ERR: u32 = 5;
+const DEC_N_STATES: u32 = 6;
+const DEC_C_ZERO: u32 = 0;
+const DEC_C_A: u32 = 1;
+const DEC_C_D: u32 = 2;
+const DEC_C_OTHER: u32 = 3;
+const DEC_MAX_VARINT: u64 = 10;
+const DEC_MAX_VAR: u32 = 1 << 26; // = warp_types_sat::lrat::MAX_VAR
+
+#[inline(always)]
+const fn dec_transition(state: u32, class: u32) -> u32 {
+    match state {
+        DEC_S_TAG => match class {
+            DEC_C_A => DEC_S_ID,
+            DEC_C_D => DEC_S_DELS,
+            _ => DEC_S_ERR,
+        },
+        DEC_S_ID => DEC_S_LITS,
+        DEC_S_LITS => {
+            if class == DEC_C_ZERO {
+                DEC_S_HINTS
+            } else {
+                DEC_S_LITS
+            }
+        }
+        DEC_S_HINTS => {
+            if class == DEC_C_ZERO {
+                DEC_S_TAG
+            } else {
+                DEC_S_HINTS
+            }
+        }
+        DEC_S_DELS => {
+            if class == DEC_C_ZERO {
+                DEC_S_TAG
+            } else {
+                DEC_S_DELS
+            }
+        }
+        _ => DEC_S_ERR,
+    }
+}
+
+#[inline(always)]
+const fn dec_table_for(class: u32) -> u32 {
+    let mut t = 0u32;
+    let mut s = 0u32;
+    while s < DEC_N_STATES {
+        t |= dec_transition(s, class) << (3 * s);
+        s += 1;
+    }
+    t
+}
+
+#[inline(always)]
+const fn dec_table_identity() -> u32 {
+    let mut t = 0u32;
+    let mut s = 0u32;
+    while s < DEC_N_STATES {
+        t |= s << (3 * s);
+        s += 1;
+    }
+    t
+}
+
+#[inline(always)]
+const fn dec_apply(table: u32, state: u32) -> u32 {
+    (table >> (3 * state)) & 7
+}
+
+/// `then ∘ first`.
+#[inline(always)]
+const fn dec_compose(first: u32, then: u32) -> u32 {
+    let mut t = 0u32;
+    let mut s = 0u32;
+    while s < DEC_N_STATES {
+        t |= dec_apply(then, dec_apply(first, s)) << (3 * s);
+        s += 1;
+    }
+    t
+}
+
+#[inline(always)]
+const fn dec_lanes_below(lane: u32) -> u32 {
+    (1u32 << lane) - 1
+}
+
+/// Inclusive composition scan, Hillis–Steele on `shuffle_up` WITH the lane
+/// guard (the crate's `inclusive_sum` lacks it and is deprecated for that).
+/// Every lane calls it (the shuffles are collective); the guard only decides
+/// whether a lane composes.
+#[inline(always)]
+fn dec_scan_compose(warp: &Warp<All>, lane: u32, table: u32) -> u32 {
+    let mut t = table;
+    let mut d = 1u32;
+    while d < 32 {
+        let up = warp.shuffle_up(data::PerLane::new(t), d).get();
+        if lane >= d {
+            t = dec_compose(up, t);
+        }
+        d *= 2;
+    }
+    t
+}
+
+/// Decode slice `si` with the warp formulation. Returns the flag; counts and
+/// end through the out-params (identical in every lane).
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+unsafe fn dec_slice_warp(
+    warp: &Warp<All>,
+    lane: u32,
+    bytes: *const u8,
+    len: u64,
+    lo: u64,
+    hi: u64,
+    pass: u32,
+    // pass 2 bases (slice-local records go at base + local index)
+    step_base: u32,
+    lit_base: u32,
+    hint_base: u32,
+    del_base: u32,
+    st_pos: *mut u64,
+    st_id: *mut u64,
+    st_after: *mut u64,
+    st_lit_end: *mut u32,
+    st_hint_end: *mut u32,
+    st_del_end: *mut u32,
+    st_tag: *mut u8,
+    st_rat: *mut u8,
+    o_lits: *mut i32,
+    o_hints: *mut u64,
+    o_del_id: *mut u64,
+    o_del_pos: *mut u64,
+    out_start: &mut u64,
+    out_end: &mut u64,
+    out_counts: &mut [u32; 4],
+) -> u32 {
+    let hi = if hi < len { hi } else { len };
+    // ---- the speculative start ----
+    let mut start = 0u64;
+    if lo != 0 {
+        let mut found = false;
+        let mut base = lo;
+        while base < hi && !found {
+            let p = base + lane as u64;
+            let cand = p < hi
+                && *bytes.add(p as usize - 1) == 0
+                && (*bytes.add(p as usize) == b'a' || *bytes.add(p as usize) == b'd');
+            let b = warp.ballot(data::PerLane::new(cand)).mask_u32().get();
+            if b != 0 {
+                start = base + (b.trailing_zeros() & 31) as u64;
+                found = true;
+            }
+            base += 32;
+        }
+        if !found {
+            *out_start = lo;
+            *out_end = lo;
+            return DEC_NONE;
+        }
+    }
+    *out_start = start;
+    let identity = dec_table_identity();
+    // warp-uniform carry
+    let mut state = DEC_S_TAG;
+    let mut tok_start = start;
+    let mut c_steps = 0u32;
+    let mut c_lits = 0u32;
+    let mut c_hints = 0u32;
+    let mut c_dels = 0u32;
+    let mut c_rat = false;
+    let mut base = start;
+    loop {
+        if base >= len {
+            return DEC_DIRTY;
+        }
+        let p = base + lane as u64;
+        let has = p < len;
+        let byte = if has { *bytes.add(p as usize) } else { 0u8 };
+        let term = has && byte & 0x80 == 0;
+        let term_b = warp.ballot(data::PerLane::new(term)).mask_u32().get();
+        if term_b == 0 {
+            return DEC_DIRTY;
+        }
+        // ---- this lane's token (if it ends one) ----
+        let mut value = 0u64;
+        let mut class = DEC_C_OTHER;
+        let mut table = identity;
+        let mut too_long = false;
+        if term {
+            let below = term_b & dec_lanes_below(lane);
+            let tstart = if below != 0 {
+                base + (31 - below.leading_zeros()) as u64 + 1
+            } else {
+                tok_start
+            };
+            let n = p - tstart + 1;
+            if n > DEC_MAX_VARINT {
+                too_long = true;
+            } else {
+                let mut k = 0u64;
+                while k < n {
+                    value |= ((*bytes.add((tstart + k) as usize) & 0x7f) as u64) << (7 * k);
+                    k += 1;
+                }
+                class = if n == 1 && byte == b'a' {
+                    DEC_C_A
+                } else if n == 1 && byte == b'd' {
+                    DEC_C_D
+                } else if value == 0 {
+                    DEC_C_ZERO
+                } else {
+                    DEC_C_OTHER
+                };
+                table = dec_table_for(class);
+            }
+        }
+        // A too-long token anywhere in the window is a host error at the
+        // latest at its 11th byte; the whole slice is dirty.
+        if warp.ballot(data::PerLane::new(too_long)).mask_u32().get() != 0 {
+            return DEC_DIRTY;
+        }
+        // ---- the role scan ----
+        let incl = dec_scan_compose(warp, lane, table);
+        let excl = warp.shuffle_up(data::PerLane::new(incl), 1).get();
+        let before = dec_apply(if lane == 0 { identity } else { excl }, state);
+        // ---- this lane's role ----
+        let mut is_start = false;
+        let mut is_id = false;
+        let mut is_lit = false;
+        let mut is_hint = false;
+        let mut is_rat = false;
+        let mut is_del = false;
+        let mut is_end = false;
+        let mut is_err = false;
+        let mut lit_val = 0i32;
+        if term {
+            match before {
+                DEC_S_TAG => {
+                    if class == DEC_C_A || class == DEC_C_D {
+                        is_start = true;
+                    } else {
+                        is_err = true;
+                    }
+                }
+                DEC_S_ID => is_id = true,
+                DEC_S_LITS => {
+                    if value != 0 {
+                        is_lit = true;
+                        let mag = (value >> 1) as i64;
+                        let signed = if value & 1 == 1 { -mag } else { mag };
+                        if signed > i32::MAX as i64 || signed < i32::MIN as i64 {
+                            is_err = true;
+                        } else {
+                            lit_val = signed as i32;
+                            if lit_val.unsigned_abs() > DEC_MAX_VAR {
+                                is_err = true;
+                            }
+                        }
+                    }
+                }
+                DEC_S_HINTS => {
+                    if value != 0 {
+                        is_hint = true;
+                        is_rat = value & 1 == 1;
+                    } else {
+                        is_end = true;
+                    }
+                }
+                DEC_S_DELS => {
+                    if value != 0 {
+                        is_del = true;
+                    } else {
+                        is_end = true;
+                    }
+                }
+                _ => is_err = true,
+            }
+        }
+        // ---- the cut ----
+        let cut_b = warp
+            .ballot(data::PerLane::new(is_end && p + 1 >= hi))
+            .mask_u32()
+            .get();
+        let keep = if cut_b != 0 {
+            let c = cut_b.trailing_zeros() & 31;
+            dec_lanes_below(c) | (1u32 << c)
+        } else {
+            u32::MAX
+        };
+        let err_b = warp.ballot(data::PerLane::new(is_err)).mask_u32().get();
+        if err_b & keep != 0 {
+            return DEC_DIRTY;
+        }
+        let start_b = warp.ballot(data::PerLane::new(is_start)).mask_u32().get() & keep;
+        let id_b = warp.ballot(data::PerLane::new(is_id)).mask_u32().get() & keep;
+        let lit_b = warp.ballot(data::PerLane::new(is_lit)).mask_u32().get() & keep;
+        let hint_b = warp.ballot(data::PerLane::new(is_hint)).mask_u32().get() & keep;
+        let rat_b = warp.ballot(data::PerLane::new(is_rat)).mask_u32().get() & keep;
+        let del_b = warp.ballot(data::PerLane::new(is_del)).mask_u32().get() & keep;
+        let end_b = warp.ballot(data::PerLane::new(is_end)).mask_u32().get() & keep;
+        // ---- writes (pass 2), slot = running + popcount(ballot & below) ----
+        if pass == 2 && keep & (1u32 << lane) != 0 {
+            let lb = dec_lanes_below(lane);
+            let mine = 1u32 << lane;
+            if start_b & mine != 0 {
+                let k = step_base + c_steps + (start_b & lb).count_ones();
+                *st_pos.add(k as usize) = p;
+                *st_tag.add(k as usize) = byte;
+            }
+            let my_step = c_steps + (start_b & (lb | mine)).count_ones();
+            if id_b & mine != 0 {
+                let k = step_base + my_step - 1;
+                *st_id.add(k as usize) = value >> 1;
+                *st_after.add(k as usize) = p + 1;
+            }
+            if lit_b & mine != 0 {
+                *o_lits.add((lit_base + c_lits + (lit_b & lb).count_ones()) as usize) = lit_val;
+            }
+            if hint_b & mine != 0 {
+                *o_hints.add((hint_base + c_hints + (hint_b & lb).count_ones()) as usize) =
+                    value >> 1;
+            }
+            if del_b & mine != 0 {
+                let k = (del_base + c_dels + (del_b & lb).count_ones()) as usize;
+                *o_del_id.add(k) = value >> 1;
+                *o_del_pos.add(k) = p + 1;
+            }
+            if end_b & mine != 0 {
+                let k = (step_base + my_step - 1) as usize;
+                let starts_at_or_below = start_b & (lb | mine);
+                let rat = if starts_at_or_below == 0 {
+                    c_rat || (rat_b & lb) != 0
+                } else {
+                    let s = 31 - starts_at_or_below.leading_zeros();
+                    let since = !dec_lanes_below(s) & !(1u32 << s);
+                    (rat_b & since & lb) != 0
+                };
+                *st_rat.add(k) = rat as u8;
+                *st_lit_end.add(k) = c_lits + (lit_b & lb).count_ones();
+                *st_hint_end.add(k) = c_hints + (hint_b & lb).count_ones();
+                *st_del_end.add(k) = c_dels + (del_b & lb).count_ones();
+            }
+        }
+        // ---- carry ----
+        c_steps += start_b.count_ones();
+        c_lits += lit_b.count_ones();
+        c_hints += hint_b.count_ones();
+        c_dels += del_b.count_ones();
+        if cut_b != 0 {
+            let c = cut_b.trailing_zeros() & 31;
+            *out_end = base + c as u64 + 1;
+            out_counts[0] = c_steps;
+            out_counts[1] = c_lits;
+            out_counts[2] = c_hints;
+            out_counts[3] = c_dels;
+            return DEC_CLEAN;
+        }
+        // state after the window: lane 31's inclusive table applied to the
+        // entry state — broadcast from lane 31.
+        let incl31 = warp.broadcast_lane(data::PerLane::new(incl), 31).get();
+        state = dec_apply(incl31, state);
+        tok_start = base + (31 - term_b.leading_zeros()) as u64 + 1;
+        c_rat = if start_b != 0 {
+            let s = 31 - start_b.leading_zeros();
+            (rat_b & !dec_lanes_below(s) & !(1u32 << s)) != 0
+        } else {
+            c_rat || rat_b != 0
+        };
+        base += 32;
+    }
+}
+
+/// Warp-per-slice decode. Grid: (num_blocks, 1, 1), Block: (32, 1, 1);
+/// warps stride over the slices. Per-slice arrays have `n_slices` entries
+/// (`s_cnt` has 4 per slice: steps, lits, hints, dels). In pass 1 the kernel
+/// writes `s_start`, `s_end`, `s_flags`, `s_cnt`; in pass 2 it reads `s_cnt`
+/// as the host-computed exclusive offsets and writes the record arrays.
+#[allow(clippy::too_many_arguments)]
+#[warp_kernel]
+pub fn lrat_scan_slices(
+    bytes: *const u8,
+    len: u64,
+    slice: u32,
+    n_slices: u32,
+    num_blocks: u32,
+    pass: u32,
+    s_start: *mut u64,
+    s_end: *mut u64,
+    s_flags: *mut u32,
+    s_cnt: *mut u32,
+    st_pos: *mut u64,
+    st_id: *mut u64,
+    st_after: *mut u64,
+    st_lit_end: *mut u32,
+    st_hint_end: *mut u32,
+    st_del_end: *mut u32,
+    st_tag: *mut u8,
+    st_rat: *mut u8,
+    o_lits: *mut i32,
+    o_hints: *mut u64,
+    o_del_id: *mut u64,
+    o_del_pos: *mut u64,
+) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let bid = warp_types::gpu::block_id_x();
+    let lane = warp_types::gpu::thread_id_x();
+    let mut si = bid;
+    while si < n_slices {
+        let lo = si as u64 * slice as u64;
+        let hi = lo + slice as u64;
+        if pass == 2 && *s_flags.add(si as usize) != DEC_CLEAN {
+            si += num_blocks;
+            continue;
+        }
+        let (step_base, lit_base, hint_base, del_base) = if pass == 2 {
+            (
+                *s_cnt.add(4 * si as usize),
+                *s_cnt.add(4 * si as usize + 1),
+                *s_cnt.add(4 * si as usize + 2),
+                *s_cnt.add(4 * si as usize + 3),
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+        let mut start = 0u64;
+        let mut end = 0u64;
+        let mut counts = [0u32; 4];
+        let flag = dec_slice_warp(
+            &warp, lane, bytes, len, lo, hi, pass, step_base, lit_base, hint_base, del_base,
+            st_pos, st_id, st_after, st_lit_end, st_hint_end, st_del_end, st_tag, st_rat,
+            o_lits, o_hints, o_del_id, o_del_pos, &mut start, &mut end, &mut counts,
+        );
+        if pass == 1 && lane == 0 {
+            *s_start.add(si as usize) = start;
+            *s_end.add(si as usize) = end;
+            *s_flags.add(si as usize) = flag;
+            let c = if flag == DEC_CLEAN { counts } else { [0u32; 4] };
+            *s_cnt.add(4 * si as usize) = c[0];
+            *s_cnt.add(4 * si as usize + 1) = c[1];
+            *s_cnt.add(4 * si as usize + 2) = c[2];
+            *s_cnt.add(4 * si as usize + 3) = c[3];
+        }
+        si += num_blocks;
+    }
+}
+
+/// One varint for the serial kernel: value and the offset after it, or
+/// `None`-equivalent (ok = false) on truncation / more than 10 bytes.
+#[inline(always)]
+unsafe fn dec_varint(bytes: *const u8, len: u64, pos: &mut u64) -> (u64, bool) {
+    let mut x = 0u64;
+    let mut shift = 0u32;
+    loop {
+        if *pos >= len {
+            return (0, false);
+        }
+        let b = *bytes.add(*pos as usize);
+        *pos += 1;
+        x |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            return (x, true);
+        }
+        shift += 7;
+        if shift > 63 {
+            return (0, false);
+        }
+    }
+}
+
+/// Thread-per-slice decode (the control). Grid: (ceil(n_slices / 32), 1, 1),
+/// Block: (32, 1, 1); thread `t` takes slice `t`. Same arrays and passes as
+/// `lrat_scan_slices`.
+#[allow(clippy::too_many_arguments)]
+#[warp_kernel]
+pub fn lrat_scan_slices_serial(
+    bytes: *const u8,
+    len: u64,
+    slice: u32,
+    n_slices: u32,
+    _num_blocks: u32,
+    pass: u32,
+    s_start: *mut u64,
+    s_end: *mut u64,
+    s_flags: *mut u32,
+    s_cnt: *mut u32,
+    st_pos: *mut u64,
+    st_id: *mut u64,
+    st_after: *mut u64,
+    st_lit_end: *mut u32,
+    st_hint_end: *mut u32,
+    st_del_end: *mut u32,
+    st_tag: *mut u8,
+    st_rat: *mut u8,
+    o_lits: *mut i32,
+    o_hints: *mut u64,
+    o_del_id: *mut u64,
+    o_del_pos: *mut u64,
+) {
+    let si = warp_types::gpu::block_id_x() * 32 + warp_types::gpu::thread_id_x();
+    if si >= n_slices {
+        return;
+    }
+    if pass == 2 && *s_flags.add(si as usize) != DEC_CLEAN {
+        return;
+    }
+    let lo = si as u64 * slice as u64;
+    let hi = {
+        let h = lo + slice as u64;
+        if h < len {
+            h
+        } else {
+            len
+        }
+    };
+    let (step_base, lit_base, hint_base, del_base) = if pass == 2 {
+        (
+            *s_cnt.add(4 * si as usize),
+            *s_cnt.add(4 * si as usize + 1),
+            *s_cnt.add(4 * si as usize + 2),
+            *s_cnt.add(4 * si as usize + 3),
+        )
+    } else {
+        (0, 0, 0, 0)
+    };
+    // first candidate
+    let mut start = lo;
+    if lo != 0 {
+        let mut p = lo;
+        let mut found = false;
+        while p < hi {
+            if *bytes.add(p as usize - 1) == 0
+                && (*bytes.add(p as usize) == b'a' || *bytes.add(p as usize) == b'd')
+            {
+                found = true;
+                break;
+            }
+            p += 1;
+        }
+        if !found {
+            if pass == 1 {
+                *s_start.add(si as usize) = lo;
+                *s_end.add(si as usize) = lo;
+                *s_flags.add(si as usize) = DEC_NONE;
+                let mut k = 0;
+                while k < 4 {
+                    *s_cnt.add(4 * si as usize + k) = 0;
+                    k += 1;
+                }
+            }
+            return;
+        }
+        start = p;
+    }
+    let mut pos = start;
+    let mut c_steps = 0u32;
+    let mut c_lits = 0u32;
+    let mut c_hints = 0u32;
+    let mut c_dels = 0u32;
+    let mut dirty = false;
+    while pos < hi && pos < len {
+        let tag = *bytes.add(pos as usize);
+        let step_pos = pos;
+        pos += 1;
+        let k = (step_base + c_steps) as usize;
+        if tag == b'a' {
+            let (idv, ok) = dec_varint(bytes, len, &mut pos);
+            if !ok {
+                dirty = true;
+                break;
+            }
+            if pass == 2 {
+                *st_pos.add(k) = step_pos;
+                *st_tag.add(k) = tag;
+                *st_id.add(k) = idv >> 1;
+                *st_after.add(k) = pos;
+            }
+            loop {
+                let (m, ok) = dec_varint(bytes, len, &mut pos);
+                if !ok {
+                    dirty = true;
+                    break;
+                }
+                if m == 0 {
+                    break;
+                }
+                let mag = (m >> 1) as i64;
+                let signed = if m & 1 == 1 { -mag } else { mag };
+                if signed > i32::MAX as i64 || signed < i32::MIN as i64 {
+                    dirty = true;
+                    break;
+                }
+                let l = signed as i32;
+                if l.unsigned_abs() > DEC_MAX_VAR {
+                    dirty = true;
+                    break;
+                }
+                if pass == 2 {
+                    *o_lits.add((lit_base + c_lits) as usize) = l;
+                }
+                c_lits += 1;
+            }
+            if dirty {
+                break;
+            }
+            let mut rat = false;
+            loop {
+                let (m, ok) = dec_varint(bytes, len, &mut pos);
+                if !ok {
+                    dirty = true;
+                    break;
+                }
+                if m == 0 {
+                    break;
+                }
+                rat |= m & 1 == 1;
+                if pass == 2 {
+                    *o_hints.add((hint_base + c_hints) as usize) = m >> 1;
+                }
+                c_hints += 1;
+            }
+            if dirty {
+                break;
+            }
+            if pass == 2 {
+                *st_rat.add(k) = rat as u8;
+                *st_lit_end.add(k) = c_lits;
+                *st_hint_end.add(k) = c_hints;
+                *st_del_end.add(k) = c_dels;
+            }
+            c_steps += 1;
+        } else if tag == b'd' {
+            if pass == 2 {
+                *st_pos.add(k) = step_pos;
+                *st_tag.add(k) = tag;
+                *st_id.add(k) = 0;
+                *st_after.add(k) = 0;
+            }
+            loop {
+                let (m, ok) = dec_varint(bytes, len, &mut pos);
+                if !ok {
+                    dirty = true;
+                    break;
+                }
+                if m == 0 {
+                    break;
+                }
+                if pass == 2 {
+                    *o_del_id.add((del_base + c_dels) as usize) = m >> 1;
+                    *o_del_pos.add((del_base + c_dels) as usize) = pos;
+                }
+                c_dels += 1;
+            }
+            if dirty {
+                break;
+            }
+            if pass == 2 {
+                *st_rat.add(k) = 0;
+                *st_lit_end.add(k) = c_lits;
+                *st_hint_end.add(k) = c_hints;
+                *st_del_end.add(k) = c_dels;
+            }
+            c_steps += 1;
+        } else {
+            dirty = true;
+            break;
+        }
+    }
+    if pass == 1 {
+        *s_start.add(si as usize) = start;
+        *s_end.add(si as usize) = pos;
+        *s_flags.add(si as usize) = if dirty { DEC_DIRTY } else { DEC_CLEAN };
+        let c = if dirty { [0u32; 4] } else { [c_steps, c_lits, c_hints, c_dels] };
+        let mut k = 0;
+        while k < 4 {
+            *s_cnt.add(4 * si as usize + k) = c[k];
+            k += 1;
+        }
+    }
+}

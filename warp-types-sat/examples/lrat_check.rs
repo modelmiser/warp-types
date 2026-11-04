@@ -153,6 +153,77 @@ fn main() {
                         }
                     }
                 }
+                // Device decode (research/gpu-lrat-decode.md): both kernels at
+                // each slice size in LRAT_DECODE_SLICES (default 4096), best
+                // of LRAT_DECODE_REPS (default 1); the result must equal the
+                // host decode above, field for field.
+                #[cfg(feature = "gpu")]
+                if std::env::var_os("LRAT_GPU_DECODE").is_some() {
+                    let ctx = warp_types_sat::gpu_launcher::GpuContext::new().expect("GPU context");
+                    let slices: Vec<u32> = std::env::var("LRAT_DECODE_SLICES")
+                        .ok()
+                        .map(|b| b.split(',').filter_map(|x| x.parse().ok()).collect())
+                        .unwrap_or_else(|| vec![4096]);
+                    let reps: usize = std::env::var("LRAT_DECODE_REPS")
+                        .ok()
+                        .and_then(|x| x.parse().ok())
+                        .unwrap_or(1);
+                    let blocks: u32 = std::env::var("LRAT_GPU_BLOCKS")
+                        .ok()
+                        .and_then(|b| b.split(',').next().and_then(|x| x.parse().ok()))
+                        .unwrap_or(4096);
+                    for &slice in &slices {
+                        for coop in [true, false] {
+                            let mut best: Option<(
+                                f64,
+                                warp_types_sat::lrat_warp::decode_device::DeviceDecodeStats,
+                            )> = None;
+                            let mut equal = true;
+                            for _ in 0..reps.max(1) {
+                                let ta = Instant::now();
+                                match warp_types_sat::lrat_warp::FlatProof::from_binary_device(
+                                    &ctx, &cnf, &bytes, slice, coop, blocks,
+                                ) {
+                                    Ok((dfp, st)) => {
+                                        let t = ta.elapsed().as_secs_f64();
+                                        equal &= dfp == fp;
+                                        if best.map_or(true, |(b, _)| t < b) {
+                                            best = Some((t, st));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "c gpu-decode error slice={slice} coop={coop}: {e}"
+                                        );
+                                        equal = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some((t, st)) = best {
+                                println!(
+                                    "c gpu-decode({}; {} slice={slice} blocks={blocks}) total {t:.3}s = upload {:.3} + pass1 {:.3} + prefix {:.3} + pass2 {:.3} + download {:.3} + host {:.3}  slices={} dirty={} none={}  {}",
+                                    ctx.device_name(),
+                                    if coop { "warp" } else { "thread" },
+                                    st.timing.upload.as_secs_f64(),
+                                    st.timing.pass1.as_secs_f64(),
+                                    st.timing.prefix.as_secs_f64(),
+                                    st.timing.pass2.as_secs_f64(),
+                                    st.timing.download.as_secs_f64(),
+                                    st.host.as_secs_f64(),
+                                    st.n_slices,
+                                    st.dirty,
+                                    st.none,
+                                    if equal { "EQUAL" } else { "DIFFERENT" }
+                                );
+                            }
+                            if !equal {
+                                println!("s DISAGREE-GPU-DECODE");
+                                std::process::exit(3);
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => println!("c flat-decode error: {e}"),
         }
