@@ -257,7 +257,7 @@ impl GpuContext {
     pub fn alloc_iter_state(&self, x: &[f64]) -> Result<GpuIterState, GpuError> {
         let s = &self.stream;
         let num_vars = x.len();
-        let num_var_batches = ((num_vars + WARP_SIZE as usize - 1) / WARP_SIZE as usize) as u32;
+        let num_var_batches = num_vars.div_ceil(WARP_SIZE as usize) as u32;
 
         Ok(GpuIterState {
             dev_x: s.clone_htod(x)?,
@@ -693,7 +693,7 @@ impl GpuContext {
         lit_total: usize,
         hint_total: usize,
         blocks: u32,
-    ) -> Result<(CudaSlice<i32>, CudaSlice<u32>, Option<usize>), GpuError> {
+    ) -> Result<GatheredPayloads, GpuError> {
         let s = &self.stream;
         let blocks = blocks.max(1);
         let prefix = |segs: &[GatherSeg]| -> (Vec<u32>, Vec<u32>, Vec<u32>) {
@@ -911,6 +911,11 @@ pub struct DeviceSlices {
     pub d_hints: Option<CudaSlice<u64>>,
     pub timing: DecodeTiming,
 }
+
+/// What [`GpuContext::gather_lrat_payloads`] returns: the literal array, the
+/// dense-index hint array, and the global index of the first hint naming an
+/// id never added, if any.
+pub type GatheredPayloads = (CudaSlice<i32>, CudaSlice<u32>, Option<usize>);
 
 /// One segment for the device gathers: `len` elements from source `sel`
 /// (0 = the raw decode array, 1 = the host's extra buffer) at `src`.

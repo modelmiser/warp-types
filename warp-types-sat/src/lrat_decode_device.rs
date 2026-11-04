@@ -19,11 +19,12 @@ pub struct DeviceDecodeStats {
     pub host: std::time::Duration,
 }
 
+/// Per-slice records, each slice's device payload bases (`None` for a slice
+/// the host parsed), and how many slices were dirty / had no candidate.
+type DeviceChunks = (Vec<RawChunk>, Vec<Option<(u32, u32)>>, usize, usize);
+
 /// Build the per-slice records from the device arrays.
-fn chunks_from_device(
-    bytes: &[u8],
-    d: &DeviceSlices,
-) -> (Vec<RawChunk>, Vec<Option<(u32, u32)>>, usize, usize) {
+fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> DeviceChunks {
     let resident = d.d_lits.is_some();
     let mut bases: Vec<Option<(u32, u32)>> = Vec::with_capacity(d.n_slices);
     let (mut dirty, mut none) = (0usize, 0usize);
