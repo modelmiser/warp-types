@@ -252,7 +252,21 @@ fail-closed: no checker is not a pass.
   `lrat-check` 20.9 s, `cake_lpr` 21.5 s, our CPU route 11.6 s, device path
   1.1 s end to end — about 19× the external checkers. On a workstation RTX
   4000 SFF Ada with six CPU threads, same proof: 16.2 s, 17.4 s, 9.2 s and
-  1.2 s — about 13×. Limits: per-lemma
+  1.2 s — about 13×. **Decode on the device (2026-11-03,
+  `research/gpu-lrat-decode.md`):** `lrat_scan_slices` decodes binary LRAT
+  with a warp per 4 KB slice (token ends by `ballot`, the parser state by a
+  lane-guarded composition scan, output slots by popcount), the host stitch
+  runs over step records only, and `lrat_gather_lits` / `lrat_gather_hints`
+  place the payloads beside the check kernel, so literals and hints never
+  cross the bus twice. Held equal to the sequential decoder on the 632 <!-- unguarded: 632 — archive count, research/gpu-lrat-decode.md -->
+  archive files and on the big proofs' arrays, both kernels (a
+  thread-per-slice kernel is kept as the control: the warp is 1.3× it, the
+  GPU about 10× six host threads). Same workstation, same 415 MB proof: <!-- unguarded: 415 — proof size in MB -->
+  decode 0.90 → 0.30 s, bytes in RAM to verdict 1.19 → 0.53 s, so the
+  device path above becomes read 0.13 s + 0.53 s — about 24× the external
+  checkers; the 898 MB proof goes 2.70 → 1.43 s. What remains is the host's <!-- unguarded: 898 — proof size in MB -->
+  walk over step records (0.11 s) and the check kernel itself (0.23 s on this
+  card). `LRAT_GPU_RESIDENT=1` on the example runs this route. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not
   checked on the warp paths); ids and variables above 2^26 are refused at
   parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat
