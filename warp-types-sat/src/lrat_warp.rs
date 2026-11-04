@@ -465,7 +465,7 @@ impl FlatProof {
 // ============================================================================
 
 /// One parsed step in a worker's local record.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RawStep {
     /// Byte offset of the tag.
     pos: u64,
@@ -486,7 +486,7 @@ struct RawStep {
 }
 
 /// A worker's output: steps plus the flat local payloads they index.
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq, Eq)]
 struct RawChunk {
     steps: Vec<RawStep>,
     lits: Vec<i32>,
@@ -677,49 +677,83 @@ impl FlatProof {
         threads: usize,
         chunk: usize,
     ) -> Result<FlatProof, crate::lrat::ParseError> {
-        use crate::lrat::ParseError;
-        let err = |pos: usize, msg: &str| ParseError {
-            line: pos,
-            msg: msg.to_string(),
-        };
         if bytes.is_empty() {
             return FlatProof::from_binary(cnf, bytes);
         }
-        let chunk = chunk.max(1);
-        let n_slices = bytes.len().div_ceil(chunk);
-        let bounds: Vec<(usize, usize)> = (0..n_slices)
-            .map(|i| (i * chunk, ((i + 1) * chunk).min(bytes.len())))
-            .collect();
+        let bounds = slice_bounds(bytes.len(), chunk);
+        let chunks = parse_slices_host(bytes, &bounds, threads);
+        stitch_chunks(cnf, bytes, &bounds, chunks, threads)
+    }
+}
 
-        // ---- phase 1: parallel speculative parse of every slice ----
-        let mut chunks: Vec<RawChunk> = (0..n_slices).map(|_| RawChunk::default()).collect();
-        std::thread::scope(|sc| {
-            let threads = threads.max(1).min(n_slices);
-            let per = n_slices.div_ceil(threads);
-            let mut rest: &mut [RawChunk] = &mut chunks;
-            let mut first = 0usize;
-            while !rest.is_empty() {
-                let take = per.min(rest.len());
-                let (mine, tail) = rest.split_at_mut(take);
-                rest = tail;
-                let lo = first;
-                first += take;
-                let bounds = &bounds;
-                sc.spawn(move || {
-                    for (k, out) in mine.iter_mut().enumerate() {
-                        let (slo, shi) = bounds[lo + k];
-                        *out = match first_candidate(bytes, slo, shi) {
-                            Some(start) => parse_run(bytes, start, shi),
-                            None => RawChunk {
-                                end: slo as u64,
-                                ..Default::default()
-                            },
-                        };
-                    }
-                });
-            }
-        });
+/// Slice `len` bytes into `[lo, hi)` ranges of `chunk` bytes (the last one
+/// shorter). Shared by the host workers and the device path so both stitch
+/// over the same boundaries.
+pub(crate) fn slice_bounds(len: usize, chunk: usize) -> Vec<(usize, usize)> {
+    let chunk = chunk.max(1);
+    let n_slices = len.div_ceil(chunk);
+    (0..n_slices)
+        .map(|i| (i * chunk, ((i + 1) * chunk).min(len)))
+        .collect()
+}
 
+/// Phase 1 on host threads: the speculative parse of every slice.
+pub(crate) fn parse_slices_host(
+    bytes: &[u8],
+    bounds: &[(usize, usize)],
+    threads: usize,
+) -> Vec<RawChunk> {
+    let n_slices = bounds.len();
+    let mut chunks: Vec<RawChunk> = (0..n_slices).map(|_| RawChunk::default()).collect();
+    std::thread::scope(|sc| {
+        let threads = threads.max(1).min(n_slices);
+        let per = n_slices.div_ceil(threads);
+        let mut rest: &mut [RawChunk] = &mut chunks;
+        let mut first = 0usize;
+        while !rest.is_empty() {
+            let take = per.min(rest.len());
+            let (mine, tail) = rest.split_at_mut(take);
+            rest = tail;
+            let lo = first;
+            first += take;
+            let bounds = &bounds;
+            sc.spawn(move || {
+                for (k, out) in mine.iter_mut().enumerate() {
+                    let (slo, shi) = bounds[lo + k];
+                    *out = match first_candidate(bytes, slo, shi) {
+                        Some(start) => parse_run(bytes, start, shi),
+                        None => RawChunk {
+                            end: slo as u64,
+                            ..Default::default()
+                        },
+                    };
+                }
+            });
+        }
+    });
+    chunks
+}
+
+/// Phases 2–3 over phase-1 records, whoever produced them (host threads or the
+/// device): follow the true chain across slice boundaries, do the sequential
+/// bookkeeping, copy payloads and resolve hints. `chunks[i]` must be exactly
+/// `parse_run(bytes, start_i, bounds[i].1)` for the slice's first candidate
+/// (or empty with `end = bounds[i].0` when the slice has none) — that is the
+/// whole contract a producer has to meet.
+pub(crate) fn stitch_chunks(
+    cnf: &[Vec<i32>],
+    bytes: &[u8],
+    bounds: &[(usize, usize)],
+    chunks: Vec<RawChunk>,
+    threads: usize,
+) -> Result<FlatProof, crate::lrat::ParseError> {
+    use crate::lrat::ParseError;
+    let err = |pos: usize, msg: &str| ParseError {
+        line: pos,
+        msg: msg.to_string(),
+    };
+    let n_slices = bounds.len();
+    {
         // ---- phase 2: follow the true chain across slice boundaries ----
         let mut segments: Vec<Segment> = Vec::with_capacity(n_slices * 2);
         let mut bridges: Vec<RawChunk> = Vec::new();
@@ -1138,6 +1172,9 @@ impl FlatProof {
         Ok(fp)
     }
 }
+
+#[path = "lrat_decode_model.rs"]
+pub mod decode_model;
 
 /// Per-lemma outcome from the warp check, as a small code (device-friendly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1758,7 +1795,7 @@ mod tests {
         }
     }
 
-    fn assert_flat_eq(a: &FlatProof, b: &FlatProof, what: &str) {
+    pub(super) fn assert_flat_eq(a: &FlatProof, b: &FlatProof, what: &str) {
         assert_eq!(a.early, b.early, "{what}: early");
         assert_eq!(a.lits, b.lits, "{what}: lits");
         assert_eq!(a.clause_start, b.clause_start, "{what}: clause_start");
@@ -1798,7 +1835,7 @@ mod tests {
     /// clause 50 — encoded 0x64 = `d`, right after the literals' 0x00
     /// terminator: the one byte pattern that a worker can mistake for a step
     /// start. Deletions and multi-byte ids/literals are mixed in.
-    fn synthetic_proof(with_empty: bool) -> (Vec<Vec<i32>>, Vec<u8>) {
+    pub(super) fn synthetic_proof(with_empty: bool) -> (Vec<Vec<i32>>, Vec<u8>) {
         let cnf: Vec<Vec<i32>> = (0..60)
             .map(|i| vec![(i % 19) + 1, -((i % 23) + 2)])
             .collect();
