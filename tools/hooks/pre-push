@@ -41,6 +41,11 @@ if [ -d /usr/local/cuda ] || command -v nvcc &>/dev/null; then
         grep -n '\.extern' "$ptx" | head -5
         exit 1
     fi
+    # The workspace clippy above builds without the feature, so the CUDA path's
+    # launchers and tests went unlinted: tests/kernel_fuse_profile.rs carried three
+    # -D warnings failures for weeks (found 2026-11-03, fixed 2026-11-04).
+    echo "pre-push: cargo clippy -p warp-types-sat --features gpu --all-targets -- -D warnings"
+    cargo clippy -p warp-types-sat --features gpu --all-targets --quiet -- -D warnings
 else
     echo "pre-push: skipping gpu-feature check (no CUDA toolkit on this host)"
 fi

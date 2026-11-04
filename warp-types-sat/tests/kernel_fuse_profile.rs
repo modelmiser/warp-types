@@ -34,8 +34,8 @@ fn init_vars(n: usize) -> Vec<f64> {
 fn gpu_resident_matches_original() {
     let ctx = GpuContext::new().expect("CUDA init failed");
 
-    let mut orig_sat = 0;
-    let mut res_sat = 0;
+    let mut orig_sat = 0u32;
+    let mut res_sat = 0u32;
 
     for seed in 0..10u64 {
         let db = generate_3sat_phase_transition(20, seed);
@@ -88,7 +88,7 @@ fn gpu_resident_matches_original() {
     // Both paths should find SAT at similar rates (±2 out of 10 seeds)
     println!("SAT found: original {orig_sat}/10, resident {res_sat}/10");
     assert!(
-        (orig_sat as i32 - res_sat as i32).unsigned_abs() <= 3,
+        orig_sat.abs_diff(res_sat) <= 3,
         "SAT rate divergence too large: original {orig_sat} vs resident {res_sat}"
     );
 }
@@ -196,7 +196,7 @@ fn kernel_fuse_profile() {
         resident_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let res_median = resident_times[5];
 
-        let var_batches = (num_vars as usize + 31) / 32;
+        let var_batches = (num_vars as usize).div_ceil(32);
         println!("--- {num_vars} vars, {num_clauses} clauses ---");
         println!("  Original (1 kernel + host xfer + CPU norm): {orig_median:>6.0} μs");
         println!(
