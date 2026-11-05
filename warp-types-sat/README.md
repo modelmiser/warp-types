@@ -262,9 +262,10 @@ fail-closed: no checker is not a pass.
   archive files and on the big proofs' arrays, both kernels (a
   thread-per-slice kernel is kept as the control: the warp is 1.3× it, the
   GPU about 10× six host threads). Same workstation, same 415 MB proof, <!-- unguarded: 415 — proof size in MB -->
-  one cold run each: decode 0.90 → 0.33 s, bytes in RAM to verdict
-  1.19 → 0.41 s, so the device path above becomes read 0.13 s + 0.41 s —
-  about 30× the external checkers; the 898 MB proof goes 2.70 → 1.0 s. <!-- unguarded: 898 — proof size in MB -->
+  decode 0.90 → 0.33 s, and bytes in RAM to verdict 1.19 s (host decode +
+  the check route above) → 0.42 s, the new figures one cold run each, so
+  the device path becomes read 0.13 s + 0.42 s — about 30× the external
+  checkers; the 898 MB proof goes 2.70 → 1.0 s. <!-- unguarded: 898 — proof size in MB -->
   (Corrected 2026-11-04: the first figures, 0.30 and 0.53 s, were the best
   of three repetitions in one process, where the step-record download
   reused memory the previous repetition had freed; a one-shot run pays
@@ -272,9 +273,9 @@ fail-closed: no checker is not a pass.
   nothing to reject, and the sequential walk decides the rest. The check
   kernel packs each table slot into one 64-bit word and, when every
   literal code fits the table (variables up to 2,047, as in both proofs <!-- unguarded: 2,047 — largest variable for the direct layout -->
-  here), indexes the table directly instead of hashing: 0.23 → 0.09 s.
-  Proofs with more variables keep the hashed table (0.14 s on this proof
-  when forced; no larger-variable proof has been timed). What remains is
+  here), indexes the table directly instead of hashing: 0.23 → 0.10 s.
+  Proofs with more variables keep the hashed table (0.15 s on this proof
+  when forced, cold; no larger-variable proof has been timed). What remains is
   the step-record download and the host walk (0.08 + 0.09 s).
   `LRAT_GPU_RESIDENT=1` on the example runs this route. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not

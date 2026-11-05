@@ -67,6 +67,46 @@
   stores each assignment-table slot as one 64-bit word (one load per probe), indexes the table by literal code
   when every code of the proof fits it (`lrat_max_code` decides per launch; variables up to 2,047), fetches hint <!-- unguarded: 2,047 — largest variable for the direct layout -->
   metadata 32 hints at a time across the lanes, and runs four warps per block; `check_lrat_codes_mode` picks
+  the layout explicitly, and a block count of 0 picks it per layout from the SM count. In the direct layout a
+  code past the table fails its lemma closed. Per-lemma codes held equal to the SimWarp model in both layouts on
+  the battery and all 632 archive files. **Measured 2026-11-04**, same card, one cold run each: check 0.23 → <!-- unguarded: 632 — archive count -->
+  0.10 s on the 415 MB proof and 0.54 → 0.25 s on the 898 MB one, bytes-in-RAM to verdict 0.55 → 0.42 s and <!-- unguarded: 415, 898 — proof sizes in MB -->
+  1.3 → 1.0 s. The direct layout is most of the gain; the hashed one, which proofs with more variables keep,
+  measured 0.15 s on the 415 MB proof when forced. Pre-registered (`research/gpu-lrat-decode.md`, S5): two <!-- unguarded: 415 — proof size in MB -->
+  predictions missed — more warps per block made the kernel slower, it was contending for memory, not short of
+  latency hiding — and three met.
+- **Fixed: the LRAT check kernel's table cap and block-count arithmetic** (found by the S5 cross-vendor panel,
+  both present since the kernel was added): the kernel looked a key up before testing the 4,095-entry cap, so a <!-- unguarded: 4,095 — table cap -->
+  lemma whose 4,096th insert repeated a key read `Ok` on the device and `TableOverflow` in the SimWarp model;
+  the cap now comes first, as in the model. A caller-chosen block count of 262,144 or more wrapped the kernel's <!-- unguarded: 262,144 — first wrapping block count -->
+  32-bit table-size arithmetic into out-of-bounds device writes; the launcher now clamps the block count and
+  refuses proofs past the kernel's 32-bit indices.
+- **LRAT binary decode on the device** (`warp-types-sat`, `feature = "gpu"`): `sat-kernels::lrat_scan_slices`
+  decodes binary LRAT with one warp per 4 KB slice — token ends by `ballot`, the role machine by a lane-guarded
+  composition scan over `shuffle_up`, output slots by popcount — in two passes around a host prefix sum; the host
+  stitch (`stitch_plan`) then runs over step records only, `lrat_gather_lits` / `lrat_gather_hints` place the
+  payloads on the device, and `check_lrat_codes_resident` checks them there. Slices the one-thread decoder would
+  reject fall back to it on the host; `lrat_scan_slices_serial` (a thread per slice) is kept as the control. The
+  `SimWarp` model (`lrat_warp::decode_model`) is held slice-for-slice equal to the host parser on every truncation
+  and bit flip of a synthetic proof, long varints, straddling steps and RAT hints across windows, and the device
+  path to the sequential decoder on the same battery and on all 632 archive files, both kernels. **Measured <!-- unguarded: 632 — archive count, research/gpu-lrat-decode.md -->
+  2026-11-03** on the workstation RTX 4000 SFF Ada (pre-registered, `research/gpu-lrat-decode.md`; arrays verified
+  equal to the host decode on both proofs): the 415 MB proof decodes in 0.33 s against 0.90 s on six host threads, <!-- unguarded: 415 — proof size in MB -->
+  one cold run each (kernels 0.08 s; the rest is the upload, the step-record download and the host's walk over 4.8 M <!-- unguarded: 4.8 — step count in millions -->
+  step records), and bytes-in-RAM to verdict falls from 1.19 s to 0.57 s; the 898 MB proof from 2.70 s to 1.3 s. <!-- unguarded: 898 — proof size in MB -->
+  Phase 3a of the stitch runs on host threads (`plan_3a_parallel`) for any proof it has nothing to reject, the
+  sequential walk deciding the rest; held equal to the sequential walk on the battery, nine rejection kinds and the
+  archive. Corrected 2026-11-04: the first published figures (0.30 s decode, 0.53 s to verdict) were the best of
+  three repetitions in one process, where the download reused memory the previous repetition freed. Of the five
+  predictions one was met: on those first figures the decode missed its 0.25 s by 0.05 s and the pipeline its
+  0.5 s by 0.03 s (cold, by more), the warp kernel is 1.3× the thread kernel
+  where 2× was predicted (the GPU is ≈ 10× the host threads either way), and the PTX agreed with the model at the
+  first run where a hardware-only defect was predicted. The check kernel, 0.23 s here, was then the largest device
+  stage.
+- **LRAT check kernel: packed table, direct layout** (`warp-types-sat`, `feature = "gpu"`): `lrat_check_lemmas`
+  stores each assignment-table slot as one 64-bit word (one load per probe), indexes the table by literal code
+  when every code of the proof fits it (`lrat_max_code` decides per launch; variables up to 2,047), fetches hint <!-- unguarded: 2,047 — largest variable for the direct layout -->
+  metadata 32 hints at a time across the lanes, and runs four warps per block; `check_lrat_codes_mode` picks
   the layout explicitly, and a block count of 0 picks it per layout from the SM count. Both layouts keep the
   4,095-entry cap, so `TableOverflow` falls on the same lemmas. Per-lemma codes held equal to the SimWarp model
   in both layouts on the battery and all 632 archive files. **Measured 2026-11-04**, same card, one cold run <!-- unguarded: 632 — archive count -->
