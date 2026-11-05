@@ -347,10 +347,11 @@ fn lrat_hash(k: u32) -> u32 {
 unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, l: i32) -> bool {
     let k = lrat_code(l) + 1;
     if direct {
-        // The host guarantees every code is below LRAT_TABLE; `& (TABLE-1)`
-        // keeps a broken guarantee inside this warp's region.
+        // The caller has already refused codes past the table (it turns them
+        // into TableOverflow); the mask keeps even a broken caller inside
+        // this warp's region, and the key must match too.
         let e = *table.add((base + ((k - 1) & (LRAT_TABLE - 1))) as usize);
-        return (e >> 32) as u32 == stamp;
+        return (e >> 32) as u32 == stamp && e as u32 == k;
     }
     let mut i = lrat_hash(k);
     let mut probes = 0u32;
@@ -377,22 +378,36 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 /// looped forever (cross-vendor panel, 2026-11-02).
 #[inline(always)]
 unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i32, count: &mut u32) -> bool {
+    // The cap comes FIRST, before the key is looked up — exactly as SimWarp's
+    // `LitTable::insert`. Checking it only on reaching an empty slot (as this
+    // kernel did until 2026-11-04) let a repeated key through at occupancy
+    // 4,095 where the model reports TableOverflow (cross-vendor panel).
+    if *count >= LRAT_TABLE - 1 {
+        return false;
+    }
     let k = lrat_code(l) + 1;
+    // Direct layout: a code past the table means the host's guarantee is
+    // broken — fail closed (TableOverflow: no verdict) rather than alias.
+    if direct && k - 1 >= LRAT_TABLE {
+        return false;
+    }
     let entry = ((stamp as u64) << 32) | k as u64;
-    let mut i = if direct { (k - 1) & (LRAT_TABLE - 1) } else { lrat_hash(k) };
+    let mut i = if direct { k - 1 } else { lrat_hash(k) };
     loop {
         let idx = (base + i) as usize;
         let e = *table.add(idx);
         if (e >> 32) as u32 != stamp {
-            if *count >= LRAT_TABLE - 1 {
-                return false;
-            }
             *table.add(idx) = entry;
             *count += 1;
             return true;
         }
-        if direct || e as u32 == k {
+        if e as u32 == k {
             return true;
+        }
+        if direct {
+            // A stamped slot holding another key cannot occur when the slot
+            // is the code; fail closed if it ever does.
+            return false;
         }
         i = (i + 1) & (LRAT_TABLE - 1);
     }
@@ -468,8 +483,9 @@ pub fn lrat_check_lemmas(
             let (mut m_hc, mut m_del, mut m_cs, mut m_ce) = (0u32, 0u32, 0u32, 0u32);
             while h < he {
                 if h == batch {
-                    let j = h + lane;
-                    if j < he {
+                    // `lane < he - h`, not `h + lane < he`: no u32 wrap near 2^32.
+                    if lane < he - h {
+                        let j = h + lane;
                         m_hc = *hints.add(j as usize);
                         if m_hc < lemma_dense {
                             m_del = *deleted_at.add(m_hc as usize);
@@ -496,14 +512,26 @@ pub fn lrat_check_lemmas(
                 // Each lane strides over the clause.
                 let mut free = 0u32;
                 let mut last = 0i32;
+                let mut past_table = false;
                 let mut j = cs + lane;
                 while j < ce {
                     let l = *lits.add(j as usize);
-                    if !lrat_falsified(table, base, stamp, direct, l) {
+                    if direct && lrat_code(l) >= LRAT_TABLE {
+                        past_table = true; // the host's guarantee is broken
+                    } else if !lrat_falsified(table, base, stamp, direct, l) {
                         free += 1;
                         last = l;
                     }
                     j += 32;
+                }
+                if direct {
+                    // Warp-uniform (`direct` is a kernel argument): any lane that
+                    // met a code past the table fails the lemma closed.
+                    let voted = warp.ballot(data::PerLane::new(past_table)).mask_u32().get();
+                    if voted != 0 {
+                        code = 5;
+                        break;
+                    }
                 }
                 let total = warp.reduce_sum(data::PerLane::new(free)).get();
                 if total == 0 {

@@ -792,6 +792,29 @@ mod tests {
             },
         ];
         out.push(("overflow".into(), cnf, Proof { steps }));
+        // At the cap with a key already present (cross-vendor panel
+        // 2026-11-04): 4,095 distinct lemma literals fill the table, then the
+        // 4,096th insert repeats one — once as a repeated lemma literal, once
+        // as the unit of a hint clause whose free literal is the negation of
+        // a lemma literal. SimWarp's table refuses at the cap before looking.
+        // Clause 1 = (-1 ∨ 2): its free literal under the lemma is -1, so its
+        // unit re-inserts literal 1. Clause 2 = (2 ∨ 3): falsified outright.
+        let cnf: Vec<Vec<i32>> = vec![vec![-1, 2], vec![2, 3]];
+        let mut rep: Vec<i32> = (1..=4095).collect();
+        rep.push(1);
+        let steps = vec![
+            Step::Add {
+                id: 3,
+                lits: rep,
+                hints: vec![2],
+            },
+            Step::Add {
+                id: 4,
+                lits: (1..=4095).collect(),
+                hints: vec![1, 2],
+            },
+        ];
+        out.push(("duplicate at the cap".into(), cnf, Proof { steps }));
         out
     }
 
@@ -851,5 +874,83 @@ mod tests {
             }
         }
         eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: {n} proofs, 4 block counts");
+    }
+
+    /// The direct layout's own guard: launched direct on a proof whose
+    /// literal codes do NOT fit the table (bypassing the launcher's check),
+    /// the kernel must fail every lemma that meets a code past the table
+    /// closed (TableOverflow), never report a lemma Ok that SimWarp does not,
+    /// and agree with SimWarp on the lemmas that never leave the table. The
+    /// launcher itself refuses the request.
+    #[test]
+    fn check_kernel_direct_layout_fails_closed_past_the_table() {
+        let Some(ctx) = ctx() else { return };
+        let (what, cnf, proof) = code_battery()
+            .into_iter()
+            .find(|(w, _, _)| w == "overflow")
+            .unwrap();
+        let fp = super::super::flatten(&cnf, &proof);
+        let lits = ctx.stream().clone_htod(&fp.lits).unwrap();
+        let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
+        assert!(
+            ctx.lrat_max_code(&lits).unwrap() >= 4096,
+            "{what}: codes must not fit"
+        );
+        assert!(
+            ctx.check_lrat_codes_mode(&fp, &lits, &hints, 7, Some(true))
+                .is_err(),
+            "the launcher must refuse a direct layout the codes do not fit"
+        );
+        let want: Vec<u8> = super::super::check_warp_codes(&fp)
+            .iter()
+            .map(|&c| c as u8)
+            .collect();
+        for blocks in [1u32, 7] {
+            let got = ctx
+                .launch_lrat_check(&fp, &lits, &hints, blocks, true)
+                .unwrap();
+            let mut closed = 0;
+            for (i, (&g, &w)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    g == w || g == 5,
+                    "{what} lemma {i}: direct gave {g}, SimWarp {w}"
+                );
+                assert!(
+                    g != 0 || w == 0,
+                    "{what} lemma {i}: direct accepted what SimWarp did not"
+                );
+                closed += usize::from(g == 5 && w != 5);
+            }
+            assert!(closed > 0, "{what} blocks={blocks}: the guard never fired");
+        }
+    }
+
+    /// A caller-supplied block count past the kernel's 32-bit table
+    /// arithmetic (blocks · 4 warps · 4,096 slots ≥ 2^32 from 262,144 blocks)
+    /// is clamped, not wrapped. The proof needs more lemmas than that, or the
+    /// clamp to the lemma count hides the case: 300,000 one-literal lemmas,
+    /// each refuted by the two original units.
+    #[test]
+    fn check_kernel_huge_block_count_is_clamped() {
+        use crate::lrat::{Proof, Step};
+        let Some(ctx) = ctx() else { return };
+        let cnf = vec![vec![1], vec![-1]];
+        let steps = (0..300_000u64)
+            .map(|k| Step::Add {
+                id: 3 + k,
+                lits: vec![2 + (k % 1000) as i32],
+                hints: vec![1, 2],
+            })
+            .collect();
+        let fp = super::super::flatten(&cnf, &Proof { steps });
+        let want: Vec<u8> = super::super::check_warp_codes(&fp)
+            .iter()
+            .map(|&c| c as u8)
+            .collect();
+        assert!(want.iter().all(|&c| c == 0));
+        for blocks in [1u32 << 18, 300_000, u32::MAX] {
+            let got = ctx.check_lrat_codes(&fp, blocks).unwrap();
+            assert!(got == want, "blocks={blocks}: codes differ");
+        }
     }
 }

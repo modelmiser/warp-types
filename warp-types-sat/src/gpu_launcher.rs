@@ -802,7 +802,8 @@ impl GpuContext {
     /// array (`sat-kernels::lrat_max_code`); 0 for an empty array.
     pub fn lrat_max_code(&self, lits: &CudaSlice<i32>) -> Result<u32, GpuError> {
         let s = &self.stream;
-        let n = lits.len() as u32;
+        let n = u32::try_from(lits.len())
+            .map_err(|_| GpuError::Cuda("lrat_max_code: more than 2^32 - 1 literals".into()))?;
         if n == 0 {
             return Ok(0);
         }
@@ -824,9 +825,9 @@ impl GpuContext {
     }
 
     /// [`GpuContext::check_lrat_codes`] with the table layout chosen by the
-    /// caller: `Some(true)` direct (every literal code must be below
-    /// `LRAT_TABLE` — asserted), `Some(false)` hashed, `None` direct exactly
-    /// when the codes allow it. The tests force both layouts on every proof.
+    /// caller: `Some(true)` direct (an error unless every literal code is
+    /// below `LRAT_TABLE`), `Some(false)` hashed, `None` direct exactly when
+    /// the codes allow it. The tests force both layouts on every proof.
     ///
     /// `blocks == 0` picks the block count from the layout and the SM count:
     /// 24 blocks (96 warps) per SM for the direct layout, 6 (24 warps) for
@@ -842,24 +843,53 @@ impl GpuContext {
         direct: Option<bool>,
     ) -> Result<Vec<u8>, GpuError> {
         const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+        if fp.lemma_clause.is_empty() {
+            return Ok(Vec::new());
+        }
+        let fits = self.lrat_max_code(lits)? < TABLE;
+        let direct = match direct {
+            Some(true) if !fits => {
+                return Err(GpuError::Cuda(
+                    "direct table layout requested, but a literal code does not fit the table"
+                        .into(),
+                ))
+            }
+            Some(d) => d,
+            None => fits,
+        };
+        self.launch_lrat_check(fp, lits, hints, blocks, direct)
+    }
+
+    /// The check launch itself, layout given. `direct` is NOT verified here:
+    /// in the direct layout the kernel fails a lemma closed (TableOverflow)
+    /// when it meets a code past the table; the tests call this directly to
+    /// watch that happen.
+    pub(crate) fn launch_lrat_check(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        lits: &CudaSlice<i32>,
+        hints: &CudaSlice<u32>,
+        blocks: u32,
+        direct: bool,
+    ) -> Result<Vec<u8>, GpuError> {
+        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
         const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
+                            // The kernel indexes in u32 throughout: the last warp's table region
+                            // (blocks * WPB * TABLE), every literal and hint index, and a batch of
+                            // 32 hints past the last one must all fit. Cross-vendor panel
+                            // 2026-11-04: an unclamped `blocks` wrapped the allocation size.
+        const MAX_BLOCKS: u32 = 1 << 16;
+        let limit = (u32::MAX - 64) as usize;
+        if lits.len() > limit || hints.len() > limit || fp.clause_start.len() > limit {
+            return Err(GpuError::Cuda(
+                "LRAT check: proof too large for the kernel's 32-bit indices".into(),
+            ));
+        }
         let s = &self.stream;
         let n = fp.lemma_clause.len() as u32;
         if n == 0 {
             return Ok(Vec::new());
         }
-        let fits = self.lrat_max_code(lits)? < TABLE;
-        let direct = match direct {
-            Some(true) => {
-                assert!(
-                    fits,
-                    "direct table layout forced on a proof whose literal codes do not fit it"
-                );
-                true
-            }
-            Some(false) => false,
-            None => fits,
-        };
         let direct_arg = direct as u32;
         let blocks = if blocks == 0 {
             let sms = self
@@ -873,7 +903,7 @@ impl GpuContext {
         } else {
             blocks
         };
-        let blocks = blocks.max(1).min(n);
+        let blocks = blocks.max(1).min(n).min(MAX_BLOCKS);
         let clause_start = s.clone_htod(&fp.clause_start)?;
         let deleted_at = s.clone_htod(&fp.deleted_at)?;
         let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
