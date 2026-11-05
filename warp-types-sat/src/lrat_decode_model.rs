@@ -561,7 +561,7 @@ mod tests {
     }
 
     /// The guarded scan equals the sequential fold on random tables; the
-    /// unguarded one (the deprecated core method's shape) does not.
+    /// unguarded one (the core method's shape through 0.4.3) does not.
     #[test]
     fn compose_scan_is_a_fold_and_fails_without_the_guard() {
         let mut seed = 0x9E37_79B9u32;

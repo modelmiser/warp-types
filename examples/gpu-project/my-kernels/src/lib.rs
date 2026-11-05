@@ -340,15 +340,19 @@ pub fn tile_scans(data: *const i32, out: *mut i32) {
 
 // ============================================================================
 // Kernel 11: i64 warp scan (64-bit shuffle is two 32-bit passes). Lane t holds
-// t * 2^33 + t + 1 (lane 0 nonzero, so the exclusive identity shows), so a
-// carry or half-word mix-up shows.
+// ±(t * 2^33 + 0xC000_0000 + t + 1), sign alternating: lane 0 is nonzero (the
+// fill shows), both halves carry data, and the low words sum past 2^32 within
+// two lanes, so a lost carry from bit 31 into the high word shows.
 // ============================================================================
 
 #[warp_kernel]
-pub fn scan_sums_i64(data: *const i64, incl: *mut i64, excl: *mut i64) {
+pub fn scan_sums_i64(data: *const i64, incl: *mut i64, excl: *mut i64, tile8: *mut i64) {
     let warp: Warp<All> = Warp::kernel_entry();
     let tid = warp_types::gpu::thread_id_x();
     let v = *data.add(tid as usize);
     *incl.add(tid as usize) = warp.inclusive_sum(data::PerLane::new(v)).get();
-    *excl.add(tid as usize) = warp.exclusive_sum(data::PerLane::new(v), 0).get();
+    // A nonzero identity, so lane 0 shows whether `identity` is used at all.
+    *excl.add(tid as usize) = warp.exclusive_sum(data::PerLane::new(v), -7).get();
+    let t8: Tile<'_, 8> = warp.tile();
+    *tile8.add(tid as usize) = t8.inclusive_sum(data::PerLane::new(v)).get();
 }

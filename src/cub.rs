@@ -74,6 +74,14 @@ impl Warp<All> {
     /// that, `shfl.sync.up` hands a lane its own value back, which an
     /// unguarded scan (this method through 0.4.3) added, doubling those lanes.
     ///
+    /// The sums use `T`'s `Add`, so integer overflow behaves as `+` does in the
+    /// build (a panic with overflow checks on, wrapping otherwise), and a
+    /// float result is a tree-ordered sum, not bit-equal to a sequential one.
+    ///
+    /// The stages run while `stride < WARP_SIZE`; `shfl.sync.up` takes a
+    /// 5-bit delta, so a 64-lane target (`warp64`, refused on nvptx64 today)
+    /// needs its own shuffle before this method is correct there.
+    ///
     /// On the CPU path the calling thread is lane 0 (`gpu::lane_id()` returns
     /// 0), so the result is the lane's own value — lane 0's inclusive sum.
     /// Not available on `amdgpu`, which has no `lane_id` yet.
@@ -104,12 +112,14 @@ impl Warp<All> {
         PerLane::new(val)
     }
 
-    /// Exclusive prefix sum across all lanes: lane `i` gets the sum of lanes
-    /// `0..i`, and lane 0 gets `identity`.
+    /// Exclusive prefix sum across all lanes: lane `i > 0` gets the sum of
+    /// lanes `0..i`, and lane 0 gets `identity`.
     ///
-    /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)` with an
-    /// explicit identity. The inclusive scan shifted up one lane; lane 0,
-    /// whose `shfl.sync.up` returns its own value, takes `identity` instead.
+    /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)` when
+    /// `identity` is zero. `identity` is ONLY lane 0's value: it is not added
+    /// into the other lanes, so a nonzero one is a fill, not an offset. The
+    /// inclusive scan shifted up one lane; lane 0, whose `shfl.sync.up`
+    /// returns its own value, takes `identity` instead.
     ///
     /// On the CPU path the calling thread is lane 0, so the result is
     /// `identity`. Not available on `amdgpu`, which has no `lane_id` yet.

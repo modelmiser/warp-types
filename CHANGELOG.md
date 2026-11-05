@@ -8,8 +8,9 @@
   `exclusive_sum` ignored `identity`. Each lane now adds only when its lane index (within the tile, for
   `Tile`) is at least the stride, and lane 0 of `exclusive_sum` takes `identity`. **Behaviour change on the CPU
   path:** the thread is lane 0, so the result is its own value (`inclusive_sum`) or `identity`
-  (`exclusive_sum`), not 32× the value. Checked on an RTX 4000 Ada (`examples/gpu-project` tests 9–11: i32 and
-  i64 warp scans, tiles of 4, 8, 16 and 32 lanes), each check watched to fail on the old code and on a mutant.
+  (`exclusive_sum`), not 32× the value (N× for a `Tile<N>`). `identity` is lane 0's value only, not added into
+  the other lanes. Checked on an RTX 4000 Ada (`examples/gpu-project` tests 9–11: i32 and
+  i64 warp scans, i32 tiles of 4, 8, 16 and 32 lanes, an i64 tile of 8), each check watched to fail on the old code and on a mutant.
   Not available on `amdgpu`, which has no `lane_id` yet.
 - **`warp-types-smt`: QF_BV through the certified SAT path** (`SmtSession::bitblast`, `BitBlasted::{solve,
   solve_lrat, dimacs}`): a complete bit-blaster (ripple-carry add/sub, bitwise ops, extract, concat, equality

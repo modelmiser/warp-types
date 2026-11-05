@@ -368,18 +368,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // === Test 11: i64 warp prefix sums ===
-    println!("=== Test 11: scan_sums_i64 (64-bit, two-pass shuffle) ===");
+    println!("=== Test 11: scan_sums_i64 (64-bit, two-pass shuffle; identity -7; Tile<8>) ===");
     {
-        let input: Vec<i64> = (0..WARP_SIZE as i64).map(|t| (t << 33) + t + 1).collect();
+        let input: Vec<i64> = (0..WARP_SIZE as i64)
+            .map(|t| {
+                let m = (t << 33) + 0xC000_0000 + t + 1;
+                if t % 2 == 1 {
+                    -m
+                } else {
+                    m
+                }
+            })
+            .collect();
         let dev_in = stream.memcpy_stod(&input)?;
         let dev_incl = stream.memcpy_stod(&[0i64; WARP_SIZE])?;
         let dev_excl = stream.memcpy_stod(&[0i64; WARP_SIZE])?;
+        let dev_tile8 = stream.memcpy_stod(&[0i64; WARP_SIZE])?;
         unsafe {
             stream
                 .launch_builder(&k.scan_sums_i64)
                 .arg(&dev_in)
                 .arg(&dev_incl)
                 .arg(&dev_excl)
+                .arg(&dev_tile8)
                 .launch(LaunchConfig {
                     grid_dim: (1, 1, 1),
                     block_dim: (WARP_SIZE as u32, 1, 1),
@@ -388,6 +399,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let incl = stream.memcpy_dtov(&dev_incl)?;
         let excl = stream.memcpy_dtov(&dev_excl)?;
+        let tile8 = stream.memcpy_dtov(&dev_tile8)?;
+        let want_tile8: Vec<i64> = (0..WARP_SIZE)
+            .map(|t| input[t & !7..=t].iter().sum())
+            .collect();
         let want_incl: Vec<i64> = input
             .iter()
             .scan(0, |a, &v| {
@@ -395,8 +410,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(*a)
             })
             .collect();
-        let want_excl: Vec<i64> = (0..WARP_SIZE).map(|t| want_incl[t] - input[t]).collect();
+        let want_excl: Vec<i64> = (0..WARP_SIZE)
+            .map(|t| if t == 0 { -7 } else { want_incl[t] - input[t] })
+            .collect();
         for (name, got, want) in [
+            ("Tile<8>", &tile8, &want_tile8),
             ("inclusive", &incl, &want_incl),
             ("exclusive", &excl, &want_excl),
         ] {
