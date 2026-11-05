@@ -23,10 +23,45 @@ pub struct DeviceDecodeStats {
 /// the host parsed), and how many slices were dirty / had no candidate.
 type DeviceChunks = (Vec<RawChunk>, Vec<Option<(u32, u32)>>, usize, usize);
 
-/// Build the per-slice records from the device arrays.
-fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> DeviceChunks {
+/// Host threads for the device routes' host stages: what this process may
+/// run on (`available_parallelism` honours the CPU affinity mask).
+fn host_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// Build the per-slice records from the device arrays, slices split over
+/// `threads` host threads.
+fn chunks_from_device(bytes: &[u8], d: &DeviceSlices, threads: usize) -> DeviceChunks {
+    let n = d.n_slices;
+    let per = n.div_ceil(threads.max(1)).max(1);
+    let parts: Vec<DeviceChunks> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..n)
+            .step_by(per)
+            .map(|lo| sc.spawn(move || chunks_from_device_range(bytes, d, lo, (lo + per).min(n))))
+            .collect();
+        hs.into_iter()
+            .map(|h| h.join().expect("device records"))
+            .collect()
+    });
+    let mut out: DeviceChunks = (Vec::with_capacity(n), Vec::with_capacity(n), 0, 0);
+    for (c, b, dirty, none) in parts {
+        out.0.extend(c);
+        out.1.extend(b);
+        out.2 += dirty;
+        out.3 += none;
+    }
+    out
+}
+
+/// [`chunks_from_device`] for slices `lo..hi`.
+fn chunks_from_device_range(
+    bytes: &[u8],
+    d: &DeviceSlices,
+    lo_slice: usize,
+    hi_slice: usize,
+) -> DeviceChunks {
     let resident = d.d_lits.is_some();
-    let mut bases: Vec<Option<(u32, u32)>> = Vec::with_capacity(d.n_slices);
+    let mut bases: Vec<Option<(u32, u32)>> = Vec::with_capacity(hi_slice - lo_slice);
     let (mut dirty, mut none) = (0usize, 0usize);
     let n = d.n_slices;
     let count = |i: usize, f: usize| -> usize {
@@ -38,8 +73,8 @@ fn chunks_from_device(bytes: &[u8], d: &DeviceSlices) -> DeviceChunks {
         };
         hi - lo
     };
-    let mut chunks = Vec::with_capacity(n);
-    for i in 0..n {
+    let mut chunks = Vec::with_capacity(hi_slice - lo_slice);
+    for i in lo_slice..hi_slice {
         let lo = i * d.slice;
         let hi = ((i + 1) * d.slice).min(bytes.len());
         match d.flags[i] {
@@ -131,8 +166,10 @@ impl FlatProof {
         let t = std::time::Instant::now();
         let bounds = slice_bounds(bytes.len(), slice as usize);
         debug_assert_eq!(bounds.len(), d.n_slices);
-        let (chunks, _bases, dirty, none) = chunks_from_device(bytes, &d);
-        let fp = stitch_chunks(cnf, bytes, &bounds, chunks, 4).map_err(DeviceDecodeError::Parse)?;
+        let threads = host_threads();
+        let (chunks, _bases, dirty, none) = chunks_from_device(bytes, &d, threads);
+        let fp = stitch_chunks(cnf, bytes, &bounds, chunks, threads)
+            .map_err(DeviceDecodeError::Parse)?;
         Ok((
             fp,
             DeviceDecodeStats {
@@ -154,6 +191,9 @@ pub struct ResidentStats {
     pub plan: std::time::Duration,
     /// The two gather kernels, extra-buffer upload included.
     pub gather: std::time::Duration,
+    /// Phase 3a ran on the optimistic parallel walk (`false`: the proof had
+    /// something to reject, or one host thread, and the sequential walk ran).
+    pub fast_plan: bool,
 }
 
 impl FlatProof {
@@ -181,8 +221,10 @@ impl FlatProof {
             .map_err(DeviceDecodeError::Gpu)?;
         let t = std::time::Instant::now();
         let bounds = slice_bounds(bytes.len(), slice as usize);
-        let (chunks, bases, dirty, none) = chunks_from_device(bytes, &d);
-        let plan = stitch_plan(cnf, bytes, &bounds, chunks).map_err(DeviceDecodeError::Parse)?;
+        let threads = host_threads();
+        let (chunks, bases, dirty, none) = chunks_from_device(bytes, &d, threads);
+        let plan =
+            stitch_plan(cnf, bytes, &bounds, chunks, threads).map_err(DeviceDecodeError::Parse)?;
         let StitchPlan {
             mut fp,
             copies,
@@ -192,6 +234,7 @@ impl FlatProof {
             orig_lits,
             chunks,
             bridges,
+            fast,
         } = plan;
         let n_slices = chunks.len();
         // Segment lists: the originals first (from the extra buffer), then
@@ -315,6 +358,7 @@ impl FlatProof {
                 },
                 plan: t_plan,
                 gather: t_gather,
+                fast_plan: fast,
             },
         ))
     }

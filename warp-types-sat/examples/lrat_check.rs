@@ -301,7 +301,7 @@ fn main() {
                         }
                         if let Some((td, tk, st, v)) = best {
                             println!(
-                                "c gpu-resident({}; {} slice={slice} blocks={blocks}) decode {td:.3}s = upload {:.3} + pass1 {:.3} + prefix {:.3} + pass2 {:.3} + download {:.3} + plan {:.3} + gather {:.3}; check {tk:.3}s; bytes→verdict {:.3}s  slices={} dirty={}  {v:?}",
+                                "c gpu-resident({}; {} slice={slice} blocks={blocks}) decode {td:.3}s = upload {:.3} + pass1 {:.3} + prefix {:.3} + pass2 {:.3} + download {:.3} + plan {:.3} + gather {:.3}; check {tk:.3}s; bytes→verdict {:.3}s  slices={} dirty={} plan={}  {v:?}",
                                 ctx.device_name(),
                                 if coop { "warp" } else { "thread" },
                                 st.decode.timing.upload.as_secs_f64(),
@@ -314,6 +314,7 @@ fn main() {
                                 td + tk,
                                 st.decode.n_slices,
                                 st.decode.dirty,
+                                if st.fast_plan { "parallel" } else { "sequential" },
                             );
                             if v.is_verified() != seq.is_verified() {
                                 println!("s DISAGREE-GPU-RESIDENT-VERDICT");

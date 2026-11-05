@@ -706,7 +706,7 @@ pub(crate) fn parse_slices_host(
     let n_slices = bounds.len();
     let mut chunks: Vec<RawChunk> = (0..n_slices).map(|_| RawChunk::default()).collect();
     std::thread::scope(|sc| {
-        let threads = threads.max(1).min(n_slices);
+        let threads = threads.min(n_slices).max(1);
         let per = n_slices.div_ceil(threads);
         let mut rest: &mut [RawChunk] = &mut chunks;
         let mut first = 0usize;
@@ -747,7 +747,7 @@ pub(crate) fn stitch_chunks(
     chunks: Vec<RawChunk>,
     threads: usize,
 ) -> Result<FlatProof, crate::lrat::ParseError> {
-    let plan = stitch_plan(cnf, bytes, bounds, chunks)?;
+    let plan = stitch_plan(cnf, bytes, bounds, chunks, threads)?;
     stitch_payloads_host(cnf, plan, threads)
 }
 
@@ -775,6 +775,370 @@ pub(crate) struct StitchPlan {
     pub(crate) orig_lits: usize,
     pub(crate) chunks: Vec<RawChunk>,
     pub(crate) bridges: Vec<RawChunk>,
+    /// Phase 3a ran on the optimistic parallel walk ([`plan_3a_parallel`]);
+    /// `false` = the sequential walk (one thread, or the proof showed a
+    /// violation and the sequential walk decided it).
+    // Read by the device route (feature `gpu`) and by the tests.
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    pub(crate) fast: bool,
+}
+
+/// What the optimistic walk produces: the plan without the chunks.
+struct Fast3a {
+    fp: FlatProof,
+    copies: Vec<Copy>,
+    dense_of: Vec<u32>,
+    lit_total: usize,
+    hint_total: usize,
+}
+
+/// Per true-chain segment, from the validating pass.
+#[derive(Clone, Copy)]
+struct SegSum {
+    lit_lo: usize,
+    lit_hi: usize,
+    hint_lo: usize,
+    hint_hi: usize,
+    del_lo: usize,
+}
+
+/// Per group of segments (one thread's share), from the validating pass.
+#[derive(Clone, Copy)]
+struct GroupSum {
+    adds: usize,
+    first_id: u64,
+    last_id: u64,
+    /// Group-local index of the first lemma with no literals.
+    empty_at: Option<usize>,
+}
+
+/// Split `s` into consecutive pieces ending at each of `cuts` (ascending,
+/// absolute indices into `s`; the last piece runs to the end).
+fn split_at_cuts<'a, T>(mut s: &'a mut [T], cuts: &[usize]) -> Vec<&'a mut [T]> {
+    let mut out = Vec::with_capacity(cuts.len() + 1);
+    let mut at = 0usize;
+    for &c in cuts {
+        let (a, b) = s.split_at_mut(c - at);
+        out.push(a);
+        s = b;
+        at = c;
+    }
+    out.push(s);
+    out
+}
+
+/// Phase 3a on threads, for proofs that turn out to have nothing to reject.
+///
+/// Three passes over the true chain, each split into contiguous groups of
+/// segments: (A) validate — ids strictly increasing, the gap bound, no RAT
+/// hint — and size every segment; (B) write the lemma arrays and `dense_of`
+/// at prefix offsets (ids strictly increasing makes each group's `dense_of`
+/// range disjoint, so the pieces are plain `split_at_mut` slices); (C) the
+/// deletions, against atomic `deleted_at`: the id must name a clause added at
+/// an EARLIER step, and a swap that finds a step already there is a second
+/// deletion. Any of those, anywhere, returns `None` and the caller runs the
+/// sequential walk, which alone decides early verdicts and format errors —
+/// so on every proof the output is the sequential walk's (the tests hold the
+/// two equal).
+fn plan_3a_parallel(
+    cnf: &[Vec<i32>],
+    all: &[&RawChunk],
+    segments: &[Segment],
+    threads: usize,
+) -> Option<Fast3a> {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    let segs: Vec<&Segment> = segments.iter().filter(|s| s.step_hi > s.step_lo).collect();
+    let n_orig = cnf.len();
+    let orig_lits: usize = cnf.iter().map(|c| c.len()).sum();
+    // Groups of segments by step count.
+    let total_steps: usize = segs.iter().map(|s| s.step_hi - s.step_lo).sum();
+    let per = total_steps.div_ceil(threads.max(1)).max(1);
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    {
+        let (mut lo, mut acc) = (0usize, 0usize);
+        for (i, sg) in segs.iter().enumerate() {
+            acc += sg.step_hi - sg.step_lo;
+            if acc >= per {
+                groups.push((lo, i + 1));
+                lo = i + 1;
+                acc = 0;
+            }
+        }
+        if lo < segs.len() || groups.is_empty() {
+            groups.push((lo, segs.len()));
+        }
+    }
+    let steps_of = |sg: &Segment| &all[sg.chunk].steps[sg.step_lo..sg.step_hi];
+    let prev_of = |sg: &Segment| {
+        if sg.step_lo == 0 {
+            None
+        } else {
+            Some(all[sg.chunk].steps[sg.step_lo - 1])
+        }
+    };
+    let bad = AtomicBool::new(false);
+
+    // ---- pass A: validate + size ----
+    let pass_a: Vec<Option<(Vec<SegSum>, GroupSum)>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = groups
+            .iter()
+            .map(|&(a, b)| {
+                let segs = &segs[a..b];
+                let bad = &bad;
+                sc.spawn(move || {
+                    let mut sums = Vec::with_capacity(segs.len());
+                    let mut g = GroupSum {
+                        adds: 0,
+                        first_id: 0,
+                        last_id: 0,
+                        empty_at: None,
+                    };
+                    for sg in segs {
+                        if bad.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        let prev = prev_of(sg);
+                        let lit_lo = prev.map_or(0, |p| p.lit_end as usize);
+                        let hint_lo = prev.map_or(0, |p| p.hint_end as usize);
+                        let del_lo = prev.map_or(0, |p| p.del_end as usize);
+                        let (mut lit_hi, mut hint_hi, mut prev_lit_end) = (lit_lo, hint_lo, lit_lo);
+                        for st in steps_of(sg) {
+                            if st.tag != b'a' {
+                                continue;
+                            }
+                            if st.rat {
+                                bad.store(true, Ordering::Relaxed);
+                                return None;
+                            }
+                            if g.adds > 0
+                                && (st.id <= g.last_id
+                                    || st.id - g.last_id > crate::lrat::MAX_ID_GAP)
+                            {
+                                bad.store(true, Ordering::Relaxed);
+                                return None;
+                            }
+                            if g.adds == 0 {
+                                g.first_id = st.id;
+                            }
+                            g.last_id = st.id;
+                            if st.lit_end as usize == prev_lit_end && g.empty_at.is_none() {
+                                g.empty_at = Some(g.adds);
+                            }
+                            prev_lit_end = st.lit_end as usize;
+                            lit_hi = st.lit_end as usize;
+                            hint_hi = st.hint_end as usize;
+                            g.adds += 1;
+                        }
+                        sums.push(SegSum {
+                            lit_lo,
+                            lit_hi,
+                            hint_lo,
+                            hint_hi,
+                            del_lo,
+                        });
+                    }
+                    Some((sums, g))
+                })
+            })
+            .collect();
+        hs.into_iter()
+            .map(|h| h.join().expect("plan pass A"))
+            .collect()
+    });
+    let mut sums: Vec<SegSum> = Vec::with_capacity(segs.len());
+    let mut gsums: Vec<GroupSum> = Vec::with_capacity(groups.len());
+    for r in pass_a {
+        let (s, g) = r?;
+        sums.extend(s);
+        gsums.push(g);
+    }
+
+    // ---- across groups: ids, prefixes, copies ----
+    let mut last_id = n_orig as u64;
+    let mut id_cut: Vec<usize> = Vec::with_capacity(groups.len());
+    let mut lemma_base: Vec<usize> = Vec::with_capacity(groups.len() + 1);
+    let mut step_base: Vec<u32> = Vec::with_capacity(groups.len());
+    let mut acc_base: Vec<u32> = Vec::with_capacity(groups.len());
+    let mut hint_base: Vec<usize> = Vec::with_capacity(groups.len());
+    let mut first_empty: Option<u32> = None;
+    let (mut lemmas, mut steps_acc, mut lit_acc, mut hint_acc) = (0usize, 0u32, orig_lits, 0usize);
+    let mut copies: Vec<Copy> = Vec::with_capacity(segs.len());
+    for (gi, &(a, b)) in groups.iter().enumerate() {
+        let g = gsums[gi];
+        id_cut.push(last_id as usize + 1);
+        if g.adds > 0 {
+            if g.first_id <= last_id || g.first_id - last_id > crate::lrat::MAX_ID_GAP {
+                return None;
+            }
+            last_id = g.last_id;
+        }
+        if first_empty.is_none() {
+            first_empty = g.empty_at.map(|e| (lemmas + e) as u32);
+        }
+        lemma_base.push(lemmas);
+        step_base.push(steps_acc);
+        acc_base.push(lit_acc as u32);
+        hint_base.push(hint_acc);
+        lemmas += g.adds;
+        for (sg, sm) in segs[a..b].iter().zip(&sums[a..b]) {
+            steps_acc += (sg.step_hi - sg.step_lo) as u32;
+            lit_acc += sm.lit_hi - sm.lit_lo;
+            hint_acc += sm.hint_hi - sm.hint_lo;
+            copies.push(Copy {
+                chunk: sg.chunk,
+                lit_lo: sm.lit_lo,
+                lit_hi: sm.lit_hi,
+                hint_lo: sm.hint_lo,
+                hint_hi: sm.hint_hi,
+            });
+        }
+    }
+    lemma_base.push(lemmas);
+
+    // ---- allocate; the originals' part serially ----
+    let mut clause_start = vec![0u32; n_orig + 1 + lemmas];
+    let mut acc = 0u32;
+    for (i, c) in cnf.iter().enumerate() {
+        acc += c.len() as u32;
+        clause_start[i + 1] = acc;
+    }
+    let mut dense_of = vec![0u32; (n_orig + 1).max(last_id as usize + 1)];
+    for i in 0..n_orig {
+        dense_of[i + 1] = i as u32 + 1;
+    }
+    let mut lemma_clause = vec![0u32; lemmas];
+    let mut lemma_step = vec![0u32; lemmas];
+    let mut lemma_id = vec![0u64; lemmas];
+    let mut hint_start = vec![0u32; lemmas + 1];
+
+    // ---- pass B: write ----
+    {
+        let lcuts = &lemma_base[1..groups.len()];
+        let cs_cuts: Vec<usize> = lcuts.iter().map(|&l| n_orig + 1 + l).collect();
+        let hs_cuts: Vec<usize> = lcuts.iter().map(|&l| 1 + l).collect();
+        let cs = split_at_cuts(&mut clause_start, &cs_cuts);
+        let lc = split_at_cuts(&mut lemma_clause, lcuts);
+        let ls = split_at_cuts(&mut lemma_step, lcuts);
+        let li = split_at_cuts(&mut lemma_id, lcuts);
+        let hs = split_at_cuts(&mut hint_start, &hs_cuts);
+        let dn = split_at_cuts(&mut dense_of, &id_cut[1..]);
+        std::thread::scope(|sc| {
+            let pieces = cs.into_iter().zip(lc).zip(ls).zip(li).zip(hs).zip(dn);
+            for (gi, (((((cs, lc), ls), li), hs), dn)) in pieces.enumerate() {
+                let (a, b) = groups[gi];
+                let segs = &segs[a..b];
+                let sums = &sums[a..b];
+                let (cs_off, lc_off, hs_off) = if gi == 0 {
+                    (n_orig + 1, 0, 1)
+                } else {
+                    (0, 0, 0)
+                };
+                let dn_off = if gi == 0 { 0 } else { id_cut[gi] };
+                let lb = lemma_base[gi];
+                let mut step_ix = step_base[gi];
+                let mut acc = acc_base[gi];
+                let mut hint_seg_base = hint_base[gi];
+                sc.spawn(move || {
+                    let mut l = 0usize;
+                    for (sg, sm) in segs.iter().zip(sums) {
+                        let mut prev_lit_end = sm.lit_lo;
+                        for st in steps_of(sg) {
+                            if st.tag == b'a' {
+                                let dense = (n_orig + lb + l) as u32;
+                                dn[st.id as usize - dn_off] = dense + 1;
+                                acc += (st.lit_end as usize - prev_lit_end) as u32;
+                                prev_lit_end = st.lit_end as usize;
+                                cs[cs_off + l] = acc;
+                                lc[lc_off + l] = dense;
+                                ls[lc_off + l] = step_ix;
+                                li[lc_off + l] = st.id;
+                                hs[hs_off + l] =
+                                    (hint_seg_base + (st.hint_end as usize - sm.hint_lo)) as u32;
+                                l += 1;
+                            }
+                            step_ix += 1;
+                        }
+                        hint_seg_base += sm.hint_hi - sm.hint_lo;
+                    }
+                });
+            }
+        });
+    }
+
+    // ---- pass C: deletions ----
+    let deleted_at: Vec<AtomicU32> = vec![u32::MAX; n_orig + lemmas]
+        .into_iter()
+        .map(AtomicU32::new)
+        .collect();
+    let ok = std::thread::scope(|sc| {
+        let hs: Vec<_> = groups
+            .iter()
+            .enumerate()
+            .map(|(gi, &(a, b))| {
+                let segs = &segs[a..b];
+                let sums = &sums[a..b];
+                let (dense_of, lemma_step, deleted_at, bad) =
+                    (&dense_of, &lemma_step, &deleted_at, &bad);
+                let mut step_ix = step_base[gi];
+                sc.spawn(move || {
+                    for (sg, sm) in segs.iter().zip(sums) {
+                        if bad.load(Ordering::Relaxed) {
+                            return false;
+                        }
+                        let c = all[sg.chunk];
+                        let mut cursor = sm.del_lo;
+                        for st in steps_of(sg) {
+                            if st.tag != b'a' {
+                                let end = st.del_end as usize;
+                                for &(id, _) in &c.dels[cursor..end] {
+                                    let dense = dense_of.get(id as usize).copied().unwrap_or(0);
+                                    let fine = dense != 0
+                                        && ((dense as usize) <= n_orig
+                                            || lemma_step[dense as usize - 1 - n_orig] < step_ix)
+                                        && deleted_at[dense as usize - 1]
+                                            .swap(step_ix, Ordering::Relaxed)
+                                            == u32::MAX;
+                                    if !fine {
+                                        bad.store(true, Ordering::Relaxed);
+                                        return false;
+                                    }
+                                }
+                                cursor = end;
+                            }
+                            step_ix += 1;
+                        }
+                    }
+                    true
+                })
+            })
+            .collect();
+        hs.into_iter()
+            .map(|h| h.join().expect("plan pass C"))
+            .fold(true, |x, y| x & y)
+    });
+    if !ok {
+        return None;
+    }
+    let deleted_at: Vec<u32> = deleted_at.into_iter().map(AtomicU32::into_inner).collect();
+    Some(Fast3a {
+        fp: FlatProof {
+            lits: Vec::new(),
+            clause_start,
+            deleted_at,
+            lemma_clause,
+            lemma_step,
+            lemma_id,
+            hint_start,
+            hints: Vec::new(),
+            first_empty,
+            n_original: n_orig as u32,
+            early: None,
+        },
+        copies,
+        dense_of,
+        lit_total: lit_acc,
+        hint_total: hint_acc,
+    })
 }
 
 /// Phases 2 and 3a: follow the true chain across slice boundaries (bridging
@@ -786,6 +1150,7 @@ pub(crate) fn stitch_plan(
     bytes: &[u8],
     bounds: &[(usize, usize)],
     chunks: Vec<RawChunk>,
+    threads: usize,
 ) -> Result<StitchPlan, crate::lrat::ParseError> {
     use crate::lrat::ParseError;
     let err = |pos: usize, msg: &str| ParseError {
@@ -874,6 +1239,26 @@ pub(crate) fn stitch_plan(
             }
         }
         let all: Vec<&RawChunk> = chunks.iter().chain(bridges.iter()).collect();
+
+        // ---- phase 3a, optimistic: on threads, for a proof with nothing to
+        // reject; anything else falls through to the sequential walk ----
+        if pending_error.is_none() && threads > 1 {
+            if let Some(f) = plan_3a_parallel(cnf, &all, &segments, threads) {
+                drop(all);
+                let orig_lits: usize = cnf.iter().map(|c| c.len()).sum();
+                return Ok(StitchPlan {
+                    fp: f.fp,
+                    copies: f.copies,
+                    dense_of: f.dense_of,
+                    lit_total: f.lit_total,
+                    hint_total: f.hint_total,
+                    orig_lits,
+                    chunks,
+                    bridges,
+                    fast: true,
+                });
+            }
+        }
 
         // ---- phase 3a: sequential bookkeeping over the true chain ----
         // (ids increasing, dense map, deletions, first empty clause). This is
@@ -1087,6 +1472,7 @@ pub(crate) fn stitch_plan(
             orig_lits,
             chunks,
             bridges,
+            fast: false,
         })
     }
 }
@@ -1108,6 +1494,7 @@ pub(crate) fn stitch_payloads_host(
         orig_lits,
         chunks,
         bridges,
+        fast: _,
     } = plan;
     let all: Vec<&RawChunk> = chunks.iter().chain(bridges.iter()).collect();
     {
@@ -2149,6 +2536,148 @@ mod tests {
         }
     }
 
+    /// Phases 1–3a on host threads with the given phase-3a thread count.
+    fn plan_with(
+        cnf: &[Vec<i32>],
+        bytes: &[u8],
+        chunk: usize,
+        threads: usize,
+    ) -> Result<StitchPlan, crate::lrat::ParseError> {
+        let bounds = slice_bounds(bytes.len(), chunk);
+        let chunks = parse_slices_host(bytes, &bounds, 3);
+        stitch_plan(cnf, bytes, &bounds, chunks, threads)
+    }
+
+    /// Two plans equal in everything phase 3b consumes.
+    fn assert_plan_eq(a: &StitchPlan, b: &StitchPlan, what: &str) {
+        assert_flat_eq(&a.fp, &b.fp, what);
+        let cp = |p: &StitchPlan| -> Vec<(usize, usize, usize, usize, usize)> {
+            p.copies
+                .iter()
+                .map(|c| (c.chunk, c.lit_lo, c.lit_hi, c.hint_lo, c.hint_hi))
+                .collect()
+        };
+        assert_eq!(cp(a), cp(b), "{what}: copies");
+        assert_eq!(a.dense_of, b.dense_of, "{what}: dense_of");
+        assert_eq!(a.lit_total, b.lit_total, "{what}: lit_total");
+        assert_eq!(a.hint_total, b.hint_total, "{what}: hint_total");
+        assert_eq!(a.orig_lits, b.orig_lits, "{what}: orig_lits");
+    }
+
+    /// The optimistic parallel phase 3a against the sequential walk on valid
+    /// proofs: taken (not fallen back from), and equal in every output.
+    #[test]
+    fn plan_parallel_equals_sequential_walk_on_valid_proofs() {
+        for with_empty in [false, true] {
+            let (cnf, bytes) = synthetic_proof(with_empty);
+            for chunk in [1, 5, 13, 64, bytes.len() + 3] {
+                let seq = plan_with(&cnf, &bytes, chunk, 1).unwrap();
+                assert!(!seq.fast, "one thread runs the sequential walk");
+                for threads in [2, 3, 8, 64] {
+                    let par = plan_with(&cnf, &bytes, chunk, threads).unwrap();
+                    let what = format!("e={with_empty} c={chunk} t={threads}");
+                    assert!(par.fast, "{what}: valid proof fell back");
+                    assert_plan_eq(&par, &seq, &what);
+                }
+            }
+        }
+    }
+
+    /// Every kind of thing phase 3a rejects, placed mid-proof among valid
+    /// filler so it lands in a later group: the parallel walk must hand the
+    /// proof to the sequential walk (`fast == false`), and the result —
+    /// verdict or format error — must be the sequential walk's.
+    #[test]
+    fn plan_parallel_falls_back_on_every_rejection() {
+        use crate::lrat::{write_binary, MAX_ID_GAP};
+        let cnf: Vec<Vec<i32>> = (0..60).map(|i| vec![i + 1]).collect();
+        let filler = |from: u64, n: u64| -> Vec<Step> {
+            (0..n)
+                .flat_map(|k| {
+                    let id = from + k;
+                    let mut v = vec![Step::Add {
+                        id,
+                        lits: vec![(k % 50) as i32 + 1],
+                        hints: vec![1, 2],
+                    }];
+                    if k % 4 == 3 {
+                        v.push(Step::Delete { ids: vec![id - 1] });
+                    }
+                    v
+                })
+                .collect()
+        };
+        let add = |id: u64, hints: Vec<i64>| Step::Add {
+            id,
+            lits: vec![3],
+            hints,
+        };
+        let del = |ids: Vec<u64>| Step::Delete { ids };
+        // (name, steps placed between 300 filler adds (ids 61..361) and the tail)
+        let cases: Vec<(&str, Vec<Step>)> = vec![
+            (
+                "id not increasing",
+                vec![add(400, vec![1]), add(400, vec![1])],
+            ),
+            ("id decreasing", vec![add(400, vec![1]), add(399, vec![1])]),
+            ("RAT hint", vec![add(400, vec![1, -2, 3])]),
+            ("delete never-added id", vec![del(vec![365])]),
+            (
+                "delete twice across steps",
+                vec![del(vec![7]), del(vec![7])],
+            ),
+            ("delete twice in one step", vec![del(vec![8, 8])]),
+            (
+                "delete before its add",
+                vec![del(vec![400]), add(400, vec![1])],
+            ),
+            ("delete a lemma twice", vec![del(vec![100]), del(vec![100])]),
+            (
+                "id gap beyond the bound",
+                vec![add(400 + MAX_ID_GAP + 1, vec![1])],
+            ),
+        ];
+        for (name, mid) in cases {
+            // A valid tail just above every id used in the middle (within the
+            // gap bound, so the tail alone never forces the fallback).
+            let top = mid
+                .iter()
+                .filter_map(|s| match s {
+                    Step::Add { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+                .max(360);
+            let mut steps = filler(61, 300);
+            steps.extend(mid);
+            steps.extend(
+                filler(top + 1, 50)
+                    .into_iter()
+                    .filter(|s| !matches!(s, Step::Delete { ids } if ids[0] <= top)),
+            );
+            let bytes = write_binary(&Proof { steps });
+            // Many thread counts, so that at some of them the two halves of a
+            // violation (an id pair, a deletion pair) sit in different groups.
+            for chunk in [1, 7, 64] {
+                let seq = plan_with(&cnf, &bytes, chunk, 1);
+                for threads in [2, 3, 4, 5, 7, 16, 64, 256] {
+                    let par = plan_with(&cnf, &bytes, chunk, threads);
+                    let what = format!("{name} c={chunk} t={threads}");
+                    match (&seq, &par) {
+                        (Ok(a), Ok(b)) => {
+                            assert!(!b.fast, "{what}: the parallel walk accepted it");
+                            assert!(a.fp.early.is_some(), "{what}: no verdict at all");
+                            assert_plan_eq(b, a, &what);
+                        }
+                        (Err(a), Err(b)) => assert_eq!(a, b, "{what}: error"),
+                        _ => panic!("{what}: Ok/Err differ"),
+                    }
+                }
+            }
+        }
+    }
+
     /// Every prefix of the proof: both decoders return the same Result.
     #[test]
     fn par_decode_equals_sequential_on_every_truncation() {
@@ -2196,6 +2725,73 @@ mod tests {
 
     /// Archive agreement: reference vs warp on every proof under
     /// `LRAT_ARCHIVE_DIRS` (skips when unset).
+    /// Archive: the optimistic parallel phase 3a against the sequential walk
+    /// on every proof under `LRAT_ARCHIVE_DIRS` (skips when unset), with a
+    /// tally of which walk ran against the reference verdict. A proof whose
+    /// failure is a bad hint passes phase 3a — the check decides it — so
+    /// "parallel and rejected" is expected; "sequential and verified" is not.
+    #[test]
+    fn archive_plan_parallel_equals_sequential_walk() {
+        let Ok(dirs) = std::env::var("LRAT_ARCHIVE_DIRS") else {
+            eprintln!(
+                "archive_plan_parallel_equals_sequential_walk: SKIPPED (set LRAT_ARCHIVE_DIRS)"
+            );
+            return;
+        };
+        // (fast, verified) → count
+        let mut tally = std::collections::BTreeMap::<(bool, bool), usize>::new();
+        for dir in dirs.split(':') {
+            let dir = std::path::Path::new(dir);
+            let Ok(rd) = std::fs::read_dir(dir.join("proof")) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) != Some("lrat") {
+                    continue;
+                }
+                let stem = p.file_name().unwrap().to_str().unwrap().to_string();
+                let base = stem.split('.').next().unwrap();
+                let (Ok(cnf_text), Ok(proof_text)) = (
+                    std::fs::read_to_string(dir.join("cnf").join(format!("{base}.cnf"))),
+                    std::fs::read_to_string(&p),
+                ) else {
+                    continue;
+                };
+                let Ok(proof) = parse_text(&proof_text) else {
+                    continue;
+                };
+                let cnf = parse_cnf_ints(&cnf_text);
+                let bin = crate::lrat::write_binary(&proof);
+                let verified = check_sequential(&cnf, &proof).is_verified();
+                let mut fast_any = None;
+                for chunk in [64, 4096] {
+                    let seq = plan_with(&cnf, &bin, chunk, 1);
+                    let par = plan_with(&cnf, &bin, chunk, 4);
+                    let what = format!("{stem} c={chunk}");
+                    match (&seq, &par) {
+                        (Ok(a), Ok(b)) => {
+                            assert_plan_eq(b, a, &what);
+                            assert!(fast_any.is_none() || fast_any == Some(b.fast), "{what}");
+                            fast_any = Some(b.fast);
+                        }
+                        (Err(a), Err(b)) => {
+                            assert_eq!(a, b, "{what}: error");
+                            fast_any = Some(false);
+                        }
+                        _ => panic!("{what}: Ok/Err differ"),
+                    }
+                }
+                *tally.entry((fast_any.unwrap(), verified)).or_default() += 1;
+            }
+        }
+        eprintln!("archive_plan_parallel_equals_sequential_walk: (parallel, verified) → proofs: {tally:?}");
+        assert!(
+            !tally.contains_key(&(false, true)),
+            "a verified proof fell back"
+        );
+    }
+
     #[test]
     fn archive_agreement_reference_vs_warp() {
         let Ok(dirs) = std::env::var("LRAT_ARCHIVE_DIRS") else {
