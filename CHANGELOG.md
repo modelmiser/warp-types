@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- **Changed: binary LRAT literal 0 is a parse error** (`warp-types-sat`). Encoded value 1 ("−0") names no variable
+  and has no text form (a `0` inside a text clause ends it), yet every binary decoder here — `lrat::parse_binary`,
+  `FlatProof::from_binary`, the parallel host decoder, the SimWarp model and both device kernels — accepted it as
+  literal 0. All now refuse it, the device kernels by calling the slice dirty so the host reports the error.
+  cake_lpr accepts it; lrat-check has no binary reader. No solver emits it.
 - **Fixed: `Warp::inclusive_sum`, `Warp::exclusive_sum` and `Tile::inclusive_sum` are correct prefix sums, no
   longer deprecated.** Through 0.4.3 they were Hillis–Steele scans without the lane guard: on the device the
   low lanes added the value `shfl.sync.up` hands back to a lane below the stride (their own), and

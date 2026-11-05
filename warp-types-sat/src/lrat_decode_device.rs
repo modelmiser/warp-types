@@ -496,6 +496,32 @@ mod tests {
         }
     }
 
+    /// Literal 0 (encoded 1) is refused on the device as on the host — the
+    /// kernel must call such a slice dirty, not clean, or the device returns
+    /// a proof the host refuses. Planted in each lemma of the synthetic proof
+    /// in turn by turning a literal terminator into encoded 1 plus terminator.
+    #[test]
+    fn device_refuses_literal_zero() {
+        let Some(ctx) = ctx() else { return };
+        let cnf = vec![vec![1, 2], vec![-1, 2], vec![-2]];
+        let bin = vec![
+            b'a', 0x08, 0x04, 0x01, 0x00, 0x02, 0x04, 0x00, b'a', 0x0a, 0x00, 0x08, 0x06, 0x00,
+        ];
+        assert!(FlatProof::from_binary(&cnf, &bin).is_err());
+        for coop in [true, false] {
+            for &slice in &[1u32, 3, 5, 7, 13, 64, 4096] {
+                same(
+                    &ctx,
+                    &cnf,
+                    &bin,
+                    slice,
+                    coop,
+                    &format!("literal 0 s={slice}"),
+                );
+            }
+        }
+    }
+
     /// Long steps and RAT hints across windows, as in the model's tests.
     #[test]
     fn device_handles_straddling_steps_and_rat_hints() {

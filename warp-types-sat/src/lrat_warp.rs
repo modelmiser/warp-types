@@ -353,6 +353,9 @@ impl FlatProof {
                         let mag = (m >> 1) as i64;
                         let v = if m & 1 == 1 { -mag } else { mag };
                         let l = i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?;
+                        if l == 0 {
+                            return Err(err(pos, "literal 0 (encoded 1) names no variable"));
+                        }
                         if l.unsigned_abs() > crate::lrat::MAX_VAR {
                             return Err(err(pos, "variable beyond the checker bound"));
                         }
@@ -556,6 +559,9 @@ fn parse_step(
                 let mag = (m >> 1) as i64;
                 let v = if m & 1 == 1 { -mag } else { mag };
                 let l = i32::try_from(v).map_err(|_| err(pos, "literal out of range"))?;
+                if l == 0 {
+                    return Err(err(pos, "literal 0 (encoded 1) names no variable"));
+                }
                 if l.unsigned_abs() > crate::lrat::MAX_VAR {
                     return Err(err(pos, "variable beyond the checker bound"));
                 }
@@ -2505,6 +2511,17 @@ mod tests {
         assert!(parse_binary(&bin).is_err());
         assert!(FlatProof::from_binary(&c, &bin).is_err());
         assert_same_result(&c, &bin, 2, 3, "big var");
+        // Literal 0 — encoded 1, "−0" — names no variable and has no text
+        // form; every binary parser refuses it (accepted until 2026-11-04).
+        // `a 5 | 2 −0 0 | 1 2 0`, and the same with the 0 first.
+        for lits in [&[0x04u8, 0x01][..], &[0x01, 0x04][..]] {
+            let mut bin = vec![b'a', 0x0a];
+            bin.extend_from_slice(lits);
+            bin.extend_from_slice(&[0x00, 0x02, 0x04, 0x00]);
+            assert!(parse_binary(&bin).is_err(), "{lits:?}");
+            assert!(FlatProof::from_binary(&c, &bin).is_err(), "{lits:?}");
+            assert_same_result(&c, &bin, 2, 3, "literal 0");
+        }
     }
 
     #[test]

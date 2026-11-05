@@ -338,7 +338,9 @@ pub(crate) fn decode_slice_model(bytes: &[u8], lo: usize, hi: usize) -> Option<R
                         let mag = (v >> 1) as i64;
                         let signed = if v & 1 == 1 { -mag } else { mag };
                         match i32::try_from(signed) {
-                            Ok(l) if l.unsigned_abs() <= crate::lrat::MAX_VAR => {}
+                            // Literal 0 (encoded 1) is refused like an
+                            // out-of-bound variable: the slice goes dirty.
+                            Ok(l) if l != 0 && l.unsigned_abs() <= crate::lrat::MAX_VAR => {}
                             _ => is_err[lane] = true,
                         }
                     }

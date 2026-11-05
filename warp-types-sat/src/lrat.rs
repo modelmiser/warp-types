@@ -230,6 +230,14 @@ pub fn parse_binary(bytes: &[u8]) -> Result<Proof, ParseError> {
                         line: pos,
                         msg: format!("literal {v} out of range"),
                     })?;
+                    if l == 0 {
+                        // Encoded 1 ("−0"): no variable, and no text form — a
+                        // `0` mid-clause would end the clause in text LRAT.
+                        return Err(ParseError {
+                            line: pos,
+                            msg: "literal 0 (encoded 1) names no variable".into(),
+                        });
+                    }
                     if l.unsigned_abs() > MAX_VAR {
                         return Err(ParseError {
                             line: pos,

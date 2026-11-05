@@ -879,7 +879,8 @@ unsafe fn dec_slice_warp(
                             is_err = true;
                         } else {
                             lit_val = signed as i32;
-                            if lit_val.unsigned_abs() > DEC_MAX_VAR {
+                            // Literal 0 (encoded 1) names no variable.
+                            if lit_val == 0 || lit_val.unsigned_abs() > DEC_MAX_VAR {
                                 is_err = true;
                             }
                         }
@@ -1217,7 +1218,7 @@ pub fn lrat_scan_slices_serial(
                     break;
                 }
                 let l = signed as i32;
-                if l.unsigned_abs() > DEC_MAX_VAR {
+                if l == 0 || l.unsigned_abs() > DEC_MAX_VAR {
                     dirty = true;
                     break;
                 }
