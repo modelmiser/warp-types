@@ -61,8 +61,20 @@
   predictions one was met: on those first figures the decode missed its 0.25 s by 0.05 s and the pipeline its
   0.5 s by 0.03 s (cold, by more), the warp kernel is 1.3× the thread kernel
   where 2× was predicted (the GPU is ≈ 10× the host threads either way), and the PTX agreed with the model at the
-  first run where a hardware-only defect was predicted. The check kernel, 0.23 s here, is now the largest device
+  first run where a hardware-only defect was predicted. The check kernel, 0.23 s here, was then the largest device
   stage.
+- **LRAT check kernel: packed table, direct layout** (`warp-types-sat`, `feature = "gpu"`): `lrat_check_lemmas`
+  stores each assignment-table slot as one 64-bit word (one load per probe), indexes the table by literal code
+  when every code of the proof fits it (`lrat_max_code` decides per launch; variables up to 2,047), fetches hint <!-- unguarded: 2,047 — largest variable for the direct layout -->
+  metadata 32 hints at a time across the lanes, and runs four warps per block; `check_lrat_codes_mode` picks
+  the layout explicitly, and a block count of 0 picks it per layout from the SM count. Both layouts keep the
+  4,095-entry cap, so `TableOverflow` falls on the same lemmas. Per-lemma codes held equal to the SimWarp model
+  in both layouts on the battery and all 632 archive files. **Measured 2026-11-04**, same card, one cold run <!-- unguarded: 632 — archive count -->
+  each: check 0.23 → 0.09 s on the 415 MB proof and 0.54 → 0.23 s on the 898 MB one, bytes-in-RAM to verdict <!-- unguarded: 415, 898 — proof sizes in MB -->
+  0.55 → 0.41 s and 1.3 → 1.0 s. The direct layout is most of the gain; the hashed one, which proofs with more
+  variables keep, measured 0.14 s on the 415 MB proof when forced. Pre-registered (`research/gpu-lrat-decode.md`, <!-- unguarded: 415 — proof size in MB -->
+  S5): two predictions missed — more warps per block made the kernel slower, it was contending for memory, not
+  short of latency hiding — and three met.
 - **Warp-typed LRAT proof checker** (`warp-types-sat`): `lrat` (text + binary LRAT; the reference checker follows
   `lrat-check`'s RUP rules — hints in order, deletions honoured, every step checked including those after the empty
   clause, RAT = `Unsupported` — and reports the earliest failing step), `lrat_warp` (one warp per lemma on the

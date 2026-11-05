@@ -263,16 +263,20 @@ fail-closed: no checker is not a pass.
   thread-per-slice kernel is kept as the control: the warp is 1.3× it, the
   GPU about 10× six host threads). Same workstation, same 415 MB proof, <!-- unguarded: 415 — proof size in MB -->
   one cold run each: decode 0.90 → 0.33 s, bytes in RAM to verdict
-  1.19 → 0.57 s, so the device path above becomes read 0.13 s + 0.57 s —
-  about 23× the external checkers; the 898 MB proof goes 2.70 → 1.3 s. <!-- unguarded: 898 — proof size in MB -->
+  1.19 → 0.41 s, so the device path above becomes read 0.13 s + 0.41 s —
+  about 30× the external checkers; the 898 MB proof goes 2.70 → 1.0 s. <!-- unguarded: 898 — proof size in MB -->
   (Corrected 2026-11-04: the first figures, 0.30 and 0.53 s, were the best
   of three repetitions in one process, where the step-record download
   reused memory the previous repetition had freed; a one-shot run pays
-  it.) Phase 3a of the stitch now runs on host threads for any proof it
-  has nothing to reject, and the sequential walk decides the rest. What
-  remains is the step-record download and that walk (0.08 + 0.09 s) and
-  the check kernel itself (0.23 s on this card). `LRAT_GPU_RESIDENT=1` on
-  the example runs this route. Limits: per-lemma
+  it.) Phase 3a of the stitch runs on host threads for any proof it has
+  nothing to reject, and the sequential walk decides the rest. The check
+  kernel packs each table slot into one 64-bit word and, when every
+  literal code fits the table (variables up to 2,047, as in both proofs <!-- unguarded: 2,047 — largest variable for the direct layout -->
+  here), indexes the table directly instead of hashing: 0.23 → 0.09 s.
+  Proofs with more variables keep the hashed table (0.14 s on this proof
+  when forced; no larger-variable proof has been timed). What remains is
+  the step-record download and the host walk (0.08 + 0.09 s).
+  `LRAT_GPU_RESIDENT=1` on the example runs this route. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not
   checked on the warp paths); ids and variables above 2^26 are refused at
   parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat
