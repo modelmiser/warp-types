@@ -408,8 +408,9 @@ pub struct GpuIterState {
 impl GpuContext {
     /// Check every lemma of a flat LRAT proof on the device with
     /// `sat-kernels::lrat_check_lemmas`; returns one code per lemma (the
-    /// `lrat_warp::LemmaCode` numbering). `blocks` warps run grid-stride
-    /// over the lemmas; each gets a `LRAT_TABLE`-slot scratch table.
+    /// `lrat_warp::LemmaCode` numbering). The warps run grid-stride
+    /// over the lemmas — `blocks` blocks of `LRAT_WARPS_PER_BLOCK` warps, each warp
+    /// with its own `LRAT_TABLE`-slot scratch table.
     ///
     /// Everything about the verdict (earliest failing lemma, the empty
     /// clause) is decided on the host from the codes, as for the SimWarp
@@ -419,46 +420,12 @@ impl GpuContext {
         fp: &crate::lrat_warp::FlatProof,
         blocks: u32,
     ) -> Result<Vec<u8>, GpuError> {
-        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
-        let s = &self.stream;
-        let n = fp.lemma_clause.len() as u32;
-        if n == 0 {
+        if fp.lemma_clause.is_empty() {
             return Ok(Vec::new());
         }
-        let blocks = blocks.max(1).min(n);
-        let lits = s.clone_htod(&fp.lits)?;
-        let clause_start = s.clone_htod(&fp.clause_start)?;
-        let deleted_at = s.clone_htod(&fp.deleted_at)?;
-        let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
-        let lemma_step = s.clone_htod(&fp.lemma_step)?;
-        let hint_start = s.clone_htod(&fp.hint_start)?;
-        let hints = s.clone_htod(&fp.hints)?;
-        let table_keys: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
-        let table_stamps: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
-        // Pre-filled with `LemmaCode::Unwritten` (6): a lemma the kernel never
-        // wrote must fail, not read as Ok (= 0). Cross-vendor panel 2026-11-02.
-        let codes: CudaSlice<u8> = s.clone_htod(&vec![6u8; n as usize])?;
-        unsafe {
-            s.launch_builder(&self.kernels.lrat_check_lemmas)
-                .arg(&lits)
-                .arg(&clause_start)
-                .arg(&deleted_at)
-                .arg(&lemma_clause)
-                .arg(&lemma_step)
-                .arg(&hint_start)
-                .arg(&hints)
-                .arg(&table_keys)
-                .arg(&table_stamps)
-                .arg(&codes)
-                .arg(&n)
-                .arg(&blocks)
-                .launch(LaunchConfig {
-                    grid_dim: (blocks, 1, 1),
-                    block_dim: (WARP_SIZE, 1, 1),
-                    shared_mem_bytes: 0,
-                })?;
-        }
-        Ok(s.clone_dtoh(&codes)?)
+        let lits = self.stream.clone_htod(&fp.lits)?;
+        let hints = self.stream.clone_htod(&fp.hints)?;
+        self.check_lrat_codes_with(fp, &lits, &hints, blocks)
     }
     /// Phase 1 of the binary LRAT decode on the device
     /// (`sat-kernels::lrat_scan_slices`, or the thread-per-slice control when
@@ -828,20 +795,91 @@ impl GpuContext {
         hints: &CudaSlice<u32>,
         blocks: u32,
     ) -> Result<Vec<u8>, GpuError> {
+        self.check_lrat_codes_mode(fp, lits, hints, blocks, None)
+    }
+
+    /// The largest literal code (`2·|l| + (l < 0)`) of a device literal
+    /// array (`sat-kernels::lrat_max_code`); 0 for an empty array.
+    pub fn lrat_max_code(&self, lits: &CudaSlice<i32>) -> Result<u32, GpuError> {
+        let s = &self.stream;
+        let n = lits.len() as u32;
+        if n == 0 {
+            return Ok(0);
+        }
+        let out: CudaSlice<u32> = s.alloc_zeros(1)?;
+        let blocks = n.div_ceil(256).min(1024);
+        unsafe {
+            s.launch_builder(&self.kernels.lrat_max_code)
+                .arg(lits)
+                .arg(&n)
+                .arg(&out)
+                .arg(&blocks)
+                .launch(LaunchConfig {
+                    grid_dim: (blocks, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(s.clone_dtoh(&out)?[0])
+    }
+
+    /// [`GpuContext::check_lrat_codes`] with the table layout chosen by the
+    /// caller: `Some(true)` direct (every literal code must be below
+    /// `LRAT_TABLE` — asserted), `Some(false)` hashed, `None` direct exactly
+    /// when the codes allow it. The tests force both layouts on every proof.
+    ///
+    /// `blocks == 0` picks the block count from the layout and the SM count:
+    /// 24 blocks (96 warps) per SM for the direct layout, 6 (24 warps) for
+    /// the hashed one — the best of a sweep on an RTX 4000 SFF Ada
+    /// (`research/gpu-lrat-decode.md`, S5); the hashed table's footprint
+    /// makes more resident warps per SM SLOWER, the direct one's does not.
+    pub fn check_lrat_codes_mode(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        lits: &CudaSlice<i32>,
+        hints: &CudaSlice<u32>,
+        blocks: u32,
+        direct: Option<bool>,
+    ) -> Result<Vec<u8>, GpuError> {
         const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+        const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
         let s = &self.stream;
         let n = fp.lemma_clause.len() as u32;
         if n == 0 {
             return Ok(Vec::new());
         }
+        let fits = self.lrat_max_code(lits)? < TABLE;
+        let direct = match direct {
+            Some(true) => {
+                assert!(
+                    fits,
+                    "direct table layout forced on a proof whose literal codes do not fit it"
+                );
+                true
+            }
+            Some(false) => false,
+            None => fits,
+        };
+        let direct_arg = direct as u32;
+        let blocks = if blocks == 0 {
+            let sms = self
+                .stream
+                .context()
+                .attribute(
+                    cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+                )
+                .map_or(1, |v| v.max(1) as u32);
+            sms * if direct { 24 } else { 6 }
+        } else {
+            blocks
+        };
         let blocks = blocks.max(1).min(n);
         let clause_start = s.clone_htod(&fp.clause_start)?;
         let deleted_at = s.clone_htod(&fp.deleted_at)?;
         let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
         let lemma_step = s.clone_htod(&fp.lemma_step)?;
         let hint_start = s.clone_htod(&fp.hint_start)?;
-        let table_keys: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
-        let table_stamps: CudaSlice<u32> = s.alloc_zeros((blocks * TABLE) as usize)?;
+        let table: CudaSlice<u64> = s.alloc_zeros((blocks * WPB * TABLE) as usize)?;
         // Pre-filled with `LemmaCode::Unwritten` (6): a lemma the kernel never
         // wrote must fail, not read as Ok (= 0). Cross-vendor panel 2026-11-02.
         let codes: CudaSlice<u8> = s.clone_htod(&vec![6u8; n as usize])?;
@@ -854,14 +892,14 @@ impl GpuContext {
                 .arg(&lemma_step)
                 .arg(&hint_start)
                 .arg(hints)
-                .arg(&table_keys)
-                .arg(&table_stamps)
+                .arg(&table)
                 .arg(&codes)
                 .arg(&n)
                 .arg(&blocks)
+                .arg(&direct_arg)
                 .launch(LaunchConfig {
                     grid_dim: (blocks, 1, 1),
-                    block_dim: (WARP_SIZE, 1, 1),
+                    block_dim: (WARP_SIZE * WPB, 1, 1),
                     shared_mem_bytes: 0,
                 })?;
         }

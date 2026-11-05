@@ -257,9 +257,27 @@ fn main() {
                                     &ctx, &cnf, &bytes, slice, coop, blocks,
                                 )
                                 .unwrap_or_else(|e| panic!("resident decode: {e}"));
+                            // LRAT_CHECK_TABLE = hashed | direct (default: the
+                            // launcher's choice); LRAT_CHECK_BLOCKS (default 0:
+                            // the launcher picks from the layout and SM count).
+                            let table = match std::env::var("LRAT_CHECK_TABLE").as_deref() {
+                                Ok("hashed") => Some(false),
+                                Ok("direct") => Some(true),
+                                _ => None,
+                            };
+                            let check_blocks: u32 = std::env::var("LRAT_CHECK_BLOCKS")
+                                .ok()
+                                .and_then(|b| b.parse().ok())
+                                .unwrap_or(0);
                             let tb = Instant::now();
                             let raw = ctx
-                                .check_lrat_codes_resident(&dfp, blocks)
+                                .check_lrat_codes_mode(
+                                    &dfp.meta,
+                                    &dfp.lits,
+                                    &dfp.hints,
+                                    check_blocks,
+                                    table,
+                                )
                                 .expect("resident check");
                             let tc = Instant::now();
                             let codes: Vec<warp_types_sat::lrat_warp::LemmaCode> = raw

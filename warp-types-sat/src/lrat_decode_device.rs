@@ -685,8 +685,22 @@ mod tests {
             .iter()
             .map(|&c| c as u8)
             .collect();
-        for blocks in [1u32, 7, 64, 4096] {
-            let got = ctx.check_lrat_codes(fp, blocks).unwrap();
+        let lits = ctx.stream().clone_htod(&fp.lits).unwrap();
+        let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
+        let fits = ctx.lrat_max_code(&lits).unwrap() < 4096;
+        let modes: &[Option<bool>] = if fits {
+            &[None, Some(false), Some(true)]
+        } else {
+            &[None, Some(false)]
+        };
+        for (&mode, blocks) in modes
+            .iter()
+            .flat_map(|m| [1u32, 7, 64, 4096].map(|b| (m, b)))
+        {
+            let got = ctx
+                .check_lrat_codes_mode(fp, &lits, &hints, blocks, mode)
+                .unwrap();
+            let what = format!("{what} mode={mode:?}");
             if got != want {
                 let i = got.iter().zip(&want).position(|(a, b)| a != b);
                 panic!(
@@ -802,7 +816,9 @@ mod tests {
     #[test]
     fn check_kernel_codes_equal_simwarp_on_the_archive() {
         let Ok(dirs) = std::env::var("LRAT_ARCHIVE_DIRS") else {
-            eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: SKIPPED (set LRAT_ARCHIVE_DIRS)");
+            eprintln!(
+                "check_kernel_codes_equal_simwarp_on_the_archive: SKIPPED (set LRAT_ARCHIVE_DIRS)"
+            );
             return;
         };
         let Some(ctx) = ctx() else { return };

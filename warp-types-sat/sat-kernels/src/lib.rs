@@ -295,19 +295,24 @@ pub fn grad_norm_reduce(
 // ============================================================================
 // Kernel 5: LRAT lemma checking — one warp per lemma (grid-stride)
 //
-// Device layout = `warp_types_sat::lrat_warp::FlatProof`. Each block is one
-// warp; block `b` checks lemmas `b, b + num_blocks, …`. Per hint clause the
+// Device layout = `warp_types_sat::lrat_warp::FlatProof`. Each warp checks
+// its own lemma stream (see the kernel's doc). Per hint clause the
 // lanes stride over the literals, count the ones not falsified under the
 // lemma's running assignment, `reduce_sum` the counts, and if the total is
 // one, `ballot` finds the lane that owns the unit and `broadcast_lane`
 // hands its literal to the warp. Total zero is the conflict that makes the
 // lemma RUP; two or more is a failure.
 //
-// The running assignment is an open-addressing table in a per-block global
-// scratch region (`TABLE` slots of key + stamp). Every lane performs every
-// insert — identical writes to identical slots — so no lane ever has to
-// read another lane's write and no warp barrier is needed; the stamp is the
-// lemma index + 1, so the table needs no clearing between lemmas.
+// The running assignment is a table in a per-warp global scratch region of
+// `TABLE` 64-bit slots, each `stamp << 32 | key` (key = literal code + 1),
+// so one load answers a probe; the stamp is the lemma index + 1, so the
+// table needs no clearing between lemmas. Two layouts, chosen per launch by
+// the host: HASHED (open addressing on the key) for any proof, and DIRECT
+// (slot = literal code, no probing) when every literal code of the proof is
+// below `TABLE` — denser and cheaper. Both count occupancy and stop at the
+// same cap, so `TableOverflow` falls on the same lemmas either way. Every
+// lane performs every insert — identical writes to identical slots — so no
+// lane has to read another lane's write except through the barrier below.
 //
 // Control flow at every collective is warp-uniform: admissibility, the
 // total and the verdict are computed from the same global data by all lanes.
@@ -315,8 +320,14 @@ pub fn grad_norm_reduce(
 // 5 TableOverflow (same numbering as `lrat_warp::LemmaCode`).
 // ============================================================================
 
-/// Open-addressing table capacity per block (power of two).
+/// Open-addressing table capacity per warp (power of two).
 pub const LRAT_TABLE: u32 = 4096;
+
+/// Warps per block of `lrat_check_lemmas`. Each warp checks its own lemma
+/// stream with its own table region; nothing is shared between the warps of
+/// a block. More than one per block because a one-warp block caps residency
+/// at the per-SM BLOCK limit (24 on sm_89), half the per-SM warp limit.
+pub const LRAT_WARPS_PER_BLOCK: u32 = 4;
 
 #[inline(always)]
 fn lrat_code(l: i32) -> u32 {
@@ -328,21 +339,27 @@ fn lrat_hash(k: u32) -> u32 {
     k.wrapping_mul(0x9E37_79B1) & (LRAT_TABLE - 1)
 }
 
-/// Is literal `l` falsified in this block's table (stamp-qualified)? The
-/// probe count is bounded so a full table cannot spin (it cannot BE full —
-/// `lrat_insert` caps occupancy at `LRAT_TABLE - 1` — but a bounded loop is
-/// the property a reader can check).
+/// Is literal `l` falsified in this warp's table (stamp-qualified)? In the
+/// hashed layout the probe count is bounded so a full table cannot spin (it
+/// cannot BE full — `lrat_insert` caps occupancy at `LRAT_TABLE - 1` — but a
+/// bounded loop is the property a reader can check).
 #[inline(always)]
-unsafe fn lrat_falsified(keys: *const u32, stamps: *const u32, base: u32, stamp: u32, l: i32) -> bool {
+unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, l: i32) -> bool {
     let k = lrat_code(l) + 1;
+    if direct {
+        // The host guarantees every code is below LRAT_TABLE; `& (TABLE-1)`
+        // keeps a broken guarantee inside this warp's region.
+        let e = *table.add((base + ((k - 1) & (LRAT_TABLE - 1))) as usize);
+        return (e >> 32) as u32 == stamp;
+    }
     let mut i = lrat_hash(k);
     let mut probes = 0u32;
     while probes < LRAT_TABLE {
-        let idx = (base + i) as usize;
-        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
+        let e = *table.add((base + i) as usize);
+        if (e >> 32) as u32 != stamp {
             return false;
         }
-        if *keys.add(idx) == k {
+        if e as u32 == k {
             return true;
         }
         i = (i + 1) & (LRAT_TABLE - 1);
@@ -354,44 +371,42 @@ unsafe fn lrat_falsified(keys: *const u32, stamps: *const u32, base: u32, stamp:
 /// Mark literal `l` false. `count` is this lemma's occupancy; returns false
 /// (table overflow, code 5) rather than filling the last slot, so a lookup
 /// always finds an empty slot and terminates. Same cap as `SimWarp`'s
-/// `LitTable` (`CAP - 1` = 4,095 literals). The previous version capped
-/// PROBES at 4,095, which still admitted a 4,096th key whenever the hole was
-/// within reach — then the table was full and a miss looped forever
-/// (cross-vendor panel, 2026-11-02).
+/// `LitTable` (`CAP - 1` = 4,095 literals), in both layouts. The previous
+/// version capped PROBES at 4,095, which still admitted a 4,096th key
+/// whenever the hole was within reach — then the table was full and a miss
+/// looped forever (cross-vendor panel, 2026-11-02).
 #[inline(always)]
-unsafe fn lrat_insert(
-    keys: *mut u32,
-    stamps: *mut u32,
-    base: u32,
-    stamp: u32,
-    l: i32,
-    count: &mut u32,
-) -> bool {
+unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i32, count: &mut u32) -> bool {
     let k = lrat_code(l) + 1;
-    let mut i = lrat_hash(k);
+    let entry = ((stamp as u64) << 32) | k as u64;
+    let mut i = if direct { (k - 1) & (LRAT_TABLE - 1) } else { lrat_hash(k) };
     loop {
         let idx = (base + i) as usize;
-        if *stamps.add(idx) != stamp || *keys.add(idx) == 0 {
+        let e = *table.add(idx);
+        if (e >> 32) as u32 != stamp {
             if *count >= LRAT_TABLE - 1 {
                 return false;
             }
-            *keys.add(idx) = k;
-            *stamps.add(idx) = stamp;
+            *table.add(idx) = entry;
             *count += 1;
             return true;
         }
-        if *keys.add(idx) == k {
+        if direct || e as u32 == k {
             return true;
         }
         i = (i + 1) & (LRAT_TABLE - 1);
     }
 }
 
-/// Check lemmas `block_id, block_id + num_blocks, …` of a flat LRAT proof.
+/// Check lemmas `w, w + W, …` of a flat LRAT proof, where `w` is the global
+/// warp index (`block_id * LRAT_WARPS_PER_BLOCK + thread_id / 32`) and `W =
+/// num_blocks * LRAT_WARPS_PER_BLOCK`.
 ///
-/// Grid: (num_blocks, 1, 1), Block: (32, 1, 1). `table_keys`/`table_stamps`
-/// hold `num_blocks * LRAT_TABLE` entries each, zeroed by the host once.
-/// `codes[i]` receives lemma `i`'s code.
+/// Grid: (num_blocks, 1, 1), Block: (32 * LRAT_WARPS_PER_BLOCK, 1, 1).
+/// `table` holds `W * LRAT_TABLE` 64-bit slots, zeroed by the host once.
+/// `direct != 0` selects the direct layout; the host passes it only when
+/// every literal code (`2·|l| + (l < 0)`) is below `LRAT_TABLE`. `codes[i]`
+/// receives lemma `i`'s code.
 #[warp_kernel]
 pub fn lrat_check_lemmas(
     lits: *const i32,
@@ -401,17 +416,21 @@ pub fn lrat_check_lemmas(
     lemma_step: *const u32,
     hint_start: *const u32,
     hints: *const u32,
-    table_keys: *mut u32,
-    table_stamps: *mut u32,
+    table: *mut u64,
     codes: *mut u8,
     num_lemmas: u32,
     num_blocks: u32,
+    direct: u32,
 ) {
+    let direct = direct != 0;
     let warp: Warp<All> = Warp::kernel_entry();
     let bid = warp_types::gpu::block_id_x();
-    let lane = warp_types::gpu::thread_id_x();
-    let base = bid * LRAT_TABLE;
-    let mut i = bid;
+    let tid = warp_types::gpu::thread_id_x();
+    let lane = tid & 31;
+    let gw = bid * LRAT_WARPS_PER_BLOCK + (tid >> 5);
+    let n_warps = num_blocks * LRAT_WARPS_PER_BLOCK;
+    let base = gw * LRAT_TABLE;
+    let mut i = gw;
     while i < num_lemmas {
         let stamp = i + 1;
         let lemma_dense = *lemma_clause.add(i as usize);
@@ -423,7 +442,7 @@ pub fn lrat_check_lemmas(
         // Lemma literals are false. Every lane inserts (identical writes).
         let mut k = ls;
         while k < le {
-            if !lrat_insert(table_keys, table_stamps, base, stamp, *lits.add(k as usize), &mut count) {
+            if !lrat_insert(table, base, stamp, direct, *lits.add(k as usize), &mut count) {
                 code = 5;
                 break;
             }
@@ -439,26 +458,48 @@ pub fn lrat_check_lemmas(
             let hs = *hint_start.add(i as usize);
             let he = *hint_start.add(i as usize + 1);
             let mut h = hs;
+            // Hint metadata, 32 hints at a time, one per lane: the hint's
+            // dense id, its deletion step and its clause bounds. Each hint's
+            // four values then reach the warp by `broadcast_lane` instead of
+            // by a chain of dependent loads. A lane whose hint is forward
+            // (`>= lemma_dense`) loads nothing more: the warp rejects that
+            // hint before using the other three values.
+            let mut batch = hs;
+            let (mut m_hc, mut m_del, mut m_cs, mut m_ce) = (0u32, 0u32, 0u32, 0u32);
             while h < he {
-                let hc = *hints.add(h as usize);
+                if h == batch {
+                    let j = h + lane;
+                    if j < he {
+                        m_hc = *hints.add(j as usize);
+                        if m_hc < lemma_dense {
+                            m_del = *deleted_at.add(m_hc as usize);
+                            m_cs = *clause_start.add(m_hc as usize);
+                            m_ce = *clause_start.add(m_hc as usize + 1);
+                        }
+                    }
+                    batch = h + 32;
+                }
+                // `& 31`: see the note at the unit broadcast below.
+                let src = (h + 32 - batch) & 31;
+                let hc = warp.broadcast_lane(data::PerLane::new(m_hc), src).get();
                 // Admissibility — the same test in every lane.
                 if hc >= lemma_dense {
                     code = 4;
                     break;
                 }
-                if *deleted_at.add(hc as usize) < lstep {
+                if warp.broadcast_lane(data::PerLane::new(m_del), src).get() < lstep {
                     code = 3;
                     break;
                 }
-                let cs = *clause_start.add(hc as usize);
-                let ce = *clause_start.add(hc as usize + 1);
+                let cs = warp.broadcast_lane(data::PerLane::new(m_cs), src).get();
+                let ce = warp.broadcast_lane(data::PerLane::new(m_ce), src).get();
                 // Each lane strides over the clause.
                 let mut free = 0u32;
                 let mut last = 0i32;
                 let mut j = cs + lane;
                 while j < ce {
                     let l = *lits.add(j as usize);
-                    if !lrat_falsified(table_keys, table_stamps, base, stamp, l) {
+                    if !lrat_falsified(table, base, stamp, direct, l) {
                         free += 1;
                         last = l;
                     }
@@ -483,7 +524,7 @@ pub fn lrat_check_lemmas(
                 let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
                 let src = voted.trailing_zeros() & 31;
                 let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-                let ok = lrat_insert(table_keys, table_stamps, base, stamp, -unit, &mut count);
+                let ok = lrat_insert(table, base, stamp, direct, -unit, &mut count);
                 warp_types::gpu::syncwarp(0xffff_ffff);
                 if !ok {
                     code = 5;
@@ -495,8 +536,30 @@ pub fn lrat_check_lemmas(
         if lane == 0 {
             *codes.add(i as usize) = code;
         }
-        i += num_blocks;
+        i += n_warps;
     }
+}
+
+/// The largest literal code (`2·|l| + (l < 0)`) in `lits[..n]`, folded into
+/// `*out` by atomic maximum (the host zeroes it). Picks the check kernel's
+/// table layout for a device-resident proof.
+///
+/// Grid: (num_blocks, 1, 1), Block: (256, 1, 1); grid-stride.
+#[warp_kernel]
+pub fn lrat_max_code(lits: *const i32, n: u32, out: *mut u32, num_blocks: u32) {
+    let tid = warp_types::gpu::thread_id_x();
+    let bid = warp_types::gpu::block_id_x();
+    let mut i = bid * 256 + tid;
+    let mut m = 0u32;
+    while i < n {
+        let c = lrat_code(*lits.add(i as usize));
+        if c > m {
+            m = c;
+        }
+        i += num_blocks * 256;
+    }
+    let a = core::sync::atomic::AtomicU32::from_ptr(out);
+    a.fetch_max(m, core::sync::atomic::Ordering::Relaxed);
 }
 
 // ============================================================================
