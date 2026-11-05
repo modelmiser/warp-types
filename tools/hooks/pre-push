@@ -50,6 +50,18 @@ else
     echo "pre-push: skipping gpu-feature check (no CUDA toolkit on this host)"
 fi
 
+# The four device-target clippies CI runs (ci.yml, job nvptx). Not covered by
+# the host clippy above: a lint in a kernel crate failed CI on three pushes in a
+# row (2026-11-04, `k - 1 >= LRAT_TABLE` in sat-kernels) while this hook passed.
+for m in "-p warp-types" \
+         "--manifest-path warp-types-sat/sat-kernels/Cargo.toml" \
+         "--manifest-path examples/gpu-project/my-kernels/Cargo.toml" \
+         "--manifest-path tools/ptxprobe/Cargo.toml"; do
+    echo "pre-push: cargo clippy $m --target nvptx64-nvidia-cuda -- -D warnings"
+    # shellcheck disable=SC2086 # $m is two words on purpose
+    cargo clippy $m --target nvptx64-nvidia-cuda --quiet -- -D warnings
+done
+
 echo "pre-push: PTX operands (membermask / width reach shfl.sync)"
 bash scripts/check-ptx-operands.sh
 

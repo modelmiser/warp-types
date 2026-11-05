@@ -388,7 +388,7 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i
     let k = lrat_code(l) + 1;
     // Direct layout: a code past the table means the host's guarantee is
     // broken — fail closed (TableOverflow: no verdict) rather than alias.
-    if direct && k - 1 >= LRAT_TABLE {
+    if direct && k > LRAT_TABLE {
         return false;
     }
     let entry = ((stamp as u64) << 32) | k as u64;
