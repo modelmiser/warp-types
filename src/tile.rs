@@ -212,26 +212,29 @@ where
         val
     }
 
-    /// Inclusive prefix sum within the tile.
+    /// Inclusive prefix sum within the tile: lane `i` of the tile gets the sum
+    /// of the tile's lanes `0..=i`.
     ///
-    /// **WARNING:** Not correct on any target. On CPU, `shfl_up` is identity,
-    /// so each stage doubles (result: val × SIZE). On GPU, lanes where
-    /// `lane_id < stride` get clamped (own value), doubling instead of
-    /// preserving. Needs `if lane_id >= stride` guard (requires `lane_id()`).
-    /// Retained for type-system demonstration.
-    #[deprecated(
-        note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan."
-    )]
+    /// Hillis–Steele on the width-confined `shuffle_up`, with the lane guard
+    /// on the lane's index WITHIN the tile (`lane_id() % SIZE`): every lane
+    /// issues every shuffle, and adds what it received only when that index is
+    /// at least the stride. Through 0.4.3 the guard was missing and the low
+    /// lanes of each tile doubled. On the CPU path the thread is lane 0, so the
+    /// result is its own value. Not available on `amdgpu` (no `lane_id`).
+    #[cfg(not(target_arch = "amdgpu"))]
     #[inline]
     pub fn inclusive_sum<T: GpuValue + GpuShuffle + core::ops::Add<Output = T>>(
         &self,
         data: PerLane<T>,
     ) -> PerLane<T> {
+        let lane = crate::gpu::lane_id() & (SIZE as u32 - 1);
         let mut val = data.get();
         let mut stride = 1u32;
         while stride < SIZE as u32 {
             let s = unsafe { val.gpu_shfl_up_width(stride, SIZE as u32) };
-            val = val + s;
+            if lane >= stride {
+                val = val + s;
+            }
             stride *= 2;
         }
         PerLane::new(val)
@@ -410,13 +413,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_tile_inclusive_sum() {
+    fn test_tile_inclusive_sum_cpu_is_lane_zero() {
+        // CPU path: lane 0 of the tile, so its own value (8 through 0.4.3).
+        // Multi-lane result: examples/gpu-project Test 10.
         let warp: Warp<All> = Warp::kernel_entry();
         let tile: Tile<8> = warp.tile();
-        let data = PerLane::new(1i32);
-        let result = tile.inclusive_sum(data);
-        // CPU emulation: 1 + 1 = 2, 2 + 2 = 4, 4 + 4 = 8
-        assert_eq!(result.get(), 8);
+        assert_eq!(tile.inclusive_sum(PerLane::new(1i32)).get(), 1);
     }
 }

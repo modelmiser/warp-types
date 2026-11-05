@@ -11,7 +11,9 @@
 use core::panic::PanicInfo;
 
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! { loop {} }
+fn panic(_: &PanicInfo) -> ! {
+    loop {}
+}
 
 use warp_types::*; // includes warp_kernel via re-export
 
@@ -129,67 +131,97 @@ pub fn bitonic_sort_i32(data: *mut i32) {
     // k=2, j=1
     let p = warp.shuffle_xor(data::PerLane::new(val), 1).get();
     let w = ((tid & 2) == 0) == ((tid & 1) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
 
     // k=4, j=2
     let p = warp.shuffle_xor(data::PerLane::new(val), 2).get();
     let w = ((tid & 4) == 0) == ((tid & 2) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=4, j=1
     let p = warp.shuffle_xor(data::PerLane::new(val), 1).get();
     let w = ((tid & 4) == 0) == ((tid & 1) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
 
     // k=8, j=4
     let p = warp.shuffle_xor(data::PerLane::new(val), 4).get();
     let w = ((tid & 8) == 0) == ((tid & 4) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=8, j=2
     let p = warp.shuffle_xor(data::PerLane::new(val), 2).get();
     let w = ((tid & 8) == 0) == ((tid & 2) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=8, j=1
     let p = warp.shuffle_xor(data::PerLane::new(val), 1).get();
     let w = ((tid & 8) == 0) == ((tid & 1) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
 
     // k=16, j=8
     let p = warp.shuffle_xor(data::PerLane::new(val), 8).get();
     let w = ((tid & 16) == 0) == ((tid & 8) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=16, j=4
     let p = warp.shuffle_xor(data::PerLane::new(val), 4).get();
     let w = ((tid & 16) == 0) == ((tid & 4) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=16, j=2
     let p = warp.shuffle_xor(data::PerLane::new(val), 2).get();
     let w = ((tid & 16) == 0) == ((tid & 2) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=16, j=1
     let p = warp.shuffle_xor(data::PerLane::new(val), 1).get();
     let w = ((tid & 16) == 0) == ((tid & 1) == 0);
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
 
     // k=32, j=16 (tid & 32 == 0 always true for 32 lanes → all ascending)
     let p = warp.shuffle_xor(data::PerLane::new(val), 16).get();
     let w = (tid & 16) == 0; // simplified: ascending always true
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=32, j=8
     let p = warp.shuffle_xor(data::PerLane::new(val), 8).get();
     let w = (tid & 8) == 0;
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=32, j=4
     let p = warp.shuffle_xor(data::PerLane::new(val), 4).get();
     let w = (tid & 4) == 0;
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=32, j=2
     let p = warp.shuffle_xor(data::PerLane::new(val), 2).get();
     let w = (tid & 2) == 0;
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
     // k=32, j=1
     let p = warp.shuffle_xor(data::PerLane::new(val), 1).get();
     let w = (tid & 1) == 0;
-    if (w && val > p) || (!w && val < p) { val = p; }
+    if (w && val > p) || (!w && val < p) {
+        val = p;
+    }
 
     *data.add(tid as usize) = val;
 }
@@ -235,7 +267,9 @@ pub fn shuffle_within_even(out: *mut i32) {
     let warp: Warp<All> = Warp::kernel_entry();
     let tid = warp_types::gpu::thread_id_x();
     let (evens, _odds) = warp.diverge_even_odd();
-    let v = evens.shuffle_xor_within(data::PerLane::new(tid as i32), 2).get();
+    let v = evens
+        .shuffle_xor_within(data::PerLane::new(tid as i32), 2)
+        .get();
     *out.add(tid as usize) = v;
 }
 
@@ -264,4 +298,57 @@ pub fn dyn_shuffle_xor_partial(out: *mut i32) {
     let w = DynWarp::from_mask_32(0x0000_FFFF);
     let v = w.shuffle_xor_scalar(tid as i32, 1).unwrap_or(-1);
     *out.add(tid as usize) = v;
+}
+
+// ============================================================================
+// Kernel 9: warp prefix sums. Lane t holds t*t + 1 (distinct values, so a
+// doubled or clamped lane shows). Expected: inclusive[t] = sum of lanes 0..=t,
+// exclusive[t] = sum of lanes 0..t (lane 0 gets the identity, 0).
+// ============================================================================
+
+#[warp_kernel]
+pub fn scan_sums(data: *const i32, incl: *mut i32, excl: *mut i32) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let v = *data.add(tid as usize);
+    let i = warp.inclusive_sum(data::PerLane::new(v)).get();
+    let e = warp.exclusive_sum(data::PerLane::new(v), 0).get();
+    *incl.add(tid as usize) = i;
+    *excl.add(tid as usize) = e;
+}
+
+// ============================================================================
+// Kernel 10: tile prefix sums, Tile<4|8|16|32>. Expected: each N-lane tile
+// scanned on its own (lane t gets the sum of lanes (t & !(N-1))..=t).
+// ============================================================================
+
+#[warp_kernel]
+pub fn tile_scans(data: *const i32, out: *mut i32) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let v = data::PerLane::new(*data.add(tid as usize));
+    let t = tid as usize;
+    let t4: Tile<'_, 4> = warp.tile();
+    *out.add(t) = t4.inclusive_sum(v).get();
+    let t8: Tile<'_, 8> = warp.tile();
+    *out.add(32 + t) = t8.inclusive_sum(v).get();
+    let t16: Tile<'_, 16> = warp.tile();
+    *out.add(64 + t) = t16.inclusive_sum(v).get();
+    let t32: Tile<'_, 32> = warp.tile();
+    *out.add(96 + t) = t32.inclusive_sum(v).get();
+}
+
+// ============================================================================
+// Kernel 11: i64 warp scan (64-bit shuffle is two 32-bit passes). Lane t holds
+// t * 2^33 + t + 1 (lane 0 nonzero, so the exclusive identity shows), so a
+// carry or half-word mix-up shows.
+// ============================================================================
+
+#[warp_kernel]
+pub fn scan_sums_i64(data: *const i64, incl: *mut i64, excl: *mut i64) {
+    let warp: Warp<All> = Warp::kernel_entry();
+    let tid = warp_types::gpu::thread_id_x();
+    let v = *data.add(tid as usize);
+    *incl.add(tid as usize) = warp.inclusive_sum(data::PerLane::new(v)).get();
+    *excl.add(tid as usize) = warp.exclusive_sum(data::PerLane::new(v), 0).get();
 }

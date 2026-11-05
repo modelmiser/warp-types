@@ -27,10 +27,10 @@
 //! by slice, on every truncation and every bit flip of the synthetic proof, so
 //! that "dirty" cannot hide a wrong record.
 //!
-//! The scan is the lane-guarded Hillis–Steele; the crate's
-//! `Warp::inclusive_sum` is deprecated as incorrect for lack of that guard
-//! (`src/cub.rs`), which is why the composition scan is written here and
-//! tested against a sequential fold — and shown to fail without the guard.
+//! The scan is the lane-guarded Hillis–Steele. The core `Warp::inclusive_sum`
+//! lacked that guard until 2026-11-04 and only sums; the composition scan is
+//! written here, tested against a sequential fold, and shown to fail without
+//! the guard.
 
 use super::{first_candidate, parse_run, RawChunk, RawStep};
 use warp_types::simwarp::SimWarp;
@@ -155,7 +155,7 @@ pub(crate) fn scan_compose(tables: [u32; WARP]) -> [u32; WARP] {
 }
 
 /// The same scan with the guard switchable, so a test can show that the
-/// unguarded form (what the deprecated `Warp::inclusive_sum` does) is wrong.
+/// unguarded form (what `Warp::inclusive_sum` did through 0.4.3) is wrong.
 pub(crate) fn scan_compose_guarded(tables: [u32; WARP], guard: bool) -> [u32; WARP] {
     let mut v = SimWarp::<u32>::from_array(tables);
     let mut d = 1u32;

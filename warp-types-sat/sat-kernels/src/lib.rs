@@ -710,7 +710,8 @@ const fn dec_lanes_below(lane: u32) -> u32 {
 }
 
 /// Inclusive composition scan, Hillis–Steele on `shuffle_up` WITH the lane
-/// guard (the crate's `inclusive_sum` lacks it and is deprecated for that).
+/// guard — the same shape as the core `Warp::inclusive_sum` (guarded since
+/// 2026-11-04), but composing transition tables, which is not a sum.
 /// Every lane calls it (the shuffles are collective); the guard only decides
 /// whether a lane composes.
 #[inline(always)]

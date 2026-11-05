@@ -316,7 +316,8 @@ Common CUDA patterns and their warp-types equivalents:
 | `__shfl_down_sync(0xFFFFFFFF, val, delta)` | `warp.shuffle_down(PerLane::new(val), delta).get()` or `warp.shuffle_down_raw(val, delta)` |
 | `__ballot_sync(0xFFFFFFFF, pred)` | `warp.ballot(PerLane::new(pred))` (returns `BallotResult`) |
 | `cub::WarpReduce<T>::Sum(val)` | `warp.reduce_sum(PerLane::new(val))` |
-| `cub::WarpScan<T>::InclusiveSum(val)` | `warp.inclusive_sum(PerLane::new(val))` |
+| `cub::WarpScan<T>::InclusiveSum(val)` | `warp.inclusive_sum(PerLane::new(val))` (correct from the release after 0.4.3; earlier versions lack the lane guard) |
+| `cub::WarpScan<T>::ExclusiveSum(val)` | `warp.exclusive_sum(PerLane::new(val), 0)` (same) |
 | `cg::tiled_partition<16>(block)` | `warp.tile::<16>()` |
 | `if (threadIdx.x < N) { ... }` | `let diverged = warp.diverge_dynamic(mask); diverged.merge()` |
 | `__activemask()` | No equivalent needed — active set is tracked in the type |

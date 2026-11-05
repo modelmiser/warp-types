@@ -14,10 +14,11 @@
 //! | CPU | Identity (returns own value) | N/A | Emulation |
 //!
 //! **CPU emulation caveat:** Shuffle-XOR returns `self` on CPU, which makes
-//! `reduce_sum` accidentally correct (1+1+1...=32 via butterfly doubling)
-//! but makes `inclusive_sum` incorrect (produces reduce result, not prefix).
-//! Tests that rely on scan semantics must be gated behind `#[cfg(target_arch)]`
-//! or use a multi-lane CPU emulator.
+//! `reduce_sum` behave as if 32 lanes held the same value (butterfly
+//! doubling), while the lane-guarded scans see the thread as lane 0
+//! (`lane_id()` returns 0) and return lane 0's prefix. Neither is a
+//! multi-lane result: tests of scan semantics belong on the device
+//! (`examples/gpu-project`) or on the multi-lane `SimWarp` emulator.
 //!
 //! Requires nightly Rust with `#![feature(asm_experimental_arch)]`.
 
@@ -820,10 +821,9 @@ impl GpuShuffle for f64 {
 
 // CPU fallback: single-thread, shuffle returns own value (identity).
 //
-// **Caveat:** This makes reduce_sum accidentally correct (butterfly doubling)
-// but makes inclusive_sum/exclusive_sum incorrect (produces reduce result,
-// not prefix). Tests that rely on scan semantics must be gated behind
-// `#[cfg(target_arch)]` or use the Platform trait's multi-lane CpuSimd emulator.
+// **Caveat:** reduce_sum behaves as if every lane held this value (butterfly
+// doubling); the lane-guarded scans see lane 0 and return its prefix. Tests of
+// multi-lane semantics belong on the device or on a multi-lane emulator.
 macro_rules! impl_cpu_gpu_shuffle {
     ($($t:ty),+) => {
         $(

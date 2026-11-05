@@ -82,7 +82,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let expected = (0..WARP_SIZE as i32).sum::<i32>(); // 496
         let all_correct = result.iter().all(|&v| v == expected);
         println!("  Input:    [0, 1, 2, ..., 31]");
-        println!("  Expected: every lane = {} (diverge/merge erased)", expected);
+        println!(
+            "  Expected: every lane = {} (diverge/merge erased)",
+            expected
+        );
         println!("  Got:      lane[0]={}, lane[31]={}", result[0], result[31]);
         println!("  Result:   {}", if all_correct { "PASS" } else { "FAIL" });
     }
@@ -113,7 +116,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Input:    [1; 32], n=32");
         println!("  Expected: 32");
         println!("  Got:      {}", result[0]);
-        println!("  Result:   {}", if result[0] == 32 { "PASS" } else { "FAIL" });
+        println!(
+            "  Result:   {}",
+            if result[0] == 32 { "PASS" } else { "FAIL" }
+        );
     }
     println!();
 
@@ -140,8 +146,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let correct = result == expected;
         println!("  Input:    [31, 30, 29, ..., 1, 0]");
         println!("  Expected: [0, 1, 2, ..., 30, 31]");
-        println!("  Got:      [{}, {}, {}, ..., {}, {}]",
-                 result[0], result[1], result[2], result[30], result[31]);
+        println!(
+            "  Got:      [{}, {}, {}, ..., {}, {}]",
+            result[0], result[1], result[2], result[30], result[31]
+        );
         println!("  Result:   {}", if correct { "PASS" } else { "FAIL" });
         if !correct {
             println!("  Full:     {:?}", &result);
@@ -173,13 +181,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let lane0_correct = result[0] == expected;
         let warp_uniform = result.iter().all(|&v| v == result[0]);
         println!("  Predicate: tid < 16");
-        println!("  Expected:  0x{:08X} (lanes 0..16 = 1, lanes 16..32 = 0)", expected);
+        println!(
+            "  Expected:  0x{:08X} (lanes 0..16 = 1, lanes 16..32 = 0)",
+            expected
+        );
         println!("  lane[0]:   0x{:08X}", result[0]);
-        println!("  uniform:   {} (all 32 lanes wrote the same value)", warp_uniform);
-        println!("  Result:    {}",
-            if lane0_correct && warp_uniform { "PASS" } else { "FAIL" });
+        println!(
+            "  uniform:   {} (all 32 lanes wrote the same value)",
+            warp_uniform
+        );
+        println!(
+            "  Result:    {}",
+            if lane0_correct && warp_uniform {
+                "PASS"
+            } else {
+                "FAIL"
+            }
+        );
         if !lane0_correct || !warp_uniform {
-            println!("  Full:      {:08X?}", result.iter().map(|v| *v).collect::<Vec<_>>());
+            println!(
+                "  Full:      {:08X?}",
+                result.iter().map(|v| *v).collect::<Vec<_>>()
+            );
         }
     }
     println!();
@@ -266,8 +289,133 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // === Test 9: warp prefix sums (inclusive and exclusive) ===
+    println!("=== Test 9: scan_sums (Warp::inclusive_sum / exclusive_sum) ===");
+    let mut scan_failures = 0;
+    let input: Vec<i32> = (0..WARP_SIZE as i32).map(|t| t * t + 1).collect();
+    {
+        let dev_in = stream.memcpy_stod(&input)?;
+        let dev_incl = stream.memcpy_stod(&[0i32; WARP_SIZE])?;
+        let dev_excl = stream.memcpy_stod(&[0i32; WARP_SIZE])?;
+        unsafe {
+            stream
+                .launch_builder(&k.scan_sums)
+                .arg(&dev_in)
+                .arg(&dev_incl)
+                .arg(&dev_excl)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        let incl = stream.memcpy_dtov(&dev_incl)?;
+        let excl = stream.memcpy_dtov(&dev_excl)?;
+        let want_incl: Vec<i32> = input
+            .iter()
+            .scan(0, |a, &v| {
+                *a += v;
+                Some(*a)
+            })
+            .collect();
+        let want_excl: Vec<i32> = (0..WARP_SIZE).map(|t| want_incl[t] - input[t]).collect();
+        for (name, got, want) in [
+            ("inclusive", &incl, &want_incl),
+            ("exclusive", &excl, &want_excl),
+        ] {
+            let pass = got == want;
+            scan_failures += usize::from(!pass);
+            println!("  {name}: {}", if pass { "PASS" } else { "FAIL" });
+            if !pass {
+                println!("    Got:      {:?}", got);
+                println!("    Expected: {:?}", want);
+            }
+        }
+    }
+    println!();
+
+    // === Test 10: Tile<N> prefix sums ===
+    println!("=== Test 10: tile_scans (Tile<4|8|16|32>::inclusive_sum) ===");
+    {
+        let dev_in = stream.memcpy_stod(&input)?;
+        let dev_out = stream.memcpy_stod(&[0i32; 4 * WARP_SIZE])?;
+        unsafe {
+            stream
+                .launch_builder(&k.tile_scans)
+                .arg(&dev_in)
+                .arg(&dev_out)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        let got = stream.memcpy_dtov(&dev_out)?;
+        for (row, n) in [4usize, 8, 16, 32].into_iter().enumerate() {
+            let want: Vec<i32> = (0..WARP_SIZE)
+                .map(|t| input[t & !(n - 1)..=t].iter().sum())
+                .collect();
+            let g = &got[row * WARP_SIZE..(row + 1) * WARP_SIZE];
+            let pass = g == want.as_slice();
+            scan_failures += usize::from(!pass);
+            println!("  Tile<{n}>: {}", if pass { "PASS" } else { "FAIL" });
+            if !pass {
+                println!("    Got:      {:?}", g);
+                println!("    Expected: {:?}", want);
+            }
+        }
+    }
+    println!();
+
+    // === Test 11: i64 warp prefix sums ===
+    println!("=== Test 11: scan_sums_i64 (64-bit, two-pass shuffle) ===");
+    {
+        let input: Vec<i64> = (0..WARP_SIZE as i64).map(|t| (t << 33) + t + 1).collect();
+        let dev_in = stream.memcpy_stod(&input)?;
+        let dev_incl = stream.memcpy_stod(&[0i64; WARP_SIZE])?;
+        let dev_excl = stream.memcpy_stod(&[0i64; WARP_SIZE])?;
+        unsafe {
+            stream
+                .launch_builder(&k.scan_sums_i64)
+                .arg(&dev_in)
+                .arg(&dev_incl)
+                .arg(&dev_excl)
+                .launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (WARP_SIZE as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        let incl = stream.memcpy_dtov(&dev_incl)?;
+        let excl = stream.memcpy_dtov(&dev_excl)?;
+        let want_incl: Vec<i64> = input
+            .iter()
+            .scan(0, |a, &v| {
+                *a += v;
+                Some(*a)
+            })
+            .collect();
+        let want_excl: Vec<i64> = (0..WARP_SIZE).map(|t| want_incl[t] - input[t]).collect();
+        for (name, got, want) in [
+            ("inclusive", &incl, &want_incl),
+            ("exclusive", &excl, &want_excl),
+        ] {
+            let pass = got == want;
+            scan_failures += usize::from(!pass);
+            println!("  {name}: {}", if pass { "PASS" } else { "FAIL" });
+            if !pass {
+                println!("    Got:      {:?}", got);
+                println!("    Expected: {:?}", want);
+            }
+        }
+    }
+    println!();
+
+    if scan_failures > 0 {
+        return Err(format!("{scan_failures} scan check(s) failed").into());
+    }
     println!("All kernels compiled from cargo, type-checked at build time,");
-    println!("and executed on real GPU hardware with correct results.");
+    println!("and executed on real GPU hardware.");
 
     Ok(())
 }

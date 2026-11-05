@@ -8,7 +8,7 @@
 //! | CUB (C++)               | warp-types (Rust)                    |
 //! |--------------------------|--------------------------------------|
 //! | `cub::WarpReduce<T>`     | `warp.reduce(data, op)`              |
-//! | `cub::WarpScan<T>`       | `warp.inclusive_sum(data)`            |
+//! | `cub::WarpScan<T>`       | `warp.inclusive_sum(data)`, `warp.exclusive_sum(data, id)` |
 //! | `cub::WarpExchange<T>`   | *(not yet implemented)*              |
 //!
 //! # Safety
@@ -64,93 +64,76 @@ impl Warp<All> {
         val
     }
 
-    /// Inclusive prefix sum across all lanes.
+    /// Inclusive prefix sum across all lanes: lane `i` gets the sum of lanes
+    /// `0..=i`.
     ///
     /// Equivalent to `cub::WarpScan<T>::InclusiveSum(val, &sum)`.
-    /// Uses Hillis-Steele parallel scan (5 stages for 32 lanes).
+    /// Hillis–Steele on `shuffle_up`, log₂(WARP_SIZE) stages, WITH the lane
+    /// guard: every lane issues every shuffle (they are collective), and a lane
+    /// adds the value it received only when `lane_id() >= stride` — below
+    /// that, `shfl.sync.up` hands a lane its own value back, which an
+    /// unguarded scan (this method through 0.4.3) added, doubling those lanes.
     ///
-    /// Lane i should get sum of lanes 0..=i.
-    ///
-    /// **WARNING:** This function does not produce a correct inclusive scan on
-    /// any target. On CPU, `shfl_up` is identity, so each stage doubles the
-    /// value (result: val × 32). On GPU, lanes where `lane_id < stride` get
-    /// their own value back from `shfl_up` (clamped), causing them to double
-    /// instead of preserving their partial sum. A correct Hillis-Steele scan
-    /// requires `if lane_id >= stride { val = val + s; }`, which needs
-    /// per-lane branching not available in the single-thread CPU emulation
-    /// (the `gpu::lane_id()` intrinsic exists but returns 0 on CPU).
-    ///
-    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
+    /// On the CPU path the calling thread is lane 0 (`gpu::lane_id()` returns
+    /// 0), so the result is the lane's own value — lane 0's inclusive sum.
+    /// Not available on `amdgpu`, which has no `lane_id` yet.
     ///
     /// ```
     /// use warp_types::*;
     ///
     /// let warp: Warp<All> = Warp::kernel_entry();
-    /// let data = data::PerLane::new(1i32);
-    /// let prefix = warp.inclusive_sum(data);
-    /// // CPU emulation: NOT a correct inclusive scan (see doc)
+    /// let prefix = warp.inclusive_sum(data::PerLane::new(5i32));
+    /// assert_eq!(prefix.get(), 5); // CPU: lane 0 sums lanes 0..=0
     /// ```
-    #[deprecated(
-        note = "Not correct on any target — Hillis-Steele without lane_id guard. Use SimWarp for tested scan."
-    )]
+    #[cfg(not(target_arch = "amdgpu"))]
     #[inline]
     pub fn inclusive_sum<T>(&self, data: PerLane<T>) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
     {
+        let lane = crate::gpu::lane_id();
         let mut val = data.get();
-        // Hillis-Steele: add from lane (id - delta), not (id + delta)
-        // Using shuffle-up: lane[i] reads from lane[i - delta]
-        let s1 = unsafe { val.gpu_shfl_up(1) };
-        val = val + s1;
-        let s2 = unsafe { val.gpu_shfl_up(2) };
-        val = val + s2;
-        let s4 = unsafe { val.gpu_shfl_up(4) };
-        val = val + s4;
-        let s8 = unsafe { val.gpu_shfl_up(8) };
-        val = val + s8;
-        let s16 = unsafe { val.gpu_shfl_up(16) };
-        val = val + s16;
+        let mut stride = 1u32;
+        while stride < crate::WARP_SIZE {
+            let s = unsafe { val.gpu_shfl_up(stride) };
+            if lane >= stride {
+                val = val + s;
+            }
+            stride *= 2;
+        }
         PerLane::new(val)
     }
 
-    /// Exclusive prefix sum across all lanes (STUB -- not yet correct).
+    /// Exclusive prefix sum across all lanes: lane `i` gets the sum of lanes
+    /// `0..i`, and lane 0 gets `identity`.
     ///
-    /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)`.
-    /// Lane i should get sum of lanes 0..i (lane 0 gets `identity`).
+    /// Equivalent to `cub::WarpScan<T>::ExclusiveSum(val, &sum)` with an
+    /// explicit identity. The inclusive scan shifted up one lane; lane 0,
+    /// whose `shfl.sync.up` returns its own value, takes `identity` instead.
     ///
-    /// **WARNING:** This function does not produce a correct exclusive scan on
-    /// any target. Lane 0 should receive `identity` but gets its own value
-    /// instead, because the implementation lacks `lane_id()`. On CPU,
-    /// `shfl_up` returns self, so the result is the inclusive sum. On GPU,
-    /// lane 0's `shfl_up(1)` returns its own value, not the identity.
-    /// Use `inclusive_sum` and implement the shift manually in GPU kernel code.
-    ///
-    /// Retained to demonstrate the type-system contract (requires `Warp<All>`).
+    /// On the CPU path the calling thread is lane 0, so the result is
+    /// `identity`. Not available on `amdgpu`, which has no `lane_id` yet.
     ///
     /// ```
     /// use warp_types::*;
     ///
     /// let warp: Warp<All> = Warp::kernel_entry();
-    /// let data = data::PerLane::new(1i32);
-    /// #[allow(deprecated)]
-    /// let prefix = warp.exclusive_sum(data, 0);
-    /// // CPU emulation: NOT a correct exclusive scan (see doc)
+    /// let prefix = warp.exclusive_sum(data::PerLane::new(5i32), 0);
+    /// assert_eq!(prefix.get(), 0); // CPU: lane 0 gets the identity
     /// ```
-    #[deprecated(note = "produces incorrect results — use inclusive_sum and manual shift instead")]
+    #[cfg(not(target_arch = "amdgpu"))]
     #[inline]
     pub fn exclusive_sum<T>(&self, data: PerLane<T>, identity: T) -> PerLane<T>
     where
         T: GpuValue + GpuShuffle + core::ops::Add<Output = T>,
     {
-        // Inclusive scan then shift down by 1
-        #[allow(deprecated)]
-        let inclusive = self.inclusive_sum(data);
-        let shifted = unsafe { inclusive.get().gpu_shfl_up(1) };
-        // TODO: lane 0 should get `identity`, but we lack lane_id() on CPU.
-        // On real GPU, use: if lane_id() == 0 { identity } else { shifted }
-        let _ = identity;
-        PerLane::new(shifted)
+        let inclusive = self.inclusive_sum(data).get();
+        let shifted = unsafe { inclusive.gpu_shfl_up(1) };
+        PerLane::new(if crate::gpu::lane_id() == 0 {
+            identity
+        } else {
+            shifted
+        })
     }
 
     /// Reduce with addition (convenience wrapper).
@@ -271,16 +254,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_inclusive_sum() {
-        // TYPE-SYSTEM TEST: validates inclusive_sum compiles. The result (32) is
-        // the INCORRECT CPU identity behavior (doubling per stage), not a correct
-        // prefix sum. This function is #[deprecated] and documented broken.
-        // For correct scan with real lane exchange, see simwarp::hillis_steele_*.
+    fn test_inclusive_sum_cpu_is_lane_zero() {
+        // CPU path: the thread is lane 0, so its inclusive sum is its own
+        // value (the unguarded scan through 0.4.3 returned 32 here). The
+        // multi-lane result is checked on the device: examples/gpu-project
+        // Test 9.
         let warp: Warp<All> = Warp::kernel_entry();
-        let data = PerLane::new(1i32);
-        let result = warp.inclusive_sum(data);
-        assert_eq!(result.get(), 32);
+        assert_eq!(warp.inclusive_sum(PerLane::new(1i32)).get(), 1);
+        assert_eq!(warp.inclusive_sum(PerLane::new(7u64)).get(), 7);
     }
 
     #[test]
@@ -301,13 +282,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_exclusive_sum_runs_on_cpu_identity() {
-        // Documented as wrong on every target (no lane_id guard); this pins the
-        // CPU behaviour so a change to the deprecated path is noticed.
+    fn test_exclusive_sum_cpu_is_identity() {
+        // CPU path: lane 0 gets the identity (the unguarded scan through 0.4.3
+        // returned 3 * 32 here and ignored `identity`).
         let warp: Warp<All> = Warp::kernel_entry();
-        let r = warp.exclusive_sum(PerLane::new(3i32), 0);
-        assert_eq!(r.get(), 3 * 32); // inclusive doubling, then identity shuffle_up
+        assert_eq!(warp.exclusive_sum(PerLane::new(3i32), 0).get(), 0);
+        assert_eq!(warp.exclusive_sum(PerLane::new(3i32), -9).get(), -9);
     }
 
     #[test]
@@ -319,7 +299,6 @@ mod tests {
 
     // Verify CUB-equivalent methods are ONLY on Warp<All>
     #[test]
-    #[allow(deprecated)]
     fn test_cub_requires_all() {
         let warp: Warp<All> = Warp::kernel_entry();
         let data = PerLane::new(1i32);
