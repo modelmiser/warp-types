@@ -261,12 +261,18 @@ fail-closed: no checker is not a pass.
   cross the bus twice. Held equal to the sequential decoder on the 632 <!-- unguarded: 632 — archive count, research/gpu-lrat-decode.md -->
   archive files and on the big proofs' arrays, both kernels (a
   thread-per-slice kernel is kept as the control: the warp is 1.3× it, the
-  GPU about 10× six host threads). Same workstation, same 415 MB proof: <!-- unguarded: 415 — proof size in MB -->
-  decode 0.90 → 0.30 s, bytes in RAM to verdict 1.19 → 0.53 s, so the
-  device path above becomes read 0.13 s + 0.53 s — about 24× the external
-  checkers; the 898 MB proof goes 2.70 → 1.43 s. What remains is the host's <!-- unguarded: 898 — proof size in MB -->
-  walk over step records (0.11 s) and the check kernel itself (0.23 s on this
-  card). `LRAT_GPU_RESIDENT=1` on the example runs this route. Limits: per-lemma
+  GPU about 10× six host threads). Same workstation, same 415 MB proof, <!-- unguarded: 415 — proof size in MB -->
+  one cold run each: decode 0.90 → 0.33 s, bytes in RAM to verdict
+  1.19 → 0.57 s, so the device path above becomes read 0.13 s + 0.57 s —
+  about 23× the external checkers; the 898 MB proof goes 2.70 → 1.3 s. <!-- unguarded: 898 — proof size in MB -->
+  (Corrected 2026-11-04: the first figures, 0.30 and 0.53 s, were the best
+  of three repetitions in one process, where the step-record download
+  reused memory the previous repetition had freed; a one-shot run pays
+  it.) Phase 3a of the stitch now runs on host threads for any proof it
+  has nothing to reject, and the sequential walk decides the rest. What
+  remains is the step-record download and that walk (0.08 + 0.09 s) and
+  the check kernel itself (0.23 s on this card). `LRAT_GPU_RESIDENT=1` on
+  the example runs this route. Limits: per-lemma
   assignments above 4,095 literals are reported `TableOverflow` (not
   checked on the warp paths); ids and variables above 2^26 are refused at
   parse time. `cargo run --release --example lrat_check -- f.cnf f.lrat

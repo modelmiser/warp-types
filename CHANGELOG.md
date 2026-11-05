@@ -51,10 +51,15 @@
   and bit flip of a synthetic proof, long varints, straddling steps and RAT hints across windows, and the device
   path to the sequential decoder on the same battery and on all 632 archive files, both kernels. **Measured <!-- unguarded: 632 — archive count, research/gpu-lrat-decode.md -->
   2026-11-03** on the workstation RTX 4000 SFF Ada (pre-registered, `research/gpu-lrat-decode.md`; arrays verified
-  equal to the host decode on both proofs): the 415 MB proof decodes in 0.30 s against 0.90 s on six host threads <!-- unguarded: 415 — proof size in MB -->
-  (kernels 0.08 s; the rest is the upload and the host's walk over 4.8 M step records), and bytes-in-RAM to verdict <!-- unguarded: 4.8 — step count in millions -->
-  falls from 1.19 s to 0.53 s; the 898 MB proof from 2.70 s to 1.43 s. Of the five predictions one was met: the <!-- unguarded: 898 — proof size in MB -->
-  decode missed its 0.25 s by 0.05 s, the pipeline its 0.5 s by 0.03 s, the warp kernel is 1.3× the thread kernel
+  equal to the host decode on both proofs): the 415 MB proof decodes in 0.33 s against 0.90 s on six host threads, <!-- unguarded: 415 — proof size in MB -->
+  one cold run each (kernels 0.08 s; the rest is the upload, the step-record download and the host's walk over 4.8 M <!-- unguarded: 4.8 — step count in millions -->
+  step records), and bytes-in-RAM to verdict falls from 1.19 s to 0.57 s; the 898 MB proof from 2.70 s to 1.3 s. <!-- unguarded: 898 — proof size in MB -->
+  Phase 3a of the stitch runs on host threads (`plan_3a_parallel`) for any proof it has nothing to reject, the
+  sequential walk deciding the rest; held equal to the sequential walk on the battery, nine rejection kinds and the
+  archive. Corrected 2026-11-04: the first published figures (0.30 s decode, 0.53 s to verdict) were the best of
+  three repetitions in one process, where the download reused memory the previous repetition freed. Of the five
+  predictions one was met: on those first figures the decode missed its 0.25 s by 0.05 s and the pipeline its
+  0.5 s by 0.03 s (cold, by more), the warp kernel is 1.3× the thread kernel
   where 2× was predicted (the GPU is ≈ 10× the host threads either way), and the PTX agreed with the model at the
   first run where a hardware-only defect was predicted. The check kernel, 0.23 s here, is now the largest device
   stage.
