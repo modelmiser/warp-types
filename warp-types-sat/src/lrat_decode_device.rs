@@ -675,4 +675,165 @@ mod tests {
         eprintln!("archive_agreement_device_decode: {n} proofs, both kernels");
         assert!(n > 0, "no proofs found under LRAT_ARCHIVE_DIRS");
     }
+
+    // ---- the check kernel, lemma by lemma (research/gpu-lrat-decode.md S5) ----
+
+    /// The device's per-lemma codes against `check_warp_codes` (the SimWarp
+    /// model) at several block counts — every lemma, not only the verdict.
+    fn codes_equal(ctx: &GpuContext, fp: &FlatProof, what: &str) {
+        let want: Vec<u8> = super::super::check_warp_codes(fp)
+            .iter()
+            .map(|&c| c as u8)
+            .collect();
+        for blocks in [1u32, 7, 64, 4096] {
+            let got = ctx.check_lrat_codes(fp, blocks).unwrap();
+            if got != want {
+                let i = got.iter().zip(&want).position(|(a, b)| a != b);
+                panic!(
+                    "{what} blocks={blocks}: codes differ (len {} vs {}), first at {i:?}: {:?} vs {:?}",
+                    got.len(),
+                    want.len(),
+                    i.map(|i| got[i]),
+                    i.map(|i| want[i])
+                );
+            }
+        }
+    }
+
+    /// Proofs that reach every code: the synthetic proofs, steps after ⊥,
+    /// hint-level corruptions of the synthetic proof, and both overflow
+    /// shapes (a lemma past the table cap; units pushing a lemma past it).
+    fn code_battery() -> Vec<(String, Vec<Vec<i32>>, crate::lrat::Proof)> {
+        use crate::lrat::{parse_binary, parse_cnf_ints, parse_text, Proof, Step};
+        let mut out = Vec::new();
+        for e in [false, true] {
+            let (cnf, bytes) = synthetic_proof(e);
+            let p = parse_binary(&bytes).unwrap();
+            out.push((format!("synthetic e={e}"), cnf.clone(), p.clone()));
+            // Hint corruptions, one lemma at a time across the proof: a hint
+            // dropped, a hint swapped for a later id, for a deleted id.
+            let mut x = 7u32;
+            for k in 0..24 {
+                let mut q = p.clone();
+                let adds: Vec<usize> = q
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| matches!(s, Step::Add { hints, .. } if hints.len() > 1))
+                    .map(|(i, _)| i)
+                    .collect();
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let at = adds[(x as usize >> 4) % adds.len()];
+                let deleted = q.steps[..at].iter().find_map(|s| match s {
+                    Step::Delete { ids } => Some(ids[0]),
+                    _ => None,
+                });
+                if let Step::Add { id, hints, .. } = &mut q.steps[at] {
+                    match k % 3 {
+                        0 => {
+                            hints.remove(0);
+                        }
+                        1 => hints[0] = (*id + 1) as i64,
+                        _ => {
+                            if let Some(d) = deleted {
+                                hints[0] = d as i64;
+                            }
+                        }
+                    }
+                }
+                out.push((format!("synthetic e={e} corruption {k}"), cnf.clone(), q));
+            }
+        }
+        let c = parse_cnf_ints("p cnf 2 4\n1 2 0\n-1 2 0\n1 -2 0\n-1 -2 0\n");
+        for (i, t) in [
+            "5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 99 0\n",
+            "5 2 0 1 2 0\n6 0 5 3 4 0\n7 1 0 1 0\n",
+            "5 2 0 1 2 0\n6 0 5 3 4 0\n",
+            "5 2 0 1 0\n6 0 5 3 4 0\n",
+        ]
+        .iter()
+        .enumerate()
+        {
+            out.push((format!("small {i}"), c.clone(), parse_text(t).unwrap()));
+        }
+        // Overflow: a 5,000-literal lemma; and a 4,090-literal lemma whose
+        // ten unit hints push the table past its 4,095 cap.
+        let mut cnf: Vec<Vec<i32>> = (0..10).map(|k| vec![1, 5000 + k]).collect();
+        cnf.push(vec![-1]);
+        let steps = vec![
+            Step::Add {
+                id: 12,
+                lits: (1..=5000).collect(),
+                hints: vec![11],
+            },
+            Step::Add {
+                id: 13,
+                lits: (1..=4090).collect(),
+                hints: (1..=10).collect(),
+            },
+            Step::Add {
+                id: 14,
+                lits: vec![2],
+                hints: vec![11, 1],
+            },
+        ];
+        out.push(("overflow".into(), cnf, Proof { steps }));
+        out
+    }
+
+    #[test]
+    fn check_kernel_codes_equal_simwarp_on_the_battery() {
+        let Some(ctx) = ctx() else { return };
+        let mut seen = [0usize; 7];
+        for (what, cnf, proof) in code_battery() {
+            let fp = super::super::flatten(&cnf, &proof);
+            for c in super::super::check_warp_codes(&fp) {
+                seen[c as usize] += 1;
+            }
+            codes_equal(&ctx, &fp, &what);
+        }
+        eprintln!("check kernel battery: codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}", &seen[..6]);
+        // Every code the kernel can write is exercised.
+        for (c, n) in seen[..6].iter().enumerate() {
+            assert!(*n > 0, "code {c} never produced by the battery");
+        }
+    }
+
+    #[test]
+    fn check_kernel_codes_equal_simwarp_on_the_archive() {
+        let Ok(dirs) = std::env::var("LRAT_ARCHIVE_DIRS") else {
+            eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: SKIPPED (set LRAT_ARCHIVE_DIRS)");
+            return;
+        };
+        let Some(ctx) = ctx() else { return };
+        let mut n = 0usize;
+        for dir in dirs.split(':') {
+            let dir = std::path::Path::new(dir);
+            let Ok(rd) = std::fs::read_dir(dir.join("proof")) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) != Some("lrat") {
+                    continue;
+                }
+                let stem = p.file_name().unwrap().to_str().unwrap().to_string();
+                let base = stem.split('.').next().unwrap();
+                let (Ok(cnf_text), Ok(proof_text)) = (
+                    std::fs::read_to_string(dir.join("cnf").join(format!("{base}.cnf"))),
+                    std::fs::read_to_string(&p),
+                ) else {
+                    continue;
+                };
+                let Ok(proof) = crate::lrat::parse_text(&proof_text) else {
+                    continue;
+                };
+                let cnf = crate::lrat::parse_cnf_ints(&cnf_text);
+                let fp = super::super::flatten(&cnf, &proof);
+                codes_equal(&ctx, &fp, &stem);
+                n += 1;
+            }
+        }
+        eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: {n} proofs, 4 block counts");
+    }
 }
