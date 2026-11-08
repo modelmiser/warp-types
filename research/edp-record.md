@@ -155,4 +155,19 @@ same mutant. A mutant any checker accepts kills the run until explained.
   kernel itself scales with the 2.0 G hints as the decode arc measured. The
   remaining route to P4 is the batched device-resident decode (bytes up once,
   decode + check on the card), which the decode arc built for single proofs.
+- 2026-11-08 — **B1 done** (`ref/run.sh`: one process per step, one niced core,
+  trimmed proofs; text for lrat-check, binary for cake_lpr and ours): **ours
+  (sequential + independent, 1 thread) 665.7 s · lrat-check 199.6 s · cake_lpr
+  366.9 s; 5226/5226 VERIFIED by all three.** Hardest step for every tool is
+  3696 (ours 12.5 s, lrat-check 1.55 s, cake_lpr 3.24 s). **P1 MET** (three-way
+  agreement, 0 unsupported). **P2 MISSED low** (cake_lpr 366.9 s against the
+  400–1600 s range — our proofs are easier for it than theirs were). **P3 MET**
+  (199.6 s in 100–300). Ratios to B2's cold 15.707 s: lrat-check 12.7×, cake_lpr
+  23.4×, ours 42.4×, published 128-thread 3.8×. **§3's bar is not met on either
+  clause** (≥ 10× under 60.2 s; ≥ 20× under same-machine lrat-check); the
+  honest sentence today is "one workstation with a 20 GB GPU checks the
+  compositional EDP proof in 15.7 s, where the published run took 60.2 s on 128
+  threads and lrat-check takes 199.6 s on this machine one step at a time" —
+  with §0's four caveats attached. Options recorded for the owner: push the
+  batched device-resident decode for P4, or write up here.
 
