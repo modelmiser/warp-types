@@ -362,3 +362,45 @@ as refuted on this card and the write-up uses 13.7 s).
   clauses for the last steps (13.6 M extra clauses in all, a new cost for the layout
   stage), so a 1.0–1.3× band around our own time is the prediction, not a speed-up claim.
   P14 is P6's "within 2×" clause restated for the proofs that will actually exist.
+- 13:51–14:01Z **Path A2 run by the owner** (`pathA2/run.sh`): 5,225 cubes from the
+  published lemmas, all UNSAT under iglucose (mean 231 ms — 4× path A's per-cube time, these
+  cubes carry fewer assumptions; 213 s on 6 cores; 5.34 GB of DRAT); last step CNF + 5,225
+  lemmas UNSAT in 0.15 s. **Emitted lemma vs published: 1,811 identical, 3,414 strict
+  subsets, 0 other.** **P11 MISSED** on its ≥ 90 % identical clause (34.7 %), met on "none
+  other"; the composition everything below runs on is the published one with 3,414 lemmas
+  strengthened to subsets. drat-trim `-L` with the unit rule: 5,226 LRATs, 13.52 GB text,
+  mean 419 ms per step (6.5 min on 6 cores). `run.sh` printed "5226 not verified" — an
+  artefact of its own grep: drat-trim prints `\rs VERIFIED` and the anchor `^s` never
+  matches. Steps 1, 2600, 5225, 5226 re-run by hand: `s VERIFIED`, 0 RAT lemmas in core
+  each (step 1: 23 of 68 lemmas in core; the published derivation keeps 25). Full CR-safe
+  verdict re-run (`pathA2/verdicts.sh`) launched 14:44Z for P12 [result appended below].
+- **Converted** with `lrat_check --to-binary` (our parser and writer): 5,226/5,226 in
+  22.6 s, **6.611 GB binary** (ours: 6.894 GB) — P14's byte clause MET, by 4 %. Volume:
+  19,974,053 lemmas, 1,791,914,187 hints (ours 25.2 M / 2.00 G).
+- **Our checker on them** (`edp_resident --cumulative`: step j's formula = CNF + lemmas
+  1..j−1 + the units of ¬L_j, 13.6 M extra clauses in all; outputs in `a2check/`).
+  **run0 oracles: 5,226/5,226 VERIFIED, 0 UNSUPPORTED, 0 malformed, 0 host-route steps;
+  `--verify-b2`: 5,226 steps compared, 0 code mismatches** (the B2 host route took
+  36.6 min on these — it re-parses the cumulative extras per step); **`--simwarp 50`:
+  0 mismatches. P13 MET.** Timed (6 niced host threads on cores 0–5; cold = fadvise
+  DONTNEED on all 5,226 files, confirmed by read 1.75 s vs 0.62 warm):
+  | run | cache | read | upload | scan (p1+p2 / dl) | plan | layout | gather | check | total |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 1 | **cold** | 1.753 | 0.961 | 2.719 (1.463 / 1.221) | 0.970 | 0.466 | 0.424 | 3.215 | **11.816 s** |
+  | 2 | warm | 0.620 | 0.967 | 2.869 (1.464 / 1.365) | 0.998 | 0.487 | 0.424 | 3.229 | **10.914 s** |
+  | 3 | warm | 0.623 | 0.966 | 2.866 (1.458 / 1.369) | 0.996 | 0.487 | 0.423 | 3.275 | 10.973 s |
+  | 4 | warm | 0.620 | 0.967 | 2.869 (1.466 / 1.365) | 0.994 | 0.485 | 0.423 | 3.278 | 10.960 s |
+  (cnf+comp 0.56 s — building the 13.6 M extras — and init 0.18 s not shown.) **Best of 3:
+  10.91 s warm; cold 11.82 s. P14 MET** (≤ 11.6 s predicted; 10.91 / 8.90 = 1.23×, inside
+  the 1.0–1.3 band). Fewer bytes, lemmas and hints than ours, yet 2.0 s slower: plan 1.00
+  vs 0.50, layout 0.49 vs 0.40, cnf+comp +0.5 — the per-step extras, as predicted — and scan
+  download 1.37 vs 0.42 (drat-trim writes a deletion line after most lemmas, 22 for 24
+  lemmas in step 1, so there are more records to bring down). The check kernel itself is
+  faster (3.23 vs 3.71 s; 10 % fewer hints).
+  **What this settles (P6 restated):** the published solver's proofs for the published
+  composition, trimmed by the published checker, contain zero RAT steps, and our checker
+  verifies every one of them, agreeing with the host route on all 19,974,053 lemma codes.
+  **What it does not settle:** these are not the 2023 files (march_cu drifted; 3,414 lemmas
+  are strict subsets; the derivation became a refutation through the unit rule), and the
+  same-machine cake_lpr / lrat-check reruns of §5 were on OUR proofs — not yet re-timed on
+  these [open; cheap].

@@ -6,11 +6,13 @@
 //! ```text
 //! edp_resident CNF COMP DIR [--pattern s{}.blrat] [--threads 6] [--chunk-gb 12]
 //!              [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096]
-//!              [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2]
+//!              [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2] [--cumulative]
 //! ```
 //!
 //! Step `j` is the CNF plus one unit per literal of the negated lemma `j`;
-//! the last step (the line `0`) is the CNF plus every earlier lemma.
+//! the last step (the line `0`) is the CNF plus every earlier lemma. With
+//! `--cumulative`, step `j` also carries lemmas `1..j-1` before the units — the
+//! published pipeline's step formula, whose clause ids drat-trim's LRAT uses.
 //! `--simwarp K` holds K evenly spaced steps' codes to the one-at-a-time host
 //! decode against the real formula + SimWarp. `--verify-b2` re-runs every
 //! chunk through B2 (host decode, `batch_par`, the non-resident device check)
@@ -71,7 +73,7 @@ fn codes_of(raw: &[u8]) -> Vec<LemmaCode> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2]");
+        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2] [--cumulative]");
         std::process::exit(1);
     }
     let pattern: String = arg(&args, "--pattern", "s{}.blrat".to_string());
@@ -104,12 +106,20 @@ fn main() {
         .collect();
     let n_steps_all = comp.len();
     let n_steps: usize = arg(&args, "--steps", n_steps_all).min(n_steps_all);
+    // `--cumulative`: step j's formula also carries lemmas 1..j-1 before the
+    // units (the published pipeline's step formula, drat-trim's clause ids).
+    let cumulative = args.iter().any(|a| a == "--cumulative");
     let extras: Vec<Vec<Vec<i32>>> = (0..n_steps)
         .map(|j| {
             if comp[j].is_empty() {
                 comp[..j].to_vec()
             } else {
-                comp[j].iter().map(|&l| vec![-l]).collect()
+                let units = comp[j].iter().map(|&l| vec![-l]);
+                if cumulative {
+                    comp[..j].iter().cloned().chain(units).collect()
+                } else {
+                    units.collect()
+                }
             }
         })
         .collect();
