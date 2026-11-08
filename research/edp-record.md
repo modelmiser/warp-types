@@ -553,3 +553,42 @@ code download; `--serial` = C1):
   (its 0.55 s of extras construction runs before the pipeline and cannot overlap).
 - **P28** the serial control (`--serial`) within 8.6–9.3 s.
 **Kill** as before: any P25 mismatch not traced to a bug fixed and re-run clean.
+
+- 17:26Z **C2 as built, measured** (`c2/run-all.sh`, outputs `c2/run*.txt`, `c2/a2-run*.txt`;
+  12 chunks, 2 GB first). **Oracles: `--verify-b2` 5,226 steps, 0 code mismatches;
+  `--simwarp 50` 0; 5,226/5,226 VERIFIED, 0 UNSUPPORTED, 0 host-route — P25 MET** (with
+  the five gpu tests and M5 killed 3/3).
+  | run | cache | read (overlapped) | fill | checks span | total |
+  |---|---|---|---|---|---|
+  | 1 | **cold** | 2.114 | 0.435 | 0.435..6.287 | **6.424 s** |
+  | 2 | warm | 1.134 | 0.492 | 0.492..6.368 | 6.518 s |
+  | 3 | warm | 1.215 | 0.483 | 0.483..6.298 | 6.428 s |
+  | 4 | warm | 1.117 | 0.453 | 0.453..6.280 | **6.423 s** |
+  (stage sums per run: upload 1.2, scan passes 1.7 + 2.0 co-running, plan 0.65, layout 0.6,
+  gather 0.9–1.3, check 5.4–5.5, all overlapped; init 0.12–0.14; device peak 4.59 GB.)
+  **Best of 3: 6.42 s warm; cold 6.42 s.** **P23 MET** (≤ 6.5; the 6.35 point was 0.07
+  low), **P23b MISSED** — the §3 10× clause stays missed at **9.4×** under the published
+  60.2 s; P4 MISSED. **P24 MET** (cold = warm to 1 ms: the cold read is entirely hidden).
+  **P26 MET** (4.59 ≤ 8 GB). **P28 MISSED by 3 ms**: the serial control took 9.303 s
+  (8.6–9.3 predicted) with its check stage at 4.22 s against 3.71–3.77 s in every earlier
+  serial run on this card — the kernel itself varied by 0.45 s run to run here, cause not
+  investigated [noted, no claim]. Path A2 proofs (`--cumulative`, 11 chunks): cold 7.278,
+  warm 7.203 / 7.203 / 7.490 → **best 7.20 s = 1.12× — P27 MET** (1.0–1.2); fill 0.80 s
+  (the 0.55 s extras construction before the pipeline plus a heavier first chunk).
+  **Ratios now.** Our proofs, 6.42 s: **31.1× under same-machine lrat-check (199.6 s)**,
+  57.2× under cake_lpr (366.9 s), 9.4× under the published 128-thread 60.2 s, 603× under
+  the published single thread. Path A2 proofs, 7.20 s: **26.9× under lrat-check (193.5 s)
+  — the §3 ≥ 20× clause now holds on these too** (17.7× in §7), 66.5× under cake_lpr
+  (478.6 s). C2 over C1: 8.90 → 6.42 s (1.39×); 10.91 → 7.20 s on the A2 proofs (1.52×).
+  **The honest sentence today:** "one workstation with a 20 GB GPU checks the compositional
+  EDP proof in 6.4 s warm or cold (7.2 s on the published pipeline's own proofs), where the
+  published run took 60.2 s on 128 threads and lrat-check takes 199.6 s on this machine one
+  step at a time" — §0's caveats attached, nothing leaves the repo before the cross-vendor
+  panel. **§8 ledger:** P16 MISSED, P16b MISSED, P17 MET, P18 half, P19 MET, P20 MET,
+  P21 (as-designed A2) not run — superseded by P27, P22 MET; as built: P23 MET, P23b MISSED,
+  P24 MET, P25 MET, P26 MET, P27 MET, P28 MISSED by 3 ms.
+  **Where the remaining time is:** the kernels, co-running, fill the card from 0.45 s to
+  6.3 s; standalone they sum to ≈ 5.2 s. Under 6.02 s and under 5 s both need a faster
+  check kernel (the direct table past 4,096 codes, S5's predicted 1.8×, footprint vs the
+  48 MB L2 to be measured) or a faster scan — a kernel arc, separately pre-registered,
+  NOT started here.
