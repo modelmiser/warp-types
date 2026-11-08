@@ -318,3 +318,47 @@ as refuted on this card and the write-up uses 13.7 s).
   under it. Under 5 s needs the check kernel faster — the direct table layout extended
   past 2047 variables (EDP has 4207), S5's 1.8× if its footprint still fits the cache —
   plus C2. Both are separate arcs, owner's call; neither is started.
+
+## 7. Path A — the published pipeline rerun (owner-run, 2026-11-08)
+
+- 13:38Z `pathA/run.sh` (march_cu `-e 0.4` exactly as `gen-cubes.sh`; CnC at 705b60c, the
+  repo's only commit, 2025-07-14; iglucose from the same tree; drat-trim master 2e3b2dc):
+  **14,721 cubes, not 5,225** (19.4 s, 120 refuted leaves). The first 12 lemmas equal the
+  published ones as literal sets; the 13th differs (ours ends in −3028 where theirs has
+  3035); and the trees are not one a deeper cut of the other: 2,288 of the 5,225 published
+  lemmas are a subset of the negation of no cube of ours, 5,907 of our 14,721 cubes are
+  covered by no published lemma (scratch `patha_cubes.py`). The 2023 march_cu is
+  unrecoverable from the squashed repo. **P6 clause 1 (cubes = published) FAILED** — the
+  tools are deterministic, the version is not. All 14,721 cubes UNSAT under iglucose (mean
+  54 ms, 259 s on 6 cores); last step CNF + 14,721 lemmas UNSAT in ≈ 9 s, 4.95 MB DRAT.
+- The drat-trim stage produced **14,722 empty LRATs, every step `s NOT VERIFIED`
+  ("ERROR: no conflict")**: iglucose's per-cube DRAT ends with the lemma and has no empty
+  clause (84 additions for cube 1, 0 deletions), and stock drat-trim — master 2e3b2dc
+  (2024-11-25) and develop fb3fe74 (2023-07-09, the branch `setup.sh` checks out; built in
+  `drat-trim-develop/`) alike — requires a conflict in backward mode; forward mode (`-f`)
+  says `s DERIVATION` but writes a single deletion line as the LRAT; the undocumented `-B`
+  mode bus-errors. How the 2023 LRATs (a 36-line trimmed derivation of lemma 25226 for
+  step 1, `comproof/lrat/proof-1.lrat`) were produced is not reproducible from the
+  published scripts as they stand today [unresolved; no claim made about the authors'
+  setup].
+- **What works and is equivalent:** append the negation of lemma j as unit clauses to step
+  j's formula, after the previous lemmas so the ids match drat-trim's numbering. drat-trim
+  then trims and verifies a refutation: step 1 → `s VERIFIED`, 24 of 85 lemmas in core
+  (drat-trim's count; the published derivation keeps 25), 46 LRAT lines, a final empty
+  clause hinted by the 13 units and the core. This is "CNF ∧ L₁..L_{j−1} ⊢ L_j" in
+  refutation form — the form our checker already consumes (path B's step formula was CNF +
+  the same units, without the previous lemmas).
+- **Path A2 prepared** (`pathA2/run.sh`, owner-run; waits for path A's DONE line): the
+  published lemmas fed to iglucose as cubes ¬L_j (same solver, same composition, 5,225 + 1
+  steps), the emitted lemma recorded per step and classified against the published one
+  (identical / strict subset / other), the last step CNF + 5,225 lemmas, drat-trim `-L` per
+  step with the unit rule above. **Pre-registered before the run:** **P11** iglucose emits
+  the published lemma itself for ≥ 90 % of steps and a strict subset for the rest, none
+  "other". **P12** drat-trim verifies 5,226/5,226. **P13** our checker (resident route with
+  cumulative extras: lemmas 1..j−1, then the units) verifies 5,226/5,226 with 0 UNSUPPORTED
+  (zero RAT, as P6 asked) and 0 malformed. **P14** the drat-trim-trimmed proofs total fewer
+  bytes than our lrat-trim'd ones (< 6.894 GB binary), and the resident route runs them in
+  ≤ 11.6 s warm (1.3 × our 8.9 s): fewer bytes, but the per-step extras grow to 5,224
+  clauses for the last steps (13.6 M extra clauses in all, a new cost for the layout
+  stage), so a 1.0–1.3× band around our own time is the prediction, not a speed-up claim.
+  P14 is P6's "within 2×" clause restated for the proofs that will actually exist.
