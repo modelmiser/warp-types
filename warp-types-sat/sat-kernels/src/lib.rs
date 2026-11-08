@@ -342,15 +342,20 @@ fn lrat_hash(k: u32) -> u32 {
 /// Is literal `l` falsified in this warp's table (stamp-qualified)? In the
 /// hashed layout the probe count is bounded so a full table cannot spin (it
 /// cannot BE full — `lrat_insert` caps occupancy at `LRAT_TABLE - 1` — but a
-/// bounded loop is the property a reader can check).
+/// bounded loop is the property a reader can check). `slots` is the direct
+/// layout's region size (research/edp-record.md §9); the hashed layout
+/// ignores it.
 #[inline(always)]
-unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, l: i32) -> bool {
+unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32) -> bool {
     let k = lrat_code(l) + 1;
     if direct {
-        // The caller has already refused codes past the table (it turns them
-        // into TableOverflow); the mask keeps even a broken caller inside
+        // The caller has already refused codes past the region (it turns them
+        // into TableOverflow); the bound keeps even a broken caller inside
         // this warp's region, and the key must match too.
-        let e = *table.add((base + ((k - 1) & (LRAT_TABLE - 1))) as usize);
+        if k > slots {
+            return false;
+        }
+        let e = *table.add((base + (k - 1)) as usize);
         return (e >> 32) as u32 == stamp && e as u32 == k;
     }
     let mut i = lrat_hash(k);
@@ -372,12 +377,14 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 /// Mark literal `l` false. `count` is this lemma's occupancy; returns false
 /// (table overflow, code 5) rather than filling the last slot, so a lookup
 /// always finds an empty slot and terminates. Same cap as `SimWarp`'s
-/// `LitTable` (`CAP - 1` = 4,095 literals), in both layouts. The previous
-/// version capped PROBES at 4,095, which still admitted a 4,096th key
-/// whenever the hole was within reach — then the table was full and a miss
-/// looped forever (cross-vendor panel, 2026-11-02).
+/// `LitTable` (`CAP - 1` = 4,095 literals), in both layouts — the cap is
+/// `LRAT_TABLE - 1` even when the direct region (`slots`) is wider than
+/// `LRAT_TABLE` (edp-record §9: the cap and the slot count are two things).
+/// The previous version capped PROBES at 4,095, which still admitted a
+/// 4,096th key whenever the hole was within reach — then the table was full
+/// and a miss looped forever (cross-vendor panel, 2026-11-02).
 #[inline(always)]
-unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i32, count: &mut u32) -> bool {
+unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32, count: &mut u32) -> bool {
     // The cap comes FIRST, before the key is looked up — exactly as SimWarp's
     // `LitTable::insert`. Checking it only on reaching an empty slot (as this
     // kernel did until 2026-11-04) let a repeated key through at occupancy
@@ -386,9 +393,9 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i
         return false;
     }
     let k = lrat_code(l) + 1;
-    // Direct layout: a code past the table means the host's guarantee is
+    // Direct layout: a code past the region means the host's guarantee is
     // broken — fail closed (TableOverflow: no verdict) rather than alias.
-    if direct && k > LRAT_TABLE {
+    if direct && k > slots {
         return false;
     }
     let entry = ((stamp as u64) << 32) | k as u64;
@@ -418,10 +425,13 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, l: i
 /// num_blocks * LRAT_WARPS_PER_BLOCK`.
 ///
 /// Grid: (num_blocks, 1, 1), Block: (32 * LRAT_WARPS_PER_BLOCK, 1, 1).
-/// `table` holds `W * LRAT_TABLE` 64-bit slots, zeroed by the host once.
-/// `direct != 0` selects the direct layout; the host passes it only when
-/// every literal code (`2·|l| + (l < 0)`) is below `LRAT_TABLE`. `codes[i]`
-/// receives lemma `i`'s code.
+/// `table` holds `W * region` 64-bit slots, zeroed by the host once, where
+/// `region` is `slots` in the direct layout and `LRAT_TABLE` in the hashed
+/// one. `direct != 0` selects the direct layout; the host passes it only
+/// when every literal code (`2·|l| + (l < 0)`) is below `slots`
+/// (research/edp-record.md §9: `slots` may exceed `LRAT_TABLE`; the
+/// occupancy cap stays `LRAT_TABLE - 1`). `codes[i]` receives lemma `i`'s
+/// code.
 #[warp_kernel]
 pub fn lrat_check_lemmas(
     lits: *const i32,
@@ -436,6 +446,7 @@ pub fn lrat_check_lemmas(
     num_lemmas: u32,
     num_blocks: u32,
     direct: u32,
+    slots: u32,
 ) {
     let direct = direct != 0;
     let warp: Warp<All> = Warp::kernel_entry();
@@ -444,7 +455,7 @@ pub fn lrat_check_lemmas(
     let lane = tid & 31;
     let gw = bid * LRAT_WARPS_PER_BLOCK + (tid >> 5);
     let n_warps = num_blocks * LRAT_WARPS_PER_BLOCK;
-    let base = gw * LRAT_TABLE;
+    let base = gw * if direct { slots } else { LRAT_TABLE };
     let mut i = gw;
     while i < num_lemmas {
         let stamp = i + 1;
@@ -457,7 +468,7 @@ pub fn lrat_check_lemmas(
         // Lemma literals are false. Every lane inserts (identical writes).
         let mut k = ls;
         while k < le {
-            if !lrat_insert(table, base, stamp, direct, *lits.add(k as usize), &mut count) {
+            if !lrat_insert(table, base, stamp, direct, slots, *lits.add(k as usize), &mut count) {
                 code = 5;
                 break;
             }
@@ -516,9 +527,9 @@ pub fn lrat_check_lemmas(
                 let mut j = cs + lane;
                 while j < ce {
                     let l = *lits.add(j as usize);
-                    if direct && lrat_code(l) >= LRAT_TABLE {
+                    if direct && lrat_code(l) >= slots {
                         past_table = true; // the host's guarantee is broken
-                    } else if !lrat_falsified(table, base, stamp, direct, l) {
+                    } else if !lrat_falsified(table, base, stamp, direct, slots, l) {
                         free += 1;
                         last = l;
                     }
@@ -552,7 +563,7 @@ pub fn lrat_check_lemmas(
                 let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
                 let src = voted.trailing_zeros() & 31;
                 let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-                let ok = lrat_insert(table, base, stamp, direct, -unit, &mut count);
+                let ok = lrat_insert(table, base, stamp, direct, slots, -unit, &mut count);
                 warp_types::gpu::syncwarp(0xffff_ffff);
                 if !ok {
                     code = 5;

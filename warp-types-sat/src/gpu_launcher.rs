@@ -25,6 +25,14 @@ const WARP_SIZE: u32 = 32;
 pub const DEC_CLEAN: u32 = 0;
 pub const DEC_DIRTY: u32 = 1;
 pub const DEC_NONE: u32 = 2;
+/// The launcher picks the direct check layout on its own only for proofs
+/// whose literal codes are all below this (variables ≤ 2,047); a wider
+/// region is reachable by request (`Some(true)`). `research/edp-record.md`
+/// §9 pre-registered a 1 GiB table budget instead and measured the widened
+/// direct layout on EDP2_1161 (8,416 slots): not faster than the hashed one
+/// at the launcher's block count (P30 missed), so the policy reverted to
+/// this, as that section said it would.
+pub const LRAT_DIRECT_AUTO_CODES: u32 = 4096;
 
 /// GPU context holding CUDA device, stream, and loaded kernels.
 ///
@@ -1034,73 +1042,25 @@ impl GpuContext {
         Ok(s.clone_dtoh(&out)?[0])
     }
 
-    /// [`GpuContext::check_lrat_codes`] with the table layout chosen by the
-    /// caller: `Some(true)` direct (an error unless every literal code is
-    /// below `LRAT_TABLE`), `Some(false)` hashed, `None` direct exactly when
-    /// the codes allow it. The tests force both layouts on every proof.
-    ///
-    /// `blocks == 0` picks the block count from the layout and the SM count:
-    /// 24 blocks (96 warps) per SM for the direct layout, 6 (24 warps) for
-    /// the hashed one — the best of a sweep on an RTX 4000 SFF Ada
-    /// (`research/gpu-lrat-decode.md`, S5); the hashed table's footprint
-    /// makes more resident warps per SM SLOWER, the direct one's does not.
-    pub fn check_lrat_codes_mode(
-        &self,
-        fp: &crate::lrat_warp::FlatProof,
-        lits: &CudaSlice<i32>,
-        hints: &CudaSlice<u32>,
-        blocks: u32,
-        direct: Option<bool>,
-    ) -> Result<Vec<u8>, GpuError> {
-        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
-        if fp.lemma_clause.is_empty() {
-            return Ok(Vec::new());
-        }
-        let fits = self.lrat_max_code(lits)? < TABLE;
-        let direct = match direct {
-            Some(true) if !fits => {
-                return Err(GpuError::Cuda(
-                    "direct table layout requested, but a literal code does not fit the table"
-                        .into(),
-                ))
-            }
-            Some(d) => d,
-            None => fits,
-        };
-        self.launch_lrat_check(fp, lits, hints, blocks, direct)
+    /// The direct layout's region size for a proof whose largest literal
+    /// code is `max_code`: whole 128-byte lines of 64-bit slots, at least one
+    /// (`research/edp-record.md` §9). Every code of the proof is below it.
+    pub fn lrat_direct_slots(max_code: u32) -> u32 {
+        (max_code / 32 + 1) * 32
     }
 
-    /// The check launch itself, layout given. `direct` is NOT verified here:
-    /// in the direct layout the kernel fails a lemma closed (TableOverflow)
-    /// when it meets a code past the table; the tests call this directly to
-    /// watch that happen.
-    pub(crate) fn launch_lrat_check(
-        &self,
-        fp: &crate::lrat_warp::FlatProof,
-        lits: &CudaSlice<i32>,
-        hints: &CudaSlice<u32>,
-        blocks: u32,
-        direct: bool,
-    ) -> Result<Vec<u8>, GpuError> {
-        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+    /// The block count the check launch will use for `blocks` (0 = pick),
+    /// the layout and its per-warp region: 24 blocks (96 warps) per SM for the
+    /// direct layout, 6 (24 warps) for the hashed one — the best of a sweep
+    /// on an RTX 4000 SFF Ada (`research/gpu-lrat-decode.md`, S5; the hashed
+    /// table's footprint makes more resident warps per SM SLOWER, the direct
+    /// one's does not) — clamped to the lemma count and to the kernel's
+    /// 32-bit table arithmetic (`blocks · 4 warps · region` must fit a u32;
+    /// cross-vendor panel 2026-11-04: an unclamped `blocks` wrapped the
+    /// allocation size).
+    fn lrat_check_blocks(&self, blocks: u32, direct: bool, region: u32, n: u32) -> u32 {
         const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
-                            // The kernel indexes in u32 throughout: the last warp's table region
-                            // (blocks * WPB * TABLE), every literal and hint index, and a batch of
-                            // 32 hints past the last one must all fit. Cross-vendor panel
-                            // 2026-11-04: an unclamped `blocks` wrapped the allocation size.
-        const MAX_BLOCKS: u32 = 1 << 16;
-        let limit = (u32::MAX - 64) as usize;
-        if lits.len() > limit || hints.len() > limit || fp.clause_start.len() > limit {
-            return Err(GpuError::Cuda(
-                "LRAT check: proof too large for the kernel's 32-bit indices".into(),
-            ));
-        }
-        let s = &self.stream;
-        let n = fp.lemma_clause.len() as u32;
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-        let direct_arg = direct as u32;
+        let max_blocks = (u32::MAX / (WPB * region.max(1))).min(1 << 16);
         let blocks = if blocks == 0 {
             let sms = self
                 .stream
@@ -1113,13 +1073,74 @@ impl GpuContext {
         } else {
             blocks
         };
-        let blocks = blocks.max(1).min(n).min(MAX_BLOCKS);
+        blocks.max(1).min(n).min(max_blocks)
+    }
+
+    /// [`GpuContext::check_lrat_codes`] with the table layout chosen by the
+    /// caller: `Some(true)` direct (a region of one 64-bit slot per literal
+    /// code up to the proof's largest, per warp — any proof the device memory
+    /// admits), `Some(false)` hashed, `None` direct exactly when every code
+    /// is below [`LRAT_DIRECT_AUTO_CODES`]. The tests force both layouts on
+    /// every proof.
+    ///
+    /// `blocks == 0` picks the block count from the layout and the SM count
+    /// ([`Self::lrat_check_blocks`]).
+    pub fn check_lrat_codes_mode(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        lits: &CudaSlice<i32>,
+        hints: &CudaSlice<u32>,
+        blocks: u32,
+        direct: Option<bool>,
+    ) -> Result<Vec<u8>, GpuError> {
+        if fp.lemma_clause.is_empty() {
+            return Ok(Vec::new());
+        }
+        let max_code = self.lrat_max_code(lits)?;
+        let slots = Self::lrat_direct_slots(max_code);
+        let direct = direct.unwrap_or(max_code < LRAT_DIRECT_AUTO_CODES);
+        self.launch_lrat_check(fp, lits, hints, blocks, direct, slots)
+    }
+
+    /// The check launch itself, layout and direct region size given. Neither
+    /// is verified here: in the direct layout the kernel fails a lemma closed
+    /// (TableOverflow) when it meets a code at or past `slots`; the tests call
+    /// this directly with an undersized `slots` to watch that happen.
+    pub(crate) fn launch_lrat_check(
+        &self,
+        fp: &crate::lrat_warp::FlatProof,
+        lits: &CudaSlice<i32>,
+        hints: &CudaSlice<u32>,
+        blocks: u32,
+        direct: bool,
+        slots: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        const TABLE: u32 = 4096; // must equal sat-kernels::LRAT_TABLE
+        const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
+                            // The kernel indexes in u32 throughout: the last warp's table region
+                            // (blocks * WPB * region), every literal and hint index, and a batch of
+                            // 32 hints past the last one must all fit.
+        let limit = (u32::MAX - 64) as usize;
+        if lits.len() > limit || hints.len() > limit || fp.clause_start.len() > limit {
+            return Err(GpuError::Cuda(
+                "LRAT check: proof too large for the kernel's 32-bit indices".into(),
+            ));
+        }
+        let s = &self.stream;
+        let n = fp.lemma_clause.len() as u32;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let direct_arg = direct as u32;
+        let slots = slots.max(32);
+        let region = if direct { slots } else { TABLE };
+        let blocks = self.lrat_check_blocks(blocks, direct, region, n);
         let clause_start = s.clone_htod(&fp.clause_start)?;
         let deleted_at = s.clone_htod(&fp.deleted_at)?;
         let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
         let lemma_step = s.clone_htod(&fp.lemma_step)?;
         let hint_start = s.clone_htod(&fp.hint_start)?;
-        let table: CudaSlice<u64> = s.alloc_zeros((blocks * WPB * TABLE) as usize)?;
+        let table: CudaSlice<u64> = s.alloc_zeros((blocks * WPB * region) as usize)?;
         // Pre-filled with `LemmaCode::Unwritten` (6): a lemma the kernel never
         // wrote must fail, not read as Ok (= 0). Cross-vendor panel 2026-11-02.
         let codes: CudaSlice<u8> = s.clone_htod(&vec![6u8; n as usize])?;
@@ -1137,6 +1158,7 @@ impl GpuContext {
                 .arg(&n)
                 .arg(&blocks)
                 .arg(&direct_arg)
+                .arg(&slots)
                 .launch(LaunchConfig {
                     grid_dim: (blocks, 1, 1),
                     block_dim: (WARP_SIZE * WPB, 1, 1),

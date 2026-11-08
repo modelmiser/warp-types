@@ -713,12 +713,10 @@ mod tests {
             .collect();
         let lits = ctx.stream().clone_htod(&fp.lits).unwrap();
         let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
-        let fits = ctx.lrat_max_code(&lits).unwrap() < 4096;
-        let modes: &[Option<bool>] = if fits {
-            &[None, Some(false), Some(true)]
-        } else {
-            &[None, Some(false)]
-        };
+        // Every proof admits both layouts since the direct region is sized to
+        // the proof's largest code (edp-record §9); the launcher's own choice
+        // is the third mode.
+        let modes: &[Option<bool>] = &[None, Some(false), Some(true)];
         for (&mode, blocks) in modes
             .iter()
             .flat_map(|m| [1u32, 7, 64, 4096].map(|b| (m, b)))
@@ -841,6 +839,35 @@ mod tests {
             },
         ];
         out.push(("duplicate at the cap".into(), cnf, Proof { steps }));
+        // Wide variables (edp-record §9): the two shapes above with every
+        // variable past 4,096 codes — "small 0" on variables 5,000–5,001 and
+        // "duplicate at the cap" on 1,906..=6,000 (4,095 literals, codes up
+        // to 12,001) — so the direct region is wider than LRAT_TABLE while
+        // the occupancy cap is seen to stay at 4,095.
+        let c = parse_cnf_ints(
+            "p cnf 5001 4\n5000 5001 0\n-5000 5001 0\n5000 -5001 0\n-5000 -5001 0\n",
+        );
+        out.push((
+            "wide small".into(),
+            c,
+            parse_text("5 5001 0 1 2 0\n6 0 5 3 4 0\n").unwrap(),
+        ));
+        let cnf: Vec<Vec<i32>> = vec![vec![-5999, 6000], vec![6000, 5998]];
+        let mut rep: Vec<i32> = (1906..=6000).collect();
+        rep.push(5999);
+        let steps = vec![
+            Step::Add {
+                id: 3,
+                lits: rep,
+                hints: vec![2],
+            },
+            Step::Add {
+                id: 4,
+                lits: (1906..=6000).collect(),
+                hints: vec![1, 2],
+            },
+        ];
+        out.push(("wide duplicate at the cap".into(), cnf, Proof { steps }));
         out
     }
 
@@ -902,12 +929,13 @@ mod tests {
         eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: {n} proofs, 4 block counts");
     }
 
-    /// The direct layout's own guard: launched direct on a proof whose
-    /// literal codes do NOT fit the table (bypassing the launcher's check),
-    /// the kernel must fail every lemma that meets a code past the table
-    /// closed (TableOverflow), never report a lemma Ok that SimWarp does not,
-    /// and agree with SimWarp on the lemmas that never leave the table. The
-    /// launcher itself refuses the request.
+    /// The direct layout's own guard: launched direct with a region (4,096
+    /// slots) the proof's literal codes do NOT fit — bypassing the launcher,
+    /// which sizes the region to the largest code (edp-record §9) — the
+    /// kernel must fail every lemma that meets a code past the region closed
+    /// (TableOverflow), never report a lemma Ok that SimWarp does not, and
+    /// agree with SimWarp on the lemmas that never leave the region. Through
+    /// the launcher the same proof, forced direct, is equal to SimWarp.
     #[test]
     fn check_kernel_direct_layout_fails_closed_past_the_table() {
         let Some(ctx) = ctx() else { return };
@@ -920,20 +948,21 @@ mod tests {
         let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
         assert!(
             ctx.lrat_max_code(&lits).unwrap() >= 4096,
-            "{what}: codes must not fit"
-        );
-        assert!(
-            ctx.check_lrat_codes_mode(&fp, &lits, &hints, 7, Some(true))
-                .is_err(),
-            "the launcher must refuse a direct layout the codes do not fit"
+            "{what}: codes must not fit 4,096 slots"
         );
         let want: Vec<u8> = super::super::check_warp_codes(&fp)
             .iter()
             .map(|&c| c as u8)
             .collect();
+        assert_eq!(
+            ctx.check_lrat_codes_mode(&fp, &lits, &hints, 7, Some(true))
+                .unwrap(),
+            want,
+            "{what}: the launcher's direct region must fit the codes"
+        );
         for blocks in [1u32, 7] {
             let got = ctx
-                .launch_lrat_check(&fp, &lits, &hints, blocks, true)
+                .launch_lrat_check(&fp, &lits, &hints, blocks, true, 4096)
                 .unwrap();
             let mut closed = 0;
             for (i, (&g, &w)) in got.iter().zip(&want).enumerate() {

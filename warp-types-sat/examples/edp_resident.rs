@@ -10,7 +10,7 @@
 //! ```text
 //! edp_resident CNF COMP DIR [--pattern s{}.blrat] [--threads 6] [--chunk-gb 3|12]
 //!              [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096]
-//!              [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2]
+//!              [--check-blocks 0] [--check-table auto|hashed|direct] [--steps N] [--simwarp K] [--verify-b2]
 //!              [--cumulative] [--serial] [--preparers 2] [--first-gb 2]
 //! ```
 //!
@@ -80,7 +80,7 @@ fn codes_of(raw: &[u8]) -> Vec<LemmaCode> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 3|12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2] [--cumulative] [--serial] [--preparers 2] [--first-gb 2]");
+        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 3|12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--check-table auto|hashed|direct] [--steps N] [--simwarp K] [--verify-b2] [--cumulative] [--serial] [--preparers 2] [--first-gb 2]");
         std::process::exit(1);
     }
     let pattern: String = arg(&args, "--pattern", "s{}.blrat".to_string());
@@ -95,6 +95,12 @@ fn main() {
         scan_blocks: arg(&args, "--scan-blocks", 4096),
         gather_blocks: arg(&args, "--gather-blocks", 4096),
         check_blocks: arg(&args, "--check-blocks", 0),
+        check_direct: match arg(&args, "--check-table", "auto".to_string()).as_str() {
+            "direct" => Some(true),
+            "hashed" => Some(false),
+            "auto" => None,
+            other => panic!("--check-table {other}: expected hashed, direct or auto"),
+        },
         threads,
         cooperative: !args.iter().any(|a| a == "--no-coop"),
     };
@@ -134,12 +140,17 @@ fn main() {
         .collect();
     let t1 = Instant::now();
     println!(
-        "c cnf {} vars? clauses {n_cnf}; comp {n_steps_all} lines; checking {n_steps} steps; threads {threads}; slice {} scan-blocks {} gather-blocks {} check-blocks {}",
+        "c cnf {} vars? clauses {n_cnf}; comp {n_steps_all} lines; checking {n_steps} steps; threads {threads}; slice {} scan-blocks {} gather-blocks {} check-blocks {} check-table {}",
         cnf.iter().flatten().map(|l| l.unsigned_abs()).max().unwrap_or(0),
         opts.slice,
         opts.scan_blocks,
         opts.gather_blocks,
-        opts.check_blocks
+        opts.check_blocks,
+        match opts.check_direct {
+            Some(true) => "direct",
+            Some(false) => "hashed",
+            None => "auto",
+        }
     );
 
     // Sizes first (one stat per file), so the chunks can be cut before any
@@ -341,7 +352,16 @@ fn main() {
                 FlatProof::from_binary(&f, &b).expect("B2 decode")
             });
             let b = warp_types_sat::lrat_batch::batch_par(&cnf, &decoded, threads);
-            let b2 = codes_of(&ctx.check_lrat_codes(&b.flat, 4096).expect("B2 check"));
+            // The reference is pinned to the HASHED layout (edp-record §9,
+            // K4 d): the route under test may run the widened direct one.
+            let b2 = {
+                let lits = ctx.stream().clone_htod(&b.flat.lits).expect("B2 lits");
+                let hints = ctx.stream().clone_htod(&b.flat.hints).expect("B2 hints");
+                codes_of(
+                    &ctx.check_lrat_codes_mode(&b.flat, &lits, &hints, 4096, Some(false))
+                        .expect("B2 check"),
+                )
+            };
             let mut bad = 0usize;
             for (i, &(l, h)) in b.lemma_range.iter().enumerate() {
                 if b2[l..h] != codes_all[lo + i][..] {

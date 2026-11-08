@@ -52,6 +52,9 @@ pub struct BatchOpts {
     pub gather_blocks: u32,
     /// Blocks for the check kernel (0 = the launcher's choice).
     pub check_blocks: u32,
+    /// The check kernel's table layout: `Some(true)` direct, `Some(false)`
+    /// hashed, `None` the launcher's choice (edp-record §9).
+    pub check_direct: Option<bool>,
     /// Host threads for the padding, plan and layout phases.
     pub threads: usize,
     /// The warp scan kernel (`true`) or the thread-per-slice control.
@@ -70,6 +73,7 @@ impl Default for BatchOpts {
             scan_blocks: 4096,
             gather_blocks: 4096,
             check_blocks: 0,
+            check_direct: None,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
             cooperative: true,
             preparers: 1,
@@ -347,6 +351,7 @@ pub struct PreparedChunk {
     d_hints: CudaSlice<u32>,
     n_cnf: usize,
     check_blocks: u32,
+    check_direct: Option<bool>,
     stats: ChunkStats,
 }
 
@@ -897,6 +902,7 @@ pub fn prepare_chunk(
         d_hints,
         n_cnf,
         check_blocks: opts.check_blocks,
+        check_direct: opts.check_direct,
         stats: st,
     })
 }
@@ -914,13 +920,14 @@ pub fn check_prepared(ctx: &GpuContext, p: PreparedChunk) -> Result<ChunkOutcome
         d_hints,
         n_cnf,
         check_blocks: blocks,
+        check_direct,
         mut stats,
     } = p;
     let n = routes.len();
 
     // ---- (6) the check, once ----
     let t = Instant::now();
-    let raw = ctx.check_lrat_codes_mode(&meta, &d_lits, &d_hints, blocks, None)?;
+    let raw = ctx.check_lrat_codes_mode(&meta, &d_lits, &d_hints, blocks, check_direct)?;
     stats.t_check = t.elapsed();
 
     // ---- (7) verdicts per step ----

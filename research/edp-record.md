@@ -675,3 +675,77 @@ consecutive; its base variables x_d, x_2d, … are not). 4,608 warps (1,152 bloc
 sweep (runs 6–17, serial path), then A2 cold + 3 warm. 6 niced host threads on cores 0–5.
 The 415 MB archive check (P35) by `lrat_check` cold, three single runs. Corrections to any
 of this in brackets; nothing above changes after the first measurement.
+
+**K as measured (2026-11-08, 19:50–19:55Z; `~/staging/2026-11-08-edp-record/k/`).** Built as
+designed: `slots` argument, region = `gw · slots` in the direct layout, cap unchanged at
+4,095; launcher `lrat_direct_slots` (whole lines), the u32 clamp from the region, the 1 GiB
+auto policy; `--verify-b2`'s B2 pinned hashed; battery + "wide small" + "wide duplicate at
+the cap"; both mutants killed before the kernel was trusted (A, sign dropped: battery
+blocks=1 lemma 50 code 2 vs 0, and 5,226/5,226 EDP steps mismatching; B, stride left at
+4,096: battery corruption 13 blocks=64 lemma 212 — code 39, an out-of-region write into
+`codes` — and 5,033 of 5,226 EDP steps mismatching). Full gpu suite 291 passed
+(`archive_agreement_with_external_checkers` fails only for want of `LRAT_CHECK` in the
+environment — not run; the kernel oracle on the archive ran over the three campaign
+directories; the `negatives` directory is no longer at the path the S5 runs used).
+**Oracles (run0): 0 mismatching steps against the hashed B2 on all 5,226 steps; SimWarp 50/50;
+P32 MET.** Then, direct at the launcher's 24 blocks per SM (1,152 blocks, 310 MB table):
+| run | cache | read | fill | checks span | total |
+|---|---|---|---|---|---|
+| 1 | **cold** | 2.036 | 0.481 | 0.481..6.072 | **6.214 s** |
+| 2 | warm | 1.082 | 0.461 | 0.461..5.956 | 6.131 s |
+| 3 | warm | 1.222 | 0.463 | 0.463..5.960 | **6.091 s** |
+| 4 | warm | 1.043 | 0.482 | 0.482..6.009 | 6.177 s |
+(co-running stage sums: check 4.4–4.7 against §8's 5.4–5.5, scan passes 3.7–4.5, gather
+1.0; peak device memory **5.42 GB**.) **Best of 3: 6.09 s warm; cold 6.21 s** — from 6.42 /
+6.42 (§8), 1.05×. **P29 MISSED** (4.6–5.6). **P29b MISSED by 0.07 s** — 6.09 against the 6.02
+line; **9.9× under the published 60.2 s**. **P4 MISSED.** P24's property weakened: cold is
+0.12 s over warm (the read is no longer entirely hidden).
+**P30 MISSED, and the no-gain line crossed:** the serial-path check stage at the launcher's
+1,152 blocks is **4.39 s — SLOWER than the hashed 3.71–3.77 s**; the sweep (runs 6–17, check
+stage, 3 runs each): **288 blocks 3.447 / 3.454 / 3.469 s**, 576 blocks 4.45 / 4.55 / 4.59 s,
+1,152 blocks 4.65 / 4.66 / 4.69 s, 2,304 blocks 4.63 / 4.68 / 4.69 s. The widened direct
+layout's best point, 3.45 s at 6 blocks per SM, is 1.07–1.09× over hashed and sits ON the
+pre-registered line (≥ 3.4 s = no gain). **P31 MISSED** (best at 288, not 576 / 1,152; the
+"2,304 ≥ 10 % slower than the best" half held, by 35 %). **P36 MISSED** at the default
+(9.49 s); 8.53–8.58 s at 288 blocks, inside 7.9–8.7 but not the configuration P36 named.
+**P33 MISSED** (5.42 GB against ≤ 5.0: the table grew 0.16 GB, the peak 0.83 GB — not
+investigated). **P34 and P35 INVALID — host contended:** from ≈ 19:52:30Z a Coccinelle run
+(five `spatch` processes and a `yices-smt2`, nice 15, not this session's) shared the host;
+runs 14–17's totals went to 16–18 s with their check stage unchanged (4.63–4.69 s), the A2
+runs' host stages ran at 2–4× §8's (read 4.5–4.9 s vs 0.84, plan 2.9–4.3 vs 0.9) for totals
+of 12.0–14.5 s, and the 415 MB runs' plan stage doubled; their check figures (0.120–0.130
+s against ≤ 0.11) are therefore not read. Both to be re-measured on a quiet host, below.
+**The consequence the pre-registration fixed:** P30 missed → **K2's auto policy reverted**
+to "direct only below 4,096 codes" (`LRAT_DIRECT_AUTO_CODES`; the 1 GiB budget constant is
+gone); the wide region stays reachable by request (`Some(true)`, `--check-table direct`).
+**Reading.** (1) Footprint, not probing, is what the card feels: the direct region at
+8,416 slots touches the same ≈ 100 lines per lemma as the packed hashed table but spread
+over 67 KB per warp instead of 32 KB; at 4,608 warps that is 59 MB of live lines against a
+48 MB L2 and the kernel is 25 % SLOWER than hashed, at 1,152 warps (15 MB) it is 7 % faster.
+The S5 gain (1.5–1.8×) was a 350-variable proof's — 704 slots, 5.6 KB per warp — and did not
+survive a twelvefold wider region. (2) The pipeline nevertheless gained 0.33 s with the
+SLOWER standalone kernel: co-running with the scan passes, 4,608 check warps take a larger
+share of the SMs than 1,152 do (check stage 4.4 s co-running vs 5.4 s for hashed at 288
+blocks) — a scheduling-share effect, not a kernel speedup. The standalone optimum (288) and
+the co-running optimum may therefore differ, which is what the follow-on below measures.
+
+**K-follow-on, pre-registered 2026-11-08 20:05Z, before measuring (numbers fixed now).**
+K3 said the sweep decides the direct block count; the sweep says 288 for 8,416 slots. All
+runs below are forced (`--check-table …`), on our proofs, pipelined, 6 niced threads, a quiet
+host (no `spatch`); `~/staging/2026-11-08-edp-record/k/run-follow.sh`.
+- **F1** direct, 288 check blocks, best of 3 warm: **6.0–6.5 s** (point 6.25) — predicted NOT
+  better than direct at 1,152 (the co-running share shrinks with the warps).
+- **F2** direct at the default 1,152, best of 3 warm: 6.0–6.2 s (reproducing 6.09) and cold;
+  peak device memory recorded again (P33's 5.42 GB unexplained).
+- **F3** hashed (= §8's configuration), best of 3 warm: 6.3–6.5 s (reproducing 6.42).
+- **F4** path A2 proofs, auto (= hashed after the revert): 7.0–7.4 s (reproducing 7.20) — the
+  valid P34 re-measurement; and A2 direct at 1,152: 6.8–7.3.
+- **F5** (P35 re-measured) 415 MB archive proof, `lrat_check` resident, cold ×3: check ≤ 0.11
+  s (the direct layout at 704 slots is the S5 kernel plus one bound compare).
+- **Decision rule, fixed now:** the auto policy stays "direct below 4,096 codes". If F2 beats
+  F3 by ≥ 0.2 s in BOTH best-of-3 and cold, the ledger records that a wider auto policy
+  would buy that much on this proof and leaves changing it to the owner (a 5 % gain from a
+  slower kernel is a scheduling accident, not a property to build a default on). The K3
+  block-count function is installed only if F1 beats F2 by ≥ 0.1 s; otherwise the direct
+  default stays 24 blocks per SM and the sweep is recorded as "standalone and co-running
+  optima differ". Kill: any `s VERIFIED` missing or any oracle disagreement.
