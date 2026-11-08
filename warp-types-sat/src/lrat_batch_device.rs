@@ -56,6 +56,11 @@ pub struct BatchOpts {
     pub threads: usize,
     /// The warp scan kernel (`true`) or the thread-per-slice control.
     pub cooperative: bool,
+    /// [`check_pipelined`] only: preparer threads, each on its own stream,
+    /// taking chunks in turn (≥ 1). One preparer's host phases (plan,
+    /// layout, record download) sit on the pipeline's critical path; a
+    /// second preparer's device work fills them.
+    pub preparers: usize,
 }
 
 impl Default for BatchOpts {
@@ -67,6 +72,7 @@ impl Default for BatchOpts {
             check_blocks: 0,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
             cooperative: true,
+            preparers: 1,
         }
     }
 }
@@ -955,15 +961,18 @@ pub struct PipeTimes {
     pub check: (f64, f64),
 }
 
-/// The two-stream pipeline (design C2, `research/edp-record.md` §8): chunk
-/// `k+1` is read and prepared while chunk `k` is checked. Three threads —
+/// The multi-stream pipeline (design C2, `research/edp-record.md` §8): the
+/// next chunks are read and prepared while chunk `k` is checked. Threads —
 /// a reader (`load(j)` for each step of the next chunk, on `opts.threads`
-/// workers), a preparer on a [`GpuContext::fork`] of `ctx`, and the checker
-/// on `ctx` itself — joined by rendezvous channels, so at most one chunk
-/// waits prepared. `chunks` are consecutive step ranges `lo..hi` covering
-/// the steps in order; `extras[j]` is step `j`'s formula beyond `cnf`.
-/// Outcomes per chunk, in chunk order, with each chunk's intervals. A
-/// failure on any thread ends the pipeline with that error.
+/// workers), `opts.preparers` preparers each on a [`GpuContext::fork`] of
+/// `ctx` taking chunks in turn, and the checker on another fork — joined by
+/// rendezvous channels, so little waits prepared; the checker takes chunks
+/// in chunk order whatever order they finish. `chunks` are consecutive step
+/// ranges `lo..hi` covering the steps in order; `extras[j]` is step `j`'s
+/// formula beyond `cnf`. Outcomes per chunk, in chunk order, with each
+/// chunk's intervals. A failure on any thread ends the pipeline with that
+/// error. The allocator's pool is set to retain freed memory
+/// ([`GpuContext::retain_pool_memory`]).
 pub fn check_pipelined(
     ctx: &GpuContext,
     cnf: &[Vec<i32>],
@@ -972,14 +981,22 @@ pub fn check_pipelined(
     load: impl Fn(usize) -> Vec<u8> + Sync,
     opts: &BatchOpts,
 ) -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
+    use std::collections::BTreeMap;
     use std::sync::mpsc::sync_channel;
+    use std::sync::Mutex;
     let t0 = Instant::now();
     let at = |t: Instant| t.duration_since(t0).as_secs_f64();
-    let prep_ctx = ctx.fork()?;
+    ctx.retain_pool_memory()?;
+    let n_prep = opts.preparers.max(1);
+    let prep_ctxs: Vec<GpuContext> = (0..n_prep).map(|_| ctx.fork()).collect::<Result<_, _>>()?;
+    // The check on its own non-blocking stream as well, never the legacy
+    // null stream of `ctx` (§8).
+    let check_ctx = ctx.fork()?;
+    type Prepared = (usize, PreparedChunk, (f64, f64), (f64, f64));
     let (tx_bytes, rx_bytes) = sync_channel::<(usize, Vec<Vec<u8>>, (f64, f64))>(1);
-    let (tx_prep, rx_prep) =
-        sync_channel::<Result<(usize, PreparedChunk, (f64, f64), (f64, f64)), GpuError>>(0);
+    let (tx_prep, rx_prep) = sync_channel::<Result<Prepared, GpuError>>(0);
     let threads = opts.threads.max(1);
+    let rx_bytes = Mutex::new(rx_bytes);
     std::thread::scope(|s| -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
         // Reader.
         let load = &load;
@@ -993,10 +1010,13 @@ pub fn check_pipelined(
                 }
             }
         });
-        // Preparer.
-        let prep_ctx = &prep_ctx;
-        s.spawn(move || {
-            for (k, bytes, read) in rx_bytes {
+        // Preparers, taking chunks in turn.
+        let rx_bytes = &rx_bytes;
+        for prep_ctx in &prep_ctxs {
+            let tx_prep = tx_prep.clone();
+            s.spawn(move || loop {
+                let msg = rx_bytes.lock().unwrap().recv();
+                let Ok((k, bytes, read)) = msg else { return };
                 let (lo, hi) = chunks[k];
                 let proofs: Vec<&[u8]> = bytes.iter().map(Vec::as_slice).collect();
                 let a = Instant::now();
@@ -1007,24 +1027,29 @@ pub fn check_pipelined(
                 if tx_prep.send(msg).is_err() || stop {
                     return;
                 }
-            }
-        });
-        // Checker (this thread).
+            });
+        }
+        drop(tx_prep);
+        // Checker (this thread), in chunk order.
         let mut out = Vec::with_capacity(chunks.len());
+        let mut pending: BTreeMap<usize, Prepared> = BTreeMap::new();
         for msg in rx_prep {
-            let (k, p, read, prepare) = msg?;
-            debug_assert_eq!(k, out.len(), "chunks arrive in order");
-            let a = Instant::now();
-            let o = check_prepared(ctx, p)?;
-            let check = (at(a), at(Instant::now()));
-            out.push((
-                o,
-                PipeTimes {
-                    read,
-                    prepare,
-                    check,
-                },
-            ));
+            let p = msg?;
+            pending.insert(p.0, p);
+            while let Some((k, p, read, prepare)) = pending.remove(&out.len()) {
+                debug_assert_eq!(k, out.len());
+                let a = Instant::now();
+                let o = check_prepared(&check_ctx, p)?;
+                let check = (at(a), at(Instant::now()));
+                out.push((
+                    o,
+                    PipeTimes {
+                        read,
+                        prepare,
+                        check,
+                    },
+                ));
+            }
         }
         Ok(out)
     })
@@ -1288,11 +1313,11 @@ mod tests {
         }
     }
 
-    /// The two-stream pipeline (§8) over the `lrat_batch` shapes with
-    /// malformed and rejected steps mixed in, cut into 1-, 2- and 3-step
-    /// chunks: every step's codes and verdict equal the one-at-a-time
-    /// reference, chunk outcomes come back in chunk order and cover the
-    /// ranges, and the well-formed steps stay on the device route.
+    /// The pipeline (§8) over the `lrat_batch` shapes with malformed and
+    /// rejected steps mixed in, cut into 1-, 2- and 3-step chunks, with one
+    /// to three preparers: every step's codes and verdict equal the
+    /// one-at-a-time reference, chunk outcomes come back in chunk order and
+    /// cover the ranges, and the well-formed steps stay on the device route.
     #[test]
     fn pipelined_route_agrees_with_the_reference() {
         let Some(ctx) = ctx() else { return };
@@ -1322,20 +1347,15 @@ mod tests {
         let proofs: Vec<Vec<u8>> = steps.iter().map(|(_, p)| p.clone()).collect();
         let n = steps.len();
         let device_steps = [0usize, 1, 2, 5, 6, 8, 10, 11, 13];
-        for per_chunk in [1usize, 2, 3] {
+        for (per_chunk, preparers) in [(1usize, 1usize), (2, 1), (3, 1), (1, 2), (2, 3)] {
             let chunks: Vec<(usize, usize)> = (0..n)
                 .step_by(per_chunk)
                 .map(|lo| (lo, (lo + per_chunk).min(n)))
                 .collect();
-            let out = check_pipelined(
-                &ctx,
-                &cnf(),
-                &extras,
-                &chunks,
-                |j| proofs[j].clone(),
-                &opts(64, 2),
-            )
-            .unwrap();
+            let mut o = opts(64, 2);
+            o.preparers = preparers;
+            let out = check_pipelined(&ctx, &cnf(), &extras, &chunks, |j| proofs[j].clone(), &o)
+                .unwrap();
             assert_eq!(out.len(), chunks.len(), "per_chunk={per_chunk}: one outcome per chunk");
             let mut j = 0usize;
             for (k, (o, t)) in out.iter().enumerate() {
@@ -1372,6 +1392,18 @@ mod tests {
             }
             assert_eq!(j, n);
         }
+    }
+
+    /// The pool setting the pipeline relies on lands: after
+    /// `retain_pool_memory` the release threshold reads back as the maximum
+    /// (on a card with the stream-ordered allocator; `None` otherwise).
+    #[test]
+    fn retain_pool_memory_sets_the_release_threshold() {
+        let Some(ctx) = ctx() else { return };
+        let before = ctx.pool_release_threshold().unwrap();
+        ctx.retain_pool_memory().unwrap();
+        let after = ctx.pool_release_threshold().unwrap();
+        assert_eq!(after, before.map(|_| u64::MAX), "before {before:?}, after {after:?}");
     }
 
     /// Long proofs on the synthetic CNF: steps straddling many slices, the

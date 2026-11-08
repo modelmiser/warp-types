@@ -488,3 +488,68 @@ the card otherwise idle):
 
 **Kill.** Any P19 mismatch not traced to a bug that is fixed and re-run clean; or a C2
 total not under C1's 8.90 s (then C2 is recorded as refuted on this card and §6 stands).
+
+- 17:02Z **C2 as pre-registered, measured** (`c2/run-all.sh`; the §8 design: one preparer
+  on a forked stream, the check on the caller's legacy null stream, 6 GB chunk budget, no
+  pinned staging): **oracles clean** (`--verify-b2` 5,226 steps, 0 code mismatches;
+  `--simwarp 50` 0; 5,226/5,226 VERIFIED, 0 host-route) — **P19 MET**. Timing: **warm
+  7.863 / 7.871 / 7.902 → best 7.86 s; cold 8.00 s** (6 chunks; device peak 5.29 GB).
+  **P16 MISSED** (7.86 > 6.5; the point estimate 5.9 was wrong by 2 s), **P16b MISSED**,
+  **P17 MET** (cold − warm = 0.14 s: the read IS hidden), **P18 half** (stage sum − wall =
+  3.7 s ≥ 2.5 MET; the check sum FELL, 3.71 → 3.45, instead of growing — no co-running
+  happened, see below), **P22 MET** (5.3 GB ≤ 12), P20 MET (4/4 gpu tests; M4 killed, and
+  a second mutant, the reader returning a chunk's proofs reversed, killed). The serial
+  control through the refactored code: 9.11 s (C1 8.90–9.07). **Why 7.86 and not 5.9:**
+  the per-chunk timeline (`c2/run3.txt`) shows chunk 1's upload at 0.20 s and every later
+  chunk's at 0.77–0.82 s whatever its size, ending when the previous check kernel ends:
+  the preparer was being serialised behind the check, so the pipeline degenerated into
+  C1 with smaller chunks (which is where the 1 s gain came from).
+- 17:10–17:50Z **Diagnostics** (`c2/diag/`, one run each, not protocol runs):
+  E1 check moved to a forked non-blocking stream — upload stalls move, total 7.60;
+  E2 pool release threshold → max — 7.41, stalls unchanged, peak unchanged;
+  E3 `--no-coop` (thread-per-slice scan) — 7.68, unchanged; E4 allocator
+  `REUSE_ALLOW_INTERNAL_DEPENDENCIES` off — 7.32, unchanged; E5 fine timers — the stall is
+  one `cuMemAllocAsync` on the preparer's stream, 0.47–0.59 s, the first allocation after
+  the check kernel went in flight (a 2.5 MB one in chunk 2, the 1.3 GB buffer in chunk 3);
+  E6 pool pre-grown by 10 GB (peak 9.7 GB) — unchanged, so not pool growth; E7 split alloc
+  / memset / tiny alloc — the `cuMemAllocAsync` itself blocks, the memset issue and a
+  following tiny alloc do not. nsys on this machine lacks its importer. **E8: a
+  `cuStreamSynchronize` on the check stream before the pageable code download removes
+  the stall entirely** (uploads 0.13–0.19 s every chunk): the thread spinning inside the
+  pageable device-to-host copy was holding up allocations from the other thread for the
+  kernel's duration [driver behaviour inferred from timing, not from a trace]. Total
+  still 7.36 s — the kernels now genuinely co-run and slow each other (check sum 3.45 →
+  5.25, scan passes 1.45 → 3.7) and the pipeline is PREPARE-bound: each 1.28 GB chunk's
+  preparation is ≈ 1.2 s serial (upload 0.15, scan 0.85 co-running, records 0.08, plan +
+  layout 0.12, gather 0.06) against a 1.0 s check. E9: a smaller first chunk cuts the fill
+  (1.0 → 0.45 → 0.22 s) and the total does not move; the 10 GB reserve is not load-bearing
+  (7.354 vs 7.365) → removed. **E11: two preparer threads, each on its own stream, taking
+  chunks in turn — 6.41 s (4 GB chunks), 6.34 (3 GB), 6.33 (2 GB); three preparers 6.35;**
+  the check thread now runs back to back (check span = wall) with the GPU saturated by the
+  co-running kernels. E13 knob matrix on that: check blocks 576 / 1152 → 7.28 / 7.41
+  (worse); scan blocks 1024 / 256 → 6.40 / 6.62; gather blocks 1024 → 6.60; first chunk
+  1 GB → 6.62; 4 host threads → 6.70; the pre-registered knobs are the best. E14 without
+  the pool retention: 6.45 / 6.52 / 6.63 against 6.33–6.41 with → kept.
+  **What the diagnostics say about the floor:** the kernel work is ≈ 5.2 s standalone
+  (check 3.45 + scan 1.45 + gather 0.33 at these chunk sizes); co-running costs ≈ 0.5 s of
+  interference; fill ≈ 0.45 and init ≈ 0.12 are exposed. ≈ 6.3 s is this kernel set's
+  practical floor on this card; the §3 10× clause (≤ 6.02 s) needs a faster check or scan
+  kernel, not more scheduling.
+
+**C2 as built — pre-registered before the protocol run** (same protocol; `edp_resident`
+defaults are now the chosen configuration: two preparers on forked streams, the check on a
+third, chunk budget 3 GB after a 2 GB first chunk, pool retention, stream wait before the
+code download; `--serial` = C1):
+- **P23** warm best-of-3 **≤ 6.5 s**, point 6.35 (6.25–6.45). **P23b: the 10× clause
+  (≤ 6.02 s) MISSED.** P4 MISSED.
+- **P24** cold ≤ warm best + 0.5 s.
+- **P25** oracles clean again on the as-built route (verify-b2 0 mismatches, simwarp 50
+  clean, 5,226/5,226, 0 host-route); the 5 gpu tests pass (the pipelined test now also
+  with 2 and 3 preparers); mutant M5 — the checker taking chunks in arrival order instead
+  of chunk order — killed in at least one of three runs of the test (it is timing-dependent
+  with several preparers, and that is recorded as such).
+- **P26** device peak ≤ 8 GB.
+- **P27** path A2 (`--cumulative`) within **1.0–1.2×** of the as-built own-proof time
+  (its 0.55 s of extras construction runs before the pipeline and cannot overlap).
+- **P28** the serial control (`--serial`) within 8.6–9.3 s.
+**Kill** as before: any P25 mismatch not traced to a bug fixed and re-run clean.

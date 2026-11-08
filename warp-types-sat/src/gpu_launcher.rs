@@ -108,6 +108,79 @@ impl GpuContext {
         })
     }
 
+    /// Keep freed device memory in the stream-ordered allocator's pool
+    /// instead of returning it to the driver at every synchronisation (the
+    /// pool's default release threshold is 0). Each chunk of the batched
+    /// route then reuses the previous chunk's memory; without this, every
+    /// chunk re-maps gigabytes, which stalls behind a kernel running on
+    /// another stream (§8 of `research/edp-record.md`, first runs: 0.2 s for
+    /// an upload with the card idle, 0.8 s with the check kernel running).
+    /// A no-op on a context without the async allocator. The reservation is
+    /// released when the context goes.
+    pub fn pool_release_threshold(&self) -> Result<Option<u64>, GpuError> {
+        use cudarc::driver::sys;
+        let ctx = self.stream.context();
+        if !ctx.has_async_alloc() {
+            return Ok(None);
+        }
+        ctx.bind_to_thread()?;
+        let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+        let mut threshold: u64 = 0;
+        // SAFETY: as in `retain_pool_memory`.
+        unsafe {
+            sys::cuDeviceGetDefaultMemPool(&mut pool, ctx.cu_device())
+                .result()
+                .map_err(|e| GpuError::Cuda(e.to_string()))?;
+            sys::cuMemPoolGetAttribute(
+                pool,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &mut threshold as *mut u64 as *mut std::ffi::c_void,
+            )
+            .result()
+            .map_err(|e| GpuError::Cuda(e.to_string()))?;
+        }
+        Ok(Some(threshold))
+    }
+
+    pub fn retain_pool_memory(&self) -> Result<(), GpuError> {
+        use cudarc::driver::sys;
+        let ctx = self.stream.context();
+        if !ctx.has_async_alloc() {
+            return Ok(());
+        }
+        ctx.bind_to_thread()?;
+        let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+        let mut threshold: u64 = u64::MAX;
+        // SAFETY: plain driver calls on a live device; `pool` is written by
+        // the first call before the second reads it; `threshold` outlives
+        // the call that reads it.
+        unsafe {
+            sys::cuDeviceGetDefaultMemPool(&mut pool, ctx.cu_device())
+                .result()
+                .map_err(|e| GpuError::Cuda(e.to_string()))?;
+            sys::cuMemPoolSetAttribute(
+                pool,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &mut threshold as *mut u64 as *mut std::ffi::c_void,
+            )
+            .result()
+            .map_err(|e| GpuError::Cuda(e.to_string()))?;
+            // And never let an allocation on one stream wait for a free on
+            // another to reuse its memory: with two streams, that internal
+            // dependency made every chunk's first allocation on the preparing
+            // stream wait for the check kernel on the other (§8).
+            let mut no: i32 = 0;
+            sys::cuMemPoolSetAttribute(
+                pool,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_INTERNAL_DEPENDENCIES,
+                &mut no as *mut i32 as *mut std::ffi::c_void,
+            )
+            .result()
+            .map_err(|e| GpuError::Cuda(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Upload SoA clause data to the GPU. Do this once per problem instance.
     pub fn upload_clause_data(&self, soa: &ClauseDataSoA) -> Result<GpuClauseData, GpuError> {
         let s = &self.stream;
@@ -1070,6 +1143,11 @@ impl GpuContext {
                     shared_mem_bytes: 0,
                 })?;
         }
+        // Wait on the stream before the pageable download: a thread spinning
+        // inside a pageable device-to-host copy held up `cuMemAllocAsync`
+        // calls from the other stream's thread for the kernel's whole
+        // duration (§8, two-stream pipeline); a stream wait does not.
+        s.synchronize()?;
         Ok(s.clone_dtoh(&codes)?)
     }
 }

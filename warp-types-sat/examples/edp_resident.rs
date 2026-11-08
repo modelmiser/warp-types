@@ -2,15 +2,16 @@
 //! device-resident route (`research/edp-record.md` §6 and §8): per chunk,
 //! every step's bytes go up once, the scan / gathers / check run on the
 //! card, and the host sees step records and codes only. By default the §8
-//! pipeline: chunk k+1 is read and prepared on a second stream while chunk k
-//! is checked; `--serial` is the §6 C1 route (read everything, then one chunk
-//! at a time on one stream).
+//! pipeline: the next chunks are read and prepared on their own streams
+//! (`--preparers`, two by default) while chunk k is checked on another;
+//! `--serial` is the §6 C1 route (read everything, then one chunk at a time
+//! on one stream).
 //!
 //! ```text
-//! edp_resident CNF COMP DIR [--pattern s{}.blrat] [--threads 6] [--chunk-gb 6|12]
+//! edp_resident CNF COMP DIR [--pattern s{}.blrat] [--threads 6] [--chunk-gb 3|12]
 //!              [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096]
 //!              [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2]
-//!              [--cumulative] [--serial]
+//!              [--cumulative] [--serial] [--preparers 2] [--first-gb 2]
 //! ```
 //!
 //! Step `j` is the CNF plus one unit per literal of the negated lemma `j`;
@@ -79,22 +80,23 @@ fn codes_of(raw: &[u8]) -> Vec<LemmaCode> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 6|12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2] [--cumulative] [--serial]");
+        eprintln!("usage: edp_resident CNF COMP DIR [--pattern s{{}}.blrat] [--threads 6] [--chunk-gb 3|12] [--slice 4096] [--scan-blocks 4096] [--gather-blocks 4096] [--check-blocks 0] [--steps N] [--simwarp K] [--verify-b2] [--cumulative] [--serial] [--preparers 2] [--first-gb 2]");
         std::process::exit(1);
     }
     let pattern: String = arg(&args, "--pattern", "s{}.blrat".to_string());
     let threads: usize = arg(&args, "--threads", 6);
     let serial = args.iter().any(|a| a == "--serial");
-    let chunk_gb: f64 = arg(&args, "--chunk-gb", if serial { 12.0 } else { 6.0 });
+    let chunk_gb: f64 = arg(&args, "--chunk-gb", if serial { 12.0 } else { 3.0 });
     let simwarp: usize = arg(&args, "--simwarp", 0);
     let verify_b2 = args.iter().any(|a| a == "--verify-b2");
     let opts = BatchOpts {
+        preparers: arg(&args, "--preparers", 2),
         slice: arg(&args, "--slice", 4096),
         scan_blocks: arg(&args, "--scan-blocks", 4096),
         gather_blocks: arg(&args, "--gather-blocks", 4096),
         check_blocks: arg(&args, "--check-blocks", 0),
         threads,
-        cooperative: true,
+        cooperative: !args.iter().any(|a| a == "--no-coop"),
     };
 
     let t0 = Instant::now();
@@ -154,9 +156,13 @@ fn main() {
         (4.5 * sizes[j] as f64) as usize + 12 * n_cnf + 32 * extras[j].len() + (1 << 10)
     };
     let budget = (chunk_gb * 1e9) as usize;
+    // The first chunk is smaller in pipelined mode: nothing overlaps it, so
+    // its preparation is the pipeline's fill.
+    let first_budget = (arg(&args, "--first-gb", if serial { chunk_gb } else { 2.0 }) * 1e9) as usize;
     let mut chunks: Vec<(usize, usize)> = Vec::new();
     let mut lo = 0usize;
     while lo < n_steps {
+        let budget = if chunks.is_empty() { first_budget } else { budget };
         let mut hi = lo;
         let mut used = 0usize;
         while hi < n_steps && (hi == lo || used + est(hi) <= budget) {
@@ -180,6 +186,14 @@ fn main() {
     let t_init0 = Instant::now();
     let ctx = GpuContext::new().expect("GPU context");
     let t_init = t_init0.elapsed().as_secs_f64();
+    println!(
+        "c gpu: async allocator {}; preparers {}; scan cooperative {}; {} chunks (first budget {:.1} GB, then {chunk_gb:.1} GB)",
+        ctx.pool_release_threshold().expect("pool attribute").is_some(),
+        opts.preparers,
+        opts.cooperative,
+        chunks.len(),
+        first_budget as f64 / 1e9
+    );
 
     let mut verdicts: Vec<Result<Verdict, _>> = Vec::with_capacity(n_steps);
     let mut codes_all: Vec<Vec<LemmaCode>> = Vec::with_capacity(n_steps);
