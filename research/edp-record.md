@@ -261,3 +261,60 @@ threads on cores 0–5, niced; the card otherwise idle):
 **Kill.** Any O1/O2 mismatch that is not a bug found, fixed and re-run with a
 clean result; or a C1 total not under B2's 13.7 s (then the route is recorded
 as refuted on this card and the write-up uses 13.7 s).
+
+- 2026-11-08 — **C1 built and measured** (`lrat_warp::batch_device`, `examples/edp_resident`;
+  commits 942228129, 4c33de751). Built as pre-registered with two deviations found on
+  the first runs, both recorded here: (i) the "chain ran past the step's end" rule as
+  written would have sent 8 of the first 300 well-formed steps to the host route — a
+  mis-synchronised speculative chain in a step's LAST slice legitimately runs into the
+  next step's padding (the single-proof route bounds it by the proof's length); such a
+  slice is now re-parsed on the host within the step's bytes, exactly as a dirty slice
+  is, and the stitch decides; (ii) the host staging buffer (2.5 GB of 0xFF per chunk,
+  first-touch) cost 2.6 s, so each proof is copied straight into its place in a device
+  buffer and the scan runs over that (`decode_lrat_slices_device`). One field slip
+  caught by the oracle run: the device's `st_after` is unused (0) for `d` steps and my
+  "record before the step's start" guard read it — every deletion step took the host
+  route until fixed. **Oracles: O1** every one of the 25,224,312 codes of all 5226 steps
+  equal to B2's (`--verify-b2`, three chunks, 0 mismatches); **O2** 50 steps equal to
+  one-at-a-time SimWarp, 0 mismatches; **O3** three gpu tests pass (the `lrat_batch`
+  shapes; malformed / empty / RAT / bad-deletion / id-order / bad-hint / flipped-byte /
+  every truncation of a proof, each on the right route; long proofs across 13-byte
+  slices and the padding, both scan kernels). **Watched to fail** (mutants on a copy,
+  restored by `cp`): M1 sentinel shift dropped → 2 of 3 tests fail; M2 overrun rule
+  dropped (`overrun = false`) → 2 of 3 fail (the truncation sweep reaches it); M3
+  host-route hint copy dropped → 1 of 3 fails. Full gpu suite on the restored tree with
+  the four archive dirs: 289 passed, 1 failed = `archive_agreement_with_external_checkers`
+  demanding `LRAT_CHECK` (harness configuration); rerun with `LRAT_CHECK` = drat-trim's lrat-check and `CAKE_LPR` set: 632/632 agree, 147 verified, pass — the suite is clean on the committed tree.
+  **Measured** (6 host threads on cores 0–5, niced, the card otherwise idle; cold =
+  `posix_fadvise(DONTNEED)` on all 5226 files, confirmed by the read time):
+  | run | cache | read | upload | scan (p1+p2 / dl) | plan | layout | gather | check | total |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 1 | warm | 0.717 | 0.979 | 1.878 (1.425 / 0.421) | 0.505 | 0.401 | 0.340 | 3.669 | 8.996 s |
+  | 2 | **cold** | 1.824 | 0.983 | 1.913 (1.419 / 0.459) | 0.523 | 0.432 | 0.342 | 3.708 | **10.300 s** |
+  | 3 | warm | 0.618 | 0.975 | 1.880 (1.432 / 0.417) | 0.498 | 0.393 | 0.339 | 3.706 | **8.904 s** |
+  | 4 | warm | 0.627 | 0.984 | 1.928 (1.436 / 0.456) | 0.527 | 0.423 | 0.341 | 3.752 | 9.068 s |
+  | 5 | warm | 0.640 | 0.981 | 1.905 (1.420 / 0.450) | 0.518 | 0.419 | 0.341 | 3.760 | 9.031 s |
+  (CUDA init 0.11–0.20 and combine 0.07 not shown; ≈ 0.3 s per run is allocation and
+  freeing between stages.) Three chunks (2.47 / 2.59 / 1.84 GB of bytes); device peak
+  10.15 GB of 19.2 (sampled at 100 ms); 0 host-route steps; 14 dirty slices of 1.69 M
+  (the chunk's first slice and 11 false starts). **Best of 3 (runs 3–5): 8.90 s; cold
+  10.30 s.**
+  **Ledger.** P7 **MET** (8.90 s ≤ 9.5; cold 10.30 ≤ 11). P8 **MET** (scan passes 1.43 +
+  gather 0.34 + check 3.71 = 5.48 s = 62 % of 8.90). P9 **MET** (0 host-route steps, 0
+  bad hints). P10 **MET** (O1, O2 zero mismatches; three mutants killed). P4 **MISSED as
+  predicted** (floor stated before building: the kernels alone are 5.5 s here; the check
+  kernel is 3.7 s on the hashed layout, 2.0 G hints at 0.54 G/s). Against §3's bar:
+  **≥ 20× under same-machine lrat-check MET** (199.6 / 8.90 = 22.4×); **≥ 10× under the
+  published 60.2 s MISSED** (6.8×). Also 41× under same-machine cake_lpr (366.9 s), 75×
+  under our per-step CPU route (665.7 s), 435× under the published single thread
+  (3871.7 s). The honest sentence today: "one workstation with a 20 GB GPU checks the
+  compositional EDP proof in 8.9 s (10.3 s cold), where the published run took 60.2 s on
+  128 threads and lrat-check takes 199.6 s on this machine one step at a time" — with
+  §0's four caveats attached, and nothing leaves the repo before the cross-vendor panel.
+  **Where the time is now:** device 5.5 s (check 3.7, scan 1.4, gather 0.3) + upload 1.0
+  + record download 0.45 + host plan/layout 0.9 + read 0.6 + init/alloc 0.5. **C2**
+  (pinned buffers, a second stream, chunk k+1's upload and scan under chunk k's check)
+  would overlap everything but the device sum: predicted 6.0–6.5 s, AT the 10× line, not
+  under it. Under 5 s needs the check kernel faster — the direct table layout extended
+  past 2047 variables (EDP has 4207), S5's 1.8× if its footprint still fits the cache —
+  plus C2. Both are separate arcs, owner's call; neither is started.
