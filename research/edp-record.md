@@ -170,4 +170,15 @@ same mutant. A mutant any checker accepts kills the run until explained.
   threads and lrat-check takes 199.6 s on this machine one step at a time" —
   with §0's four caveats attached. Options recorded for the owner: push the
   batched device-resident decode for P4, or write up here.
+- 2026-11-08 — **B2 re-run with core 0 idle** (B1 finished). Runs 5–7, 5 threads
+  on cores 1–5: **13.999 / 14.420 / 14.457 s** (decode 4.87–5.26, layout 2.45–2.47,
+  check 5.32–5.36); run 8, 6 threads on cores 0–5: **13.670 s** (decode 4.80,
+  layout 2.16, check 5.39). All 5226/5226. The 18–19 s of runs 3–4 was the
+  per-step reference run sharing the socket, not cache state — confound
+  resolved. Run 5 was meant to be cold but its 0.709 s read says the eviction did
+  not take (the 26 GB stream was itself cached), so this set has **no clean cold
+  number**; run 2's 15.707 s stays the only cold one. Best-of-3 at 5 threads
+  14.0 s; best overall 13.7 s (6 threads) = 4.4× under 60.2 s, 14.6× under
+  same-machine lrat-check, 26.8× under cake_lpr, 48.7× under our per-step CPU
+  route. §3's bar still unmet on both clauses; P4 still MISSED.
 
