@@ -1049,27 +1049,33 @@ impl GpuContext {
         (max_code / 32 + 1) * 32
     }
 
-    /// The block count the check launch will use for `blocks` (0 = pick),
-    /// the layout and its per-warp region: 24 blocks (96 warps) per SM for the
-    /// direct layout, 6 (24 warps) for the hashed one — the best of a sweep
-    /// on an RTX 4000 SFF Ada (`research/gpu-lrat-decode.md`, S5; the hashed
-    /// table's footprint makes more resident warps per SM SLOWER, the direct
-    /// one's does not) — clamped to the lemma count and to the kernel's
-    /// 32-bit table arithmetic (`blocks · 4 warps · region` must fit a u32;
-    /// cross-vendor panel 2026-11-04: an unclamped `blocks` wrapped the
-    /// allocation size).
-    fn lrat_check_blocks(&self, blocks: u32, direct: bool, region: u32, n: u32) -> u32 {
+    /// The block count the check launch will use for `blocks` (0 = pick)
+    /// and a per-warp table region of `region` 64-bit slots: **24 blocks (96
+    /// warps) per SM when every resident warp's region together fits the
+    /// device's L2, else 6 (24 warps)**. One rule for three measured points
+    /// on an RTX 4000 SFF Ada (48 MB L2): the hashed table (32 KB regions,
+    /// 151 MB resident) is fastest at 6 per SM, the direct table of a
+    /// 350-variable proof (5.6 KB, 26 MB) at 24, and the direct table of a
+    /// 4,207-variable proof (67 KB, 310 MB) at 6 — a wider footprint wants
+    /// fewer resident warps (`research/gpu-lrat-decode.md` S5;
+    /// `research/edp-record.md` §9, K3). Clamped to the lemma count and to
+    /// the kernel's 32-bit table arithmetic (`blocks · 4 warps · region` must
+    /// fit a u32; cross-vendor panel 2026-11-04: an unclamped `blocks`
+    /// wrapped the allocation size).
+    pub fn lrat_check_blocks(&self, blocks: u32, region: u32, n: u32) -> u32 {
+        use cudarc::driver::sys::CUdevice_attribute::*;
         const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
         let max_blocks = (u32::MAX / (WPB * region.max(1))).min(1 << 16);
         let blocks = if blocks == 0 {
-            let sms = self
-                .stream
-                .context()
-                .attribute(
-                    cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-                )
+            let ctx = self.stream.context();
+            let sms = ctx
+                .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
                 .map_or(1, |v| v.max(1) as u32);
-            sms * if direct { 24 } else { 6 }
+            let l2 = ctx
+                .attribute(CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
+                .map_or(0, |v| v.max(0) as u64);
+            let resident = sms as u64 * 24 * WPB as u64 * region as u64 * 8;
+            sms * if resident <= l2 { 24 } else { 6 }
         } else {
             blocks
         };
@@ -1134,7 +1140,7 @@ impl GpuContext {
         let direct_arg = direct as u32;
         let slots = slots.max(32);
         let region = if direct { slots } else { TABLE };
-        let blocks = self.lrat_check_blocks(blocks, direct, region, n);
+        let blocks = self.lrat_check_blocks(blocks, region, n);
         let clause_start = s.clone_htod(&fp.clause_start)?;
         let deleted_at = s.clone_htod(&fp.deleted_at)?;
         let lemma_clause = s.clone_htod(&fp.lemma_clause)?;

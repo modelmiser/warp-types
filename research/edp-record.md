@@ -749,3 +749,91 @@ host (no `spatch`); `~/staging/2026-11-08-edp-record/k/run-follow.sh`.
   block-count function is installed only if F1 beats F2 by ≥ 0.1 s; otherwise the direct
   default stays 24 blocks per SM and the sweep is recorded as "standalone and co-running
   optima differ". Kill: any `s VERIFIED` missing or any oracle disagreement.
+
+**K-follow-on as measured (20:01–20:04Z, quiet host, `run-follow.sh`; every run `s VERIFIED`).**
+- **F1 direct at 288 blocks, warm: 5.411 / 5.400 / 5.349 → best 5.35 s** — **F1 REFUTED in the
+  good direction** (predicted 6.0–6.5, "not better than 1,152"): the smaller footprint wins
+  co-running too (check stage 4.5 s co-running, scan passes 4.0–4.2, gather 1.3). **5.35 s is
+  under the 6.02 s line: 60.2 / 5.35 = 11.3× — the §3 10× clause is MET on this configuration,
+  which is NOT the launcher's default** (see the rule below). P4 (≤ 5 s) still missed. Not
+  measured cold [F1 had no cold run in the pre-registration — an omission; added below as
+  the final run].
+- **F2** direct at 1,152: cold 6.199, warm 6.091 / 6.125 / 6.241 → 6.09 s, **MET** (reproduced);
+  peak 5.42 GB again.
+- **F3** hashed (§8's configuration): 6.500 / 6.534 / 6.591 → 6.50 s, **MET** at the edge
+  (6.3–6.5; §8 measured 6.42 — a 0.08 s drift between sessions).
+- **F4** A2 auto (hashed): cold 7.552, warm 7.412 / 7.564 / 7.383 → **7.38 s MET** (7.0–7.4;
+  §8: 7.20); A2 direct at 1,152: 7.662 / 7.399 / 7.641 → 7.40 s, **MISSED** (6.8–7.3) — no
+  gain on the A2 proofs at 1,152 blocks (their upload stage ran 3.0–3.2 s co-running against
+  1.1 s hashed: the wider check kernel starves the preparers' copies). A2 at 288 not run.
+- **F5 MISSED:** 415 MB check cold **0.120 / 0.120 / 0.123 s** (thread-decode line 0.117–0.120)
+  against ≤ 0.11 and S5's 0.095–0.104 — **a ≈ 20 % regression on the small proof** that the
+  contended run also showed. The only differences for this proof are the region (704 slots,
+  5.6 KB per warp, against 4,096) and one bound compare per probe. **Diagnostic D1,
+  pre-registered now:** region floored at 4,096 slots (`slots.max(4096)` — S5's layout
+  exactly for every proof it already covered), F5 rerun cold ×3; if the check returns to ≤
+  0.11 s the floor stays (the small region, not the kernel code, was the cost); if not, the
+  bound compare is suspected and the pre-K PTX is diffed against the new one.
+**Decision rule applied as written.** F2 − F3 = 0.41 s warm (cold: 6.20 vs §8's 6.42, 0.22 s)
+≥ 0.2 → recorded: **a wider auto policy would buy 0.4 s on this proof at 1,152 blocks and
+1.15 s at 288; changing the policy is the owner's call** (`LRAT_DIRECT_AUTO_CODES`); the
+launcher's default stays direct-below-4,096-codes and the headline configuration needs
+`--check-table direct`. F1 − F2 = 0.74 s ≥ 0.1 → **the K3 block-count function is installed.**
+Its form, chosen from the three points now in hand (hashed 32 KB regions: best at 6 per SM;
+direct 5.6 KB: 24; direct 67 KB: 6): **24 blocks per SM when all resident warps' regions
+together fit the device's L2 (`CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE`, 48 MB here: 4,608 ×
+region ≤ L2), else 6** — one rule for both layouts, replacing the per-layout constants.
+**Final run, pre-registered now:** after D1 and the rule, `--check-table direct` with the
+launcher's block count (→ 288 here): cold then best of 3 warm, device memory sampled.
+Predicted **warm 5.3–5.5 s, cold 5.4–5.7 s, peak ≤ 5.0 GB** (the 288-block table is 78 MB);
+A2 proofs `--check-table direct` best of 3: 6.9–7.4 s. The gpu suite must pass after the
+rule (the block-count tests pin explicit counts and are unaffected).
+- **D1 result: the floor did NOT restore it** — 0.121 / 0.118 / 0.122 s cold with 4,096-slot
+  regions. The floor stays (it costs nothing and keeps S5's layout) but the cause is
+  elsewhere. **D2, pre-registered now:** the pre-K kernel and launcher (`*.pre-k` scratch
+  copies: §8's code exactly) rebuilt in this tree, same three cold runs. ≤ 0.105 s → the
+  regression is K's (the bound compare / region multiply — then the PTX is diffed); ≈ 0.12
+  s → it predates K (S5's 0.095–0.104 was measured 11-04, before §8's stream synchronise
+  and today's driver state) and is recorded as session drift, not K's cost.
+- **D2 result: the pre-K code measures the same — 0.116 / 0.120 / 0.120 s.** The 415 MB
+  regression against S5's 0.095–0.104 **predates K**: session drift (recorded, cause not
+  chased; §8's synchronise before the download and the day's driver state are the candidates).
+  F5 is therefore MISSED against its number but **K's cost on the small proof is nil**.
+  [The D1 floor is DROPPED again: it bought nothing, and under the K3 rule below it would
+  have put every small proof's direct table on the 6-per-SM count S5 showed to be slower.]
+
+**Final run as measured (20:09Z, quiet host, `run-final.sh`; the launcher's rule chose 288
+blocks for both layouts on this proof — printed in every log — and `--check-table direct`):**
+| run | cache | read | fill | checks span | total |
+|---|---|---|---|---|---|
+| cold | **cold** | 2.116 | 0.448 | 0.448..5.322 | **5.524 s** |
+| 1 | warm | 1.216 | 0.442 | 0.442..5.200 | **5.339 s** |
+| 2 | warm | 1.211 | 0.484 | 0.484..5.348 | 5.500 s |
+| 3 | warm | 1.113 | 0.463 | 0.463..5.315 | 5.451 s |
+(co-running: check 4.5–4.7, scan passes 4.0–4.2, gather 1.35–1.6; peak device memory 5.16 GB;
+standalone check stage on the serial path 3.440 s.) **Best of 3: 5.34 s warm; cold 5.52 s —
+warm 5.3–5.5 MET, cold 5.4–5.7 MET; peak ≤ 5.0 GB MISSED (5.16).** Path A2 proofs, direct:
+6.234 / 6.288 / 6.293 → **6.23 s** — predicted 6.9–7.4, **MISSED in the good direction** (from
+7.38 hashed, 1.18×: at 288 blocks the preparers' uploads are no longer starved, 1.0–1.2 s).
+**§9 ledger:** P29 MISSED, P29b MISSED (as the default), P4 MISSED, P30 MISSED (no-gain line,
+policy reverted), P31 MISSED, P32 MET, P33 MISSED, P34 INVALID → F4 MET, P35 INVALID → F5
+MISSED (predates K, D2), P36 MISSED; F1 REFUTED upward, F2 MET, F3 MET, F4 MET / MISSED,
+F5 MISSED; final warm MET, cold MET, memory MISSED, A2 MISSED upward.
+**Ratios now, with the direct table requested** (our proofs 5.34 s): **11.3× under the published
+128-thread 60.2 s — the §3 10× clause MET for the first time; 37.4× under same-machine
+lrat-check (199.6 s)**, 68.7× under cake_lpr (366.9 s), 725× under the published single
+thread (3,871.7 s). Path A2 proofs 6.23 s: 9.7× under 60.2 s (still short of 10× on the
+published pipeline's own proofs), 31.1× under lrat-check (193.5 s), 76.8× under cake_lpr
+(478.6 s). The launcher's DEFAULT on this proof is the hashed table: 6.50 s today (§8: 6.42),
+9.3×. K over C2: 6.42 → 5.34 s (1.20×) requested, 6.42 → 6.50 default (none).
+**The honest sentence today:** "one workstation with a 20 GB GPU checks the compositional EDP
+proof in 5.3 s warm or 5.5 s cold when the checker is told to use its direct assignment
+table (6.2 s on the published pipeline's own proofs), where the published run took 60.2 s on
+128 threads and lrat-check takes 199.6 s on this machine one step at a time; with the
+checker's default table it is 6.5 s" — §0's caveats attached, nothing leaves the repo before
+the cross-vendor panel. **Open, for the owner:** whether `LRAT_DIRECT_AUTO_CODES` moves (the
+rule above kept it; the measured case for moving it is 6.50 → 5.34 s here and 7.38 → 6.23 s
+on A2, with the K3 block rule in place, and no proof past 4,207 variables measured). **Not
+done:** the kernel itself is unchanged in its inner loop — under 5 s now needs either the
+scan passes (1.45 s standalone, 4 s co-running) or a check kernel that touches fewer lines
+per lemma; the 415 MB drift (D2) is unexplained.

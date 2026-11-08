@@ -196,6 +196,18 @@ fn main() {
 
     let t_init0 = Instant::now();
     let ctx = GpuContext::new().expect("GPU context");
+    {
+        // The launcher's block-count rule (edp-record §9, K3), stated so a run's
+        // configuration is in its log: the hashed region and the CNF's direct one.
+        let max_code = cnf.iter().flatten().map(|l| (l.unsigned_abs() << 1) | (*l < 0) as u32).max().unwrap_or(0);
+        let slots = GpuContext::lrat_direct_slots(max_code);
+        println!(
+            "c check blocks (launcher's rule for --check-blocks {}): hashed {} | direct at {slots} slots {}",
+            opts.check_blocks,
+            ctx.lrat_check_blocks(opts.check_blocks, 4096, u32::MAX),
+            ctx.lrat_check_blocks(opts.check_blocks, slots, u32::MAX)
+        );
+    }
     let t_init = t_init0.elapsed().as_secs_f64();
     println!(
         "c gpu: async allocator {}; preparers {}; scan cooperative {}; {} chunks (first budget {:.1} GB, then {chunk_gb:.1} GB)",
