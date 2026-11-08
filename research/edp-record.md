@@ -423,3 +423,68 @@ as refuted on this card and the write-up uses 13.7 s).
   numbers go in the write-up side by side. **§7 ledger:** P11 MISSED (34.7 % identical),
   P12 MET, P13 MET, P14 MET, P15 half (lrat-check met, cake_lpr missed by 0.5 %); P6 clause 1
   FAILED (version drift), clause 2 (zero RAT) MET, clause 3 restated as P14 and MET.
+
+## 8. C2 — two streams: chunk k+1 prepared under chunk k's check (2026-11-08)
+
+Owner 08:50Z: "continue. direction is your call." Chosen: C2, the pre-registered
+follow-on of §6, because the arc's missed clause is the 10× over the published 60.2 s
+(≤ 6.02 s) and §6 predicted C2 "at the line". The wider direct table and the write-up
+stay untouched. Written before any code.
+
+**Where C1's 8.90 s goes** (§6, warm): device kernels 5.48 s (check 3.71 + scan passes
+1.43 + gather 0.34) — everything else is host or PCIe work the card idles through: upload
+0.98, scan-record download 0.42, plan 0.50, layout 0.39, read 0.62, init 0.11, combine 0.07,
+allocation and freeing ≈ 0.3. Three chunks run strictly in sequence on the legacy default
+stream.
+
+**Design C2 (no kernel changes).** `check_chunk` is cut at step (5)/(6) into
+`prepare_chunk` (upload, scan, plan, layout, gathers; ends with the bad-hint download,
+which synchronises its stream, so every array it hands over is complete) and
+`check_prepared` (the check launch, combine); `check_chunk` = the two in sequence, so the
+three §6 gpu tests exercise the same code. `GpuContext::fork` gives a second context on a
+new NON_BLOCKING stream sharing the loaded module (the legacy null stream would
+synchronise with every blocking stream; `new_stream` streams do not). A library driver
+`check_pipelined` runs three threads: reader (loads one chunk's proofs ahead, `threads`
+workers), preparer (on the forked context), checker (on the caller's context), joined by
+rendezvous channels, so at most one prepared chunk waits. Device memory handed across is
+allocated on the preparer's stream and freed there (`cuMemFreeAsync`, stream-ordered) after
+the checker's synchronous code download — so a chunk's arrays linger until the preparer's
+stream reaches the free. The example's measured path IS the library driver (the loader is
+the file read; the test's loader is an in-memory slice), with a per-chunk timeline
+(read / prepare / check intervals from t0) beside the §6 stage columns. `--serial` keeps
+the C1 path for comparison.
+
+**Two decisions.** (1) **No pinned staging in this build**: the upload is hidden under the
+previous chunk's check, and pinning gigabytes of host RAM on the live machine is a cost
+with no predicted return; revisited only if the measured fill (time to the first check
+launch) is upload-bound. (2) **Chunk budget 6 GB instead of 12** (≈ 6 chunks): two chunks
+are in flight, so the fill halves and the footprint stays bounded — predicted peak ≈ 1.9 GB
+of check arrays for the chunk being checked + ≈ 5 GB prepare peak + the lingering arrays of
+the chunk before ≈ 9 GB.
+
+**Predictions** (same protocol: oracles first, then cold via fadvise DONTNEED, then best
+of 3 warm; 6 niced host threads on cores 0–5, now shared by the reader and the preparer;
+the card otherwise idle):
+- **P16** C2 warm best-of-3 **≤ 6.5 s**; point estimate **5.9 s** (5.4–6.4). Two regimes
+  written down: if the scan/gather kernels merely time-slice with the check kernel the
+  total is the device sum 5.5 + fill ≈ 0.4 + init ≈ 0.15 → 6.0–6.5; if they co-run (the
+  hashed check launch is 6 blocks × 4 warps per SM = 24 of 48 warp slots, latency-bound)
+  → 5.0–5.8. **P16b: the §3 10× clause (≤ 6.02 s) MET** — called narrowly, on the co-run
+  regime. **P4 (≤ 5 s) still MISSED.**
+- **P17** cold ≤ warm best + 0.7 s (only the first chunk's read is exposed).
+- **P18** overlap is visible in the numbers: the per-chunk stage sum (read + upload + scan
+  + plan + layout + gather + check + combine) exceeds the wall by ≥ 2.5 s, and the check
+  stage sum grows from 3.71 s to 3.9–4.8 s under the co-running scan.
+- **P19** oracles clean on the pipelined route: `--verify-b2` 0 code mismatches on all
+  5,226 steps, `--simwarp 50` 0 mismatches, 5,226/5,226 VERIFIED, 0 host-route steps.
+- **P20** the three §6 gpu tests pass unchanged; a new test runs the pipelined driver over
+  the `lrat_batch` shapes and the malformed set in 1- and 2-step chunks against the
+  one-at-a-time reference; one mutant watched to fail: the extras slice handed to
+  `prepare_chunk` offset by one chunk (M4).
+- **P21** the path A2 proofs (`--cumulative`) on C2 within **1.0–1.15×** of C2's own-proof
+  time (C1: 1.23× — their extra plan/record-download work is host and PCIe time that now
+  overlaps).
+- **P22** device peak ≤ 12 GB (sampled at 100 ms).
+
+**Kill.** Any P19 mismatch not traced to a bug that is fixed and re-run clean; or a C2
+total not under C1's 8.90 s (then C2 is recorded as refuted on this card and §6 stands).
