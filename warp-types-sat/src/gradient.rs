@@ -517,6 +517,67 @@ pub fn hybrid_solve_stats(
     crate::solver::solve_cdcl_core_stats(db, num_vars, vsids)
 }
 
+/// [`hybrid_solve`] with the learned-clause reduction interval chosen by the
+/// caller and no proof — the like-for-like timing twin of
+/// [`hybrid_solve_drat`].
+pub fn hybrid_solve_with(
+    db: ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+    reduce_interval: u64,
+) -> crate::solver::SolveResult {
+    let grad = gradient_search(&db, num_vars, config);
+    if let Some(assign) = grad.assignment {
+        return crate::solver::SolveResult::Sat(assign);
+    }
+    let vsids = warm_started_vsids(&db, num_vars, grad.best_continuous.as_deref());
+    crate::solver::solve_from(db, num_vars, vsids, reduce_interval)
+}
+
+/// [`hybrid_solve`] with a **DRAT** proof of an `Unsat` answer written to `out`.
+///
+/// The gradient phase reads the clauses and never adds, removes or assumes
+/// one, so the CDCL phase's log is the whole proof — the same core and writer
+/// as [`crate::solver::solve_watched_drat_with`]; only the VSIDS warm start
+/// differs. When the gradient phase finds a model, CDCL never runs and
+/// nothing is written (a `Sat` answer has no proof; check the model).
+pub fn hybrid_solve_drat(
+    db: ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+    out: &mut dyn std::io::Write,
+    reduce_interval: u64,
+) -> std::io::Result<crate::solver::SolveResult> {
+    let grad = gradient_search(&db, num_vars, config);
+    if let Some(assign) = grad.assignment {
+        return Ok(crate::solver::SolveResult::Sat(assign));
+    }
+    let vsids = warm_started_vsids(&db, num_vars, grad.best_continuous.as_deref());
+    crate::solver::solve_drat_from(db, num_vars, vsids, out, reduce_interval)
+}
+
+/// [`hybrid_solve`] with an **LRAT** proof written to `out`; see
+/// [`hybrid_solve_drat`]. `binary` selects the binary LRAT layout. Stats are
+/// all zero when the gradient phase answered.
+pub fn hybrid_solve_lrat(
+    db: ClauseDb,
+    num_vars: u32,
+    config: &GradientConfig,
+    out: &mut dyn std::io::Write,
+    reduce_interval: u64,
+    binary: bool,
+) -> std::io::Result<(crate::solver::SolveResult, crate::solver::LratStats)> {
+    let grad = gradient_search(&db, num_vars, config);
+    if let Some(assign) = grad.assignment {
+        return Ok((
+            crate::solver::SolveResult::Sat(assign),
+            crate::solver::LratStats::default(),
+        ));
+    }
+    let vsids = warm_started_vsids(&db, num_vars, grad.best_continuous.as_deref());
+    crate::solver::solve_lrat_from(db, num_vars, vsids, out, reduce_interval, binary)
+}
+
 /// Build a VSIDS warm-started from a continuous gradient solution.
 ///
 /// Phase hint: rounded polarity. Activity hint: confidence `|x - 0.5|` scaled
@@ -1188,5 +1249,119 @@ mod cube_tests {
         assert_eq!(st.cubes_solved, 1);
         let (h, _) = hybrid_solve_stats(clone_original(&inst.db), inst.num_vars, &cfg());
         assert!(matches!(h, SolveResult::Unsat));
+    }
+
+    // ── Proofs from the hybrid path ──
+
+    /// Hybrid solve with both logs; on UNSAT the DRAT log must pass the
+    /// crate's forward RUP checker and the LRAT log every LRAT checker, and
+    /// the binary LRAT must decode to the text one. Returns (result, the
+    /// DRAT bytes) so callers can compare against the plain solve.
+    fn hybrid_proofs(text: &str) -> (crate::solver::SolveResult, Vec<u8>) {
+        use crate::dimacs::parse_dimacs_str;
+        use crate::lrat::{check_sequential, parse_binary, parse_cnf_ints, parse_text};
+        use crate::proof::{check_drat, parse_drat};
+        let cnf = parse_cnf_ints(text);
+        let cnf64: Vec<Vec<i64>> = cnf
+            .iter()
+            .map(|c| c.iter().map(|&l| l as i64).collect())
+            .collect();
+        // Few starts: proof soundness does not depend on the gradient's
+        // quality (it only orders decisions), and debug builds are slow.
+        let config = GradientConfig {
+            num_starts: 4,
+            ..GradientConfig::default()
+        };
+
+        let inst = parse_dimacs_str(text).unwrap();
+        let mut drat = Vec::new();
+        let r = hybrid_solve_drat(inst.db, inst.num_vars, &config, &mut drat, 50).unwrap();
+
+        let inst = parse_dimacs_str(text).unwrap();
+        let mut lrat = Vec::new();
+        let (r2, st) =
+            hybrid_solve_lrat(inst.db, inst.num_vars, &config, &mut lrat, 50, false).unwrap();
+        assert_eq!(r2, r, "DRAT and LRAT hybrid solves agree");
+
+        let inst = parse_dimacs_str(text).unwrap();
+        let mut lbin = Vec::new();
+        let (r3, _) =
+            hybrid_solve_lrat(inst.db, inst.num_vars, &config, &mut lbin, 50, true).unwrap();
+        assert_eq!(r3, r);
+
+        match &r {
+            solver::SolveResult::Unsat => {
+                let steps = parse_drat(std::str::from_utf8(&drat).unwrap()).unwrap();
+                assert_eq!(check_drat(&cnf64, &steps), Ok(()), "hybrid DRAT");
+                assert_eq!(st.unjustified, 0);
+                let proof = parse_text(std::str::from_utf8(&lrat).unwrap()).unwrap();
+                let v = check_sequential(&cnf, &proof);
+                assert!(v.is_verified(), "hybrid LRAT: {v:?}");
+                assert_eq!(parse_binary(&lbin).unwrap(), proof, "binary = text");
+            }
+            solver::SolveResult::Sat(a) => {
+                for c in &cnf {
+                    assert!(
+                        c.iter()
+                            .any(|&l| a[(l.unsigned_abs() - 1) as usize] == (l > 0)),
+                        "hybrid model falsifies {c:?}"
+                    );
+                }
+            }
+            solver::SolveResult::Unknown => panic!("no budget: Unknown is impossible"),
+        }
+        (r, drat)
+    }
+
+    #[test]
+    fn hybrid_pigeonhole_proofs_check() {
+        for n in 3..=6 {
+            let (r, _) = hybrid_proofs(&crate::bench::pigeonhole_dimacs(n));
+            assert_eq!(r, solver::SolveResult::Unsat, "PHP({n})");
+        }
+    }
+
+    #[test]
+    fn hybrid_random_proofs_check_and_differ_from_plain() {
+        // UNSAT and SAT instances at the threshold. At least one UNSAT proof
+        // must differ from the plain solve's: otherwise the warm start never
+        // reached the core and this test exercises nothing new.
+        use crate::dimacs::parse_dimacs_str;
+        let (mut unsat, mut sat, mut differs) = (0, 0, 0);
+        for seed in 0..16u64 {
+            let db = generate_3sat_phase_transition(50, seed);
+            let text = crate::bench::db_to_dimacs(&db, 50);
+            let (r, drat) = hybrid_proofs(&text);
+            match r {
+                solver::SolveResult::Unsat => {
+                    unsat += 1;
+                    let inst = parse_dimacs_str(&text).unwrap();
+                    let mut plain = Vec::new();
+                    solver::solve_watched_drat_with(inst.db, inst.num_vars, &mut plain, 50)
+                        .unwrap();
+                    if plain != drat {
+                        differs += 1;
+                    }
+                }
+                _ => sat += 1,
+            }
+        }
+        assert!(unsat >= 5 && sat >= 5, "unsat {unsat}, sat {sat}");
+        assert!(
+            differs > 0,
+            "no hybrid proof differed from the plain solve's"
+        );
+    }
+
+    #[test]
+    fn hybrid_gradient_model_writes_no_proof() {
+        // Easy SAT: the gradient phase answers and CDCL never runs.
+        let mut db = ClauseDb::new();
+        db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
+        db.add_clause(vec![Lit::neg(0)]);
+        let mut out = Vec::new();
+        let r = hybrid_solve_drat(db, 2, &GradientConfig::default(), &mut out, 50).unwrap();
+        assert_eq!(r, solver::SolveResult::Sat(vec![false, true]));
+        assert!(out.is_empty(), "a gradient model has no proof");
     }
 }

@@ -1,17 +1,31 @@
 //! CLI entry point: solve a DIMACS CNF file.
 //!
-//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat>] [--certify] [--reduce-interval <n>] <file.cnf>
+//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat> | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>
 //!
 //! `--drat FILE` writes a DRAT proof of an UNSATISFIABLE answer to FILE
 //! (checkable with `drat-trim FILE.cnf FILE.drat`). On SATISFIABLE the file is
 //! still written but proves nothing. See `warp_types_sat::proof`.
 //!
-//! `--certify` (requires `--drat`) runs an external DRAT checker on the proof
+//! `--certify` with `--drat` runs an external DRAT checker on the proof
 //! before printing an UNSATISFIABLE verdict: `drat-trim` from `$DRAT_TRIM` or
 //! `PATH`. If the checker is missing, cannot run, or does not print
 //! `s VERIFIED`, the answer is printed as `s UNKNOWN` with the reason on
-//! stderr and the exit status is 2. SATISFIABLE answers are not affected (a
-//! model is its own check). Fail-closed: an absent checker is not a pass.
+//! stderr and the exit status is 2. Fail-closed: an absent checker is not a
+//! pass. With `--lrat` the checker is `lrat-check` (`$LRAT_CHECK` or `PATH`).
+//! Without either, an UNSATISFIABLE answer cannot be certified and is printed
+//! as `s UNKNOWN` (exit 2); `--certify` alone is for checking models.
+//!
+//! Under `--certify` a SATISFIABLE answer is checked too: the model is
+//! evaluated against the clauses read again from the file by
+//! [`model_check`], a reader that shares no code with the crate's DIMACS
+//! parser — so a parser that dropped a clause cannot certify its own model.
+//! A model that falsifies a clause, or does not cover the declared
+//! variables, is printed as `s UNKNOWN` with exit status 2.
+//!
+//! `--hybrid` solves with the gradient→CDCL hybrid
+//! (`gradient::hybrid_solve_{drat,lrat}`, default `GradientConfig`) instead
+//! of plain CDCL. Proofs and `--certify` work the same way; when the gradient
+//! phase finds the model, CDCL never runs and the proof file is empty.
 //!
 //! `--reduce-interval N` sets the conflicts between learned-clause reductions
 //! (default 2000). A diagnostic: a small N makes short solves exercise clause
@@ -27,7 +41,7 @@ use std::io::{BufWriter, Write};
 use std::process;
 
 fn usage(prog: &str) -> ! {
-    eprintln!("Usage: {prog} [--drat <proof.drat> | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--reduce-interval <n>] <file.cnf>");
+    eprintln!("Usage: {prog} [--drat <proof.drat> | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>");
     process::exit(1);
 }
 
@@ -46,6 +60,64 @@ fn same_file(cnf: &str, proof: &str) -> bool {
     match (canon(cnf), canon(proof)) {
         (Some(a), Some(b)) => a == b,
         _ => cnf == proof,
+    }
+}
+
+/// Check `model` (index i = variable i+1) against the clauses in the DIMACS
+/// text, read here with a deliberately separate reader: comment (`c`) and
+/// header (`p`) lines are skipped, `%` ends the input (SATLIB), every other
+/// token is an integer and `0` closes a clause; a trailing clause without its
+/// `0` is checked too. Ok carries the number of clauses checked.
+fn model_check(text: &str, model: &[bool]) -> Result<usize, String> {
+    let mut declared: Option<usize> = None;
+    let mut clause: Vec<i64> = Vec::new();
+    let mut checked = 0usize;
+    let check = |c: &[i64]| -> Result<(), String> {
+        let sat = c.iter().any(|&l| {
+            let v = l.unsigned_abs() as usize;
+            v >= 1 && v <= model.len() && model[v - 1] == (l > 0)
+        });
+        if sat {
+            Ok(())
+        } else {
+            Err(format!("the model falsifies clause {c:?}"))
+        }
+    };
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('%') {
+            break;
+        }
+        if t.is_empty() || t.starts_with('c') {
+            continue;
+        }
+        if t.starts_with('p') {
+            let n = t.split_whitespace().nth(2).and_then(|n| n.parse().ok());
+            declared = Some(n.ok_or_else(|| format!("unreadable header: {t}"))?);
+            continue;
+        }
+        for tok in t.split_whitespace() {
+            let l: i64 = tok.parse().map_err(|_| format!("bad token {tok:?}"))?;
+            if l == 0 {
+                check(&clause)?;
+                checked += 1;
+                clause.clear();
+            } else {
+                clause.push(l);
+            }
+        }
+    }
+    if !clause.is_empty() {
+        check(&clause)?;
+        checked += 1;
+    }
+    match declared {
+        Some(n) if n == model.len() => Ok(checked),
+        Some(n) => Err(format!(
+            "the model has {} values for {n} declared variables",
+            model.len()
+        )),
+        None => Err("no header".into()),
     }
 }
 
@@ -123,6 +195,7 @@ fn main() {
     let mut lrat_binary = false;
     let mut reduce_interval: u64 = warp_types_sat::solver::DEFAULT_REDUCE_INTERVAL;
     let mut certify = false;
+    let mut hybrid = false;
     let mut cnf_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -143,6 +216,7 @@ fn main() {
             }
             "--lrat-binary" => lrat_binary = true,
             "--certify" => certify = true,
+            "--hybrid" => hybrid = true,
             "--reduce-interval" => {
                 i += 1;
                 reduce_interval = args
@@ -172,8 +246,10 @@ fn main() {
         eprintln!("Error: --lrat-binary requires --lrat <proof.lrat>");
         process::exit(1);
     }
-    if certify && drat_path.is_none() && lrat_path.is_none() {
-        eprintln!("Error: --certify requires --drat <proof.drat> or --lrat <proof.lrat>");
+    if certify && lrat_binary {
+        // lrat-check reads text LRAT only; a binary proof would always be
+        // reported NOT certified after the whole solve. Say so up front.
+        eprintln!("Error: --certify checks LRAT with lrat-check, which reads text only; drop --lrat-binary");
         process::exit(1);
     }
     for d in drat_path.iter().chain(lrat_path.iter()) {
@@ -198,7 +274,17 @@ fn main() {
         instance.num_vars, instance.num_clauses,
     );
 
+    use warp_types_sat::gradient::{
+        hybrid_solve_drat, hybrid_solve_lrat, hybrid_solve_with, GradientConfig,
+    };
+    let config = GradientConfig::default();
+    if hybrid {
+        eprintln!("c solver: gradient -> CDCL hybrid (default GradientConfig)");
+    }
     let result = match (&drat_path, &lrat_path) {
+        (None, None) if hybrid => {
+            hybrid_solve_with(instance.db, instance.num_vars, &config, reduce_interval)
+        }
         (None, None) => warp_types_sat::solver::solve_watched_with(
             instance.db,
             instance.num_vars,
@@ -210,13 +296,24 @@ fn main() {
                 process::exit(1);
             });
             let mut out = BufWriter::new(file);
-            let (r, st) = warp_types_sat::solver::solve_watched_lrat_with(
-                instance.db,
-                instance.num_vars,
-                &mut out,
-                reduce_interval,
-                lrat_binary,
-            )
+            let (r, st) = if hybrid {
+                hybrid_solve_lrat(
+                    instance.db,
+                    instance.num_vars,
+                    &config,
+                    &mut out,
+                    reduce_interval,
+                    lrat_binary,
+                )
+            } else {
+                warp_types_sat::solver::solve_watched_lrat_with(
+                    instance.db,
+                    instance.num_vars,
+                    &mut out,
+                    reduce_interval,
+                    lrat_binary,
+                )
+            }
             .and_then(|r| out.flush().map(|_| r))
             .unwrap_or_else(|e| {
                 eprintln!("Error writing proof to {}: {}", path, e);
@@ -238,12 +335,22 @@ fn main() {
                 process::exit(1);
             });
             let mut out = BufWriter::new(file);
-            let r = warp_types_sat::solver::solve_watched_drat_with(
-                instance.db,
-                instance.num_vars,
-                &mut out,
-                reduce_interval,
-            )
+            let r = if hybrid {
+                hybrid_solve_drat(
+                    instance.db,
+                    instance.num_vars,
+                    &config,
+                    &mut out,
+                    reduce_interval,
+                )
+            } else {
+                warp_types_sat::solver::solve_watched_drat_with(
+                    instance.db,
+                    instance.num_vars,
+                    &mut out,
+                    reduce_interval,
+                )
+            }
             .and_then(|r| out.flush().map(|_| r))
             .unwrap_or_else(|e| {
                 eprintln!("Error writing proof to {}: {}", path, e);
@@ -255,6 +362,16 @@ fn main() {
     };
 
     if certify {
+        if let warp_types_sat::solver::SolveResult::Sat(model) = &result {
+            match model_check(&contents, model) {
+                Ok(n) => eprintln!("c certified: the model satisfies all {n} clauses"),
+                Err(why) => {
+                    eprintln!("c NOT certified: {why}");
+                    println!("s UNKNOWN");
+                    process::exit(2);
+                }
+            }
+        }
         if let warp_types_sat::solver::SolveResult::Unsat = result {
             let outcome = match (&drat_path, &lrat_path) {
                 (Some(proof), _) => {
@@ -262,7 +379,9 @@ fn main() {
                 }
                 (None, Some(proof)) => run_lrat_check(&cnf_path, proof)
                     .map(|()| format!("lrat-check verified {proof}")),
-                (None, None) => unreachable!("checked above"),
+                (None, None) => {
+                    Err("no proof was written: UNSAT needs --drat or --lrat to be certified".into())
+                }
             };
             match outcome {
                 Ok(msg) => eprintln!("c certified: {msg}"),
@@ -295,5 +414,38 @@ fn main() {
         warp_types_sat::solver::SolveResult::Unknown => {
             println!("s UNKNOWN");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_check;
+
+    #[test]
+    fn model_check_accepts_and_rejects() {
+        let cnf = "c x\np cnf 3 2\n1 -2 0\n2 3 0\n";
+        assert_eq!(model_check(cnf, &[true, false, true]), Ok(2));
+        // (1 ∨ ¬2) falsified by 1=F, 2=T.
+        assert!(model_check(cnf, &[false, true, true])
+            .unwrap_err()
+            .contains("falsifies"));
+        // Too few / too many values for the declared variables.
+        assert!(model_check(cnf, &[true, false]).is_err());
+        assert!(model_check(cnf, &[true, false, true, true]).is_err());
+        assert!(model_check("1 0\n", &[true])
+            .unwrap_err()
+            .contains("header"));
+    }
+
+    #[test]
+    fn model_check_reads_clauses_the_way_dimacs_files_write_them() {
+        // Clause split over lines; trailing clause without its 0 is checked.
+        let cnf = "p cnf 2 2\n1\n2 0\n-1";
+        assert!(model_check(cnf, &[true, true]).is_err(), "the -1 clause");
+        assert_eq!(model_check(cnf, &[false, true]), Ok(2));
+        // SATLIB: `%` ends the input; the lone 0 after it is not an empty clause.
+        assert_eq!(model_check("p cnf 1 1\n1 0\n%\n0\n", &[true]), Ok(1));
+        // An empty clause before `%` is falsified by every model.
+        assert!(model_check("p cnf 1 1\n0\n", &[true]).is_err());
     }
 }

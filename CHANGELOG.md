@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **Added: `solve --certify` checks SAT models; `--hybrid`; hybrid DRAT/LRAT** (`warp-types-sat`). Under
+  `--certify` a model is evaluated against the clauses re-read from the file by a reader that shares no code with
+  the crate's DIMACS parser; a falsified clause or a wrong variable count prints `s UNKNOWN` (exit 2). `--certify`
+  no longer requires a proof flag: without one an UNSAT answer is not certified (`s UNKNOWN`, exit 2).
+  `--certify --lrat-binary` is refused up front (lrat-check reads text only; it had always failed closed after
+  the solve). New `gradient::hybrid_solve_{with,drat,lrat}` log the gradient→CDCL hybrid through the same core
+  and writers as the plain solve (`solve --hybrid`); verified by drat-trim and lrat-check end to end.
 - **Changed: binary LRAT literal 0 is a parse error** (`warp-types-sat`). Encoded value 1 ("−0") names no variable
   and has no text form (a `0` inside a text clause ends it), yet every binary decoder here — `lrat::parse_binary`,
   `FlatProof::from_binary`, the parallel host decoder, the SimWarp model and both device kernels — accepted it as

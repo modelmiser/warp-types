@@ -215,13 +215,28 @@ pub fn solve_watched_drat(
 /// compaction, which is what a proof-logging test needs to cover; it is a
 /// diagnostic, not a tuning knob.
 pub fn solve_watched_drat_with(
-    mut db: ClauseDb,
+    db: ClauseDb,
     num_vars: u32,
     out: &mut dyn Write,
     reduce_interval: u64,
 ) -> io::Result<SolveResult> {
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
+    solve_drat_from(db, num_vars, vsids, out, reduce_interval)
+}
+
+/// The DRAT-logging solve from a caller-built `Vsids` (initialised exactly
+/// once, as [`solve_cdcl_core`] requires). One code path for the plain and
+/// the warm-started (gradient hybrid) solves, so a hybrid proof is logged by
+/// the same core as a plain one. VSIDS only orders decisions: it never adds
+/// or removes a clause, so it cannot affect what the proof must justify.
+pub(crate) fn solve_drat_from(
+    mut db: ClauseDb,
+    num_vars: u32,
+    mut vsids: Vsids,
+    out: &mut dyn Write,
+    reduce_interval: u64,
+) -> io::Result<SolveResult> {
     let mut writer = DratWriter::new(out);
     let result = solve_cdcl_core_inner(
         &mut db,
@@ -259,7 +274,7 @@ pub struct LratStats {
 /// chain construction is `lrat_emit::rup_chain`; see
 /// `research/lrat-from-solver.md`.
 pub fn solve_watched_lrat_with(
-    mut db: ClauseDb,
+    db: ClauseDb,
     num_vars: u32,
     out: &mut dyn Write,
     reduce_interval: u64,
@@ -267,6 +282,41 @@ pub fn solve_watched_lrat_with(
 ) -> io::Result<(SolveResult, LratStats)> {
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
+    solve_lrat_from(db, num_vars, vsids, out, reduce_interval, binary)
+}
+
+/// The unlogged solve from a caller-built `Vsids` with a chosen reduction
+/// interval — the like-for-like timing twin of [`solve_drat_from`].
+pub(crate) fn solve_from(
+    mut db: ClauseDb,
+    num_vars: u32,
+    mut vsids: Vsids,
+    reduce_interval: u64,
+) -> SolveResult {
+    solve_cdcl_core_inner(
+        &mut db,
+        num_vars,
+        &mut vsids,
+        &mut SolveStats::default(),
+        0,
+        0.0,
+        0,
+        DEFAULT_PIVOT_BUMP_SCALE,
+        reduce_interval,
+        &mut NoTheory,
+        &mut NoProof,
+    )
+}
+
+/// The LRAT-logging solve from a caller-built `Vsids`; see [`solve_drat_from`].
+pub(crate) fn solve_lrat_from(
+    mut db: ClauseDb,
+    num_vars: u32,
+    mut vsids: Vsids,
+    out: &mut dyn Write,
+    reduce_interval: u64,
+    binary: bool,
+) -> io::Result<(SolveResult, LratStats)> {
     let n_original = db.iter_crefs().count();
     let mut writer = crate::proof::LratWriter::new(out, n_original, binary);
     let result = solve_cdcl_core_inner(
