@@ -404,3 +404,22 @@ as refuted on this card and the write-up uses 13.7 s).
   are strict subsets; the derivation became a refutation through the unit rule), and the
   same-machine cake_lpr / lrat-check reruns of §5 were on OUR proofs — not yet re-timed on
   these [open; cheap].
+- **Pre-registered before running `ref2/run.sh`** (same-machine lrat-check and cake_lpr on
+  the A2 proofs, one niced core, one tool at a time, the per-step formula built outside the
+  timed window — the §5 protocol): **P15** lrat-check total within 0.7–1.3× of its 199.6 s
+  on our proofs, cake_lpr within 0.7–1.3× of its 366.9 s, both 5,226/5,226 verified. The
+  resident route's ratio to each is then quoted beside the §6 ratios, not instead of them.
+- 14:41–14:47Z `pathA2/verdicts.sh` (drat-trim without `-L`, CR-safe match, 6 niced cores):
+  **5,226/5,226 `s VERIFIED`, 0 steps with RAT lemmas in core — P12 MET**; mean 348 ms per
+  step, 1,819 s of core time. The published checker's own verdict on the proofs our checker
+  was timed on, step by step.
+- 14:47–15:00Z `ref2/run.sh`: **lrat-check 193.5 s (5,226/5,226 VERIFIED; 0.97× its 199.6 s
+  on our proofs — P15 MET); cake_lpr 478.6 s (5,226/5,226 VERIFIED; 1.30× its 366.9 s —
+  P15 MISSED by a hair, 1.3045 against a 1.3 bound).** Both tools now parse a growing
+  formula per step (CNF + up to 5,225 lemmas + units), which our proofs never asked of
+  them; the ratio is reported, not excused. **Resident route on the same proofs: 10.91 s →
+  17.7× under lrat-check, 43.9× under cake_lpr.** The §3 "≥ 20× under same-machine
+  lrat-check" clause therefore holds on our proofs (22.4×) and NOT on these (17.7×); both
+  numbers go in the write-up side by side. **§7 ledger:** P11 MISSED (34.7 % identical),
+  P12 MET, P13 MET, P14 MET, P15 half (lrat-check met, cake_lpr missed by 0.5 %); P6 clause 1
+  FAILED (version drift), clause 2 (zero RAT) MET, clause 3 restated as P14 and MET.
