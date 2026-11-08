@@ -158,6 +158,273 @@ pub fn batch(cnf: &[Vec<i32>], steps: &[FlatProof]) -> Batch {
     Batch { flat, lemma_range }
 }
 
+/// Carve `lens` consecutive sub-slices off the front of `s`.
+fn carve<'a, T>(mut s: &'a mut [T], lens: impl Iterator<Item = usize>) -> Vec<&'a mut [T]> {
+    let mut out = Vec::new();
+    for l in lens {
+        let (a, b) = s.split_at_mut(l);
+        out.push(a);
+        s = b;
+    }
+    out
+}
+
+/// One step's destination regions in the batch arrays.
+struct StepSlices<'a> {
+    lits_priv: &'a mut [i32],
+    lits_lemma: &'a mut [i32],
+    cs_priv: &'a mut [u32],
+    cs_lemma: &'a mut [u32],
+    del_priv: &'a mut [u32],
+    del_lemma: &'a mut [u32],
+    lemma_clause: &'a mut [u32],
+    lemma_step: &'a mut [u32],
+    lemma_id: &'a mut [u64],
+    hint_start: &'a mut [u32],
+    hints: &'a mut [u32],
+}
+
+/// Per-step offsets in the batch, computed from sizes alone.
+#[derive(Clone, Copy)]
+struct Off {
+    n_priv: usize,
+    priv_lits_len: usize,
+    n_lemmas: usize,
+    lemma_lits_len: usize,
+    hints_len: usize,
+    priv_dense: u32,
+    priv_lits: usize,
+    lemma_dense: u32,
+    lemma_lits: usize,
+    lemma_ix: usize,
+    hints: usize,
+}
+
+/// [`batch`] with the copy done on `threads` workers, each filling whole
+/// steps into pre-sized arrays (step regions are disjoint, so the fill needs
+/// no synchronisation). Produces exactly the arrays [`batch`] does (tested);
+/// the single-threaded one stays as the reference. Pass 1 (sizes and
+/// offsets) is sequential and reads no payload; the zero-fill of the arrays
+/// is the price of staying in safe code.
+pub fn batch_par(cnf: &[Vec<i32>], steps: &[FlatProof], threads: usize) -> Batch {
+    let n_cnf = cnf.len();
+    let cnf_lits: usize = cnf.iter().map(Vec::len).sum();
+    // Pass 1: sizes, then offsets.
+    let mut offs: Vec<Off> = Vec::with_capacity(steps.len());
+    let (mut priv_dense, mut priv_lits) = (n_cnf as u32, cnf_lits);
+    for (j, fp) in steps.iter().enumerate() {
+        assert!(
+            fp.n_original as usize >= n_cnf,
+            "step {j}: n_original < shared CNF"
+        );
+        assert_eq!(
+            fp.hint_start.len(),
+            fp.lemma_clause.len() + 1,
+            "step {j}: hint_start"
+        );
+        assert_eq!(
+            fp.hints.len(),
+            *fp.hint_start.last().unwrap() as usize,
+            "step {j}: hints on host"
+        );
+        for (d, c) in cnf.iter().enumerate() {
+            let (s, e) = (fp.clause_start[d] as usize, fp.clause_start[d + 1] as usize);
+            assert!(
+                s == e || &fp.lits[s..e] == c.as_slice(),
+                "step {j}: dense {d} is neither the CNF clause nor a placeholder"
+            );
+        }
+        let n_orig = fp.n_original as usize;
+        let extras_lits = fp.clause_start[n_orig] as usize - fp.clause_start[n_cnf] as usize;
+        let (mut n_del, mut del_lits) = (0usize, 0usize);
+        for (d, c) in cnf.iter().enumerate() {
+            if fp.deleted_at[d] != u32::MAX {
+                n_del += 1;
+                del_lits += c.len();
+            }
+        }
+        let o = Off {
+            n_priv: n_orig - n_cnf + n_del,
+            priv_lits_len: extras_lits + del_lits,
+            n_lemmas: fp.lemma_clause.len(),
+            lemma_lits_len: fp.lits.len() - fp.clause_start[n_orig] as usize,
+            hints_len: fp.hints.len(),
+            priv_dense,
+            priv_lits,
+            lemma_dense: 0,
+            lemma_lits: 0,
+            lemma_ix: 0,
+            hints: 0,
+        };
+        priv_dense += o.n_priv as u32;
+        priv_lits += o.priv_lits_len;
+        offs.push(o);
+    }
+    let n_original = priv_dense;
+    let (mut lemma_dense, mut lemma_lits, mut lemma_ix, mut hints) =
+        (n_original, priv_lits, 0usize, 0usize);
+    for o in offs.iter_mut() {
+        o.lemma_dense = lemma_dense;
+        o.lemma_lits = lemma_lits;
+        o.lemma_ix = lemma_ix;
+        o.hints = hints;
+        lemma_dense += o.n_lemmas as u32;
+        lemma_lits += o.lemma_lits_len;
+        lemma_ix += o.n_lemmas;
+        hints += o.hints_len;
+    }
+    let n_clauses = lemma_dense as usize;
+    let mut flat = FlatProof {
+        lits: vec![0; lemma_lits],
+        clause_start: vec![0; n_clauses + 1],
+        deleted_at: vec![u32::MAX; n_clauses],
+        lemma_clause: vec![0; lemma_ix],
+        lemma_step: vec![0; lemma_ix],
+        lemma_id: vec![0; lemma_ix],
+        hint_start: vec![0; lemma_ix + 1],
+        hints: vec![0; hints],
+        first_empty: None,
+        n_original,
+        early: None,
+    };
+    // Shared CNF.
+    {
+        let mut at = 0usize;
+        for (d, c) in cnf.iter().enumerate() {
+            flat.lits[at..at + c.len()].copy_from_slice(c);
+            at += c.len();
+            flat.clause_start[d + 1] = at as u32;
+        }
+    }
+    // Carve every step's regions (disjoint by construction).
+    let (lits_priv_all, lits_lemma_all) = flat.lits[cnf_lits..].split_at_mut(priv_lits - cnf_lits);
+    let (cs_priv_all, cs_lemma_all) =
+        flat.clause_start[n_cnf + 1..].split_at_mut(n_original as usize - n_cnf);
+    let (del_priv_all, del_lemma_all) =
+        flat.deleted_at[n_cnf..].split_at_mut(n_original as usize - n_cnf);
+    let mut lits_priv = carve(lits_priv_all, offs.iter().map(|o| o.priv_lits_len)).into_iter();
+    let mut lits_lemma = carve(lits_lemma_all, offs.iter().map(|o| o.lemma_lits_len)).into_iter();
+    let mut cs_priv = carve(cs_priv_all, offs.iter().map(|o| o.n_priv)).into_iter();
+    let mut cs_lemma = carve(cs_lemma_all, offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut del_priv = carve(del_priv_all, offs.iter().map(|o| o.n_priv)).into_iter();
+    let mut del_lemma = carve(del_lemma_all, offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut lemma_clause =
+        carve(&mut flat.lemma_clause[..], offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut lemma_step =
+        carve(&mut flat.lemma_step[..], offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut lemma_id = carve(&mut flat.lemma_id[..], offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut hint_start =
+        carve(&mut flat.hint_start[1..], offs.iter().map(|o| o.n_lemmas)).into_iter();
+    let mut hints_sl = carve(&mut flat.hints[..], offs.iter().map(|o| o.hints_len)).into_iter();
+    let work: Vec<(usize, StepSlices)> = (0..steps.len())
+        .map(|j| {
+            (
+                j,
+                StepSlices {
+                    lits_priv: lits_priv.next().unwrap(),
+                    lits_lemma: lits_lemma.next().unwrap(),
+                    cs_priv: cs_priv.next().unwrap(),
+                    cs_lemma: cs_lemma.next().unwrap(),
+                    del_priv: del_priv.next().unwrap(),
+                    del_lemma: del_lemma.next().unwrap(),
+                    lemma_clause: lemma_clause.next().unwrap(),
+                    lemma_step: lemma_step.next().unwrap(),
+                    lemma_id: lemma_id.next().unwrap(),
+                    hint_start: hint_start.next().unwrap(),
+                    hints: hints_sl.next().unwrap(),
+                },
+            )
+        })
+        .collect();
+    // Fill one step: private originals (extras, then copies of deleted shared
+    // clauses), then its lemmas with hints remapped.
+    let fill = |j: usize, mut s: StepSlices| {
+        let fp = &steps[j];
+        let o = offs[j];
+        let n_orig = fp.n_original as usize;
+        let mut remap: Vec<(u32, u32)> = Vec::new();
+        let (mut at, mut k) = (0usize, 0usize);
+        let mut put = |s: &mut StepSlices, d: usize, lits: &[i32]| {
+            s.lits_priv[at..at + lits.len()].copy_from_slice(lits);
+            at += lits.len();
+            s.cs_priv[k] = (o.priv_lits + at) as u32;
+            s.del_priv[k] = fp.deleted_at[d];
+            remap.push((d as u32, o.priv_dense + k as u32));
+            k += 1;
+        };
+        for d in n_cnf..n_orig {
+            let (a, b) = (fp.clause_start[d] as usize, fp.clause_start[d + 1] as usize);
+            put(&mut s, d, &fp.lits[a..b]);
+        }
+        for (d, c) in cnf.iter().enumerate() {
+            if fp.deleted_at[d] != u32::MAX {
+                put(&mut s, d, c);
+            }
+        }
+        let map = |d: u32| -> u32 {
+            if d as usize >= n_orig {
+                o.lemma_dense + (d - fp.n_original)
+            } else if (d as usize) < n_cnf && fp.deleted_at[d as usize] == u32::MAX {
+                d
+            } else {
+                remap
+                    .iter()
+                    .find(|(from, _)| *from == d)
+                    .map(|&(_, to)| to)
+                    .unwrap()
+            }
+        };
+        let (mut at, mut ha) = (0usize, 0usize);
+        for i in 0..o.n_lemmas {
+            let d = fp.lemma_clause[i] as usize;
+            let (a, b) = (fp.clause_start[d] as usize, fp.clause_start[d + 1] as usize);
+            s.lits_lemma[at..at + (b - a)].copy_from_slice(&fp.lits[a..b]);
+            at += b - a;
+            s.cs_lemma[i] = (o.lemma_lits + at) as u32;
+            s.del_lemma[i] = fp.deleted_at[d];
+            s.lemma_clause[i] = map(fp.lemma_clause[i]);
+            s.lemma_step[i] = fp.lemma_step[i];
+            s.lemma_id[i] = fp.lemma_id[i];
+            let (hs, he) = (fp.hint_start[i] as usize, fp.hint_start[i + 1] as usize);
+            for (dst, &h) in s.hints[ha..ha + (he - hs)]
+                .iter_mut()
+                .zip(&fp.hints[hs..he])
+            {
+                *dst = map(h);
+            }
+            ha += he - hs;
+            s.hint_start[i] = (o.hints + ha) as u32;
+        }
+    };
+    // Runs of roughly equal bytes, in step order, one worker each.
+    let weight = |o: &Off| 4 * (o.lemma_lits_len + o.hints_len) + 24 * o.n_lemmas;
+    let total: usize = offs.iter().map(weight).sum();
+    let threads = threads.clamp(1, steps.len().max(1));
+    let per = total / threads + 1;
+    std::thread::scope(|sc| {
+        let fill = &fill;
+        let mut acc = 0usize;
+        let mut group: Vec<(usize, StepSlices)> = Vec::new();
+        for (j, s) in work {
+            acc += weight(&offs[j]);
+            group.push((j, s));
+            if acc >= per {
+                let g = std::mem::take(&mut group);
+                sc.spawn(move || g.into_iter().for_each(|(j, s)| fill(j, s)));
+                acc = 0;
+            }
+        }
+        if !group.is_empty() {
+            sc.spawn(move || group.into_iter().for_each(|(j, s)| fill(j, s)));
+        }
+    });
+    let lemma_range = offs
+        .iter()
+        .map(|o| (o.lemma_ix, o.lemma_ix + o.n_lemmas))
+        .collect();
+    Batch { flat, lemma_range }
+}
+
 /// Per-step verdicts from the batch's per-lemma codes: step `j`'s slice of
 /// `codes` combined with step `j`'s own flat proof, exactly as the
 /// one-at-a-time path does. `codes.len()` must equal the batch's lemma count.
@@ -260,6 +527,23 @@ mod tests {
             "placeholder batch != real batch"
         );
         assert_eq!(hb.flat.lits, b.flat.lits);
+        // Contract 4: the parallel layout is the sequential one, array for array.
+        for t in [1usize, 2, 3, 7] {
+            let pb = batch_par(&cnf(), &fps, t);
+            assert_eq!(pb.lemma_range, b.lemma_range, "threads {t}");
+            assert_eq!(pb.flat.n_original, b.flat.n_original, "threads {t}");
+            assert_eq!(pb.flat.lits, b.flat.lits, "threads {t}");
+            assert_eq!(pb.flat.clause_start, b.flat.clause_start, "threads {t}");
+            assert_eq!(pb.flat.deleted_at, b.flat.deleted_at, "threads {t}");
+            assert_eq!(pb.flat.lemma_clause, b.flat.lemma_clause, "threads {t}");
+            assert_eq!(pb.flat.lemma_step, b.flat.lemma_step, "threads {t}");
+            assert_eq!(pb.flat.lemma_id, b.flat.lemma_id, "threads {t}");
+            assert_eq!(pb.flat.hint_start, b.flat.hint_start, "threads {t}");
+            assert_eq!(pb.flat.hints, b.flat.hints, "threads {t}");
+            let hp = batch_par(&cnf(), &holders, t);
+            assert_eq!(hp.flat.lits, b.flat.lits, "placeholders, threads {t}");
+            assert_eq!(hp.flat.hints, b.flat.hints, "placeholders, threads {t}");
+        }
         vs
     }
 

@@ -136,4 +136,23 @@ same mutant. A mutant any checker accepts kills the run until explained.
   copy and the decode runs on 5 threads; both are host work, not checking.
   **P5 MET**: check 19 % of total. Next: parallel layout, then re-measure (cold
   first, then best-of-3) before any number is quoted outside this file.
+- 2026-11-08 — **Parallel layout** (`batch_par`, 5 workers; equal to `batch` array
+  for array, tested at 1/2/3/7 threads) and the **measured runs** (B1's pass 1
+  still running on core 0 — a confound, stated). Cache evicted before run 2 by
+  streaming the 26 GB of untrimmed text (10 s). Each run 5226/5226 VERIFIED.
+  | run | cache | read | decode | layout | device check | CUDA init | total |
+  |---|---|---|---|---|---|---|---|
+  | 2 | cold | 1.834 | 5.150 | 2.772 | 5.324 | 0.201 | **15.707 s** |
+  | 3 | warm | 0.705 | 8.027 | 4.040 | 5.348 | 0.208 | 18.806 s |
+  | 4 | warm | 0.912 | 8.139 | 3.975 | 5.386 | 0.201 | 19.075 s |
+  The device stage is steady within 1 %; the host phases (decode, layout) vary by
+  60 % and the cold run is the fastest — unexplained; suspected page-cache reclaim
+  against ≈ 20 GB of fresh allocations, to be re-run after B1 finishes. **P4
+  MISSED** (15.7–19.1 s vs ≤ 5 s). Against the published figure: 3.2–3.8× under
+  60.2 s (128 threads), 200× under 3871.7 s (1 thread) — short of the ≥ 10× bar
+  set in §3 for "the GPU is the story". Where the time is: host decode 5–8 s (6.9
+  GB at ≈ 1 GB/s on 5 threads) + layout 3–4 s + the check's ≈ 10 GB upload; the
+  kernel itself scales with the 2.0 G hints as the decode arc measured. The
+  remaining route to P4 is the batched device-resident decode (bytes up once,
+  decode + check on the card), which the decode arc built for single proofs.
 

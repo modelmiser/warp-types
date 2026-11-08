@@ -20,7 +20,7 @@
 
 use std::time::Instant;
 use warp_types_sat::lrat::{parse_cnf_ints, Verdict};
-use warp_types_sat::lrat_batch::{batch, combine_steps};
+use warp_types_sat::lrat_batch::{batch_par, combine_steps};
 use warp_types_sat::lrat_warp::{check_warp_codes, FlatProof, LemmaCode};
 
 fn arg<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
@@ -176,7 +176,7 @@ fn main() {
             hi += 1;
         }
         let a = Instant::now();
-        let b = batch(&cnf, &steps[lo..hi]);
+        let b = batch_par(&cnf, &steps[lo..hi], threads);
         let bt = Instant::now();
         #[cfg(feature = "gpu")]
         let codes = codes_of(&ctx.check_lrat_codes(&b.flat, blocks).expect("device check"));
