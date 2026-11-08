@@ -117,4 +117,23 @@ same mutant. A mutant any checker accepts kills the run until explained.
   standard chain and the like-for-like object to a drat-trim LRAT. The untrimmed
   sizes are kept here as the record of what the solver emitted. Path A (owner runs
   the external tools; `pathA/run.sh`) not yet started at this point.
+- 2026-11-08 — **Trimmed**: 5226/5226 with `lrat-trim`, 0 errors, 647 s on 6 cores;
+  25.31 GB → **6.894 GB binary / 14.014 GB text**. These are the objects every
+  checker below is timed on.
+- 2026-11-08 — **B2 built** (`lrat_batch.rs`: shared CNF once, per-step private
+  originals incl. copies of any deleted shared clause, lemmas in step order, hints
+  remapped; verdicts from each step's own flat proof; 4 contract tests incl.
+  placeholder steps and a deleting step that must not leak) and **first full run**
+  (`examples/edp_batch.rs`, run 1, cache warm from the trim, 5 host threads on
+  cores 1–5 + the Ada, 2 chunks ≤ 6 GB est.): **5226/5226 VERIFIED, 0
+  unsupported, batch codes = one-at-a-time SimWarp codes on 50 evenly spaced
+  steps.** Volume: 25,224,312 lemmas, 1,999,078,832 hints. **Total 27.363 s** =
+  cnf+comp 0.005 · read proofs 1.126 · decode 8.625 · batch layout 11.461 ·
+  device check 5.332 (incl. upload) · combine 0.056 · (CUDA init ≈ 0.3, not yet
+  timed separately). **P1 MET** on our proofs (lrat-check/cake_lpr per step still
+  running, B1). **P4 MISSED** on this run: 27.4 s against ≤ 5 s — under the
+  published 60.2 s / 128 threads, but the layout is a single-threaded ≈ 12 GB
+  copy and the decode runs on 5 threads; both are host work, not checking.
+  **P5 MET**: check 19 % of total. Next: parallel layout, then re-measure (cold
+  first, then best-of-3) before any number is quoted outside this file.
 

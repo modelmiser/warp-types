@@ -46,6 +46,7 @@ pub mod gpu_launcher;
 pub mod gradient;
 pub mod literal;
 pub mod lrat;
+pub mod lrat_batch;
 pub(crate) mod lrat_emit;
 pub mod lrat_warp;
 pub mod phase;
