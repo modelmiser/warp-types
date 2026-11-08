@@ -25,14 +25,15 @@ const WARP_SIZE: u32 = 32;
 pub const DEC_CLEAN: u32 = 0;
 pub const DEC_DIRTY: u32 = 1;
 pub const DEC_NONE: u32 = 2;
-/// The launcher picks the direct check layout on its own only for proofs
-/// whose literal codes are all below this (variables ≤ 2,047); a wider
-/// region is reachable by request (`Some(true)`). `research/edp-record.md`
-/// §9 pre-registered a 1 GiB table budget instead and measured the widened
-/// direct layout on EDP2_1161 (8,416 slots): not faster than the hashed one
-/// at the launcher's block count (P30 missed), so the policy reverted to
-/// this, as that section said it would.
-pub const LRAT_DIRECT_AUTO_CODES: u32 = 4096;
+/// The largest direct check table (all resident warps' regions together, at
+/// the block count [`GpuContext::lrat_check_blocks`] picks) the launcher
+/// chooses on its own; a wider proof gets the hashed layout. On a 48-SM card
+/// at 6 blocks per SM this admits ≈ 116,000 slots, ≈ 58,000 variables.
+/// Measured (`research/edp-record.md` §9): direct beats hashed at 704 slots
+/// (S5) and at 8,416 slots (EDP2_1161, 5.34 vs 6.50 s pipelined, 3.45 vs
+/// 3.73 s standalone) — between 8,416 slots and this budget the default is
+/// an extrapolation, not a measurement.
+pub const LRAT_DIRECT_TABLE_BUDGET: u64 = 1 << 30;
 
 /// GPU context holding CUDA device, stream, and loaded kernels.
 ///
@@ -1085,8 +1086,9 @@ impl GpuContext {
     /// [`GpuContext::check_lrat_codes`] with the table layout chosen by the
     /// caller: `Some(true)` direct (a region of one 64-bit slot per literal
     /// code up to the proof's largest, per warp — any proof the device memory
-    /// admits), `Some(false)` hashed, `None` direct exactly when every code
-    /// is below [`LRAT_DIRECT_AUTO_CODES`]. The tests force both layouts on
+    /// admits), `Some(false)` hashed, `None` direct exactly when the direct
+    /// table at the block count the launch will use is at most
+    /// [`LRAT_DIRECT_TABLE_BUDGET`] bytes. The tests force both layouts on
     /// every proof.
     ///
     /// `blocks == 0` picks the block count from the layout and the SM count
@@ -1102,9 +1104,13 @@ impl GpuContext {
         if fp.lemma_clause.is_empty() {
             return Ok(Vec::new());
         }
-        let max_code = self.lrat_max_code(lits)?;
-        let slots = Self::lrat_direct_slots(max_code);
-        let direct = direct.unwrap_or(max_code < LRAT_DIRECT_AUTO_CODES);
+        const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
+        let n = fp.lemma_clause.len() as u32;
+        let slots = Self::lrat_direct_slots(self.lrat_max_code(lits)?);
+        let direct = direct.unwrap_or_else(|| {
+            let blocks = self.lrat_check_blocks(blocks, slots, n) as u64;
+            blocks * WPB * slots as u64 * 8 <= LRAT_DIRECT_TABLE_BUDGET
+        });
         self.launch_lrat_check(fp, lits, hints, blocks, direct, slots)
     }
 

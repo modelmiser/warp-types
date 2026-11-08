@@ -837,3 +837,30 @@ on A2, with the K3 block rule in place, and no proof past 4,207 variables measur
 done:** the kernel itself is unchanged in its inner loop — under 5 s now needs either the
 scan passes (1.45 s standalone, 4 s co-running) or a check kernel that touches fewer lines
 per lemma; the 415 MB drift (D2) is unexplained.
+
+**Policy decision (owner 20:2xZ: "your call"; recorded before the confirmation run).** The
+direct layout becomes the launcher's default wherever its table, at the block count the K3
+rule picks, is at most 1 GiB (`LRAT_DIRECT_TABLE_BUDGET`, the K2 figure, now paired with the
+rule that made it hold): at 6 blocks per SM on this card that is 116,000 slots, ≈ 58,000
+variables; above it the hashed table. Why: both layouts are oracle-equal (every test forces
+each on every proof); at the same block count direct beat hashed standalone (3.45 vs 3.73 s)
+and in the pipeline (5.34 vs 6.50; A2 6.23 vs 7.38); each probe is one load with no hash and
+no chain, which the region's width does not change, while the budget bounds the memory. What
+is NOT measured: any proof between 8,416 slots and the budget — the default there is an
+extrapolation, flagged here and in the constant's comment; the first such proof measured
+should be added to the sweep. **Confirmation run, pre-registered:** no `--check-table` flag,
+cold then best of 3 warm: **warm 5.3–5.5 s, cold 5.4–5.7 s** (the final run's configuration,
+now chosen by the launcher), the log's rule line showing direct at 288; the gpu suite passes.
+- Confirmation run 20:46Z **CONTENDED** (another Coccinelle job, six `spatch` at nice 15, started
+  during it): the rule line shows direct at 288 as predicted; cold 5.667, warm 5.712 / 5.749 /
+  5.738 with the host stages inflated (read 1.8–2.0 s vs 1.1–1.2, plan 1.0–1.1 vs 0.65) — not
+  read against the 5.3–5.5 / 5.4–5.7 prediction; rerun on a quiet host below.
+- Confirmation rerun 20:54Z, after the Coccinelle job ended, **host under memory pressure**
+  (a `lean` process at nice 15 — lean rss 6.4 GB, 460 s elapsed; a kworker at 90 % reclaiming; mem used 29 GB of 62, available 33 GB at the time
+  of writing): the rule line shows direct at 288; **cold 5.528 s — MET (5.4–5.7)**; warm 5.516 /
+  5.823 / 6.044 — the "warm" read stage was 2.2–2.9 s against 1.1–1.2 s on a quiet host, so the
+  page cache was being evicted between runs and the warm set is not a warm set; **best 5.52 s,
+  0.02 over the 5.3–5.5 prediction — not read as a verdict either way.** The default
+  configuration produced the same device-side profile as the final run (check 4.45–4.59
+  co-running, scan 3.85–4.14, fill 0.44–0.48). **A clean confirmation on a quiet host is
+  pending** (`run-confirm.sh`; TODO).
