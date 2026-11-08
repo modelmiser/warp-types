@@ -182,3 +182,82 @@ same mutant. A mutant any checker accepts kills the run until explained.
   same-machine lrat-check, 26.8× under cake_lpr, 48.7× under our per-step CPU
   route. §3's bar still unmet on both clauses; P4 still MISSED.
 
+
+## 6. C — the batched device-resident route (pre-registered 2026-11-08, before code)
+
+**Why.** B2's 13.7 s is 7 s of host work (decode 4.8 + layout 2.2) and 5.4 s
+of device check, of which ≈ 2 s is the upload of the 10 GB of gathered
+literals and hints. The decode arc built a device-resident route for ONE proof
+(bytes up once; scan, gather and check on the card; the host sees step records
+only). C runs that route over many proofs per launch.
+
+**Measured before any code** (the single-proof resident route on the two largest
+EDP steps, `lrat_check` with `LRAT_GPU_RESIDENT=1`, best of 3, hashed table
+since 4207 variables exceed the direct layout's 2047):
+
+| step | bytes | hints | upload | pass 1 + 2 | plan | gather | check (resident) | check with upload | host decode (6 thr) |
+|---|---|---|---|---|---|---|---|---|---|
+| 3696 | 85.8 MB | 23.9 M | 0.013 | 0.022 | 0.005 | 0.004 | 0.035 | 0.060 | 0.077 |
+| 1646 | 58.9 MB | 17.3 M | 0.005 | 0.011 | 0.006 | 0.003 | 0.023 | 0.043 | 0.050 |
+
+Per-byte / per-hint rates from step 3696, scaled to the full set (6.894 GB,
+2.0 G hints): upload ≈ 1.0 s · scan passes ≈ 1.8 s · gather ≈ 0.3 s · check
+kernel ≈ 2.9 s (the 5.3 s B2 check stage was ≈ 2.9 s kernel + ≈ 2.1 s upload
++ meta, consistent). **The device kernels alone sum to ≈ 5.0 s at these
+rates; with the bytes upload ≈ 6.0 s.** So, written down before building:
+**P4 (≤ 5 s) is predicted MISSED by C on this card**, and the §3 10× clause
+(≤ 6.0 s) is predicted missed by the serial design. What C can win is the 7 s
+of host work minus what replaces it.
+
+**Design C1 (serial; no kernel changes).** Per chunk of steps: (1) one host
+buffer holds every step's bytes, each step front-padded with 0xFF…0x00 so it
+ENDS on a 4096-byte slice boundary (a 0xFF run is never a step start; the 0
+before the real first byte lets the scan find it); (2) the existing two-pass
+scan (`decode_lrat_slices`, resident) runs once over the buffer; (3) per step,
+on host threads, its slices' records are rebuilt with positions made relative
+and fed to the existing `stitch_plan` against placeholders + the step's extras
+— a step goes the **host route** (`from_binary`, the proven decoder) if any of
+its slices is dirty or carries an error, if any chain end passes the step's
+end, or if the plan reports a structural verdict; (4) one batched layout is
+sized and filled on host threads: per step a region of clause_start /
+deleted_at holding the CNF's clause starts (the literals shared once at the
+front), one unreferenced sentinel entry so the last CNF clause's end is right,
+then the extras and lemmas; lemma arrays with offsets; per step a dense table
+remapped to batch indices; (5) literals gathered by one launch of
+`lrat_gather_lits`, hints by one launch of `lrat_gather_hints` PER STEP over
+views of chunk-wide arrays (its dense table is per step — the one reason for
+per-step launches), host-route steps copied in directly; a hint naming an
+unknown id sends that step to the host route and the chunk's layout is redone;
+(6) the raw arrays are freed and `check_lrat_codes_mode` runs once over the
+chunk's meta; (7) verdicts per step from each step's own plan or flat proof
+(`combine`, the hint id of a Deleted/Forward reason fetched from the device as
+`combine_resident` does). Chunks are cut by an estimated device footprint.
+
+**Oracles.** O1: the per-lemma codes of EVERY step equal B2's
+(`batch_par` + `check_lrat_codes`) on the full EDP run — a `--verify-b2` mode
+of the new example runs both and compares all 25,224,312 codes. O2: codes of
+50 evenly spaced steps equal the one-at-a-time host decode against the real
+formula + SimWarp (the existing contract check). O3, gpu tests: synthetic
+multi-step batches (the `lrat_batch` shapes: shared-clause deletion, the
+mutants, many extras) plus a truncated step, a bit-flipped step, a step with a
+hint naming an unknown id, a step longer than one slice, and a padded first
+step — each step's verdict and codes equal to `from_binary` + `check_warp_codes`
++ `combine`; the host route taken exactly by the malformed steps. Watched to
+fail before being believed: a mutant dropping the sentinel shift (private
+dense `d` mapped without the +1) and a mutant dropping the chain-end rule.
+
+**Predictions** (same protocol as §4: cold first, then best of 3; 6 host
+threads on cores 0–5, niced; the card otherwise idle):
+- P7: C1 total (warm cache) **≤ 9.5 s**, expected 7.5–9.5 s; cold ≤ 11 s.
+- P8: the three device stages (scan, gather, check) are ≥ 55 % of C1's total.
+- P9: zero steps take the host route on the 5226 real proofs; zero bad hints.
+- P10: O1 and O2 report zero mismatches; O3's mutants are each killed.
+- P4 restated: MISSED (floor ≈ 5.0 s of kernels + 1.0 s upload). §3's 10× clause
+  (≤ 6.0 s): MISSED by C1.
+- C2 (optional, only if C1 lands inside P7): pinned host buffers and a second
+  stream so chunk k+1's upload and scan run under chunk k's check; predicted
+  total ≤ 6.5 s. Not built until C1 is measured.
+
+**Kill.** Any O1/O2 mismatch that is not a bug found, fixed and re-run with a
+clean result; or a C1 total not under B2's 13.7 s (then the route is recorded
+as refuted on this card and the write-up uses 13.7 s).
