@@ -92,6 +92,22 @@ impl GpuContext {
         Ok(GpuContext { stream, kernels })
     }
 
+    /// A second handle on the same device and loaded module, submitting to a
+    /// NEW non-blocking stream: work on it runs beside work on `self` (the
+    /// legacy default stream synchronises with every blocking stream; a
+    /// `CU_STREAM_NON_BLOCKING` stream does not). Device memory allocated
+    /// through one handle may be used by kernels on the other once the
+    /// producing stream has been synchronised (a host-side download or
+    /// `synchronize` on it); it is freed on the stream that allocated it.
+    /// `research/edp-record.md` §8.
+    pub fn fork(&self) -> Result<Self, GpuError> {
+        let stream = self.stream.context().new_stream()?;
+        Ok(GpuContext {
+            stream,
+            kernels: self.kernels.clone(),
+        })
+    }
+
     /// Upload SoA clause data to the GPU. Do this once per problem instance.
     pub fn upload_clause_data(&self, soa: &ClauseDataSoA) -> Result<GpuClauseData, GpuError> {
         let s = &self.stream;

@@ -327,8 +327,33 @@ fn step_records(
     Some((chunks, bases))
 }
 
+/// A chunk after [`prepare_chunk`]: its routes, the batched index arrays on
+/// the host, and the gathered literal and hint arrays on the device (complete
+/// — the preparing stream was synchronised by the bad-hint download). Owns no
+/// borrow of the proofs, so it can cross to another thread and another stream
+/// ([`check_pipelined`]). The device arrays are freed on the stream that
+/// allocated them when this is dropped.
+pub struct PreparedChunk {
+    routes: Vec<Route>,
+    offs: Vec<Off>,
+    meta: FlatProof,
+    d_lits: CudaSlice<i32>,
+    d_hints: CudaSlice<u32>,
+    n_cnf: usize,
+    check_blocks: u32,
+    stats: ChunkStats,
+}
+
+impl PreparedChunk {
+    /// Sizes and stage times so far (the check and combine fields are zero).
+    pub fn stats(&self) -> &ChunkStats {
+        &self.stats
+    }
+}
+
 /// Check one chunk of steps: step `j` is `cnf ++ extras[j]` with the binary
-/// LRAT `proofs[j]`. Verdicts and codes per step, in order.
+/// LRAT `proofs[j]`. Verdicts and codes per step, in order. The two halves,
+/// [`prepare_chunk`] then [`check_prepared`], on the one stream.
 pub fn check_chunk(
     ctx: &GpuContext,
     cnf: &[Vec<i32>],
@@ -336,6 +361,19 @@ pub fn check_chunk(
     proofs: &[&[u8]],
     opts: &BatchOpts,
 ) -> Result<ChunkOutcome, GpuError> {
+    let p = prepare_chunk(ctx, cnf, extras, proofs, opts)?;
+    check_prepared(ctx, p)
+}
+
+/// Steps (1)–(5) of the design: upload and scan, records and plan per step,
+/// layout, gathers. Everything but the check launch and the verdicts.
+pub fn prepare_chunk(
+    ctx: &GpuContext,
+    cnf: &[Vec<i32>],
+    extras: &[Vec<Vec<i32>>],
+    proofs: &[&[u8]],
+    opts: &BatchOpts,
+) -> Result<PreparedChunk, GpuError> {
     assert_eq!(extras.len(), proofs.len(), "one extras list per proof");
     let n = proofs.len();
     let n_cnf = cnf.len();
@@ -845,11 +883,39 @@ pub fn check_chunk(
         .iter()
         .filter(|r| !matches!(r, Route::Dev { .. }))
         .count();
+    Ok(PreparedChunk {
+        routes,
+        offs,
+        meta,
+        d_lits,
+        d_hints,
+        n_cnf,
+        check_blocks: opts.check_blocks,
+        stats: st,
+    })
+}
+
+/// Steps (6)–(7): the check launch once over the prepared chunk on `ctx`'s
+/// stream, then the verdicts per step. `ctx` may be a [`GpuContext::fork`]
+/// sibling of the preparing handle: the arrays are complete when
+/// [`prepare_chunk`] returns.
+pub fn check_prepared(ctx: &GpuContext, p: PreparedChunk) -> Result<ChunkOutcome, GpuError> {
+    let PreparedChunk {
+        routes,
+        offs,
+        meta,
+        d_lits,
+        d_hints,
+        n_cnf,
+        check_blocks: blocks,
+        mut stats,
+    } = p;
+    let n = routes.len();
 
     // ---- (6) the check, once ----
     let t = Instant::now();
-    let raw = ctx.check_lrat_codes_mode(&meta, &d_lits, &d_hints, opts.check_blocks, None)?;
-    st.t_check = t.elapsed();
+    let raw = ctx.check_lrat_codes_mode(&meta, &d_lits, &d_hints, blocks, None)?;
+    stats.t_check = t.elapsed();
 
     // ---- (7) verdicts per step ----
     let t = Instant::now();
@@ -872,12 +938,95 @@ pub fn check_chunk(
         per_step.push(cj.to_vec());
         kinds.push(k);
     }
-    st.t_combine = t.elapsed();
+    stats.t_combine = t.elapsed();
     Ok(ChunkOutcome {
         verdicts,
         codes: per_step,
         routes: kinds,
-        stats: st,
+        stats,
+    })
+}
+
+/// One chunk's intervals in the pipeline, seconds from the call's start.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PipeTimes {
+    pub read: (f64, f64),
+    pub prepare: (f64, f64),
+    pub check: (f64, f64),
+}
+
+/// The two-stream pipeline (design C2, `research/edp-record.md` §8): chunk
+/// `k+1` is read and prepared while chunk `k` is checked. Three threads —
+/// a reader (`load(j)` for each step of the next chunk, on `opts.threads`
+/// workers), a preparer on a [`GpuContext::fork`] of `ctx`, and the checker
+/// on `ctx` itself — joined by rendezvous channels, so at most one chunk
+/// waits prepared. `chunks` are consecutive step ranges `lo..hi` covering
+/// the steps in order; `extras[j]` is step `j`'s formula beyond `cnf`.
+/// Outcomes per chunk, in chunk order, with each chunk's intervals. A
+/// failure on any thread ends the pipeline with that error.
+pub fn check_pipelined(
+    ctx: &GpuContext,
+    cnf: &[Vec<i32>],
+    extras: &[Vec<Vec<i32>>],
+    chunks: &[(usize, usize)],
+    load: impl Fn(usize) -> Vec<u8> + Sync,
+    opts: &BatchOpts,
+) -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
+    use std::sync::mpsc::sync_channel;
+    let t0 = Instant::now();
+    let at = |t: Instant| t.duration_since(t0).as_secs_f64();
+    let prep_ctx = ctx.fork()?;
+    let (tx_bytes, rx_bytes) = sync_channel::<(usize, Vec<Vec<u8>>, (f64, f64))>(1);
+    let (tx_prep, rx_prep) =
+        sync_channel::<Result<(usize, PreparedChunk, (f64, f64), (f64, f64)), GpuError>>(0);
+    let threads = opts.threads.max(1);
+    std::thread::scope(|s| -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
+        // Reader.
+        let load = &load;
+        s.spawn(move || {
+            for (k, &(lo, hi)) in chunks.iter().enumerate() {
+                let a = Instant::now();
+                let bytes = par_map(hi - lo, threads, |i| load(lo + i));
+                let iv = (at(a), at(Instant::now()));
+                if tx_bytes.send((k, bytes, iv)).is_err() {
+                    return;
+                }
+            }
+        });
+        // Preparer.
+        let prep_ctx = &prep_ctx;
+        s.spawn(move || {
+            for (k, bytes, read) in rx_bytes {
+                let (lo, hi) = chunks[k];
+                let proofs: Vec<&[u8]> = bytes.iter().map(Vec::as_slice).collect();
+                let a = Instant::now();
+                let r = prepare_chunk(prep_ctx, cnf, &extras[lo..hi], &proofs, opts);
+                let iv = (at(a), at(Instant::now()));
+                let msg = r.map(|p| (k, p, read, iv));
+                let stop = msg.is_err();
+                if tx_prep.send(msg).is_err() || stop {
+                    return;
+                }
+            }
+        });
+        // Checker (this thread).
+        let mut out = Vec::with_capacity(chunks.len());
+        for msg in rx_prep {
+            let (k, p, read, prepare) = msg?;
+            debug_assert_eq!(k, out.len(), "chunks arrive in order");
+            let a = Instant::now();
+            let o = check_prepared(ctx, p)?;
+            let check = (at(a), at(Instant::now()));
+            out.push((
+                o,
+                PipeTimes {
+                    read,
+                    prepare,
+                    check,
+                },
+            ));
+        }
+        Ok(out)
     })
 }
 
@@ -1136,6 +1285,92 @@ mod tests {
                 out.verdicts[2], out.verdicts[6]
             );
             assert!(matches!(out.verdicts[6], Ok(Verdict::Unsupported { .. })));
+        }
+    }
+
+    /// The two-stream pipeline (§8) over the `lrat_batch` shapes with
+    /// malformed and rejected steps mixed in, cut into 1-, 2- and 3-step
+    /// chunks: every step's codes and verdict equal the one-at-a-time
+    /// reference, chunk outcomes come back in chunk order and cover the
+    /// ranges, and the well-formed steps stay on the device route.
+    #[test]
+    fn pipelined_route_agrees_with_the_reference() {
+        let Some(ctx) = ctx() else { return };
+        let u2 = vec![vec![-2]];
+        let u1 = vec![vec![-1]];
+        let many = vec![vec![-2], vec![2, -1], vec![1]];
+        let good = bin("5 0 4 1 2 0\n");
+        let mut flipped = good.clone();
+        flipped[3] ^= 0x80;
+        let steps: Vec<(Vec<Vec<i32>>, Vec<u8>)> = vec![
+            (u2.clone(), bin("5 0 4 1 2 0\n")),
+            (u1.clone(), bin("5 0 4 1 3 0\n")),
+            (u2.clone(), bin("5 d 1 0\n6 0 4 1 2 0\n")),
+            (u2.clone(), Vec::new()),
+            (u2.clone(), bin("5 0 4 99 0\n")),
+            (u2.clone(), bin("5 d 3 0\n6 0 4 1 2 0\n")),
+            (u2.clone(), bin("5 0 1 2 0\n")),
+            (u2.clone(), bin("5 0 4 -1 2 0\n")),
+            (u2.clone(), bin("5 0 4 6 2 0\n6 0 4 1 2 0\n")),
+            (u2.clone(), flipped),
+            (u2.clone(), bin("5 1 0 4 1 0\n")),
+            (many.clone(), bin("7 0 4 5 6 0\n")),
+            (u2.clone(), good[..5].to_vec()),
+            (u1.clone(), bin("5 0 4 1 3 0\n")),
+        ];
+        let extras: Vec<Vec<Vec<i32>>> = steps.iter().map(|(e, _)| e.clone()).collect();
+        let proofs: Vec<Vec<u8>> = steps.iter().map(|(_, p)| p.clone()).collect();
+        let n = steps.len();
+        let device_steps = [0usize, 1, 2, 5, 6, 8, 10, 11, 13];
+        for per_chunk in [1usize, 2, 3] {
+            let chunks: Vec<(usize, usize)> = (0..n)
+                .step_by(per_chunk)
+                .map(|lo| (lo, (lo + per_chunk).min(n)))
+                .collect();
+            let out = check_pipelined(
+                &ctx,
+                &cnf(),
+                &extras,
+                &chunks,
+                |j| proofs[j].clone(),
+                &opts(64, 2),
+            )
+            .unwrap();
+            assert_eq!(out.len(), chunks.len(), "per_chunk={per_chunk}: one outcome per chunk");
+            let mut j = 0usize;
+            for (k, (o, t)) in out.iter().enumerate() {
+                let (lo, hi) = chunks[k];
+                assert_eq!(o.verdicts.len(), hi - lo, "per_chunk={per_chunk}: chunk {k} size");
+                assert!(t.read.1 <= t.prepare.1 && t.prepare.1 <= t.check.1);
+                for i in 0..hi - lo {
+                    let mut f = cnf();
+                    f.extend(extras[j].iter().cloned());
+                    match FlatProof::from_binary(&f, &proofs[j]) {
+                        Ok(fp) => {
+                            let codes = check_warp_codes(&fp);
+                            assert_eq!(o.codes[i], codes, "per_chunk={per_chunk}: step {j} codes");
+                            assert_eq!(
+                                o.verdicts[i].as_ref().unwrap(),
+                                &combine(&fp, &codes),
+                                "per_chunk={per_chunk}: step {j} verdict"
+                            );
+                        }
+                        Err(e) => assert_eq!(
+                            o.verdicts[i].as_ref().unwrap_err(),
+                            &e,
+                            "per_chunk={per_chunk}: step {j} error"
+                        ),
+                    }
+                    assert_eq!(
+                        o.routes[i] == RouteKind::Device,
+                        device_steps.contains(&j),
+                        "per_chunk={per_chunk}: step {j} route {:?}",
+                        o.routes[i]
+                    );
+                    j += 1;
+                }
+            }
+            assert_eq!(j, n);
         }
     }
 

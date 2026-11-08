@@ -449,7 +449,8 @@ fn generate_rust_module(kernel_crate: &Path, kernels: &[String]) -> String {
         code.push_str(&format!("/// - `{}` \n", name));
     }
     code.push_str(
-        "pub struct Kernels {\n\
+        "#[derive(Clone)]\n\
+         pub struct Kernels {\n\
          _module: ::std::sync::Arc<::cudarc::driver::CudaModule>,\n",
     );
     for name in kernels {
