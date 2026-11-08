@@ -592,3 +592,86 @@ code download; `--serial` = C1):
   check kernel (the direct table past 4,096 codes, S5's predicted 1.8×, footprint vs the
   48 MB L2 to be measured) or a faster scan — a kernel arc, separately pre-registered,
   NOT started here.
+
+## 9. K — the check kernel: the direct table widened past 4,096 codes (pre-registered 2026-11-08, before code)
+
+Owner 19:3xZ: "go. pre-register the direct-table kernel arc." §8 left the pipeline at
+6.42 s with the card busy from 0.45 s to 6.3 s and the kernels summing to ≈ 5.2 s
+standalone, of which the check is 3.71–3.77 s (hashed layout, 2.0 G hints at 0.54 G/s,
+25.2 M lemmas → ≈ 79 hints per lemma). The scan passes (1.45 s) are untouched here.
+
+**Why the table is hashed on EDP today.** `LRAT_TABLE = 4096` is one constant doing two
+jobs: the per-warp slot count of BOTH layouts and (minus one) the occupancy cap that
+keeps `TableOverflow` on the same lemmas as SimWarp's `LitTable` (`CAP = 4096`). The
+direct layout indexes slot = literal code, so it needs every code below the slot count;
+EDP2_1161 has 4,207 variables → codes up to 2·4207+1 = **8,415**, and the launcher falls
+back to hashed. S5 measured direct over hashed at 1.8× warm (0.079 vs 0.141 s) and
+1.5× cold (0.095–0.104 vs 0.149–0.151 s) on the 415 MB proof, 1.47× cold on the 898 MB one
+(0.247–0.251 vs 0.364–0.368) — the gain narrowed as the proof grew.
+
+**Design K (kernel + launcher; the hashed path's behaviour unchanged).**
+- K1 `lrat_check_lemmas` takes a new `slots: u32` argument — the per-warp region size of
+  the DIRECT layout (`base = gw · slots`; insert refuses `k > slots`; a lookup of a code
+  `≥ slots` fails the lemma closed as today). The hashed layout ignores it and keeps
+  `LRAT_TABLE` and its mask. The occupancy cap stays `LRAT_TABLE − 1 = 4,095` in both
+  layouts, so overflow falls on exactly the lemmas SimWarp reports — the cap and the slot
+  count are now two things.
+- K2 Launcher: `lrat_max_code` (already computed per launch) gives `m`; `slots = round_up
+  (m + 1, 32)` (whole 128 B lines, min 32); the table allocation is `blocks · 4 · slots ·
+  8 B`; the u32 clamp on `blocks` is recomputed from `slots` (today's 65,536 assumes 4,096).
+  **Layout policy, fixed now:** direct whenever the table at the chosen block count is
+  ≤ 1 GiB (at 1,152 blocks: `slots ≤ 29,120`, i.e. ≤ 14,559 variables); hashed above —
+  competition-scale proofs (10^5–10^6 variables) stay hashed. If P30 below is MISSED the
+  policy reverts to "direct only below 4,096 codes" and the wide table stays reachable by
+  request (`Some(true)`); either way the rule is written here before the number exists.
+- K3 Block count: `blocks = 0` keeps 24 blocks per SM for direct (S5's sweep); the sweep
+  in the protocol decides whether EDP's wider footprint moves it, and if it does the
+  default becomes a function of `slots` (two points: S5's and this one), not a new constant.
+- K4 Oracle changes: (a) S5's per-lemma code test (`lrat_decode_device.rs`, battery +
+  632 archive files, both layouts forced, blocks 1/7/64/4,096) runs unchanged — direct now
+  at `slots` sized to each proof; (b) a new battery proof with variables up to 6,000
+  (codes ≥ 4,096, previously an error when forced direct) forced direct vs SimWarp, with a
+  lemma at the 4,095 cap so the cap is seen to be independent of `slots`; (c) the
+  fail-closed test (`check_kernel_direct_layout_fails_closed_past_the_table`) is
+  re-expressed through the internal launch with an undersized `slots`; (d) `edp_resident
+  --verify-b2`'s reference B2 is pinned to the HASHED layout (today it is "auto", which
+  would follow the change under test); `--simwarp 50` stays. (e) Two kernel mutants on a
+  copy, each watched to fail the oracle before the real kernel is trusted: the direct
+  lookup dropping the sign bit (S5's), and the direct region stride left at `LRAT_TABLE`
+  while `slots ≠ 4,096` (overlapping regions).
+
+**Footprint arithmetic (before measuring).** A lemma's live entries ≈ 79 units + its own
+literals ≈ 100; at one 64-bit slot per code, 16 codes per 128 B line, a fully scattered
+lemma touches ≤ 100 lines ≈ 12.8 KB per warp — the SAME line count the packed hashed
+layout touches; the direct layout's gain is one load with no probe chain and line sharing
+when a clause's variables are neighbours (EDP's auxiliary counter variables are
+consecutive; its base variables x_d, x_2d, … are not). 4,608 warps (1,152 blocks) × 12.8 KB
+= 59 MB, over the 48 MB L2 when fully scattered; 576 blocks → 29 MB. Allocation 1,152 ·
+4 · 8,416 · 8 B = 310 MB (151 MB today), zeroed per chunk (≈ 1 ms).
+
+**Predictions (ranges fixed now).**
+- **P29** pipelined wall, our proofs, best of 3 warm: **4.6–5.6 s** (point 5.1); cold
+  within 0.1 s of warm (P24's property, kept).
+- **P29b** ≤ 6.02 s → the §3 **10× clause MET**. **P4** (≤ 5 s): predicted **MISSED
+  narrowly** (point 5.1) — stated as the coin flip it is.
+- **P30** serial-path check stage on EDP (`--serial`, warm best of 3): **2.0–2.85 s**
+  from 3.71–3.77 (1.3–1.85×, S5's 1.47–1.8× widened downward for the larger footprint).
+  **Kill / no-gain line:** ≥ 3.4 s → the wide direct layout is not faster here; K2's
+  policy reverts as written; the arc records "no gain" and stops.
+- **P31** block sweep (serial path, check stage, 3 runs each at 288 / 576 / 1,152 / 2,304
+  blocks): best at **576 or 1,152**; 2,304 slower than the best by ≥ 10 % (L2 overflow).
+- **P32** codes equal everywhere: K4(a)–(d) zero disagreements before and after; both K4(e)
+  mutants killed. Any disagreement that is not a mutant = **KILL** (stop, diagnose, no
+  timing claimed).
+- **P33** device peak ≤ 5.0 GB (4.59 + the table's 0.16 GB, pool retained).
+- **P34** path A2 proofs (`--cumulative`): 1.0–1.2× our proofs' wall (P27's pattern).
+- **P35** no regression where the direct layout already applied: the 415 MB archive proof's
+  check, cold, ≤ 0.11 s (S5 after the panel fixes: 0.095–0.104); the full gpu suite passes.
+- **P36** serial total (`--serial`): 7.9–8.7 s from 9.1–9.3.
+
+**Protocol** (as §8, run as `~/staging/2026-11-08-edp-record/k/run-all.sh`): oracles first
+(run0: `--verify-b2 --simwarp 50`), `posix_fadvise(DONTNEED)` then cold (run1), warm runs
+2–4 with the 100 ms device-memory sampler on run 2, `--serial` control (run5), the P31
+sweep (runs 6–17, serial path), then A2 cold + 3 warm. 6 niced host threads on cores 0–5.
+The 415 MB archive check (P35) by `lrat_check` cold, three single runs. Corrections to any
+of this in brackets; nothing above changes after the first measurement.
