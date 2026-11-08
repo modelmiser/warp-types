@@ -107,3 +107,14 @@ same mutant. A mutant any checker accepts kills the run until explained.
 
 ## 5. Ledger (appended as measured; corrections in brackets)
 
+- 2026-11-08 — **Path B generation done**: 5226/5226 steps UNSAT (`solve --lrat`,
+  text), 2070.5 s of solver time on 6 niced cores, hardest step 53.7 s (step 3767),
+  **25.31 GB of untrimmed text LRAT**, largest 707 MB (step 3696). That is far
+  more than the published pipeline's "20 million additions / up to 110 MB" because
+  drat-trim's `-L` output is trimmed and ours is the solver's raw log. Decision,
+  before any checking is timed: every path-B proof is trimmed with `lrat-trim`
+  (binary for the device and cake_lpr, text for lrat-check), which is this crate's
+  standard chain and the like-for-like object to a drat-trim LRAT. The untrimmed
+  sizes are kept here as the record of what the solver emitted. Path A (owner runs
+  the external tools; `pathA/run.sh`) not yet started at this point.
+
