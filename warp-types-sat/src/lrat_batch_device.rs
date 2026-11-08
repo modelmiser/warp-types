@@ -161,7 +161,7 @@ fn par_map<T: Send>(n: usize, threads: usize, f: impl Fn(usize) -> T + Sync) -> 
 }
 
 /// Carve `lens` consecutive sub-slices off the front of `s`.
-fn carve<'a, T>(mut s: &'a mut [T], lens: impl Iterator<Item = usize>) -> Vec<&'a mut [T]> {
+fn carve<T>(mut s: &mut [T], lens: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
     let mut out = Vec::new();
     for l in lens {
         let (a, b) = s.split_at_mut(l);

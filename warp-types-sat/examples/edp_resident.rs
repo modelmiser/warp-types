@@ -268,7 +268,7 @@ fn main() {
     // Report.
     let ok = verdicts
         .iter()
-        .filter(|v| v.as_ref().map_or(false, Verdict::is_verified))
+        .filter(|v| v.as_ref().is_ok_and(Verdict::is_verified))
         .count();
     let unsupported = verdicts
         .iter()
@@ -278,7 +278,7 @@ fn main() {
     for (j, v) in verdicts
         .iter()
         .enumerate()
-        .filter(|(_, v)| !v.as_ref().map_or(false, Verdict::is_verified))
+        .filter(|(_, v)| !v.as_ref().is_ok_and(Verdict::is_verified))
         .take(10)
     {
         println!("c step {} NOT verified: {v:?}", j + 1);
