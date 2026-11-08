@@ -1632,6 +1632,9 @@ pub(crate) fn stitch_payloads_host(
 }
 
 #[cfg(feature = "gpu")]
+#[path = "lrat_batch_device.rs"]
+pub mod batch_device;
+#[cfg(feature = "gpu")]
 #[path = "lrat_decode_device.rs"]
 pub mod decode_device;
 #[path = "lrat_decode_model.rs"]

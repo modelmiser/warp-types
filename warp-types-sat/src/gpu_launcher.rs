@@ -443,16 +443,46 @@ impl GpuContext {
     ) -> Result<DeviceSlices, GpuError> {
         use std::time::Instant;
         let s = &self.stream;
-        let len = bytes.len() as u64;
-        let slice = slice.max(1);
-        let n_slices = (bytes.len() as u64).div_ceil(slice as u64) as u32;
-        if n_slices == 0 {
+        if bytes.is_empty() {
             return Err(GpuError::Cuda("decode: empty input".into()));
         }
         let t0 = Instant::now();
         let d_bytes = s.clone_htod(bytes)?;
         s.synchronize()?;
         let t_upload = t0.elapsed();
+        let mut out = self.decode_lrat_slices_device(
+            &d_bytes,
+            bytes.len(),
+            slice,
+            cooperative,
+            blocks,
+            resident,
+        )?;
+        out.timing.upload = t_upload;
+        Ok(out)
+    }
+
+    /// [`GpuContext::decode_lrat_slices`] over `len` bytes already on the
+    /// device at the start of `d_bytes` (the batched resident route uploads
+    /// each proof into its place itself); `timing.upload` is zero here.
+    pub fn decode_lrat_slices_device(
+        &self,
+        d_bytes: &CudaSlice<u8>,
+        len: usize,
+        slice: u32,
+        cooperative: bool,
+        blocks: u32,
+        resident: bool,
+    ) -> Result<DeviceSlices, GpuError> {
+        use std::time::Instant;
+        let s = &self.stream;
+        let len = len as u64;
+        let slice = slice.max(1);
+        let n_slices = len.div_ceil(slice as u64) as u32;
+        if n_slices == 0 {
+            return Err(GpuError::Cuda("decode: empty input".into()));
+        }
+        let t_upload = std::time::Duration::ZERO;
         let s_start: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
         let s_end: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
         let s_flags: CudaSlice<u32> = s.alloc_zeros(n_slices as usize)?;
@@ -498,7 +528,7 @@ impl GpuContext {
             };
             unsafe {
                 s.launch_builder(f)
-                    .arg(&d_bytes)
+                    .arg(d_bytes)
                     .arg(&len)
                     .arg(&slice)
                     .arg(&n_slices)
@@ -753,6 +783,97 @@ impl GpuContext {
             Some(b[0] as usize)
         };
         Ok((lits, hints, first_bad))
+    }
+
+    /// One launch of `lrat_gather_lits` over caller-owned device arrays (the
+    /// batched resident route, `lrat_warp::batch_device`): `n_out` literals
+    /// into `out` from `n_seg` segments `(dst, src, sel)`, source 0 = `src0`,
+    /// source 1 = `src1`. Nothing is launched for `n_out == 0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gather_lits_into(
+        &self,
+        seg_dst: &cudarc::driver::CudaView<'_, u32>,
+        seg_src: &cudarc::driver::CudaView<'_, u32>,
+        seg_sel: &cudarc::driver::CudaView<'_, u32>,
+        n_seg: u32,
+        src0: &CudaSlice<i32>,
+        src1: &CudaSlice<i32>,
+        out: &mut cudarc::driver::CudaViewMut<'_, i32>,
+        n_out: u32,
+        blocks: u32,
+    ) -> Result<(), GpuError> {
+        if n_out == 0 || n_seg == 0 {
+            return Ok(());
+        }
+        let blocks = blocks.max(1);
+        unsafe {
+            self.stream
+                .launch_builder(&self.kernels.lrat_gather_lits)
+                .arg(seg_dst)
+                .arg(seg_src)
+                .arg(seg_sel)
+                .arg(&n_seg)
+                .arg(src0)
+                .arg(src1)
+                .arg(out)
+                .arg(&n_out)
+                .arg(&blocks)
+                .launch(LaunchConfig {
+                    grid_dim: (blocks, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(())
+    }
+
+    /// One launch of `lrat_gather_hints` over caller-owned device arrays:
+    /// `n_out` raw hint ids from the segments, each mapped through the
+    /// `dense_len`-entry table `dense_of` (0 = never added), written to `out`
+    /// as `dense - 1`; the first index whose id maps to 0 lands in `bad`
+    /// (atomic minimum; the caller pre-fills it with `u32::MAX`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gather_hints_into(
+        &self,
+        seg_dst: &cudarc::driver::CudaView<'_, u32>,
+        seg_src: &cudarc::driver::CudaView<'_, u32>,
+        seg_sel: &cudarc::driver::CudaView<'_, u32>,
+        n_seg: u32,
+        src0: &CudaSlice<u64>,
+        src1: &CudaSlice<u64>,
+        dense_of: &cudarc::driver::CudaView<'_, u32>,
+        dense_len: u32,
+        out: &mut cudarc::driver::CudaViewMut<'_, u32>,
+        n_out: u32,
+        bad: &mut cudarc::driver::CudaViewMut<'_, u32>,
+        blocks: u32,
+    ) -> Result<(), GpuError> {
+        if n_out == 0 || n_seg == 0 {
+            return Ok(());
+        }
+        let blocks = blocks.max(1);
+        unsafe {
+            self.stream
+                .launch_builder(&self.kernels.lrat_gather_hints)
+                .arg(seg_dst)
+                .arg(seg_src)
+                .arg(seg_sel)
+                .arg(&n_seg)
+                .arg(src0)
+                .arg(src1)
+                .arg(dense_of)
+                .arg(&dense_len)
+                .arg(out)
+                .arg(&n_out)
+                .arg(bad)
+                .arg(&blocks)
+                .launch(LaunchConfig {
+                    grid_dim: (blocks, 1, 1),
+                    block_dim: (WARP_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(())
     }
 
     /// Both payload arrays of a resident proof (verification only — the point
