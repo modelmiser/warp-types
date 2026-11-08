@@ -864,3 +864,7 @@ now chosen by the launcher), the log's rule line showing direct at 288; the gpu 
   configuration produced the same device-side profile as the final run (check 4.45–4.59
   co-running, scan 3.85–4.14, fill 0.44–0.48). **A clean confirmation on a quiet host is
   pending** (`run-confirm.sh`; TODO).
+  [CORRECTED 20:58Z: "under memory pressure" overstates it — 33 GB of 62 were available while
+  the lean process held 6.4 GB; the slow "warm" reads (2.2–2.9 s) are unexplained, with the
+  kworker at 90 % and the lean job's own I/O on the same `/home` enclosure as the candidates.
+  The reading stands: the warm set is not a warm set, and the verdict waits for a quiet host.]
