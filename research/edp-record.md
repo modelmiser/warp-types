@@ -868,3 +868,19 @@ now chosen by the launcher), the log's rule line showing direct at 288; the gpu 
   the lean process held 6.4 GB; the slow "warm" reads (2.2–2.9 s) are unexplained, with the
   kworker at 90 % and the lean job's own I/O on the same `/home` enclosure as the candidates.
   The reading stands: the warm set is not a warm set, and the verdict waits for a quiet host.]
+- Confirmation 2026-11-10 19:57Z, two `lean` jobs alive on core 6 at nice 19 (outside the run's
+  cores 0–5; the owner asked for a hold before they were stopped): cold 5.489, warm 5.540 /
+  5.375 / 5.394 — inside both windows, but logged as a contended point, not the verdict.
+- **Confirmation 2026-11-10 19:59Z, QUIET host (owner: "host is clear"; lean 0, spatch 0, load
+  2.1 from the resident cockpit), binary confirmed up to date by cargo against 5649e23c2.**
+  Rule line: `hashed 288 | direct at 8416 slots 288` as predicted. **Cold 5.470 s — MET
+  (5.4–5.7). Warm 5.347 / 5.419 / 5.354, best 5.35 s — MET (5.3–5.5).** The warm set is a warm
+  set this time (read 1.17–1.25 s, plan 0.65–0.67 s, both at the quiet-host figures). Device
+  side unchanged from the final run (check 4.44–4.61 co-running, scan 3.97–4.13). All four
+  runs 5226/5226 verified. **The launcher's default now reproduces the §9 final-run figure
+  without any flag: 5.35 s warm / 5.47 s cold = 11.3× / 11.0× under the published 60.2 s
+  (10× clause MET as the DEFAULT configuration), 37.3× under same-machine lrat-check
+  (199.6 s), 68.6× under same-machine cake_lpr (366.9 s).** Logs:
+  `~/staging/2026-11-08-edp-record/k/run-confirm4.log`, `confirm-{cold,1,2,3}.txt` (the 19:57Z
+  contended point is `run-confirm3.log`, whose per-run files it overwrote are those four names'
+  previous contents — not kept).
