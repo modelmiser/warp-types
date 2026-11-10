@@ -1002,3 +1002,45 @@ confirmation history); oracles first (run0: `--verify-b2 --simwarp 50`); `posix_
 Corrections in brackets; nothing above changes after the first measurement. Scratch copies
 of the pre-H kernel, launcher and tests go to the scratchpad before the first edit
 (`*.pre-h`); mutants are built on copies and restored by `cp`.
+[CORRECTED 2026-11-10 20:3xZ, before any H measurement, on reading the reference while
+building: shape (b)'s parenthesis "the duplicate must NOT trip the cap" misstates the
+reference. `lrat_insert` and SimWarp's `LitTable::insert` test the cap BEFORE looking the
+key up, so at 4,094 + a new unit + a duplicate unit the duplicate FAILS (code 5) at count
+4,095. The shape stays; its expected answer is whatever SimWarp says (that is the oracle,
+not my sentence), and the kernel implements cap-before-lookup as the serial code does.]
+[CORRECTED 2026-11-10 20:2xZ, before the protocol run: §9 and §10 say "632 archive files";
+the archive the oracle tests read today is **180 proofs** (`2026-11-01-cert-campaign/run1`,
+`run2-default2000`, `run3-cake-cnfuzz`; the 632 figure predates the `negatives` directory's
+removal and is not re-derivable). And the gpu suite's first run under H had three
+`archive_agreement_*` tests fail with "0 proofs found" because I passed the run directories
+as RELATIVE names from the wrong cwd — while `check_kernel_codes_equal_simwarp_on_the_archive`
+PASSED on the same empty listing (it had no `n > 0` assertion: a check that cannot fail). With
+absolute paths all archive tests pass on H (180 proofs; the kernel oracle at 4 block counts × 3
+layouts; 180/180 agree with lrat-check, 147 verified). The assertion is added; the suite is
+reported below as 289 + 3 = 292 passing across the two invocations.]
+[CORRECTED 2026-11-10 22:5xZ, before the H ledger: two protocol runs exist and NEITHER is a
+clean H measurement. (1) The first run (`run-all.log`, 20:20–20:23Z) ran the H binary (built
+20:17Z; its PTX is the `kernels.ptx.h` snapshot) but was CONTENDED — the owner was using
+the machine ("hmm, i was using the machine right then") — so none of its numbers is read
+against a prediction. (2) After it, at 20:24:54Z, I issued the no-gain-rule command (copy the
+snapshots to staging, `cp` the pre-H kernel back into the tree, rebuild the examples) as a
+backgrounded shell line; the owner rejected the tool call 16 s later, but the line had
+already run to completion (PTX and both example binaries timestamped 20:24:55–58Z; `git
+diff` of the kernel against HEAD empty; the target PTX byte-identical to `kernels.ptx.k`). I
+did not check the tree after the rejection ([[feedback_interrupted_bash_may_have_run]]: a
+rejected or interrupted Bash may already have written). So the second run (`run-all2.log`,
+owner's "clear now." 22:39:50Z, load 1.08, lean = spatch = 0) measured the **K kernel**: warm
+5.492 / 5.379 / 5.419 → 5.38 s, cold 5.440 s, serial check 3.409 s, sweep 288: 3.422 / 3.447
+/ 3.451, 576: 4.425 / 4.507 / 4.532, 1,152: 4.641 / 4.675 / 4.684, hashed 6.652, A2 cold
+6.318 / warm best 6.537, 415 MB check 0.117–0.124 s — the §9 K figures reproduced to within
+noise (§9: 5.35 / 5.47; sweep 3.45 / 4.45–4.59 / 4.65–4.69; A2 6.23; D2 0.116–0.120), which is
+how the misattribution was noticed: a batched kernel cannot reproduce the serial kernel's
+occupancy curve. That run stands as a THIRD quiet-host confirmation of §9, nothing more; its
+device peak read 6.03 GB against §9's 5.16 (sampler: 48 samples of 100 ms; the first sample
+2 MiB, so no co-tenant) — unexplained, not read. The H source was restored from the
+`kernels-lib.rs.h` snapshot at 22:45Z (`cmp` clean), both examples rebuilt (4.9 s, PTX
+byte-identical to `kernels.ptx.h`). P46 is answerable from the two PTX snapshots alone
+(`ptxas -v -arch=sm_89`): **K 35 registers, H 47 registers, 0 spill bytes both, 440 bytes
+cmem[0] both (13 params)** — 12 more registers, no spills; at 47 registers a 256-thread
+block uses 12,032 of the SM's 65,536, so occupancy is not register-limited at 288 or 1,152
+blocks. The clean H protocol run awaits the owner's next clear; its log is `run-all3.log`.]

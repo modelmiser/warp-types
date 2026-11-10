@@ -868,6 +868,157 @@ mod tests {
             },
         ];
         out.push(("wide duplicate at the cap".into(), cnf, Proof { steps }));
+        // ---- edp-record §10: the batched hint loop's failure modes ----
+        // (a) A unit chain inside one batch and across batches: hint k's unit
+        // is what makes hint k+1 unit (M-H1: in-batch falsification dropped).
+        // Chains of 7 (one batch) and 46 (two 32-hint windows, several
+        // batches); each also in a wrong hint order (NotUnit) and without
+        // the closing conflict (NoConflict).
+        for n in [7u32, 46] {
+            let mut cnf: Vec<Vec<i32>> = vec![vec![1, 2]];
+            for k in 2..n {
+                cnf.push(vec![-(k as i32), k as i32 + 1]);
+            }
+            cnf.push(vec![-(n as i32)]);
+            let m = cnf.len() as u64; // clause ids 1..=m; the last is the conflict
+            let chain: Vec<i64> = (1..=m as i64).collect();
+            let mut swapped = chain.clone();
+            swapped.swap(2, 3);
+            let open: Vec<i64> = (1..m as i64).collect();
+            for (what, hints) in [("chain", chain), ("chain wrong order", swapped), ("chain open", open)] {
+                let steps = vec![Step::Add {
+                    id: m + 1,
+                    lits: vec![1],
+                    hints,
+                }];
+                out.push((format!("{what} {n}"), cnf.clone(), Proof { steps }));
+            }
+        }
+        // (b) Two hints unit on the same literal with the count near the cap.
+        // Clause 1 = (1 ∨ 5000), 2 = (2 ∨ 5000), 3 = (3 ∨ 5001), 4 = (-5000 ∨ -5001).
+        // Lemma 1..=4094: hint 1 inserts -5000 (count 4,095), hint 2 repeats it
+        // — the cap is tested before the lookup, so the reference says
+        // TableOverflow. Lemma 1..=4093: the repeat passes without counting
+        // (M-H2 counts it: then hint 3's insert overflows instead of
+        // reaching hint 4's conflict).
+        let cnf: Vec<Vec<i32>> = vec![vec![1, 5000], vec![2, 5000], vec![3, 5001], vec![-5000, -5001]];
+        for top in [4094i32, 4093] {
+            let steps = vec![Step::Add {
+                id: 5,
+                lits: (1..=top).collect(),
+                hints: vec![1, 2, 3, 4],
+            }];
+            out.push((format!("duplicate units near the cap {top}"), cnf.clone(), Proof { steps }));
+        }
+        // (c) Order of failures: a conflict at hint j then a forward hint at
+        // j+1 — the NEXT lemma's id, since flatten stops at an unknown id —
+        // (code 0, not 4); a deleted hint whose clause would conflict
+        // (code 3, not 0); a forward hint whose empty bounds would read as a
+        // conflict (code 4, not 0) — M-H3 tests admissibility after the count.
+        let cnf: Vec<Vec<i32>> = vec![vec![-1], vec![2]];
+        out.push((
+            "conflict then forward".into(),
+            cnf.clone(),
+            Proof {
+                steps: vec![
+                    Step::Add {
+                        id: 3,
+                        lits: vec![-1],
+                        hints: vec![1, 4],
+                    },
+                    Step::Add {
+                        id: 4,
+                        lits: vec![2],
+                        hints: vec![2],
+                    },
+                ],
+            },
+        ));
+        out.push((
+            "deleted conflict".into(),
+            cnf.clone(),
+            Proof {
+                steps: vec![
+                    Step::Delete { ids: vec![2] },
+                    Step::Add {
+                        id: 3,
+                        lits: vec![2],
+                        hints: vec![2, 1],
+                    },
+                ],
+            },
+        ));
+        out.push((
+            "forward first".into(),
+            cnf,
+            Proof {
+                steps: vec![
+                    Step::Add {
+                        id: 3,
+                        lits: vec![2],
+                        hints: vec![4, 1],
+                    },
+                    Step::Add {
+                        id: 4,
+                        lits: vec![2],
+                        hints: vec![2],
+                    },
+                ],
+            },
+        ));
+        // (d) Hint clauses of 31, 32, 33 and 70 literals; the 33- and 70-wide
+        // ones are unit on their last literal, and the hint after each is
+        // NotUnit only if that unit was seen (M-H4 truncates to 32 lanes: a
+        // conflict instead). Clause 5 = (33 ∨ 35), 6 = (70 ∨ 71).
+        let cnf: Vec<Vec<i32>> = vec![
+            (1..=31).collect(),
+            (1..=32).collect(),
+            (1..=33).collect(),
+            (1..=70).collect(),
+            vec![33, 35],
+            vec![70, 71],
+        ];
+        for (what, lits, hints) in [
+            ("wide 31", (1..=32).collect::<Vec<i32>>(), vec![1i64]),
+            ("wide 32", (1..=32).collect(), vec![2]),
+            ("wide 33 then", (1..=32).collect(), vec![3, 5]),
+            ("wide 70 then", (1..=69).collect(), vec![4, 6]),
+        ] {
+            out.push((
+                what.into(),
+                cnf.clone(),
+                Proof {
+                    steps: vec![Step::Add { id: 7, lits, hints }],
+                },
+            ));
+        }
+        // (e) The lemma's own literals falsify the hint outright; (f) a hint
+        // with a repeated literal (x x y, y falsified) — the lanes count
+        // occurrences, so the reference says NotUnit, whatever a reader
+        // expects.
+        let cnf: Vec<Vec<i32>> = vec![vec![1, 2], vec![3, 3, 1]];
+        out.push((
+            "own literals".into(),
+            cnf.clone(),
+            Proof {
+                steps: vec![Step::Add {
+                    id: 3,
+                    lits: vec![1, 2],
+                    hints: vec![1],
+                }],
+            },
+        ));
+        out.push((
+            "repeated literal".into(),
+            cnf,
+            Proof {
+                steps: vec![Step::Add {
+                    id: 3,
+                    lits: vec![1],
+                    hints: vec![2],
+                }],
+            },
+        ));
         out
     }
 
@@ -927,6 +1078,10 @@ mod tests {
             }
         }
         eprintln!("check_kernel_codes_equal_simwarp_on_the_archive: {n} proofs, 4 block counts");
+        // A path that resolves to nothing must FAIL, not pass vacuously: on
+        // 2026-11-10 relative LRAT_ARCHIVE_DIRS found 0 proofs and this test
+        // was green while the three archive_agreement tests beside it failed.
+        assert!(n > 0, "no proofs found under LRAT_ARCHIVE_DIRS");
     }
 
     /// The direct layout's own guard: launched direct with a region (4,096
