@@ -884,3 +884,121 @@ now chosen by the launcher), the log's rule line showing direct at 288; the gpu 
   `~/staging/2026-11-08-edp-record/k/run-confirm4.log`, `confirm-{cold,1,2,3}.txt` (the 19:57Z
   contended point is `run-confirm3.log`, whose per-run files it overwrote are those four names'
   previous contents — not kept).
+
+## 10. H — the check kernel: hints evaluated a batch at a time (pre-registered 2026-11-10, before code)
+
+Owner 20:0xZ: "go. pre-register the under-5-s arc." §9's confirmed default is 5.35 s warm /
+5.47 s cold. P4 (≤ 5 s) has been MISSED in every section since §3.
+
+**Where the 5.35 s goes (confirm-1, warm).** Card busy from the fill (0.44 s) to 5.20 s; the
+check thread runs back to back (check stage sum 4.44 s co-running, combine 0.07, ≈ 0.25 s
+waiting) — the pipeline is CHECK-bound. Standalone the check kernel is 3.44 s at 288 blocks
+(§9 sweep), the scan passes 1.45 s, the gathers ≈ 0.35 s: 5.2 s of kernel work done in 4.75
+s of co-running wall. The two preparers' co-running stage sums are 7.8 s together (upload
+1.16 PCIe, scan 4.0, plan 0.67 + layout 0.55 host, gather 1.4), ≈ 3.9 s each inside the 4.75
+s — 80 % busy, so a much faster check kernel makes the pipeline PREPARE-bound; that boundary
+is measured below and decides whether a scan stage follows.
+
+**What the check kernel does per hint, read from the source (`lrat_check_lemmas`).** The
+proof's shape: 25,224,312 lemmas, 1,999,078,832 hints (79 per lemma), 379.6 M literals over
+156.7 M clause entries — **2.4 literals per clause**, and the lemma clauses themselves ≈ 2
+literals. The hint metadata is already fetched 32 hints per lane per round (K-era code). Then
+each hint is resolved SERIALLY: 4 broadcasts, one coalesced literal load (2–3 lanes active of
+32), one table probe per literal (2–3 scattered loads), a reduce, a ballot, a broadcast, the
+unit insert (a dependent load + store), a `syncwarp` — ≈ 3 dependent memory round trips and
+8 warp-wide operations per hint, 79 times per lemma, with 29 of 32 lanes idle. At 1,152
+resident warps the measured cost is 157 µs per lemma per warp ≈ 2 µs per hint: a latency
+chain, not bandwidth (the §9 sweep showed the kernel memory-bound only above 1,152 warps).
+
+**Design H (direct layout only; the hashed path keeps its code).** Hints are evaluated
+in BATCHES of as many hints as fit in 32 literal lanes, with the sequential RUP semantics
+reconstructed in registers:
+- H1 From the 32-hint metadata round each hint lane knows its clause length (0 for a
+  forward hint, whose bounds were never loaded). An inclusive sum over lengths (5 shuffle
+  steps) and a ballot select the longest prefix of hints whose literals fit in 32 lanes; a
+  segment-start mask (one reduce-or) gives every literal lane its hint index and offset by
+  popcount arithmetic; one indexed shuffle fetches its clause start. **One** coalesced
+  literal load and **two** scattered probes per lane (the literal and its negation — the
+  negation's presence decides whether a later unit insert is new) replace the per-hint
+  chain: ≈ 6 batch rounds of 2 memory round trips per lemma instead of 79 × 3.
+- H2 The ordered resolution loop (warp-uniform trip count = hints in the batch, ≈ 13):
+  for hint j in order — admissibility first (forward → 4, deleted → 3, from two per-batch
+  ballots over the hint lanes); then `free_j = popcount(ballot(free) & seg_j)`: 0 → code 0,
+  ≥ 2 → code 1, else the unit `u_j` is broadcast from its lane and every lane of a LATER
+  hint in the batch with literal `== −u_j` marks itself falsified (that is exactly what the
+  serial insert of `−u_j` would have made the next probe see) and every later lane with
+  literal `== u_j` marks its own eventual insert a duplicate; `new_j = !present(−u_j) &&
+  !duplicate`; the cap test `count ≥ 4,095` BEFORE the insert, in order (→ code 5 at j);
+  `count += new_j`; the unit lane stores the entry (direct slot `= code(−u_j)`), no probe
+  chain. A `syncwarp` closes the batch so the next batch's loads see the stores.
+- H3 A hint longer than the lanes left in a batch starts the next batch; one longer than
+  32 literals is evaluated alone by TODAY's strided loop (kept verbatim as the fallback).
+- H4 Lemma-literal inserts (≈ 2 per lemma) stay serial as today; the hashed layout's hint
+  loop is the existing code, selected by `direct` at the same branch as now.
+- H5 Why the semantics are preserved, stated so the oracle can refute it: an insert of
+  `−u` changes a later probe's answer for literal `l` iff `l == −u`; "present before" for
+  the count is the table at batch start OR an earlier unit of the same batch (`u_i == u_j`);
+  the first failing hint in order fixes the code, and no store of a later hint is issued
+  after a failure — all three are register facts in H2. Any divergence from
+  SimWarp's `LitTable` sequence is a bug, not a tolerance.
+
+**Oracles (K4's battery and archive tests run unchanged — both layouts forced on every
+proof, blocks 1 / 7 / 64 / 4,096; `--verify-b2` against the HASHED B2 over all 5,226 steps;
+`--simwarp 50`), plus battery proofs written for H's failure modes, each with a SimWarp
+reference:** (a) a propagation chain inside one batch — hint j's unit falsifies hint j+1's
+only other literal (a unit chain of ≥ 6 binary clauses); (b) two hints unit on the same
+literal in one batch with the count at 4,094 before them (the duplicate must NOT trip the
+cap) and the same at 4,095 (it must, at the first); (c) a conflict at hint j followed by a
+forward hint at j+1 (code 0, not 4) and a deleted hint at j followed by a conflict at j+1
+(code 3, not 0); (d) hint clauses of 31, 32, 33 and 70 literals (the fallback), the 33-long
+one unit on its last literal; (e) a hint whose only free literal is the lemma's own literal
+negated (falsified at the lemma stage, so the hint is a conflict); (f) a hint with a
+repeated literal (`x x y`, y falsified → unit on x, free count 2 by lanes but one literal —
+SimWarp's answer is the reference, whatever it is, and the serial kernel's today). **Mutants
+on copies, each watched to fail before the kernel is trusted:** M-H1 the in-batch
+falsification by `−u_j` dropped (killed by a); M-H2 duplicate units counted as new (killed
+by b); M-H3 admissibility tested after the free count (killed by c); M-H4 the > 32 fallback
+removed, the clause truncated to 32 (killed by d). Any oracle disagreement that is not a
+mutant = **KILL** (stop, diagnose; no timing claimed).
+
+**Predictions (ranges fixed now).**
+- **P37** pipelined wall, our proofs, launcher default, best of 3 warm: **4.0–4.9 s** (point
+  4.4) → **P4 (≤ 5 s) MET**; cold ≤ warm + 0.3 s. If the pipeline turns PREPARE-bound the
+  wall sits at the top of the range: P37b, the check thread's idle time (checks span −
+  Σ check − Σ combine) is **≥ 0.5 s** (today 0.25) — that is the signal for stage S below.
+- **P38** serial-path check stage at 288 blocks, warm best of 3: **1.2–2.2 s** from 3.44
+  (1.6–2.9×). **No-gain line: ≥ 3.0 s** → H is recorded as no gain and the K kernel is
+  restored from the scratch copy.
+- **P39** block sweep (serial path, 288 / 576 / 1,152, 3 runs each): best at 288 or 576;
+  1,152 within 1.35× of the best (fewer round trips per lemma → less to hide → occupancy
+  matters less; the L2 footprint is unchanged).
+- **P40** zero oracle disagreements (battery, 632 archive files, B2, SimWarp) and 4/4
+  mutants killed; the gpu suite's count grows by the new battery shapes and passes.
+- **P41** device peak ≤ 5.3 GB (no new arrays; 5.16 today).
+- **P42** path A2 proofs (`--cumulative`), best of 3: **1.05–1.25×** our proofs' wall.
+- **P43** 415 MB archive proof, `lrat_check` cold ×3: check **≤ 0.12 s** (D2's 0.116–0.120
+  is the baseline; no regression on the small proof).
+- **P44** serial total (`--serial`): **6.0–7.3 s** from 8.53–8.58.
+- **P45** `--check-table hashed`: 6.3–6.7 s — the hashed path unchanged (F3: 6.50).
+- **P46** kernel signature unchanged (13 PTX params); the per-thread register count is
+  reported (`cuobjdump`/`ptxas -v` if reachable) because register pressure from the
+  per-lane batch state is the named risk to P38 and P39.
+
+**Stage S (scan), conditional — the decision rule fixed now, its numbers fixed when it is
+pre-registered.** If P37b fires (idle ≥ 0.5 s) or the wall is > 5.0 s with P38 met, the
+preparers are the bound and the scan is next: the two byte passes (1.45 s standalone, 4 s
+co-running; 6.9 GB parsed twice at ≈ 9.5 GB/s per pass by one-warp blocks at 24 per SM —
+a 32-byte window per warp iteration, ≈ 3.7 µs each, instruction-latency-bound) — four
+warps per block and/or four bytes per lane per window, same records, same `dirty` slices,
+the host plan untouched. If P37b does not fire and the wall is ≤ 5.0 s, the arc ends at H.
+Either way S is a separate pre-registration with its own ranges before any S measurement.
+
+**Protocol** (`~/staging/2026-11-10-edp-record-h/run-all.sh`, the §9 shape): the host
+quiet by `pgrep -c -x lean` = `spatch` = 0 recorded in every log header (the §9
+confirmation history); oracles first (run0: `--verify-b2 --simwarp 50`); `posix_fadvise
+(DONTNEED)` then cold (run1); warm runs 2–4 with the 100 ms device-memory sampler on run 2;
+`--serial` control (run5); the P39 sweep (runs 6–14, serial path); `--check-table hashed`
+(run15); A2 cold + 3 warm; the 415 MB check cold ×3. 6 niced host threads on cores 0–5.
+Corrections in brackets; nothing above changes after the first measurement. Scratch copies
+of the pre-H kernel, launcher and tests go to the scratchpad before the first edit
+(`*.pre-h`); mutants are built on copies and restored by `cp`.
