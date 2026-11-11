@@ -27,6 +27,7 @@ use core::panic::PanicInfo;
 fn panic(_: &PanicInfo) -> ! { loop {} }
 
 use warp_types::*;
+use warp_types::gpu::GpuShuffle;
 
 // ============================================================================
 // Kernel 1: Clause-parallel loss evaluation + butterfly reduce
@@ -420,6 +421,289 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slot
     }
 }
 
+/// Warp-wide OR of a per-lane mask (butterfly; every lane ends with the OR).
+#[inline(always)]
+unsafe fn lrat_warp_or(mut v: u32) -> u32 {
+    v |= v.gpu_shfl_xor(16);
+    v |= v.gpu_shfl_xor(8);
+    v |= v.gpu_shfl_xor(4);
+    v |= v.gpu_shfl_xor(2);
+    v |= v.gpu_shfl_xor(1);
+    v
+}
+
+/// Inclusive prefix sum of a per-lane value across the warp (shuffle-up scan).
+#[inline(always)]
+unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
+    let mut stride = 1u32;
+    while stride < 32 {
+        let s = v.gpu_shfl_up(stride);
+        if lane >= stride {
+            v += s;
+        }
+        stride <<= 1;
+    }
+    v
+}
+
+/// One hint resolved by the strided loop (the pre-§10 code, used by the
+/// hashed layout for every hint and by the direct layout for a hint wider
+/// than 32 literals): each lane strides over the clause, the free count is
+/// reduced, the single free literal's negation is inserted. Returns `0xFF`
+/// when the hint is unit and the lemma continues, otherwise the lemma's code.
+#[inline(always)]
+unsafe fn lrat_hint_strided(
+    warp: &Warp<All>,
+    lane: u32,
+    lits: *const i32,
+    table: *mut u64,
+    base: u32,
+    stamp: u32,
+    direct: bool,
+    slots: u32,
+    cs: u32,
+    ce: u32,
+    count: &mut u32,
+) -> u8 {
+    // Each lane strides over the clause.
+    let mut free = 0u32;
+    let mut last = 0i32;
+    let mut past_table = false;
+    let mut j = cs + lane;
+    while j < ce {
+        let l = *lits.add(j as usize);
+        if direct && lrat_code(l) >= slots {
+            past_table = true; // the host's guarantee is broken
+        } else if !lrat_falsified(table, base, stamp, direct, slots, l) {
+            free += 1;
+            last = l;
+        }
+        j += 32;
+    }
+    if direct {
+        // Warp-uniform (`direct` is a kernel argument): any lane that
+        // met a code past the table fails the lemma closed.
+        let voted = warp.ballot(data::PerLane::new(past_table)).mask_u32().get();
+        if voted != 0 {
+            return 5;
+        }
+    }
+    let total = warp.reduce_sum(data::PerLane::new(free)).get();
+    if total == 0 {
+        return 0; // conflict: RUP
+    }
+    if total >= 2 {
+        return 1;
+    }
+    // Exactly one free literal in the warp: find its lane, broadcast it.
+    // `& 31` keeps the lane provably in range: without it the
+    // compiler keeps `broadcast_lane`'s bounds assert for the
+    // (unreachable) `voted == 0` case, and that assert drags
+    // `core::panicking::panic_fmt` and `Display::fmt` into the
+    // PTX as undefined externs — the module then fails to LOAD,
+    // before any lemma is checked (RunPod H200, 2026-11-02).
+    let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
+    let src = voted.trailing_zeros() & 31;
+    let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
+    let ok = lrat_insert(table, base, stamp, direct, slots, -unit, count);
+    warp_types::gpu::syncwarp(0xffff_ffff);
+    if !ok {
+        return 5;
+    }
+    0xFF
+}
+
+/// The direct layout's hint loop: hints resolved a BATCH at a time
+/// (research/edp-record.md §10). A 32-hint metadata window sits one hint
+/// per lane; a batch is the longest run of the window's remaining hints
+/// whose literals fit in 32 lanes, cut inclusively at the first hint with
+/// no literals (a forward hint, whose bounds were never loaded, or an empty
+/// clause). Every literal lane loads ITS literal once and probes the table
+/// twice — the literal (falsified?) and its negation (would the unit insert
+/// be new?) — and the hints are then resolved in order with the sequential
+/// semantics reconstructed in registers: hint `j`'s unit `u` makes every
+/// LATER lane of the batch whose literal is `-u` falsified (what the serial
+/// insert of `-u` would make the next probe see) and marks a later lane
+/// whose literal is `u` a duplicate insert; the occupancy cap is tested
+/// before each insert, duplicate or not, exactly as `lrat_insert` and
+/// SimWarp's `LitTable::insert` do; the first failing hint in order fixes
+/// the code and no later hint's store is issued. A hint wider than 32
+/// literals is resolved alone by `lrat_hint_strided`. Returns the lemma's
+/// code (2 = every hint was unit and none conflicted).
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+unsafe fn lrat_hints_direct_batched(
+    warp: &Warp<All>,
+    lane: u32,
+    lits: *const i32,
+    clause_start: *const u32,
+    deleted_at: *const u32,
+    hints: *const u32,
+    table: *mut u64,
+    base: u32,
+    stamp: u32,
+    slots: u32,
+    lemma_dense: u32,
+    lstep: u32,
+    hs: u32,
+    he: u32,
+    count: &mut u32,
+) -> u8 {
+    let mut h = hs;
+    let mut win = hs; // first hint of the metadata window held in the lanes
+    let mut win_end = hs; // one past its last hint (== win: nothing loaded yet)
+    let (mut m_del, mut m_cs, mut m_len) = (0u32, 0u32, 0u32);
+    let mut m_fwd = false;
+    while h < he {
+        if h == win_end {
+            // `he - h < 32`, not `h + 32 > he`: no u32 wrap near 2^32.
+            win = h;
+            win_end = if he - h < 32 { he } else { h + 32 };
+            m_del = 0;
+            m_cs = 0;
+            m_len = 0;
+            m_fwd = false;
+            if lane < win_end - h {
+                let hc = *hints.add((h + lane) as usize);
+                if hc < lemma_dense {
+                    m_del = *deleted_at.add(hc as usize);
+                    m_cs = *clause_start.add(hc as usize);
+                    m_len = *clause_start.add(hc as usize + 1) - m_cs;
+                } else {
+                    m_fwd = true;
+                }
+            }
+        }
+        let cur = h - win; // hint lane of the next hint to resolve
+        let in_win = lane >= cur && lane < win_end - win;
+        let len = if in_win { m_len } else { 0 };
+        let incl = lrat_warp_inclusive_sum(lane, len);
+        // The batch: a prefix of the window's remaining hints (`incl` is
+        // monotone over the lanes) whose literals fit in 32 lanes …
+        let fits = in_win && incl <= 32;
+        let fits_mask = warp.ballot(data::PerLane::new(fits)).mask_u32().get();
+        let n_fit = fits_mask.count_ones();
+        if n_fit == 0 {
+            // The next hint alone is wider than 32 lanes: the strided loop,
+            // after the same admissibility tests as below.
+            let src = cur & 31;
+            if warp.broadcast_lane(data::PerLane::new(m_fwd as u32), src).get() != 0 {
+                return 4;
+            }
+            if warp.broadcast_lane(data::PerLane::new(m_del), src).get() < lstep {
+                return 3;
+            }
+            let cs = warp.broadcast_lane(data::PerLane::new(m_cs), src).get();
+            let ce = cs + warp.broadcast_lane(data::PerLane::new(m_len), src).get();
+            let c = lrat_hint_strided(warp, lane, lits, table, base, stamp, true, slots, cs, ce, count);
+            if c != 0xFF {
+                return c;
+            }
+            h += 1;
+            continue;
+        }
+        // … cut inclusively at the first hint with no literals.
+        let empty_mask = warp.ballot(data::PerLane::new(fits && len == 0)).mask_u32().get();
+        let first_empty = empty_mask.trailing_zeros(); // 32 when none
+        let n_b = if first_empty < 32 {
+            let upto = first_empty + 1 - cur;
+            if upto < n_fit { upto } else { n_fit }
+        } else {
+            n_fit
+        };
+        let in_batch = in_win && lane < cur + n_b;
+        // Admissibility of each batch hint, as masks over the hint lanes.
+        let fwd_mask = warp.ballot(data::PerLane::new(in_batch && m_fwd)).mask_u32().get();
+        let del_mask = warp.ballot(data::PerLane::new(in_batch && !m_fwd && m_del < lstep)).mask_u32().get();
+        // Literal lanes: lane `L < total` holds literal `L` of the batch's
+        // concatenated clauses; its hint is found from the segment-start mask.
+        let total = warp.broadcast_lane(data::PerLane::new(incl), (cur + n_b - 1) & 31).get();
+        let excl = incl - len;
+        let start_mask = lrat_warp_or(if in_batch && len > 0 { 1u32 << excl } else { 0 });
+        let valid = lane < total;
+        let below = start_mask & (((2u64 << lane) - 1) as u32); // segment starts at or below this lane
+        let q = below.count_ones().wrapping_sub(1); // hint index within the batch (valid lanes)
+        let off = lane.wrapping_sub(31u32.wrapping_sub(below.leading_zeros()));
+        let cs = m_cs.gpu_shfl_idx((cur + q) & 31);
+        let mut lit = 0i32;
+        let mut fals = false;
+        let mut negp = false;
+        let mut past = false;
+        if valid {
+            lit = *lits.add((cs + off) as usize);
+            let k = lrat_code(lit) + 1;
+            let kn = lrat_code(-lit) + 1;
+            if k > slots || kn > slots {
+                past = true; // the host's guarantee is broken
+            } else {
+                let e = *table.add((base + k - 1) as usize);
+                fals = (e >> 32) as u32 == stamp && e as u32 == k;
+                let en = *table.add((base + kn - 1) as usize);
+                negp = (en >> 32) as u32 == stamp && en as u32 == kn;
+            }
+        }
+        let past_mask = warp.ballot(data::PerLane::new(past)).mask_u32().get();
+        let mut free = valid && !fals;
+        let mut dup = false;
+        // Ordered resolution. `s_excl` walks the segment starts: hint j's
+        // literals are bits [s_excl, next start or total).
+        let mut s_excl = 0u32;
+        let mut j = 0u32;
+        while j < n_b {
+            let hl = cur + j;
+            if (fwd_mask >> hl) & 1 != 0 {
+                return 4;
+            }
+            if (del_mask >> hl) & 1 != 0 {
+                return 3;
+            }
+            let rest = if s_excl >= 31 { 0 } else { start_mask & !(((2u64 << s_excl) - 1) as u32) };
+            let s_incl = if rest == 0 { total } else { rest.trailing_zeros() };
+            let seg = (((1u64 << s_incl) - 1) as u32) & !(((1u64 << s_excl) - 1) as u32);
+            if past_mask & seg != 0 {
+                return 5;
+            }
+            let fm = warp.ballot(data::PerLane::new(free)).mask_u32().get() & seg;
+            let n = fm.count_ones();
+            if n == 0 {
+                return 0; // conflict: RUP
+            }
+            if n >= 2 {
+                return 1;
+            }
+            let ul = fm.trailing_zeros() & 31;
+            let u = warp.broadcast_lane(data::PerLane::new(lit), ul).get();
+            let flags = warp.broadcast_lane(data::PerLane::new((negp as u32) | ((dup as u32) << 1)), ul).get();
+            // The cap test comes first, duplicate or not (`lrat_insert`).
+            if *count >= LRAT_TABLE - 1 {
+                return 5;
+            }
+            if flags == 0 {
+                *count += 1;
+                if lane == ul {
+                    let kn = lrat_code(-u) + 1;
+                    *table.add((base + kn - 1) as usize) = ((stamp as u64) << 32) | kn as u64;
+                }
+            }
+            // Later hints of the batch see the insert.
+            if valid && q > j {
+                if lit == -u {
+                    free = false;
+                }
+                if lit == u {
+                    dup = true;
+                }
+            }
+            s_excl = s_incl;
+            j += 1;
+        }
+        h += n_b;
+        // The next batch's probes must see this batch's stores.
+        warp_types::gpu::syncwarp(0xffff_ffff);
+    }
+    2
+}
+
 /// Check lemmas `w, w + W, …` of a flat LRAT proof, where `w` is the global
 /// warp index (`block_id * LRAT_WARPS_PER_BLOCK + thread_id / 32`) and `W =
 /// num_blocks * LRAT_WARPS_PER_BLOCK`.
@@ -483,93 +767,56 @@ pub fn lrat_check_lemmas(
         if code != 5 {
             let hs = *hint_start.add(i as usize);
             let he = *hint_start.add(i as usize + 1);
-            let mut h = hs;
-            // Hint metadata, 32 hints at a time, one per lane: the hint's
-            // dense id, its deletion step and its clause bounds. Each hint's
-            // four values then reach the warp by `broadcast_lane` instead of
-            // by a chain of dependent loads. A lane whose hint is forward
-            // (`>= lemma_dense`) loads nothing more: the warp rejects that
-            // hint before using the other three values.
-            let mut batch = hs;
-            let (mut m_hc, mut m_del, mut m_cs, mut m_ce) = (0u32, 0u32, 0u32, 0u32);
-            while h < he {
-                if h == batch {
-                    // `lane < he - h`, not `h + lane < he`: no u32 wrap near 2^32.
-                    if lane < he - h {
-                        let j = h + lane;
-                        m_hc = *hints.add(j as usize);
-                        if m_hc < lemma_dense {
-                            m_del = *deleted_at.add(m_hc as usize);
-                            m_cs = *clause_start.add(m_hc as usize);
-                            m_ce = *clause_start.add(m_hc as usize + 1);
+            if direct {
+                code = lrat_hints_direct_batched(
+                    &warp, lane, lits, clause_start, deleted_at, hints, table, base, stamp, slots,
+                    lemma_dense, lstep, hs, he, &mut count,
+                );
+            } else {
+                let mut h = hs;
+                // Hint metadata, 32 hints at a time, one per lane: the hint's
+                // dense id, its deletion step and its clause bounds. Each hint's
+                // four values then reach the warp by `broadcast_lane` instead of
+                // by a chain of dependent loads. A lane whose hint is forward
+                // (`>= lemma_dense`) loads nothing more: the warp rejects that
+                // hint before using the other three values.
+                let mut batch = hs;
+                let (mut m_hc, mut m_del, mut m_cs, mut m_ce) = (0u32, 0u32, 0u32, 0u32);
+                while h < he {
+                    if h == batch {
+                        // `lane < he - h`, not `h + lane < he`: no u32 wrap near 2^32.
+                        if lane < he - h {
+                            let j = h + lane;
+                            m_hc = *hints.add(j as usize);
+                            if m_hc < lemma_dense {
+                                m_del = *deleted_at.add(m_hc as usize);
+                                m_cs = *clause_start.add(m_hc as usize);
+                                m_ce = *clause_start.add(m_hc as usize + 1);
+                            }
                         }
+                        batch = h + 32;
                     }
-                    batch = h + 32;
-                }
-                // `& 31`: see the note at the unit broadcast below.
-                let src = (h + 32 - batch) & 31;
-                let hc = warp.broadcast_lane(data::PerLane::new(m_hc), src).get();
-                // Admissibility — the same test in every lane.
-                if hc >= lemma_dense {
-                    code = 4;
-                    break;
-                }
-                if warp.broadcast_lane(data::PerLane::new(m_del), src).get() < lstep {
-                    code = 3;
-                    break;
-                }
-                let cs = warp.broadcast_lane(data::PerLane::new(m_cs), src).get();
-                let ce = warp.broadcast_lane(data::PerLane::new(m_ce), src).get();
-                // Each lane strides over the clause.
-                let mut free = 0u32;
-                let mut last = 0i32;
-                let mut past_table = false;
-                let mut j = cs + lane;
-                while j < ce {
-                    let l = *lits.add(j as usize);
-                    if direct && lrat_code(l) >= slots {
-                        past_table = true; // the host's guarantee is broken
-                    } else if !lrat_falsified(table, base, stamp, direct, slots, l) {
-                        free += 1;
-                        last = l;
-                    }
-                    j += 32;
-                }
-                if direct {
-                    // Warp-uniform (`direct` is a kernel argument): any lane that
-                    // met a code past the table fails the lemma closed.
-                    let voted = warp.ballot(data::PerLane::new(past_table)).mask_u32().get();
-                    if voted != 0 {
-                        code = 5;
+                    // `& 31`: see the note at the unit broadcast in `lrat_hint_strided`.
+                    let src = (h + 32 - batch) & 31;
+                    let hc = warp.broadcast_lane(data::PerLane::new(m_hc), src).get();
+                    // Admissibility — the same test in every lane.
+                    if hc >= lemma_dense {
+                        code = 4;
                         break;
                     }
+                    if warp.broadcast_lane(data::PerLane::new(m_del), src).get() < lstep {
+                        code = 3;
+                        break;
+                    }
+                    let cs = warp.broadcast_lane(data::PerLane::new(m_cs), src).get();
+                    let ce = warp.broadcast_lane(data::PerLane::new(m_ce), src).get();
+                    let c = lrat_hint_strided(&warp, lane, lits, table, base, stamp, false, slots, cs, ce, &mut count);
+                    if c != 0xFF {
+                        code = c;
+                        break;
+                    }
+                    h += 1;
                 }
-                let total = warp.reduce_sum(data::PerLane::new(free)).get();
-                if total == 0 {
-                    code = 0; // conflict: RUP
-                    break;
-                }
-                if total >= 2 {
-                    code = 1;
-                    break;
-                }
-                // Exactly one free literal in the warp: find its lane, broadcast it.
-                // `& 31` keeps the lane provably in range: without it the
-                // compiler keeps `broadcast_lane`'s bounds assert for the
-                // (unreachable) `voted == 0` case, and that assert drags
-                // `core::panicking::panic_fmt` and `Display::fmt` into the
-                // PTX as undefined externs — the module then fails to LOAD,
-                // before any lemma is checked (RunPod H200, 2026-11-02).
-                let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
-                let src = voted.trailing_zeros() & 31;
-                let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-                let ok = lrat_insert(table, base, stamp, direct, slots, -unit, &mut count);
-                warp_types::gpu::syncwarp(0xffff_ffff);
-                if !ok {
-                    code = 5;
-                    break;
-                }
-                h += 1;
             }
         }
         if lane == 0 {

@@ -1107,3 +1107,13 @@ clean, by the margin the rule was written to protect against rationalising (3 ms
 them with the recommendation to KEEP H; until it is made the H kernel stays in the working
 tree uncommitted, and the record's headline stays §9's 5.35 s. What is not in question: the
 numbers above stand as measured either way.
+
+**Decision (owner, 2026-11-11): "keep. your call stands."** H is the check kernel for the
+direct layout; the K kernel's hint loop survives as `lrat_hint_strided` (the hashed path and
+the > 32-literal fallback) and as the `kernels-lib.rs.pre-h` snapshot in
+`~/staging/2026-11-10-edp-record-h/`. The record's figure for EDP2_1161 on this machine is
+now **4.67 s warm / 4.85 s cold, launcher default, no flag** (12.9× / 12.4× under the
+published 60.2 s; 42.7× under same-machine lrat-check; A2 proofs 5.77 s, 10.4×). P38 stays
+MISSED in the ledger and the no-gain line stays crossed — the decision overrides the rule's
+consequence, not its reading. The arc ends here by the stage-S rule; the §0 caveats travel
+with every sentence above, and nothing leaves the repo before the cross-vendor panel.
