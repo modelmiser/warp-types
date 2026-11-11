@@ -1044,3 +1044,66 @@ byte-identical to `kernels.ptx.h`). P46 is answerable from the two PTX snapshots
 cmem[0] both (13 params)** — 12 more registers, no spills; at 47 registers a 256-thread
 block uses 12,032 of the SM's 65,536, so occupancy is not register-limited at 288 or 1,152
 blocks. The clean H protocol run awaits the owner's next clear; its log is `run-all3.log`.]
+
+**As measured (2026-11-11 03:17–03:20Z, owner: "go. host is clear."; load 1.30, lean =
+spatch = 0; the log header records the loaded PTX byte-identical to `kernels.ptx.h` and the
+tree kernel identical to `kernels-lib.rs.h`; `run-all3.log`, per-run files under
+`h-run-0317Z/`).** Oracles first (run0): `--verify-b2` 0 mismatching steps of 5,226 against
+the hashed B2, SimWarp 50/50, 5,226/5,226 verified; earlier today the battery (incl. the six
+§10 shapes, 3 layouts × 4 block counts), the 180-proof archive at 4 block counts, and M-H1–4
+all killed. Then:
+- **P37 MET: warm 4.721 / 4.681 / 4.671 → 4.67 s** (4.0–4.9; point 4.4); **cold 4.852 s**
+  (≤ 4.97 MET). **P4 (≤ 5 s) MET for the first time since §3.** 12.9× under the published
+  60.2 s warm (12.4× cold); 42.7× under same-machine lrat-check (199.6 s). Check stage
+  co-running 3.76–3.84, scan passes 3.70–3.74, gather 1.76–1.82; combine 0.074.
+- **P37b did NOT fire:** check-thread idle (span − Σcheck − Σcombine) 0.249 / 0.235 / 0.169 s
+  (< 0.5; today's K rerun 0.17–0.25 as well). The pipeline is still check-bound after H:
+  3.8 s of check in a 4.1 s span.
+- **Stage S rule, as fixed above:** P37b did not fire and the wall is ≤ 5.0 s → **the arc
+  ends at H.** No scan pre-registration follows from this result.
+- **P38 MISSED: serial check at 288 blocks 3.012 / 3.003 / 3.014 → 3.003 s** (1.2–2.2
+  predicted; 1.15× from §9's 3.447, from today's K rerun's 3.422). **The no-gain line
+  (≥ 3.0 s) is crossed by 3 ms on the pre-registered best of 3**; the serial control in the
+  same log (run5) read 2.994 s, the four 288-block runs span 2.994–3.014 (run-to-run spread
+  ≈ 20 ms). Read as written: **no gain by the standalone line.**
+- **P39 MET:** best at 288; 576: 3.443 / 3.464 / 3.485; 1,152: 3.675 / 3.698 / 3.744 →
+  1,152 is 1.22× the best (≤ 1.35). The curve flattened exactly as predicted: K's is 3.42 /
+  4.43 / 4.64 (1.36×); at 1,152 blocks H is 0.97 s faster than K, at 288 only 0.42 s.
+- **P40 MET** (zero disagreements; 4/4 mutants; suite 292 with the new shapes).
+- **P41 MET:** device peak 5.13 GB (≤ 5.3; 42 samples; K read 5.16 in §9 and 6.03 today).
+- **P42 MET:** A2 proofs warm 6.261 / 5.920 / 5.774 → 5.774 s = **1.236×** ours (1.05–1.25);
+  cold 5.751. A2 is now 10.4× under 60.2 s on the published composition too.
+- **P43 MET:** 415 MB check 0.104–0.107 s (≤ 0.12) — and the D2 drift is gone: K measured
+  0.117–0.124 on the same files 4½ hours earlier, H 0.104–0.107, so the drift was in the
+  kernel's hint loop, not the host.
+- **P44 MISSED:** `--serial` total 8.027 (run5), 8.057–8.087 (sweep) against 6.0–7.3 — the
+  serial path's other stages are 5.0 s and the check gave back 0.44 s, not the 1.2–2.2 the
+  range assumed; the miss is P38's miss, not a second finding.
+- **P45 MET:** hashed 6.603 s (6.3–6.7; F3 6.50) — the hashed path's code is untouched.
+- **P46 reported:** 13 PTX params unchanged; registers K 35 → H 47, 0 spill bytes either.
+  Not the P38 limiter: a 256-thread block at 47 registers takes 18 % of the register file,
+  and P39's flattened curve says occupancy matters LESS under H, not more.
+
+**Tally: 7 of 9 ranges MET (P37 + P4 + cold, P39, P40, P41, P42, P43, P45); P38 and P44
+MISSED; P46 reported.** The honest sentence: **the pipelined wall gained 0.68 s (5.35 →
+4.67, 13 %) from a check kernel that gained 0.44 s standalone (3.44 → 3.00, 13 %)** — the
+pipeline is check-bound, so the kernel's gain passed through almost one for one, but the
+kernel gained a seventh where the design predicted a half. The design's model was wrong in
+the same place §9's was: "a latency chain, not bandwidth" (§10, profile paragraph) did not
+survive measurement. H removed the per-hint literal-probe chain and the 29-idle-lane rounds,
+and P39 shows the latency it hid is real (the 1,152-block point improved 0.97 s); but the
+per-hint METADATA loads — `hc`, `del`, `cs`, `len`, three scattered lines per hint, ≈ 237 L2
+lines per lemma — are untouched by H and are, by this result, most of the standalone cost,
+and H adds a negation probe per literal lane (≈ 190 lines per lemma). [Reading, not
+measured.] The next kernel step, if there is one, is a packed 16-byte (deleted-at,
+clause-start, length) record per clause — one line per hint instead of three — and the
+negation probe only for lanes still free; **not pre-registered, not started.**
+
+**The rule and the decision.** P38 ≥ 3.0 s says: H is recorded as no gain and the K kernel
+is restored. The same run met P4, the arc's purpose, for the first time, with every oracle
+clean, by the margin the rule was written to protect against rationalising (3 ms of 3,003).
+§9 ended in this exact shape — standalone no gain, pipeline gain — and the owner decided
+("your call"; direct became the default). The decision is the owner's again and is put to
+them with the recommendation to KEEP H; until it is made the H kernel stays in the working
+tree uncommitted, and the record's headline stays §9's 5.35 s. What is not in question: the
+numbers above stand as measured either way.
