@@ -136,6 +136,27 @@ def model_ok(cnf_path, solver_out):
     bad = [c for c in clauses if not any(l in lits for l in c)]
     return (not bad), f"{len(clauses) - len(bad)}/{len(clauses)} satisfied"
 
+def decode_bdrat(data):
+    """Binary DRAT (drat-trim's layout) -> the equivalent text, one step per line. Independent of the
+    crate's parser on purpose: a second reading of the same bytes."""
+    out, pos, n = [], 0, len(data)
+    while pos < n:
+        pre = data[pos]; pos += 1
+        if pre not in (97, 100): raise ValueError(f"byte {pos-1}: prefix {pre}")
+        lits = []
+        while True:
+            code, shift = 0, 0
+            while True:
+                if pos >= n: raise ValueError(f"byte {pos}: truncated step")
+                b = data[pos]; pos += 1
+                code |= (b & 0x7f) << shift; shift += 7
+                if not b & 0x80: break
+            if code == 0: break
+            if code == 1: raise ValueError(f"byte {pos}: literal code 1")
+            lits.append(-(code >> 1) if code & 1 else code >> 1)
+        out.append(("d " if pre == 100 else "") + " ".join(map(str, lits + [0])))
+    return "\n".join(out) + "\n"
+
 def corrupt(proof_text, kind):
     lines = [l for l in proof_text.split("\n") if l.strip()]
     if kind == "flip":  # flip the first literal of a lemma one third of the way in (the last lemmas
@@ -160,6 +181,7 @@ def main():
     ap.add_argument("--solve-timeout", type=int, default=120); ap.add_argument("--check-timeout", type=int, default=300)
     ap.add_argument("--negatives", type=int, default=6); ap.add_argument("--timing-reps", type=int, default=5)
     ap.add_argument("--timing-only", action="store_true", help="skip the corpus; reuse CNFs already in --out")
+    ap.add_argument("--drat-binary", action="store_true", help="solve with --drat-binary; stats and negatives via decode_bdrat")
     a = ap.parse_args()
     out = Path(a.out); (out / "cnf").mkdir(parents=True, exist_ok=True); (out / "proof").mkdir(exist_ok=True)
 
@@ -189,7 +211,7 @@ def main():
         nv, clauses = read_cnf_bytes(cnf)
         row = dict.fromkeys(cols, ""); row.update(name=name, cnf_sha=sha(cnf), vars=nv, clauses=len(clauses))
         proof = out / "proof" / f"{name}.drat"
-        rc, so, dt = run([a.solve, "--drat", str(proof), "--reduce-interval", str(a.reduce_interval), str(cnf)], a.solve_timeout)
+        rc, so, dt = run([a.solve, "--drat", str(proof)] + (["--drat-binary"] if a.drat_binary else []) + ["--reduce-interval", str(a.reduce_interval), str(cnf)], a.solve_timeout)
         row["solve"] = verdict(so); row["solve_s"] = f"{dt:.3f}"
         if a.kissat:
             krc, ko, _ = run([a.kissat, "-q", str(cnf)], a.solve_timeout)
@@ -200,7 +222,8 @@ def main():
             ok, why = model_ok(cnf, so); row["model"] = f"{'OK' if ok else 'FAIL'} {why}"
             if not ok: kills.append(f"{name}: SAT model fails file-bytes check: {why}")
         elif row["solve"] == "UNSAT":
-            text = proof.read_text(); lines = [l for l in text.split("\n") if l.strip()]
+            text = decode_bdrat(proof.read_bytes()) if a.drat_binary else proof.read_text()
+            lines = [l for l in text.split("\n") if l.strip()]
             row["proof_sha"] = sha(proof); row["proof_lines"] = len(lines)
             row["d_lines"] = sum(1 for l in lines if l.startswith("d "))
             row["unit_d_lines"] = sum(1 for l in lines if l.startswith("d ") and len(l.split()) == 3)
@@ -222,7 +245,7 @@ def main():
             if len(negs) < a.negatives * 3:
                 first = " ".join(map(str, clauses[0]))
                 for kind in ("flip", "drop0", "delorig"):
-                    bad = out / "proof" / f"{name}.{kind}.drat"
+                    bad = out / "proof" / f"{name}.{kind}.drat"  # text, decoded from the binary proof when --drat-binary
                     bad.write_text(corrupt(text, kind).replace("__ORIG__", first + " 0"))
                     n1 = verdict(run([a.drat_trim, str(cnf), str(bad)], a.check_timeout)[1])
                     n2 = verdict(run([a.drat_trim, str(cnf), str(bad), "-f"], a.check_timeout)[1])
@@ -241,7 +264,9 @@ def main():
         cnf = out / "cnf" / f"{name}.cnf"
         if not cnf.exists(): continue
         for mode, extra in (("none", ["--reduce-interval", str(a.reduce_interval)]), ("devnull", ["--drat", "/dev/null", "--reduce-interval", str(a.reduce_interval)]),
-                            ("file", ["--drat", str(out / "proof" / f"{name}.timing.drat"), "--reduce-interval", str(a.reduce_interval)])):
+                            ("file", ["--drat", str(out / "proof" / f"{name}.timing.drat"), "--reduce-interval", str(a.reduce_interval)]),
+                            ("bin-devnull", ["--drat", "/dev/null", "--drat-binary", "--reduce-interval", str(a.reduce_interval)]),
+                            ("bin-file", ["--drat", str(out / "proof" / f"{name}.timing.bdrat"), "--drat-binary", "--reduce-interval", str(a.reduce_interval)])):
             ts = [run([a.solve] + extra + [str(cnf)], a.solve_timeout)[2] for _ in range(a.timing_reps)]
             timing.append(dict(name=name, mode=mode, median_s=f"{statistics.median(ts):.4f}", min_s=f"{min(ts):.4f}", reps=a.timing_reps))
 
@@ -260,6 +285,7 @@ def main():
     cov = sum(1 for r in unsat if int(r["d_lines"] or 0) > 0) / len(unsat) if unsat else 0.0
     summ = [f"# cert-campaign summary", f"instances {len(rows)}: UNSAT {len(unsat)}, SAT {len(sat)}, other {len(rows)-len(unsat)-len(sat)}",
             f"reduce_interval {a.reduce_interval}; d-line coverage {cov:.1%} ({sum(1 for r in unsat if int(r['d_lines'] or 0) > 0)}/{len(unsat)})",
+            ("proofs: BINARY DRAT (stats/negatives via decode_bdrat)" if a.drat_binary else "proofs: text DRAT"),
             f"drat-trim default VERIFIED {sum(1 for r in unsat if r['dt_default']=='VERIFIED')}/{len(unsat)}; forward {sum(1 for r in unsat if r['dt_forward']=='VERIFIED')}/{len(unsat)}; lrat-check {sum(1 for r in unsat if r['lrat_check']=='VERIFIED')}/{len(unsat)}; cake_lpr {sum(1 for r in unsat if r['cake_lpr']=='VERIFIED')}/{sum(1 for r in unsat if r['cake_lpr'])}",
             f"unit d-lines total {sum(int(r['unit_d_lines'] or 0) for r in unsat)}; -v -W ignoring total {sum(int(r['dt_vW_ignoring'] or 0) for r in unsat)}",
             f"SAT models OK {sum(1 for r in sat if r['model'].startswith('OK'))}/{len(sat)}; kissat disagreements {sum(1 for r in rows if r['agree']=='False')}",

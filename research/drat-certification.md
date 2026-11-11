@@ -134,3 +134,32 @@ rejected otherwise — recorded, not scored.
   - **What a certificate from this pipeline says:** *this* `Unsat` answer of `solve_watched_drat` / `solve --drat` on *this* CNF is correct, as checked by a formally verified checker on the refutation `drat-trim` extracted from our log. **What it does not say:** that the solver is sound in general (per-instance only); that the deletions were logged correctly (drat-trim ignores unit deletions and trims non-core lemmas — only the strict in-crate semantics sees those, and it is author-written); anything about `Sat`, `Unknown`, the gradient/hybrid entry points, or DPLL(T) lemmas.
   - **Predictions vs outcomes (6 expected outcomes, 7 faults):** right — E1, E2, E4, E6, E3's interval-50 half, F2, F4, F5; **wrong — F3** (drat-trim accepts a proof without the final `0`), **F1** (EmptyLock vacuous on every instance; a forgotten lock would not be caught by small tests), **E3's default half** (63 % coverage, not "well below 50 %"). Direction: F3 and F1 overestimated what the pipeline catches (toward the thesis "the pipeline is strong"); E3-default and the confounded timing underestimated what default runs exercise (against it). Two each way. Not the one-sided ledger of the 65× arc.
   - **Not done, stated:** binary DRAT; LRAT emitted directly by the solver (would remove drat-trim from the trusted path); DRAT for the hybrid path; a competition-rules page quoted verbatim (the standard is cited by name, not by text). `cnfdd` was built but never needed — nothing to reduce.
+
+- 2026-11-11 — **Binary DRAT, pre-registered before code (owner: "binary DRAT next").** What is built: a binary
+  mode on `DratWriter` in drat-trim's byte layout (`drat-trim.c` `read_lit`/`binChar`, local copy: a step is the
+  byte 97 `a` or 100 `d`, then each literal as a 7-bit little-endian varint of 2·|v| + [v < 0], then a 0 byte;
+  the same literal code the crate's binary LRAT already writes), `proof::parse_drat_binary` so the in-crate
+  strict checker covers binary proofs, `solve --drat-binary` (`--certify` then passes `-i` to drat-trim), and
+  `tools/cert-campaign.py --drat-binary` plus a `binary` timing mode. The text path is not touched, so the
+  overhead comparison stays like for like. Predictions, fixed now:
+  - **P1 size.** Binary proof ≤ 50 % of the text proof's bytes on every UNSAT proof of the run-3 corpus; on the
+    r3sat n = 250 proofs 35–45 % (a text literal is 3–5 bytes plus a space; the varint is 1 byte below variable 64,
+    2 bytes to 8,191).
+  - **P2 overhead.** Same protocol as E6 (interval 50, release CLI, 5 reps, median wall, `/dev/null`), same four
+    instances, text measured again beside binary in the same session: text was +17 / +16 / +10 / +11 %; binary
+    **+4–9 %** on PHP(7)/PHP(8) and **+3–7 %** on r3sat n = 200/250. **No-gain line:** binary within 2 points of
+    text on any instance. Timing runs only after the owner's "host is clear".
+  - **P3 correctness.** Run-3 corpus (82 instances, cnfuzz included) solved with `--drat-binary`: drat-trim
+    default and `-f` VERIFIED on every UNSAT proof; `-L` LRAT verified by lrat-check and cake_lpr; every
+    per-instance verdict equal to the text run's; `-v -W` ignoring 0. **Kill:** any genuine binary proof
+    rejected by any checker stops the arc; the instance is reduced and the cause found first.
+  - **P4 autodetect.** drat-trim without `-i` turns on binary mode on every binary proof (the first byte, 97, is
+    a `binChar`); `-i` gives the same verdicts.
+  - **P5 in-crate.** `parse_drat_binary` of the binary proof equals `parse_drat` of the text proof step for step
+    on PHP(3–7) at interval 50 and the random UNSAT set (tests), and on the whole run-3 corpus (campaign).
+  - **P6 falsifiers, each watched to fail on a copy and restored by `cp`:** sign bit inverted (2·|v| − [v < 0]) →
+    drat-trim NOT VERIFIED on PHP(6) and P5 mismatch; prefix byte 98 → drat-trim "wrong binary prefix" and
+    `parse_drat_binary` error; terminator dropped from the last step → parse error. Note recorded now: drat-trim's
+    `read_lit` decodes the code 1 ("−0") as literal 0, i.e. as a clause terminator; `parse_drat_binary` rejects
+    it, as the binary LRAT decoders do since 11-08.
+  - Error-sign ledger continues: every surprise with its direction.

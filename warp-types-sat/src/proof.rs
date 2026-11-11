@@ -356,30 +356,86 @@ pub fn dimacs_int(lit: Lit) -> i64 {
     }
 }
 
-/// Writes DRAT text to any `Write`. I/O errors are kept in the writer and
-/// returned by [`DratWriter::finish`]; the solver never sees them.
+/// The literal code of the binary DRAT / LRAT layouts: `2·|v| + [v < 0]` for
+/// the DIMACS integer `v` (drat-trim's `read_lit`, cake_lpr's reader).
+#[inline]
+pub fn binary_lit(lit: Lit) -> u64 {
+    let v = dimacs_int(lit);
+    2 * v.unsigned_abs() + u64::from(v < 0)
+}
+
+/// 7-bit little-endian varint (continuation bit 0x80), the number encoding of
+/// binary DRAT and binary LRAT.
+pub(crate) fn push_varint(buf: &mut Vec<u8>, mut x: u64) {
+    loop {
+        let b = (x & 0x7f) as u8;
+        x >>= 7;
+        if x == 0 {
+            buf.push(b);
+            return;
+        }
+        buf.push(b | 0x80);
+    }
+}
+
+/// Writes DRAT — text, or the binary layout drat-trim reads (`-i`, or
+/// detected from the first bytes): a step is the byte `a` (97) or `d` (100),
+/// then each literal as a varint of [`binary_lit`], then a 0 byte. I/O errors
+/// are kept in the writer and returned by [`DratWriter::finish`]; the solver
+/// never sees them.
 pub struct DratWriter<W: Write> {
     out: W,
     err: Option<io::Error>,
+    binary: bool,
+    /// Reused step buffer (binary).
+    bbuf: Vec<u8>,
     /// Steps written: (additions, deletions). Additions count the empty clause.
     pub additions: u64,
     pub deletions: u64,
 }
 
 impl<W: Write> DratWriter<W> {
+    /// Text DRAT.
     pub fn new(out: W) -> Self {
+        Self::with_format(out, false)
+    }
+
+    /// Binary DRAT.
+    pub fn new_binary(out: W) -> Self {
+        Self::with_format(out, true)
+    }
+
+    /// Text (`binary == false`) or binary DRAT.
+    pub fn with_format(out: W, binary: bool) -> Self {
         DratWriter {
             out,
             err: None,
+            binary,
+            bbuf: Vec::new(),
             additions: 0,
             deletions: 0,
         }
     }
 
-    fn line(&mut self, prefix: &str, lits: &[Lit]) {
+    fn step(&mut self, delete: bool, lits: &[Lit]) {
         if self.err.is_some() {
             return;
         }
+        if self.binary {
+            let mut b = std::mem::take(&mut self.bbuf);
+            b.clear();
+            b.push(if delete { b'd' } else { b'a' });
+            for &l in lits {
+                push_varint(&mut b, binary_lit(l));
+            }
+            b.push(0);
+            if let Err(e) = self.out.write_all(&b) {
+                self.err = Some(e);
+            }
+            self.bbuf = b;
+            return;
+        }
+        let prefix = if delete { "d " } else { "" };
         let mut s = String::with_capacity(prefix.len() + lits.len() * 6 + 2);
         s.push_str(prefix);
         for &l in lits {
@@ -405,11 +461,11 @@ impl<W: Write> DratWriter<W> {
 impl<W: Write> ProofLog for DratWriter<W> {
     fn add(&mut self, lits: &[Lit]) {
         self.additions += 1;
-        self.line("", lits);
+        self.step(false, lits);
     }
     fn delete(&mut self, lits: &[Lit]) {
         self.deletions += 1;
-        self.line("d ", lits);
+        self.step(true, lits);
     }
 }
 
@@ -465,18 +521,6 @@ impl<W: Write> LratWriter<W> {
         }
     }
 
-    fn varint(buf: &mut Vec<u8>, mut x: u64) {
-        loop {
-            let b = (x & 0x7f) as u8;
-            x >>= 7;
-            if x == 0 {
-                buf.push(b);
-                return;
-            }
-            buf.push(b | 0x80);
-        }
-    }
-
     fn add_line(&mut self, id: u64, lits: &[Lit], hints: &[u64]) {
         self.additions += 1;
         self.hints += hints.len() as u64;
@@ -487,14 +531,13 @@ impl<W: Write> LratWriter<W> {
             let mut b = std::mem::take(&mut self.bbuf);
             b.clear();
             b.push(b'a');
-            Self::varint(&mut b, 2 * id);
+            push_varint(&mut b, 2 * id);
             for &l in lits {
-                let v = dimacs_int(l);
-                Self::varint(&mut b, 2 * v.unsigned_abs() + u64::from(v < 0));
+                push_varint(&mut b, binary_lit(l));
             }
             b.push(0);
             for &h in hints {
-                Self::varint(&mut b, 2 * h);
+                push_varint(&mut b, 2 * h);
             }
             b.push(0);
             self.write(&b);
@@ -562,7 +605,7 @@ impl<W: Write> ProofLog for LratWriter<W> {
             let mut b = Vec::with_capacity(2 + ids.len() * 4);
             b.push(b'd');
             for &i in ids {
-                Self::varint(&mut b, 2 * i);
+                push_varint(&mut b, 2 * i);
             }
             b.push(0);
             self.write(&b);
@@ -619,6 +662,69 @@ pub fn parse_drat(text: &str) -> Result<Vec<DratStep>, String> {
             return Err(format!("line {}: missing 0 terminator", n + 1));
         }
         steps.push(if is_del {
+            DratStep::Delete(lits)
+        } else {
+            DratStep::Add(lits)
+        });
+    }
+    Ok(steps)
+}
+
+/// Parse binary DRAT (drat-trim's layout, see [`DratWriter`]). Every step
+/// must start with `a` (97) or `d` (100) and end with a 0 byte; the literal
+/// code 1 ("−0") names no variable and is rejected, as the binary LRAT
+/// decoders reject it (drat-trim's `read_lit` would read it as a terminator).
+pub fn parse_drat_binary(bytes: &[u8]) -> Result<Vec<DratStep>, String> {
+    let mut steps = Vec::new();
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        let at = pos;
+        let delete = match bytes[pos] {
+            b'a' => false,
+            b'd' => true,
+            b => {
+                return Err(format!(
+                    "byte {at}: step prefix {b}, expected 97 (a) or 100 (d)"
+                ))
+            }
+        };
+        pos += 1;
+        let mut lits = Vec::new();
+        loop {
+            let mut code: u64 = 0;
+            let mut shift = 0u32;
+            loop {
+                let Some(&b) = bytes.get(pos) else {
+                    return Err(format!(
+                        "byte {pos}: proof ends inside the step at byte {at}"
+                    ));
+                };
+                pos += 1;
+                if shift >= 63 {
+                    return Err(format!(
+                        "byte {pos}: varint too long in the step at byte {at}"
+                    ));
+                }
+                code |= u64::from(b & 0x7f) << shift;
+                shift += 7;
+                if b & 0x80 == 0 {
+                    break;
+                }
+            }
+            if code == 0 {
+                break;
+            }
+            if code == 1 {
+                return Err(format!(
+                    "byte {pos}: literal code 1 (\"-0\") in the step at byte {at}"
+                ));
+            }
+            let v = i64::try_from(code >> 1).map_err(|_| {
+                format!("byte {pos}: variable out of range in the step at byte {at}")
+            })?;
+            lits.push(if code & 1 == 1 { -v } else { v });
+        }
+        steps.push(if delete {
             DratStep::Delete(lits)
         } else {
             DratStep::Add(lits)
@@ -732,7 +838,10 @@ mod tests {
     use super::*;
     use crate::bench::{generate_3sat_phase_transition, pigeonhole_dimacs};
     use crate::dimacs::parse_dimacs_str;
-    use crate::solver::{solve_watched, solve_watched_drat, solve_watched_drat_with, SolveResult};
+    use crate::solver::{
+        solve_watched, solve_watched_drat, solve_watched_drat_format, solve_watched_drat_with,
+        SolveResult,
+    };
 
     fn cnf_ints(text: &str) -> Vec<Vec<i64>> {
         text.lines()
@@ -768,6 +877,142 @@ mod tests {
         w.empty();
         let out = String::from_utf8(w.finish().unwrap()).unwrap();
         assert_eq!(out, "1 -3 0\nd -2 0\n0\n");
+    }
+
+    #[test]
+    fn writer_format_binary() {
+        // drat-trim's layout: `a`/`d`, varint(2·|v| + [v < 0]) per literal, 0.
+        let mut w = DratWriter::new_binary(Vec::new());
+        w.add(&[Lit::pos(0), Lit::neg(2)]); // 1 -3
+        w.delete(&[Lit::neg(1)]); // d -2
+        w.add(&[Lit::pos(99)]); // 100 → code 200 → two varint bytes
+        w.empty();
+        let out = w.finish().unwrap();
+        assert_eq!(
+            out,
+            vec![b'a', 2, 7, 0, b'd', 5, 0, b'a', 0xC8, 0x01, 0, b'a', 0]
+        );
+        assert_eq!(
+            parse_drat_binary(&out).unwrap(),
+            vec![
+                DratStep::Add(vec![1, -3]),
+                DratStep::Delete(vec![-2]),
+                DratStep::Add(vec![100]),
+                DratStep::Add(vec![]),
+            ]
+        );
+        assert_eq!(binary_lit(Lit::pos(0)), 2);
+        assert_eq!(binary_lit(Lit::neg(0)), 3);
+        assert_eq!(binary_lit(Lit::neg(41)), 85);
+    }
+
+    #[test]
+    fn parse_drat_binary_rejects_bad_bytes() {
+        let e = parse_drat_binary(&[b'b', 2, 0]).unwrap_err();
+        assert!(e.contains("prefix 98"), "{e}");
+        let e = parse_drat_binary(&[b'a', 2]).unwrap_err();
+        assert!(e.contains("ends inside"), "{e}");
+        let e = parse_drat_binary(&[b'a', 2, 0, b'd']).unwrap_err();
+        assert!(e.contains("ends inside"), "{e}");
+        let e = parse_drat_binary(&[b'a', 1, 0]).unwrap_err();
+        assert!(e.contains("literal code 1"), "{e}");
+        let e = parse_drat_binary(&[
+            b'a', 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0,
+        ])
+        .unwrap_err();
+        assert!(e.contains("too long"), "{e}");
+        assert_eq!(parse_drat_binary(&[]).unwrap(), vec![]);
+    }
+
+    /// The same instance solved twice, once per layout; the search is
+    /// deterministic, so the two proofs must be the same steps.
+    fn drat_both_layouts(text: &str, interval: u64) -> (SolveResult, Vec<u8>, String) {
+        let inst = parse_dimacs_str(text).unwrap();
+        let mut bin: Vec<u8> = Vec::new();
+        let r =
+            solve_watched_drat_format(inst.db, inst.num_vars, &mut bin, interval, true).unwrap();
+        let inst = parse_dimacs_str(text).unwrap();
+        let mut txt: Vec<u8> = Vec::new();
+        let r2 =
+            solve_watched_drat_format(inst.db, inst.num_vars, &mut txt, interval, false).unwrap();
+        assert_eq!(r, r2);
+        (r, bin, String::from_utf8(txt).unwrap())
+    }
+
+    #[test]
+    fn binary_and_text_drat_are_the_same_proof() {
+        // PHP(3–7) at interval 50 (deletions from PHP(6) up), then the random
+        // UNSAT set: step-for-step equal, strict checker accepts, binary smaller.
+        let mut cases: Vec<(String, String)> = (3..=7)
+            .map(|n| (format!("PHP({n})"), pigeonhole_dimacs(n)))
+            .collect();
+        for seed in 0..40u64 {
+            let db = generate_3sat_phase_transition(60, seed);
+            let text = crate::bench::db_to_dimacs(&db, 60);
+            let inst = parse_dimacs_str(&text).unwrap();
+            if solve_watched(inst.db, inst.num_vars) == SolveResult::Unsat {
+                cases.push((format!("r3sat seed {seed}"), text));
+            }
+        }
+        assert!(cases.len() >= 10, "{} cases", cases.len());
+        let mut with_deletions = 0;
+        for (name, text) in &cases {
+            let (r, bin, txt) = drat_both_layouts(text, 50);
+            assert_eq!(r, SolveResult::Unsat, "{name}");
+            let b = parse_drat_binary(&bin).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let t = parse_drat(&txt).unwrap();
+            assert_eq!(b, t, "{name}: binary and text proofs differ");
+            assert_eq!(check_drat(&cnf_ints(text), &b), Ok(()), "{name}");
+            assert!(
+                bin.len() < txt.len(),
+                "{name}: binary {} bytes, text {}",
+                bin.len(),
+                txt.len()
+            );
+            if b.iter().any(|s| matches!(s, DratStep::Delete(_))) {
+                with_deletions += 1;
+            }
+            eprintln!(
+                "{name}: {} steps, binary {} B / text {} B = {:.2}",
+                b.len(),
+                bin.len(),
+                txt.len(),
+                bin.len() as f64 / txt.len() as f64
+            );
+        }
+        assert!(
+            with_deletions >= 2,
+            "only {with_deletions} proofs carry deletions"
+        );
+    }
+
+    #[test]
+    fn binary_proofs_verify_with_drat_trim() {
+        // Autodetected (no flag) and forced (`-i`); PHP(6) at interval 50 has
+        // deletions. Skips only when no drat-trim is configured.
+        let Some(_) = drat_trim_bin() else {
+            eprintln!("drat-trim not configured: skipped");
+            return;
+        };
+        for (n, interval) in [(6u32, 50u64), (7, 2000)] {
+            let text = pigeonhole_dimacs(n);
+            let (r, bin, _) = drat_both_layouts(&text, interval);
+            assert_eq!(r, SolveResult::Unsat);
+            let auto = drat_trim_output(&format!("bin-php{n}"), &text, &bin, &[]).unwrap();
+            assert!(
+                auto.contains("turning on binary mode"),
+                "PHP({n}): drat-trim did not detect the binary layout:\n{auto}"
+            );
+            assert!(
+                auto.contains("s VERIFIED") && !auto.contains("s NOT VERIFIED"),
+                "PHP({n}) autodetect:\n{auto}"
+            );
+            let forced = drat_trim_output(&format!("bin-php{n}-i"), &text, &bin, &["-i"]).unwrap();
+            assert!(
+                forced.contains("s VERIFIED") && !forced.contains("s NOT VERIFIED"),
+                "PHP({n}) -i:\n{forced}"
+            );
+        }
     }
 
     #[test]
@@ -873,6 +1118,26 @@ mod tests {
                     .map(|f| f.to_string_lossy().into_owned())
             })
         })
+    }
+
+    /// Run drat-trim on proof BYTES with extra args; returns its whole stdout,
+    /// or `None` when no checker is configured.
+    fn drat_trim_output(tag: &str, cnf: &str, proof: &[u8], extra: &[&str]) -> Option<String> {
+        let bin = drat_trim_bin()?;
+        let dir =
+            std::env::temp_dir().join(format!("warp-types-sat-drat-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = dir.join("i.cnf");
+        let d = dir.join("i.drat");
+        std::fs::write(&c, cnf).unwrap();
+        std::fs::write(&d, proof).unwrap();
+        let out = std::process::Command::new(&bin)
+            .arg(&c)
+            .arg(&d)
+            .args(extra)
+            .output()
+            .expect("DRAT_TRIM is set or drat-trim is on PATH but it did not run");
+        Some(String::from_utf8_lossy(&out.stdout).replace('\r', "\n"))
     }
 
     /// Run drat-trim with extra args; returns its `s ...` verdict line, or

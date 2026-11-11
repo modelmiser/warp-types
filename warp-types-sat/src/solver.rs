@@ -220,9 +220,21 @@ pub fn solve_watched_drat_with(
     out: &mut dyn Write,
     reduce_interval: u64,
 ) -> io::Result<SolveResult> {
+    solve_watched_drat_format(db, num_vars, out, reduce_interval, false)
+}
+
+/// [`solve_watched_drat_with`] in text (`binary == false`) or binary DRAT —
+/// the layout `drat-trim -i` reads and detects; see [`crate::proof::DratWriter`].
+pub fn solve_watched_drat_format(
+    db: ClauseDb,
+    num_vars: u32,
+    out: &mut dyn Write,
+    reduce_interval: u64,
+    binary: bool,
+) -> io::Result<SolveResult> {
     let mut vsids = Vsids::new(num_vars);
     vsids.initialize_from_clauses(&db);
-    solve_drat_from(db, num_vars, vsids, out, reduce_interval)
+    solve_drat_from(db, num_vars, vsids, out, reduce_interval, binary)
 }
 
 /// The DRAT-logging solve from a caller-built `Vsids` (initialised exactly
@@ -236,8 +248,9 @@ pub(crate) fn solve_drat_from(
     mut vsids: Vsids,
     out: &mut dyn Write,
     reduce_interval: u64,
+    binary: bool,
 ) -> io::Result<SolveResult> {
-    let mut writer = DratWriter::new(out);
+    let mut writer = DratWriter::with_format(out, binary);
     let result = solve_cdcl_core_inner(
         &mut db,
         num_vars,

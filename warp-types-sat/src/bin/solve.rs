@@ -1,6 +1,6 @@
 //! CLI entry point: solve a DIMACS CNF file.
 //!
-//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat> | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>
+//! Usage: cargo run -p warp-types-sat --bin solve -- [--drat <proof.drat> [--drat-binary] | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>
 //!
 //! `--drat FILE` writes a DRAT proof of an UNSATISFIABLE answer to FILE
 //! (checkable with `drat-trim FILE.cnf FILE.drat`). On SATISFIABLE the file is
@@ -41,7 +41,7 @@ use std::io::{BufWriter, Write};
 use std::process;
 
 fn usage(prog: &str) -> ! {
-    eprintln!("Usage: {prog} [--drat <proof.drat> | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>");
+    eprintln!("Usage: {prog} [--drat <proof.drat> [--drat-binary] | --lrat <proof.lrat> [--lrat-binary]] [--certify] [--hybrid] [--reduce-interval <n>] <file.cnf>");
     process::exit(1);
 }
 
@@ -159,7 +159,7 @@ fn run_lrat_check(cnf: &str, proof: &str) -> Result<(), String> {
 
 /// Locate drat-trim (`$DRAT_TRIM`, else `PATH`) and run it on `cnf proof`.
 /// Ok only when its output contains `s VERIFIED`.
-fn run_drat_trim(cnf: &str, proof: &str) -> Result<(), String> {
+fn run_drat_trim(cnf: &str, proof: &str, binary: bool) -> Result<(), String> {
     let bin = env::var("DRAT_TRIM").ok().or_else(|| {
         env::var_os("PATH").and_then(|p| {
             env::split_paths(&p)
@@ -171,9 +171,12 @@ fn run_drat_trim(cnf: &str, proof: &str) -> Result<(), String> {
     let Some(bin) = bin else {
         return Err("no DRAT checker: set DRAT_TRIM or put drat-trim on PATH".into());
     };
-    let out = process::Command::new(&bin)
-        .arg(cnf)
-        .arg(proof)
+    let mut cmd = process::Command::new(&bin);
+    cmd.arg(cnf).arg(proof);
+    if binary {
+        cmd.arg("-i"); // drat-trim detects the layout itself; say it anyway
+    }
+    let out = cmd
         .output()
         .map_err(|e| format!("could not run {bin}: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
@@ -193,6 +196,7 @@ fn main() {
     let mut drat_path: Option<String> = None;
     let mut lrat_path: Option<String> = None;
     let mut lrat_binary = false;
+    let mut drat_binary = false;
     let mut reduce_interval: u64 = warp_types_sat::solver::DEFAULT_REDUCE_INTERVAL;
     let mut certify = false;
     let mut hybrid = false;
@@ -215,6 +219,7 @@ fn main() {
                 lrat_path = Some(args[i].clone());
             }
             "--lrat-binary" => lrat_binary = true,
+            "--drat-binary" => drat_binary = true,
             "--certify" => certify = true,
             "--hybrid" => hybrid = true,
             "--reduce-interval" => {
@@ -244,6 +249,10 @@ fn main() {
     }
     if lrat_binary && lrat_path.is_none() {
         eprintln!("Error: --lrat-binary requires --lrat <proof.lrat>");
+        process::exit(1);
+    }
+    if drat_binary && drat_path.is_none() {
+        eprintln!("Error: --drat-binary requires --drat <proof.drat>");
         process::exit(1);
     }
     if certify && lrat_binary {
@@ -342,13 +351,15 @@ fn main() {
                     &config,
                     &mut out,
                     reduce_interval,
+                    drat_binary,
                 )
             } else {
-                warp_types_sat::solver::solve_watched_drat_with(
+                warp_types_sat::solver::solve_watched_drat_format(
                     instance.db,
                     instance.num_vars,
                     &mut out,
                     reduce_interval,
+                    drat_binary,
                 )
             }
             .and_then(|r| out.flush().map(|_| r))
@@ -356,7 +367,11 @@ fn main() {
                 eprintln!("Error writing proof to {}: {}", path, e);
                 process::exit(1);
             });
-            eprintln!("c DRAT proof written to {}", path);
+            eprintln!(
+                "c DRAT proof written to {} ({})",
+                path,
+                if drat_binary { "binary" } else { "text" }
+            );
             r
         }
     };
@@ -374,9 +389,8 @@ fn main() {
         }
         if let warp_types_sat::solver::SolveResult::Unsat = result {
             let outcome = match (&drat_path, &lrat_path) {
-                (Some(proof), _) => {
-                    run_drat_trim(&cnf_path, proof).map(|()| format!("drat-trim verified {proof}"))
-                }
+                (Some(proof), _) => run_drat_trim(&cnf_path, proof, drat_binary)
+                    .map(|()| format!("drat-trim verified {proof}")),
                 (None, Some(proof)) => run_lrat_check(&cnf_path, proof)
                     .map(|()| format!("lrat-check verified {proof}")),
                 (None, None) => {

@@ -541,19 +541,21 @@ pub fn hybrid_solve_with(
 /// as [`crate::solver::solve_watched_drat_with`]; only the VSIDS warm start
 /// differs. When the gradient phase finds a model, CDCL never runs and
 /// nothing is written (a `Sat` answer has no proof; check the model).
+/// `binary` selects the binary DRAT layout.
 pub fn hybrid_solve_drat(
     db: ClauseDb,
     num_vars: u32,
     config: &GradientConfig,
     out: &mut dyn std::io::Write,
     reduce_interval: u64,
+    binary: bool,
 ) -> std::io::Result<crate::solver::SolveResult> {
     let grad = gradient_search(&db, num_vars, config);
     if let Some(assign) = grad.assignment {
         return Ok(crate::solver::SolveResult::Sat(assign));
     }
     let vsids = warm_started_vsids(&db, num_vars, grad.best_continuous.as_deref());
-    crate::solver::solve_drat_from(db, num_vars, vsids, out, reduce_interval)
+    crate::solver::solve_drat_from(db, num_vars, vsids, out, reduce_interval, binary)
 }
 
 /// [`hybrid_solve`] with an **LRAT** proof written to `out`; see
@@ -1275,7 +1277,7 @@ mod cube_tests {
 
         let inst = parse_dimacs_str(text).unwrap();
         let mut drat = Vec::new();
-        let r = hybrid_solve_drat(inst.db, inst.num_vars, &config, &mut drat, 50).unwrap();
+        let r = hybrid_solve_drat(inst.db, inst.num_vars, &config, &mut drat, 50, false).unwrap();
 
         let inst = parse_dimacs_str(text).unwrap();
         let mut lrat = Vec::new();
@@ -1360,7 +1362,7 @@ mod cube_tests {
         db.add_clause(vec![Lit::pos(0), Lit::pos(1)]);
         db.add_clause(vec![Lit::neg(0)]);
         let mut out = Vec::new();
-        let r = hybrid_solve_drat(db, 2, &GradientConfig::default(), &mut out, 50).unwrap();
+        let r = hybrid_solve_drat(db, 2, &GradientConfig::default(), &mut out, 50, false).unwrap();
         assert_eq!(r, solver::SolveResult::Sat(vec![false, true]));
         assert!(out.is_empty(), "a gradient model has no proof");
     }
