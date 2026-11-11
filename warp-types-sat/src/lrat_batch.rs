@@ -159,7 +159,7 @@ pub fn batch(cnf: &[Vec<i32>], steps: &[FlatProof]) -> Batch {
 }
 
 /// Carve `lens` consecutive sub-slices off the front of `s`.
-fn carve<'a, T>(mut s: &'a mut [T], lens: impl Iterator<Item = usize>) -> Vec<&'a mut [T]> {
+fn carve<T>(mut s: &mut [T], lens: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
     let mut out = Vec::new();
     for l in lens {
         let (a, b) = s.split_at_mut(l);

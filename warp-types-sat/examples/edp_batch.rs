@@ -61,6 +61,7 @@ fn device_bytes(fp: &FlatProof, n_cnf: usize) -> usize {
     4 * (fp.lits.len() - cnf_lits) + 4 * fp.hints.len() + 8 * clauses + 20 * fp.lemma_clause.len()
 }
 
+#[cfg(feature = "gpu")]
 fn codes_of(raw: &[u8]) -> Vec<LemmaCode> {
     raw.iter()
         .map(|&c| match c {

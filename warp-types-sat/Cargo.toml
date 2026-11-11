@@ -53,3 +53,9 @@ harness = false
 [[bench]]
 name = "satlib_sweep"
 harness = false
+
+# The device-resident EDP launcher links the CUDA launcher directly; without
+# the feature it cannot compile, so `cargo test --examples` (CI) skips it.
+[[example]]
+name = "edp_resident"
+required-features = ["gpu"]
