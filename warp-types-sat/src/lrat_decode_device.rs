@@ -900,9 +900,12 @@ mod tests {
         // — the cap is tested before the lookup, so the reference says
         // TableOverflow. Lemma 1..=4093: the repeat passes without counting
         // (M-H2 counts it: then hint 3's insert overflows instead of
-        // reaching hint 4's conflict).
+        // reaching hint 4's conflict). Lemma 1..=4095: the table is at the cap
+        // before any hint, so the FIRST unit insert overflows — the §10 (b)
+        // "at 4,095 (it must, at the first)" case, missing until the
+        // 2026-11-11 panel's third round noticed.
         let cnf: Vec<Vec<i32>> = vec![vec![1, 5000], vec![2, 5000], vec![3, 5001], vec![-5000, -5001]];
-        for top in [4094i32, 4093] {
+        for top in [4094i32, 4093, 4095] {
             let steps = vec![Step::Add {
                 id: 5,
                 lits: (1..=top).collect(),
@@ -1041,9 +1044,20 @@ mod tests {
     #[test]
     fn check_kernel_codes_equal_simwarp_on_the_battery() {
         let Some(ctx) = ctx() else { return };
+        // `LRAT_BATTERY_ONLY=<substring>` restricts the run to the shapes whose
+        // name contains it — so one mutant can be shown to die on ITS shape,
+        // not on whichever earlier shape happens to differ first.
+        let only = std::env::var("LRAT_BATTERY_ONLY").ok();
         let mut seen = [0usize; 7];
         let mut vacuous = 0usize;
+        let mut shapes = 0usize;
         for (what, cnf, proof) in code_battery() {
+            if let Some(f) = &only {
+                if !what.contains(f.as_str()) {
+                    continue;
+                }
+            }
+            shapes += 1;
             let fp = super::super::flatten(&cnf, &proof);
             // A shape that flattens to nothing compares empty against empty
             // and can never fail. Only a hint corruption planted in the FIRST
@@ -1052,13 +1066,32 @@ mod tests {
             // — the (d) shapes did not for a day after their CNF grew (panel
             // 2026-11-11 round 2).
             if fp.lemma_clause.is_empty() {
+                let rejected_at_step_0 =
+                    matches!(fp.early, Some(crate::lrat::Verdict::Rejected { step: 0, .. }));
                 assert!(
-                    what.contains("corruption") && fp.early.is_some(),
+                    what.contains("corruption") && rejected_at_step_0,
                     "battery shape {what:?} produced no lemmas (early = {:?})",
                     fp.early
                 );
                 vacuous += 1;
                 continue;
+            }
+            // The §10 shapes must run to their end: an early host verdict would
+            // leave later steps unchecked while the comparison still passed.
+            // Older shapes may stop early by design (e.g. "small 0" ends on an
+            // unknown hint id); those are printed so the list stays visible.
+            const SECTION_10: [&str; 9] = [
+                "chain", "duplicate units", "conflict then forward", "deleted conflict", "forward first",
+                "wide 3", "wide 7", "own literals", "repeated literal",
+            ];
+            if SECTION_10.iter().any(|p| what.starts_with(p)) {
+                assert!(fp.early.is_none(), "battery shape {what:?} cut short by the host: {:?}", fp.early);
+            } else if fp.early.is_some() && !what.contains("corruption") {
+                eprintln!(
+                    "battery shape {what:?} ends in an early host verdict after {} lemmas: {:?}",
+                    fp.lemma_clause.len(),
+                    fp.early
+                );
             }
             for c in super::super::check_warp_codes(&fp) {
                 seen[c as usize] += 1;
@@ -1066,12 +1099,15 @@ mod tests {
             codes_equal(&ctx, &fp, &what);
         }
         eprintln!(
-            "check kernel battery: codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}; {vacuous} first-lemma corruption shapes had no lemmas for the kernel",
+            "check kernel battery: {shapes} shapes ({vacuous} first-lemma corruption shapes had no lemmas for the kernel); codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}",
             &seen[..6]
         );
-        // Every code the kernel can write is exercised.
-        for (c, n) in seen[..6].iter().enumerate() {
-            assert!(*n > 0, "code {c} never produced by the battery");
+        if only.is_none() {
+            assert_eq!(vacuous, 1, "exactly one battery shape (the corruption of the first lemma) may be lemma-less");
+            // Every code the kernel can write is exercised.
+            for (c, n) in seen[..6].iter().enumerate() {
+                assert!(*n > 0, "code {c} never produced by the battery");
+            }
         }
     }
 

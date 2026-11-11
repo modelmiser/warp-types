@@ -578,7 +578,13 @@ unsafe fn lrat_hints_direct_batched(
         }
         let cur = h - win; // hint lane of the next hint to resolve
         let in_win = lane >= cur && lane < win_end - win;
-        let len = if in_win { m_len } else { 0 };
+        // Clamped to 33 for the prefix sum: a hint of 33 or more literals
+        // never fits, and with the true lengths two hints of 2^31+ literals
+        // (one 8 GB clause hinted twice — representable in u32 indices)
+        // would wrap the u32 sum back under 32 and be judged on their first
+        // 32 literals (cross-vendor panel 2026-11-11, round 3). `m_len` itself
+        // stays exact for the strided fallback's clause bounds.
+        let len = if in_win { m_len.min(33) } else { 0 };
         let incl = lrat_warp_inclusive_sum(lane, len);
         // The batch: a prefix of the window's remaining hints (`incl` is
         // monotone over the lanes) whose literals fit in 32 lanes …

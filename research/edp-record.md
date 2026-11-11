@@ -1051,7 +1051,7 @@ spatch = 0; the log header records the loaded PTX byte-identical to `kernels.ptx
 tree kernel identical to `kernels-lib.rs.h`; `run-all3.log`, per-run files under
 `h-run-0317Z/`).** Oracles first (run0): `--verify-b2` 0 mismatching steps of 5,226 against
 the hashed B2, SimWarp 50/50, 5,226/5,226 verified; earlier today the battery (incl. the six
-§10 shapes, 3 layouts × 4 block counts), the 180-proof archive at 4 block counts, and M-H1–4
+§10 shapes, 3 layouts × 4 block counts), the 180-proof archive at 4 block counts, and M-H1–4 [M-H1–M-H7, each against its own shape, by panel round 3, 2026-11-11 — bracket below.]
 all killed. Then:
 - **P37 MET: warm 4.721 / 4.681 / 4.671 → 4.67 s** (4.0–4.9; point 4.4); **cold 4.852 s**
   (≤ 4.97 MET). **P4 (≤ 5 s) MET for the first time since §3.** 12.9× under the published
@@ -1059,7 +1059,7 @@ all killed. Then:
   same-machine cake_lpr figure in the same paragraph: see the panel round-1 bracket below, 2026-11-11.] Check stage
   co-running 3.76–3.84, scan passes 3.70–3.74, gather 1.76–1.82; combine 0.074.
 - **P37b did NOT fire:** check-thread idle (span − Σcheck − Σcombine) 0.249 / 0.235 / 0.169 s
-  (< 0.5; today's K rerun 0.17–0.25 as well). The pipeline is still check-bound after H:
+  (< 0.5; today's K rerun 0.17–0.25 as well). The pipeline is still check-bound after H: [WRONG: run-all2 runs 2–4 give 0.116 / 0.130 / 0.202 — corrected below, 2026-11-11; the round-2 bracket mis-attributed this number to the round-1 bracket.]
   3.8 s of check in a 4.1 s span.
 - **Stage S rule, as fixed above:** P37b did not fire and the wall is ≤ 5.0 s → **the arc
   ends at H.** No scan pre-registration follows from this result.
@@ -1072,7 +1072,7 @@ all killed. Then:
   1,152 is 1.22× the best (≤ 1.35). The curve flattened exactly as predicted: K's is 3.42 /
   4.43 / 4.64 (1.36×); at 1,152 blocks H is 0.97 s faster than K, at 288 only 0.42 s.
 - **P40 MET** (zero disagreements; 4/4 mutants; suite 292 with the new shapes).
-- **P41 MET:** device peak 5.13 GB (≤ 5.3; 42 samples; K read 5.16 in §9 and 6.03 today).
+- **P41 MET:** device peak 5.13 GB (≤ 5.3; 42 samples; K read 5.16 in §9 and 6.03 today). [5,130 MiB; the verdict reads the pre-registered "GB" as MiB — see below, 2026-11-11.]
 - **P42 MET:** A2 proofs warm 6.261 / 5.920 / 5.774 → 5.774 s = **1.236×** ours (1.05–1.25);
   cold 5.751. A2 is now 10.4× under 60.2 s on the published composition too. [On proofs
   regenerated HERE with the published pipeline (§7), not the published files — corrected below, 2026-11-11.]
@@ -1088,7 +1088,7 @@ all killed. Then:
   and P39's flattened curve says occupancy matters LESS under H, not more. [WRONG arithmetic —
   128-thread blocks; at 1,152 blocks H holds 40 warps/SM to K's 48 — corrected below, 2026-11-11.]
 
-**Tally: 7 of 9 ranges MET (P37 + P4 + cold, P39, P40, P41, P42, P43, P45); P38 and P44
+**Tally: 7 of 9 ranges MET (P37 + P4 + cold, P39, P40, P41, P42, P43, P45); P38 and P44 [7 of the 9 pre-registered ranges P37–P45; P4 and the cold bound are clauses of P37 — 2026-11-11.]
 MISSED; P46 reported.** The honest sentence: **the pipelined wall gained 0.68 s (5.35 →
 4.67, 13 %) from a check kernel that gained 0.44 s standalone (3.44 → 3.00, 13 %)** — the
 pipeline is check-bound, so the kernel's gain passed through almost one for one, but the
@@ -1103,7 +1103,7 @@ and H adds a negation probe per literal lane (≈ 190 lines per lemma). [Both co
 — corrected in the panel brackets below, 2026-11-11.] [Reading, not
 measured.] The next kernel step, if there is one, is a packed 16-byte (deleted-at,
 clause-start, length) record per clause — one line per hint instead of three — and the
-negation probe only for lanes still free; **not pre-registered, not started.**
+negation probe only for lanes still free; **not pre-registered, not started.** [Both withdrawn in the round-2 bracket, 2026-11-11: ≈ 2 lines per hint, and the negation shares the literal's line.]
 
 **The rule and the decision.** P38 ≥ 3.0 s says: H is recorded as no gain and the K kernel
 is restored. The same run met P4, the arc's purpose, for the first time, with every oracle
@@ -1140,7 +1140,7 @@ Fable 5.1 on the API, Grok 4.7 and composer-2.5 through the jail; 0 CRITICAL, 13
   all 5,226 steps against the SAME kernel binary in the hashed layout; the two paths share
   the lemma-literal inserts, `lrat_insert`, `lrat_code` and `lrat_hint_strided` (also H's
   > 32-literal fallback), so a defect in that shared code would cancel. The kernel-INDEPENDENT
-  oracles are SimWarp's `LitTable` (host): the battery (now 6 + 2 shapes, 3 layouts × 4
+  oracles are SimWarp's `LitTable` (host): the battery (now 6 + 2 shapes, 3 layouts × 4 [8 families, 20 entries of a 78-entry battery — round 3, 2026-11-11.]
   block counts, every lemma), the 180-proof archive (4 block counts, every lemma), and
   `--simwarp` on the EDP steps — 50 of 5,226 in the protocol run; **extended to all 5,226
   steps in the bracket that follows.**
@@ -1177,9 +1177,9 @@ Fable 5.1 on the API, Grok 4.7 and composer-2.5 through the jail; 0 CRITICAL, 13
   or not `¬33` was stored, so it killed M-H4 but never tested that the strided fallback's
   insert is seen by the batch that follows. Added `(¬33 ∨ 35)` and `(¬70 ∨ 71)` as "wide 33 /
   70 propagates" (SimWarp: NoConflict; an invisible store would read NotUnit). The battery
-  is 6 + 2 shapes; the built (e) is "both lemma literals in the hint clause", not the
+  is 6 + 2 shapes; the built (e) is "both lemma literals in the hint clause", not the [20 entries, 8 families — 2026-11-11.]
   sentence's "own literal negated". Full gpu suite on the current tree: **292 passed, 0
-  failed, 13 ignored** (`warp-types-sat` lib target; 13 more in the other targets) — the
+  failed, 13 ignored** (`warp-types-sat` lib target; 13 more in the other targets) — the [Read: 292 passed and 13 ignored in the lib target, 13 more PASSED in the other targets — 2026-11-11.]
   "289 + 3 = 292" above was two invocations of this count; §9's "291" lacked one
   `archive_agreement_*` test that `LRAT_CHECK` now enables.
 - **Stamps.** The shape-(b) bracket was written at 20:3xZ, AFTER the contended run (20:20Z)
@@ -1196,7 +1196,7 @@ timing run): `edp_resident --simwarp 5226` re-decodes every one of the 5,226 ste
 the real formula on the host and compares SimWarp's full per-lemma code vector with the
 resident pipeline's: **5,226 steps compared, 0 mismatches**, 5,226/5,226 verified. The
 kernel-independent oracle now covers every lemma of every EDP step, not 50 of them; with the
-battery (8 shapes) and the 180-proof archive it is the whole of what P40 rests on.]
+battery (8 shapes) and the 180-proof archive it is the whole of what P40 rests on.] [20 §10 entries, 78 in all — 2026-11-11.]
 
 [PANEL ROUND 2, 2026-11-11 (`round2/`; 0 CRITICAL, 6 MODERATE, 15 LOW raw; Opus and Grok caught the
 defect below, Fable and composer-2.5 passed it — the split was the signal again):
@@ -1240,3 +1240,54 @@ defect below, Fable and composer-2.5 passed it — the split was the signal agai
   launcher's "24 blocks (96 warps) per SM" now says 24 requested, residency 12 (K) / 10 (H).
 - **P40's sentence** "the suite's count grows by the new battery shapes" was wrong in kind:
   the shapes live in one test; pointer added above. The inline marker at shape (b) is dated.]
+
+[PANEL ROUND 3, 2026-11-11 (`round3/`; 0 CRITICAL, 2 MODERATE, 19 LOW raw):
+- **A u32 wrap in the batch prefix sum (Fable seat) — real, pathological, fixed in the
+  kernel.** `lrat_warp_inclusive_sum` adds true clause lengths; two consecutive hints of
+  ≥ 2³¹ + 16 literals each (one 8.6 GB clause hinted twice is representable in the u32 indices
+  the launcher admits) wrap the sum back under 32, so the first hint would be judged on its
+  first 32 literals and a free literal beyond them missed — a lemma could read Ok. No EDP
+  exposure (chunks are ≤ 3 GB), no battery shape can build it, but a soundness claim must not
+  depend on that. Fix: the scan input is `m_len.min(33)` (33 or more never fits; `m_len` stays
+  exact for the fallback's clause bounds). M-H7 (the clamp removed) SURVIVES the battery, as
+  expected — defended by construction, not by test; said so here. **Consequence for the
+  record's figure: the committed kernel's PTX (`kernels.ptx.h3`, 47 registers, 0 spills) now
+  differs from the measured `kernels.ptx.h` by this one clamp. The 4.67 s / 4.85 s figures
+  belong to `kernels.ptx.h`; the clamped kernel passed every oracle (battery 78 shapes, suite
+  292, `--verify-b2` 0 of 5,226, SimWarp 5,226/5,226, on a loaded host, not timed) and awaits a
+  confirmation timing run on a clear host before the figure is attributed to it.**
+- **P39's reading was confounded (Opus seat).** At 576 blocks (12 per SM) as at 1,152, H holds
+  40 resident warps per SM to K's 48 — the round-1 bracket said only 1,152. K's own sweep shows
+  that more resident warps slow it (L2 footprint), so H's smaller resident footprint can
+  flatten H's curve by itself. P39's numeric verdict stands (1,152 within 1.35× of the best);
+  the mechanism reading "fewer round trips per lemma → occupancy matters less" is NOT
+  supported by this data. The clean like-for-like point is 288 blocks, 24 warps per SM for
+  both: 3.42 → 3.00 s (1.14×).
+- **Each mutant against its own shape** (`LRAT_BATTERY_ONLY`, added for this): M-H1 ← "chain
+  7"; M-H2 ← "duplicate units near the cap 4093"; M-H3 ← "deleted conflict" (0 vs 3) and
+  "forward first" (0 vs 4) — NOT "conflict then forward", which both orders answer 0 (it is a
+  batch-cut control, not an M-H3 killer; §10's sentence implied otherwise); M-H4 ← "wide 33
+  then" and "wide 70 then"; M-H5 and M-H6 ← "wide 33 propagates" and "wide 70 propagates";
+  M-H7 survives. Before this, M-H1 and M-H3 had only been seen to die on earlier shapes.
+- **Shape (b)'s "at 4,095 (it must, at the first)" case had never been built** (Opus): the
+  (b) shapes were 4,094 and 4,093 only. Built now (lemma 1..=4,095: the first unit insert
+  overflows); the battery's Overflow count rose 7 → 8.
+- **The battery guard, tightened:** a lemma-less shape is allowed only when its name says
+  "corruption" AND the host rejected it at step 0; exactly one such shape exists and the test
+  asserts the count; the §10 families must run to their end (no early host verdict); older
+  shapes that end early by design are printed — one does, "small 0", after 2 lemmas, on an
+  unknown hint id. The battery has 78 entries; 20 are §10's families.
+- **One shared input across all three oracles** (Fable): the resident pipeline, the hashed B2
+  and SimWarp all check the step formula the HOST builds from the composition (`extras[j]`,
+  the step's units); a wrong unit list would cancel in all three. The independent check of that
+  input is §5's: lrat-check and cake_lpr verified the same 5,226 step proofs against step
+  formulas built by their own scripts.
+- **"Launcher default" for P37** rests on the run script, not the attached `c times` lines;
+  the per-run files (`h-run-0317Z/run1-cold.txt` …) carry the header `c check blocks …: hashed
+  288 | direct at 8416 slots 288`.
+- **Wording:** the brief's Q3(c) "a hint that does not fit the remaining lanes" is not a case
+  — every batch starts with 32 fresh lanes; only a hint wider than 32 literals falls back.
+  P41's verdict reads the pre-registration's "GB" as MiB (it was: "5.16 today" = 5,162 MiB).
+  Dated pointers added above at the M-H1–4, 0.17–0.25, 5.13 GB, tally, next-step and
+  shape-count sentences; the round-2 bracket's "0.17–0.25 … in the round-1 bracket" was itself
+  mis-attributed — the number sat in the as-measured P37b bullet.]
