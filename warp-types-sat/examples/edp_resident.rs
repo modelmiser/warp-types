@@ -156,7 +156,13 @@ fn main() {
     // Sizes first (one stat per file), so the chunks can be cut before any
     // byte is read; `--serial` is the §6 C1 path (read everything, then one
     // chunk at a time on one stream), the default is the §8 C2 pipeline.
-    let path = |j: usize| format!("{}/{}", args[2], pattern.replace("{}", &(j + 1).to_string()));
+    let path = |j: usize| {
+        format!(
+            "{}/{}",
+            args[2],
+            pattern.replace("{}", &(j + 1).to_string())
+        )
+    };
     let sizes: Vec<usize> = par_map(n_steps, threads, |j| {
         std::fs::metadata(path(j))
             .unwrap_or_else(|e| panic!("stat {}: {e}", path(j)))
@@ -169,11 +175,16 @@ fn main() {
     let budget = (chunk_gb * 1e9) as usize;
     // The first chunk is smaller in pipelined mode: nothing overlaps it, so
     // its preparation is the pipeline's fill.
-    let first_budget = (arg(&args, "--first-gb", if serial { chunk_gb } else { 2.0 }) * 1e9) as usize;
+    let first_budget =
+        (arg(&args, "--first-gb", if serial { chunk_gb } else { 2.0 }) * 1e9) as usize;
     let mut chunks: Vec<(usize, usize)> = Vec::new();
     let mut lo = 0usize;
     while lo < n_steps {
-        let budget = if chunks.is_empty() { first_budget } else { budget };
+        let budget = if chunks.is_empty() {
+            first_budget
+        } else {
+            budget
+        };
         let mut hi = lo;
         let mut used = 0usize;
         while hi < n_steps && (hi == lo || used + est(hi) <= budget) {
@@ -199,7 +210,12 @@ fn main() {
     {
         // The launcher's block-count rule (edp-record §9, K3), stated so a run's
         // configuration is in its log: the hashed region and the CNF's direct one.
-        let max_code = cnf.iter().flatten().map(|l| (l.unsigned_abs() << 1) | (*l < 0) as u32).max().unwrap_or(0);
+        let max_code = cnf
+            .iter()
+            .flatten()
+            .map(|l| (l.unsigned_abs() << 1) | (*l < 0) as u32)
+            .max()
+            .unwrap_or(0);
         let slots = GpuContext::lrat_direct_slots(max_code);
         println!(
             "c check blocks (launcher's rule for --check-blocks {}): hashed {} | direct at {slots} slots {}",
@@ -419,7 +435,8 @@ fn main() {
         (t4 - t0).as_secs_f64()
     );
     if !serial {
-        let stage_sum = t_read_pipe + t_pad + t_scan + t_plan + t_layout + t_gather + t_check + t_combine;
+        let stage_sum =
+            t_read_pipe + t_pad + t_scan + t_plan + t_layout + t_gather + t_check + t_combine;
         println!(
             "c pipeline: {n_chunks} chunks | fill (first check launch) {fill:.3}s after the pipeline start | checks span {:.3}..{:.3}s | pipeline wall {:.3}s | stage sum {stage_sum:.3}s = {:.3}s of overlap",
             check_span.0,

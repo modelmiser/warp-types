@@ -885,7 +885,11 @@ mod tests {
             let mut swapped = chain.clone();
             swapped.swap(2, 3);
             let open: Vec<i64> = (1..m as i64).collect();
-            for (what, hints) in [("chain", chain), ("chain wrong order", swapped), ("chain open", open)] {
+            for (what, hints) in [
+                ("chain", chain),
+                ("chain wrong order", swapped),
+                ("chain open", open),
+            ] {
                 let steps = vec![Step::Add {
                     id: m + 1,
                     lits: vec![1],
@@ -904,14 +908,23 @@ mod tests {
         // before any hint, so the FIRST unit insert overflows — the §10 (b)
         // "at 4,095 (it must, at the first)" case, missing until the
         // 2026-11-11 panel's third round noticed.
-        let cnf: Vec<Vec<i32>> = vec![vec![1, 5000], vec![2, 5000], vec![3, 5001], vec![-5000, -5001]];
+        let cnf: Vec<Vec<i32>> = vec![
+            vec![1, 5000],
+            vec![2, 5000],
+            vec![3, 5001],
+            vec![-5000, -5001],
+        ];
         for top in [4094i32, 4093, 4095] {
             let steps = vec![Step::Add {
                 id: 5,
                 lits: (1..=top).collect(),
                 hints: vec![1, 2, 3, 4],
             }];
-            out.push((format!("duplicate units near the cap {top}"), cnf.clone(), Proof { steps }));
+            out.push((
+                format!("duplicate units near the cap {top}"),
+                cnf.clone(),
+                Proof { steps },
+            ));
         }
         // (c) Order of failures: a conflict at hint j then a forward hint at
         // j+1 — the NEXT lemma's id, since flatten stops at an unknown id —
@@ -1051,7 +1064,9 @@ mod tests {
         // not on whichever earlier shape happens to differ first.
         // An empty value is "unset": `contains("")` would match every shape
         // while still skipping the unfiltered run's assertions (panel round 4).
-        let only = std::env::var("LRAT_BATTERY_ONLY").ok().filter(|f| !f.is_empty());
+        let only = std::env::var("LRAT_BATTERY_ONLY")
+            .ok()
+            .filter(|f| !f.is_empty());
         let mut seen = [0usize; 7];
         let mut vacuous = 0usize;
         let mut shapes = 0usize;
@@ -1070,8 +1085,10 @@ mod tests {
             // — the (d) shapes did not for a day after their CNF grew (panel
             // 2026-11-11 round 2).
             if fp.lemma_clause.is_empty() {
-                let rejected_at_step_0 =
-                    matches!(fp.early, Some(crate::lrat::Verdict::Rejected { step: 0, .. }));
+                let rejected_at_step_0 = matches!(
+                    fp.early,
+                    Some(crate::lrat::Verdict::Rejected { step: 0, .. })
+                );
                 assert!(
                     what.contains("corruption") && rejected_at_step_0,
                     "battery shape {what:?} produced no lemmas (early = {:?})",
@@ -1085,11 +1102,24 @@ mod tests {
             // Older shapes may stop early by design (e.g. "small 0" ends on an
             // unknown hint id); those are printed so the list stays visible.
             const SECTION_10: [&str; 11] = [
-                "chain", "duplicate units", "conflict then forward", "deleted conflict", "forward first",
-                "wide 31", "wide 32", "wide 33", "wide 70", "own literals", "repeated literal",
+                "chain",
+                "duplicate units",
+                "conflict then forward",
+                "deleted conflict",
+                "forward first",
+                "wide 31",
+                "wide 32",
+                "wide 33",
+                "wide 70",
+                "own literals",
+                "repeated literal",
             ];
             if SECTION_10.iter().any(|p| what.starts_with(p)) {
-                assert!(fp.early.is_none(), "battery shape {what:?} cut short by the host: {:?}", fp.early);
+                assert!(
+                    fp.early.is_none(),
+                    "battery shape {what:?} cut short by the host: {:?}",
+                    fp.early
+                );
             } else if fp.early.is_some() && !what.contains("corruption") {
                 eprintln!(
                     "battery shape {what:?} ends in an early host verdict after {} lemmas: {:?}",
@@ -1116,7 +1146,10 @@ mod tests {
             }
             Some(f) => {
                 // A filter that matches nothing must not read as a pass.
-                assert!(shapes > 0, "LRAT_BATTERY_ONLY={f:?} matched no battery shape");
+                assert!(
+                    shapes > 0,
+                    "LRAT_BATTERY_ONLY={f:?} matched no battery shape"
+                );
                 eprintln!("check kernel battery: FILTERED to {f:?} — the vacuous-count and code-coverage assertions were skipped");
             }
         }

@@ -1152,7 +1152,10 @@ impl GpuContext {
         // loop. `lrat_direct_slots` yields multiples of 32; callers passing
         // their own value get the same guarantee checked here.
         if direct {
-            assert!(slots % 2 == 0, "direct-table region must be even (got {slots})");
+            assert!(
+                slots % 2 == 0,
+                "direct-table region must be even (got {slots})"
+            );
         }
         let region = if direct { slots } else { TABLE };
         let blocks = self.lrat_check_blocks(blocks, region, n);

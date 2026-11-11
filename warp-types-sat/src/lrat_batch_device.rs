@@ -1361,13 +1361,21 @@ mod tests {
                 .collect();
             let mut o = opts(64, 2);
             o.preparers = preparers;
-            let out = check_pipelined(&ctx, &cnf(), &extras, &chunks, |j| proofs[j].clone(), &o)
-                .unwrap();
-            assert_eq!(out.len(), chunks.len(), "per_chunk={per_chunk}: one outcome per chunk");
+            let out =
+                check_pipelined(&ctx, &cnf(), &extras, &chunks, |j| proofs[j].clone(), &o).unwrap();
+            assert_eq!(
+                out.len(),
+                chunks.len(),
+                "per_chunk={per_chunk}: one outcome per chunk"
+            );
             let mut j = 0usize;
             for (k, (o, t)) in out.iter().enumerate() {
                 let (lo, hi) = chunks[k];
-                assert_eq!(o.verdicts.len(), hi - lo, "per_chunk={per_chunk}: chunk {k} size");
+                assert_eq!(
+                    o.verdicts.len(),
+                    hi - lo,
+                    "per_chunk={per_chunk}: chunk {k} size"
+                );
                 assert!(t.read.1 <= t.prepare.1 && t.prepare.1 <= t.check.1);
                 for i in 0..hi - lo {
                     let mut f = cnf();
@@ -1410,7 +1418,11 @@ mod tests {
         let before = ctx.pool_release_threshold().unwrap();
         ctx.retain_pool_memory().unwrap();
         let after = ctx.pool_release_threshold().unwrap();
-        assert_eq!(after, before.map(|_| u64::MAX), "before {before:?}, after {after:?}");
+        assert_eq!(
+            after,
+            before.map(|_| u64::MAX),
+            "before {before:?}, after {after:?}"
+        );
     }
 
     /// Long proofs on the synthetic CNF: steps straddling many slices, the
