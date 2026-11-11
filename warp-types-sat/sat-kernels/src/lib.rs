@@ -454,6 +454,7 @@ unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
 /// reduced, the single free literal's negation is inserted. Returns `0xFF`
 /// when the hint is unit and the lemma continues, otherwise the lemma's code.
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn lrat_hint_strided(
     warp: &Warp<All>,
     lane: u32,
