@@ -284,6 +284,42 @@ fail-closed: no checker is not a pass.
   [threads]`; `--to-binary out.blrat` writes binary LRAT;
   `tools/lrat-mutate.py` builds the negatives.
 
+- **Many small proofs at once — the EDP2_1161 compositional proof**
+  (`lrat_batch.rs`, `lrat_batch_device.rs` as `lrat_warp::batch_device`,
+  `examples/edp_resident.rs`; pre-registration and ledger:
+  `research/edp-record.md`). Tan, Heule & Myreen (STTT 2023, Table 6)
+  checked the Erdős discrepancy instance as 5,226 LRAT-justified lemmas with
+  `cake_lpr` in 60.2 s on 128 threads (3,871.7 s on one). The same 5,226
+  lemmas, each re-proved by this crate's solver and trimmed (25.2 M lemma
+  lines, 2.0 G hints, 6.9 GB binary LRAT), check in **4.54 s warm / 4.60 s
+  cold** in one process, CNF parse to last verdict — read, decode, scan,
+  gather, check — on the RTX 4000 SFF Ada with six host threads, against
+  `lrat-check` 199.6 s (text) and `cake_lpr` 366.9 s (binary) on the same
+  trimmed proofs and machine, one step at a time on one thread; both reruns
+  predate a host reboot that sped this pipeline ≈ 4 %, so the like-for-like
+  figure inside one run is the hashed table, 6.32 s against 4.54 s. Stated
+  with the number every time: the underlying proofs are ours, not the
+  published ones (proofs of the published composition made with iglucose
+  and drat-trim, 3,414 lemmas returned as strict subsets and the derivations
+  turned into refutations through a unit rule, check in 5.55 s warm / 5.38 s
+  cold); the published figure re-read the CNF 5,226 times in 5,226
+  processes; the published hardware and `cake_lpr` are older; `cake_lpr` is
+  a verified checker and this one is not, and it is RUP-only. How: a chunk
+  of proofs goes up once, the scan, gathers and check run on the card, and
+  the next chunks are read and prepared on their own streams while one is
+  checked (`check_pipelined`); the direct table extends past 4,096 codes
+  within a 1 GiB budget (`LRAT_DIRECT_TABLE_BUDGET`, the default wherever it
+  fits); and the check kernel resolves hints a batch at a time
+  (`lrat_hints_direct_batched` — the longest run of a lemma's remaining
+  hints that fits 32 literal lanes is probed in one round, the RUP order
+  replayed in registers, batch after batch; wider hints and the hashed
+  layout keep the per-hint loop). Every code of every step is held to the
+  host checker (`--verify-b2`), sampled steps to `SimWarp`, and the kernel to
+  a 78-shape battery and its mutants before the timed run quoted. From
+  `warp-types-sat/`, with the step proofs as `proofs/s1.blrat …`
+  (`--pattern` otherwise): `cargo run --release --features gpu --example
+  edp_resident -- edp.cnf edp.comp proofs/`.
+
 ## License
 
 MIT
