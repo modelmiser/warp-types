@@ -1120,7 +1120,7 @@ the > 32-literal fallback) and as the `kernels-lib.rs.pre-h` snapshot in
 `~/staging/2026-11-10-edp-record-h/`. The record's figure for EDP2_1161 on this machine is
 now **4.67 s warm / 4.85 s cold, launcher default, no flag** (12.9× / 12.4× under the
 published 60.2 s; 42.7× under same-machine lrat-check; A2 proofs 5.77 s, 10.4×) [with the §0
-caveats and same-machine cake_lpr 366.9 s = 78.5× as restated in the panel bracket below, 2026-11-11]. P38 stays
+caveats and same-machine cake_lpr 366.9 s = 78.5× as restated in the panel bracket below, 2026-11-11]. [The committed kernel differs from the measured PTX by the round-3 clamp; this figure is `kernels.ptx.h`'s until the confirmation timing run — 2026-11-11.] P38 stays
 MISSED in the ledger and the no-gain line stays crossed — the decision overrides the rule's
 consequence, not its reading. The arc ends here by the stage-S rule; the §0 caveats travel
 with every sentence above, and nothing leaves the repo before the cross-vendor panel.
@@ -1291,3 +1291,32 @@ defect below, Fable and composer-2.5 passed it — the split was the signal agai
   Dated pointers added above at the M-H1–4, 0.17–0.25, 5.13 GB, tally, next-step and
   shape-count sentences; the round-2 bracket's "0.17–0.25 … in the round-1 bracket" was itself
   mis-attributed — the number sat in the as-measured P37b bullet.]
+
+[PANEL ROUND 4, 2026-11-11 (`round4/`, narrow: the round-3 changes; 0 CRITICAL, 5 MODERATE, 15 LOW raw,
+all harness or wording — the panel STOPS here by the stop rule: no CRITICAL and no real-bug
+MODERATE survives verification; MODERATE wording findings do not converge):
+- **The wrap condition was stated on the wrong ray** (Grok, Opus): with true lengths, two
+  consecutive hints of EQUAL length 2³¹..=2³¹+16 wrap the lane-1 sum to 0..=32 and pass
+  `incl ≤ 32`; larger equal lengths do not; in general any pair whose sum mod 2³² is ≤ 32
+  does. And the pre-clamp consequence was under-described (Fable): `total` would be the first
+  hint's full length and `1u64 << s_incl` an over-width shift (masked in release), so the hint
+  was judged on a wrapped segment mask, not cleanly "its first 32 literals". Moot after the
+  clamp; the hazard is recorded as it was.
+- **Evidence made as wide as the sentences** (Opus, Fable): M-H5 now also run against "wide 70
+  propagates" — killed (1 vs 2); M-H7 run against the FULL battery — survives (78 shapes, same
+  code counts as the clean tree); the unfiltered battery line on the committed tree, quoted:
+  `78 shapes (1 first-lemma corruption shapes had no lemmas for the kernel); codes seen
+  Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = [66, 4048, 2776, 11714, 9, 8]`, with "small
+  0" printed as the one older shape that ends early (after 2 lemmas, unknown hint id).
+- **The per-shape filter could pass vacuously** (Opus, Fable, Grok, composer): an empty
+  `LRAT_BATTERY_ONLY` matched every shape while skipping the unfiltered assertions, and a
+  filter matching nothing passed with 0 shapes. Fixed: empty = unset; a filtered run asserts
+  `shapes > 0` and prints that it is FILTERED and which assertions it skipped — watched both
+  ways (`zzz` → FAIL "matched no battery shape"; empty → the full 78-shape run).
+- **Wording:** "more resident warps slow K" was wrong for the 576 → 1,152 step, which happens
+  at the same 48 resident warps — more BLOCKS per SM (queued waves) slow it; the (c) comment in
+  the tests now calls "conflict then forward" a batch-cut control; the §10 prefix list names
+  "wide 31/32/33/70" explicitly; the corruption family's early-ending shapes are silent by
+  design (only non-corruption early shapes are printed). Residual, not fixed: the §10 shapes
+  carry no hand-written expected codes — SimWarp is the reference by construction; a drift in
+  SimWarp would move a shape's meaning without a failure. That is the oracle design, stated.]

@@ -915,9 +915,11 @@ mod tests {
         }
         // (c) Order of failures: a conflict at hint j then a forward hint at
         // j+1 — the NEXT lemma's id, since flatten stops at an unknown id —
-        // (code 0, not 4); a deleted hint whose clause would conflict
+        // (code 0, not 4: a batch-cut control, since both admissibility
+        // orders answer 0 here); a deleted hint whose clause would conflict
         // (code 3, not 0); a forward hint whose empty bounds would read as a
-        // conflict (code 4, not 0) — M-H3 tests admissibility after the count.
+        // conflict (code 4, not 0) — the last two kill M-H3 (admissibility
+        // tested after the count); the first does not (panel 2026-11-11).
         let cnf: Vec<Vec<i32>> = vec![vec![-1], vec![2]];
         out.push((
             "conflict then forward".into(),
@@ -1047,7 +1049,9 @@ mod tests {
         // `LRAT_BATTERY_ONLY=<substring>` restricts the run to the shapes whose
         // name contains it — so one mutant can be shown to die on ITS shape,
         // not on whichever earlier shape happens to differ first.
-        let only = std::env::var("LRAT_BATTERY_ONLY").ok();
+        // An empty value is "unset": `contains("")` would match every shape
+        // while still skipping the unfiltered run's assertions (panel round 4).
+        let only = std::env::var("LRAT_BATTERY_ONLY").ok().filter(|f| !f.is_empty());
         let mut seen = [0usize; 7];
         let mut vacuous = 0usize;
         let mut shapes = 0usize;
@@ -1080,9 +1084,9 @@ mod tests {
             // leave later steps unchecked while the comparison still passed.
             // Older shapes may stop early by design (e.g. "small 0" ends on an
             // unknown hint id); those are printed so the list stays visible.
-            const SECTION_10: [&str; 9] = [
+            const SECTION_10: [&str; 11] = [
                 "chain", "duplicate units", "conflict then forward", "deleted conflict", "forward first",
-                "wide 3", "wide 7", "own literals", "repeated literal",
+                "wide 31", "wide 32", "wide 33", "wide 70", "own literals", "repeated literal",
             ];
             if SECTION_10.iter().any(|p| what.starts_with(p)) {
                 assert!(fp.early.is_none(), "battery shape {what:?} cut short by the host: {:?}", fp.early);
@@ -1102,11 +1106,18 @@ mod tests {
             "check kernel battery: {shapes} shapes ({vacuous} first-lemma corruption shapes had no lemmas for the kernel); codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}",
             &seen[..6]
         );
-        if only.is_none() {
-            assert_eq!(vacuous, 1, "exactly one battery shape (the corruption of the first lemma) may be lemma-less");
-            // Every code the kernel can write is exercised.
-            for (c, n) in seen[..6].iter().enumerate() {
-                assert!(*n > 0, "code {c} never produced by the battery");
+        match &only {
+            None => {
+                assert_eq!(vacuous, 1, "exactly one battery shape (the corruption of the first lemma) may be lemma-less");
+                // Every code the kernel can write is exercised.
+                for (c, n) in seen[..6].iter().enumerate() {
+                    assert!(*n > 0, "code {c} never produced by the battery");
+                }
+            }
+            Some(f) => {
+                // A filter that matches nothing must not read as a pass.
+                assert!(shapes > 0, "LRAT_BATTERY_ONLY={f:?} matched no battery shape");
+                eprintln!("check kernel battery: FILTERED to {f:?} — the vacuous-count and code-coverage assertions were skipped");
             }
         }
     }
