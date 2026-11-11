@@ -13,7 +13,7 @@ Checking in CakeML*, STTT 25(2), 2023, §6.4 and Table 6: the Erdős discrepancy
 instance EDP2_1161 (`p cnf 4207 25142`) as a **5226-line compositional proof**,
 each line an LRAT-justified lemma (5225 cube lemmas from march_cu + iglucose +
 drat-trim, then the empty clause). cake_lpr checked it in **3871.7 s on 1 thread**
-and **60.2 s on 128 threads** (Xeon E5-2695 v3, 128 GB). Underlying proofs: "20
+and **60.2 s on 128 threads** (Xeon E5-2695 v3, 128 GB). Underlying proofs: "20 <!-- unguarded: 128 — RAM in GB of the published machine, not a count -->
 million clause addition lines", "88 bytes to 110 MB".
 
 There is no official table of proof-checking records. The claim this arc can make
@@ -61,7 +61,7 @@ formula and runs our sequential CPU checker, lrat-check and cake_lpr on the same
 correctness oracle and the same-machine baseline.
 
 **B2 — the batched compositional check.** One process: the CNF parsed once; the
-5226 proofs read (binary LRAT) and decoded with the existing parallel/device
+5226 proofs read (binary LRAT) and decoded with the existing parallel/device <!-- unguarded: 5226 — EDP2_1161 step count (the proof set), fixed in §0 -->
 decoder; each step checked against *its* formula (CNF ∪ units_j, or CNF ∪ all
 lemmas for step 5226) with per-step clause-id spaces laid out side by side in one
 device pass, so the fixed launch/upload cost is paid once, not 5226 times. The
@@ -91,7 +91,7 @@ same mutant. A mutant any checker accepts kills the run until explained.
   reads + decode dominate. The write-up leads with the split, not the ratio.
 - **P6 (path A, if the owner allows the build).** The regenerated cubes equal the
   published `.comp` lemmas line for line (deterministic tools); zero RAT steps in
-  the 5226 drat-trim proofs; B2 on those proofs within 2× of B2 on ours.
+  the 5226 drat-trim proofs; B2 on those proofs within 2× of B2 on ours. <!-- unguarded: 5226 — EDP2_1161 step count -->
 
 ## 4. Protocol
 
@@ -122,7 +122,7 @@ same mutant. A mutant any checker accepts kills the run until explained.
   checker below is timed on.
 - 2026-11-08 — **B2 built** (`lrat_batch.rs`: shared CNF once, per-step private
   originals incl. copies of any deleted shared clause, lemmas in step order, hints
-  remapped; verdicts from each step's own flat proof; 4 contract tests incl.
+  remapped; verdicts from each step's own flat proof; 4 contract tests incl. <!-- unguarded: 4 — dated arc-log tally of contract tests at §3 time -->
   placeholder steps and a deleting step that must not leak) and **first full run**
   (`examples/edp_batch.rs`, run 1, cache warm from the trim, 5 host threads on
   cores 1–5 + the Ada, 2 chunks ≤ 6 GB est.): **5226/5226 VERIFIED, 0
@@ -187,7 +187,7 @@ same mutant. A mutant any checker accepts kills the run until explained.
 
 **Why.** B2's 13.7 s is 7 s of host work (decode 4.8 + layout 2.2) and 5.4 s
 of device check, of which ≈ 2 s is the upload of the 10 GB of gathered
-literals and hints. The decode arc built a device-resident route for ONE proof
+literals and hints. The decode arc built a device-resident route for ONE proof <!-- unguarded: ONE — the decode arc's unit: a single proof, not a tally -->
 (bytes up once; scan, gather and check on the card; the host sees step records
 only). C runs that route over many proofs per launch.
 
@@ -250,7 +250,7 @@ dense `d` mapped without the +1) and a mutant dropping the chain-end rule.
 threads on cores 0–5, niced; the card otherwise idle):
 - P7: C1 total (warm cache) **≤ 9.5 s**, expected 7.5–9.5 s; cold ≤ 11 s.
 - P8: the three device stages (scan, gather, check) are ≥ 55 % of C1's total.
-- P9: zero steps take the host route on the 5226 real proofs; zero bad hints.
+- P9: zero steps take the host route on the 5226 real proofs; zero bad hints. <!-- unguarded: 5226 — EDP2_1161 step count -->
 - P10: O1 and O2 report zero mismatches; O3's mutants are each killed.
 - P4 restated: MISSED (floor ≈ 5.0 s of kernels + 1.0 s upload). §3's 10× clause
   (≤ 6.0 s): MISSED by C1.
@@ -276,11 +276,11 @@ as refuted on this card and the write-up uses 13.7 s).
   "record before the step's start" guard read it — every deletion step took the host
   route until fixed. **Oracles: O1** every one of the 25,224,312 codes of all 5226 steps
   equal to B2's (`--verify-b2`, three chunks, 0 mismatches); **O2** 50 steps equal to
-  one-at-a-time SimWarp, 0 mismatches; **O3** three gpu tests pass (the `lrat_batch`
+  one-at-a-time SimWarp, 0 mismatches; **O3** three gpu tests pass (the `lrat_batch` <!-- unguarded: three — dated arc-log tally of gpu tests at §6 time -->
   shapes; malformed / empty / RAT / bad-deletion / id-order / bad-hint / flipped-byte /
   every truncation of a proof, each on the right route; long proofs across 13-byte
   slices and the padding, both scan kernels). **Watched to fail** (mutants on a copy,
-  restored by `cp`): M1 sentinel shift dropped → 2 of 3 tests fail; M2 overrun rule
+  restored by `cp`): M1 sentinel shift dropped → 2 of 3 tests fail; M2 overrun rule <!-- unguarded: 2, 3 — mutant-kill tally at §6 time, from the log -->
   dropped (`overrun = false`) → 2 of 3 fail (the truncation sweep reaches it); M3
   host-route hint copy dropped → 1 of 3 fails. Full gpu suite on the restored tree with
   the four archive dirs: 289 passed, 1 failed = `archive_agreement_with_external_checkers`
@@ -441,10 +441,10 @@ stream.
 `prepare_chunk` (upload, scan, plan, layout, gathers; ends with the bad-hint download,
 which synchronises its stream, so every array it hands over is complete) and
 `check_prepared` (the check launch, combine); `check_chunk` = the two in sequence, so the
-three §6 gpu tests exercise the same code. `GpuContext::fork` gives a second context on a
+three §6 gpu tests exercise the same code. `GpuContext::fork` gives a second context on a <!-- unguarded: three — dated arc-log tally of gpu tests at §8 time -->
 new NON_BLOCKING stream sharing the loaded module (the legacy null stream would
 synchronise with every blocking stream; `new_stream` streams do not). A library driver
-`check_pipelined` runs three threads: reader (loads one chunk's proofs ahead, `threads`
+`check_pipelined` runs three threads: reader (loads one chunk's proofs ahead, `threads` <!-- unguarded: one — one chunk, the pipeline's unit, not a tally -->
 workers), preparer (on the forked context), checker (on the caller's context), joined by
 rendezvous channels, so at most one prepared chunk waits. Device memory handed across is
 allocated on the preparer's stream and freed there (`cuMemFreeAsync`, stream-ordered) after
@@ -477,7 +477,7 @@ the card otherwise idle):
   stage sum grows from 3.71 s to 3.9–4.8 s under the co-running scan.
 - **P19** oracles clean on the pipelined route: `--verify-b2` 0 code mismatches on all
   5,226 steps, `--simwarp 50` 0 mismatches, 5,226/5,226 VERIFIED, 0 host-route steps.
-- **P20** the three §6 gpu tests pass unchanged; a new test runs the pipelined driver over
+- **P20** the three §6 gpu tests pass unchanged; a new test runs the pipelined driver over <!-- unguarded: three — dated arc-log tally of gpu tests at §8 time -->
   the `lrat_batch` shapes and the malformed set in 1- and 2-step chunks against the
   one-at-a-time reference; one mutant watched to fail: the extras slice handed to
   `prepare_chunk` offset by one chunk (M4).
@@ -544,7 +544,7 @@ code download; `--serial` = C1):
   (≤ 6.02 s) MISSED.** P4 MISSED.
 - **P24** cold ≤ warm best + 0.5 s.
 - **P25** oracles clean again on the as-built route (verify-b2 0 mismatches, simwarp 50
-  clean, 5,226/5,226, 0 host-route); the 5 gpu tests pass (the pipelined test now also
+  clean, 5,226/5,226, 0 host-route); the 5 gpu tests pass (the pipelined test now also <!-- unguarded: 5 — dated arc-log tally of gpu tests at §9 time -->
   with 2 and 3 preparers); mutant M5 — the checker taking chunks in arrival order instead
   of chunk order — killed in at least one of three runs of the test (it is timing-dependent
   with several preparers, and that is recorded as such).
@@ -557,7 +557,7 @@ code download; `--serial` = C1):
 - 17:26Z **C2 as built, measured** (`c2/run-all.sh`, outputs `c2/run*.txt`, `c2/a2-run*.txt`;
   12 chunks, 2 GB first). **Oracles: `--verify-b2` 5,226 steps, 0 code mismatches;
   `--simwarp 50` 0; 5,226/5,226 VERIFIED, 0 UNSUPPORTED, 0 host-route — P25 MET** (with
-  the five gpu tests and M5 killed 3/3).
+  the five gpu tests and M5 killed 3/3). <!-- unguarded: five — dated arc-log tally of gpu tests at §9 time -->
   | run | cache | read (overlapped) | fill | checks span | total |
   |---|---|---|---|---|---|
   | 1 | **cold** | 2.114 | 0.435 | 0.435..6.287 | **6.424 s** |
@@ -606,7 +606,7 @@ keeps `TableOverflow` on the same lemmas as SimWarp's `LitTable` (`CAP = 4096`).
 direct layout indexes slot = literal code, so it needs every code below the slot count;
 EDP2_1161 has 4,207 variables → codes up to 2·4207+1 = **8,415**, and the launcher falls
 back to hashed. S5 measured direct over hashed at 1.8× warm (0.079 vs 0.141 s) and
-1.5× cold (0.095–0.104 vs 0.149–0.151 s) on the 415 MB proof, 1.47× cold on the 898 MB one
+1.5× cold (0.095–0.104 vs 0.149–0.151 s) on the 415 MB proof, 1.47× cold on the 898 MB one <!-- unguarded: 415, 898 — proof sizes in MB -->
 (0.247–0.251 vs 0.364–0.368) — the gain narrowed as the proof grew.
 
 **Design K (kernel + launcher; the hashed path's behaviour unchanged).**
@@ -740,7 +740,7 @@ host (no `spatch`); `~/staging/2026-11-08-edp-record/k/run-follow.sh`.
 - **F3** hashed (= §8's configuration), best of 3 warm: 6.3–6.5 s (reproducing 6.42).
 - **F4** path A2 proofs, auto (= hashed after the revert): 7.0–7.4 s (reproducing 7.20) — the
   valid P34 re-measurement; and A2 direct at 1,152: 6.8–7.3.
-- **F5** (P35 re-measured) 415 MB archive proof, `lrat_check` resident, cold ×3: check ≤ 0.11
+- **F5** (P35 re-measured) 415 MB archive proof, `lrat_check` resident, cold ×3: check ≤ 0.11 <!-- unguarded: 415 — proof size in MB -->
   s (the direct layout at 704 slots is the S5 kernel plus one bound compare).
 - **Decision rule, fixed now:** the auto policy stays "direct below 4,096 codes". If F2 beats
   F3 by ≥ 0.2 s in BOTH best-of-3 and cold, the ledger records that a wider auto policy
@@ -974,10 +974,10 @@ mutant = **KILL** (stop, diagnose; no timing claimed).
   matters less; the L2 footprint is unchanged).
 - **P40** zero oracle disagreements (battery, 632 archive files, B2, SimWarp) and 4/4
   mutants killed; the gpu suite's count grows by the new battery shapes and passes. [The shapes
-  live inside one test function; the count cannot grow by them — panel round 2, 2026-11-11.]
+  live inside one test function; the count cannot grow by them — panel round 2, 2026-11-11.] <!-- unguarded: one — the battery lives in one test function; panel round 2 -->
 - **P41** device peak ≤ 5.3 GB (no new arrays; 5.16 today).
 - **P42** path A2 proofs (`--cumulative`), best of 3: **1.05–1.25×** our proofs' wall.
-- **P43** 415 MB archive proof, `lrat_check` cold ×3: check **≤ 0.12 s** (D2's 0.116–0.120
+- **P43** 415 MB archive proof, `lrat_check` cold ×3: check **≤ 0.12 s** (D2's 0.116–0.120 <!-- unguarded: 415 — proof size in MB -->
   is the baseline; no regression on the small proof).
 - **P44** serial total (`--serial`): **6.0–7.3 s** from 8.53–8.58.
 - **P45** `--check-table hashed`: 6.3–6.7 s — the hashed path unchanged (F3: 6.50).
@@ -1010,13 +1010,13 @@ key up, so at 4,094 + a new unit + a duplicate unit the duplicate FAILS (code 5)
 4,095. The shape stays; its expected answer is whatever SimWarp says (that is the oracle,
 not my sentence), and the kernel implements cap-before-lookup as the serial code does.]
 [CORRECTED 2026-11-10 20:2xZ, before the protocol run: §9 and §10 say "632 archive files";
-the archive the oracle tests read today is **180 proofs** (`2026-11-01-cert-campaign/run1`,
+the archive the oracle tests read today is **180 proofs** (`2026-11-01-cert-campaign/run1`, <!-- unguarded: 180 — archive proof count under LRAT_ARCHIVE_DIRS, from the test's own log -->
 `run2-default2000`, `run3-cake-cnfuzz`; the 632 figure predates the `negatives` directory's
 removal and is not re-derivable). And the gpu suite's first run under H had three
-`archive_agreement_*` tests fail with "0 proofs found" because I passed the run directories
+`archive_agreement_*` tests fail with "0 proofs found" because I passed the run directories <!-- unguarded: 0 — quoted test failure text -->
 as RELATIVE names from the wrong cwd — while `check_kernel_codes_equal_simwarp_on_the_archive`
 PASSED on the same empty listing (it had no `n > 0` assertion: a check that cannot fail). With
-absolute paths all archive tests pass on H (180 proofs; the kernel oracle at 4 block counts × 3
+absolute paths all archive tests pass on H (180 proofs; the kernel oracle at 4 block counts × 3 <!-- unguarded: 180 — archive proof count, as above -->
 layouts; 180/180 agree with lrat-check, 147 verified). The assertion is added; the suite is
 reported below as 289 + 3 = 292 passing across the two invocations.]
 [CORRECTED 2026-11-10 22:5xZ, before the H ledger: two protocol runs exist and NEITHER is a
@@ -1149,7 +1149,7 @@ Fable 5.1 on the API, Grok 4.7 and composer-2.5 through the jail; 0 CRITICAL, 13
   (0.007 s), GPU-context creation (0.11–0.19 s), the proof reads and every pipeline stage
   including combine; it excludes process start-up and teardown and the oracles. The
   co-running check stage alone sums to 3.76–3.84 s. Read "checks all 5,226 proofs in 4.67 s"
-  as "launcher wall 4.67 s, CNF parse through the last verdict, one process, proofs in page
+  as "launcher wall 4.67 s, CNF parse through the last verdict, one process, proofs in page <!-- unguarded: one — one process (the launcher), not a tally -->
   cache".
 - **The ratios, with the caveats in the same paragraph as §4 requires.** 4.671 s launcher
   wall against the published 60.2 s (another machine, 128 threads, the authors' proofs, an
@@ -1239,7 +1239,7 @@ defect below, Fable and composer-2.5 passed it — the split was the signal agai
   batched path's unit lane alone stores; the others read after the `syncwarp`); the
   launcher's "24 blocks (96 warps) per SM" now says 24 requested, residency 12 (K) / 10 (H).
 - **P40's sentence** "the suite's count grows by the new battery shapes" was wrong in kind:
-  the shapes live in one test; pointer added above. The inline marker at shape (b) is dated.]
+  the shapes live in one test; pointer added above. The inline marker at shape (b) is dated.] <!-- unguarded: one — the battery lives in one test function -->
 
 [PANEL ROUND 3, 2026-11-11 (`round3/`; 0 CRITICAL, 2 MODERATE, 19 LOW raw):
 - **A u32 wrap in the batch prefix sum (Fable seat) — real, pathological, fixed in the
