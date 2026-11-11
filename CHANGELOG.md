@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- **Added: binary DRAT** (`warp-types-sat`): `DratWriter::new_binary` / `with_format`,
+  `solver::solve_watched_drat_format(db, n, out, interval, binary)`, `hybrid_solve_drat(…, binary)`,
+  `proof::parse_drat_binary`, `solve --drat FILE --drat-binary` (`--certify` then runs drat-trim with `-i`), and
+  `tools/cert-campaign.py --drat-binary`. The layout is drat-trim's: a step is the byte `a` (97) or `d` (100),
+  each literal a 7-bit varint of 2·|v| + [v < 0], then a 0 byte — the literal code the binary LRAT writer
+  already used (`binary_lit`, `push_varint` shared). `parse_drat_binary` rejects the code 1 ("−0") as the
+  binary LRAT decoders do; drat-trim's reader would take it for a terminator. **Measured 2026-11-11**
+  (pre-registered, `research/drat-certification.md`): the 11-01 campaign rerun with binary proofs — 82
+  instances, 54 UNSAT — gives drat-trim (default and `-f`), lrat-check and cake_lpr the same verdict as the text
+  run on every instance, drat-trim detects the layout on all 54 without `-i`, and binary proofs are 0.33–0.46 of
+  the text size above eleven steps (median 0.44; a proof of one or two steps saves almost nothing — the
+  "≤ 50 % on every proof" prediction missed on 14 tiny cnfuzz proofs). Three writer mutants (sign bit, prefix,
+  terminator) each killed by the tests. Logging overhead against text (+10–17 % on 11-01) is not yet measured
+  on a quiet host.
 - **Added: the batched LRAT route — the EDP2_1161 compositional proof checked in 4.5 s** (`warp-types-sat`,
   `feature = "gpu"`; pre-registration and ledger: `research/edp-record.md`). Tan, Heule & Myreen (STTT 2023,
   Table 6) checked the Erdős discrepancy instance EDP2_1161 as a compositional proof of 5,226 LRAT-justified

@@ -153,6 +153,7 @@ within-solver reference, not a cross-solver claim.
 cargo run --bin solve -- problem.cnf
 cargo run --bin solve -- --drat proof.drat problem.cnf   # also write a DRAT proof
 cargo run --bin solve -- --drat proof.drat --certify problem.cnf   # check it before answering
+cargo run --bin solve -- --drat proof.drat --drat-binary problem.cnf   # binary DRAT (drat-trim -i)
 ```
 
 Reads DIMACS CNF, prints `s SATISFIABLE` or `s UNSATISFIABLE` with the
@@ -192,7 +193,16 @@ fail-closed: no checker is not a pass.
   reformulation; GPU path via `warp-types` behind `feature = "gpu"`
 - **DRAT proof output** (`proof.rs`) — `solver::solve_watched_drat(db, n, &mut out)`
   and `solve --drat FILE` write every learned clause, every deletion and the
-  final empty clause in DRAT text. Pure SAT only: theory lemmas are logged
+  final empty clause in DRAT text, or with `--drat-binary`
+  (`DratWriter::new_binary`, `solve_watched_drat_format`) in drat-trim's
+  binary layout — a step is the byte `a` or `d`, each literal a 7-bit varint
+  of 2·|v| + [v < 0], then 0; `proof::parse_drat_binary` reads it back, and
+  drat-trim detects it without `-i`. **Checked 2026-11-11** (record in
+  `research/drat-certification.md`): the 82-instance campaign below rerun
+  with binary proofs gives the same verdict on every instance from every
+  checker; the proofs are 0.33–0.46 the size of the text ones above eleven
+  steps (median 0.44; proofs of a step or two save almost nothing).
+  Pure SAT only: theory lemmas are logged
   but are not RUP, so a DPLL(T) proof will not check. **Checked, 2026-11-01:**
   114 UNSAT proofs (54 distinct instances across three runs) from six families (random 3-SAT n = 150–250, PHP(6–8), <!-- unguarded: 114 — campaign tally, research/cert-campaign-2026-11-01/ -->
   parity, Tseitin, planted, cnfuzz), at the default reduction interval and at

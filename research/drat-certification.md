@@ -143,7 +143,7 @@ rejected otherwise — recorded, not scored.
   `tools/cert-campaign.py --drat-binary` plus a `binary` timing mode. The text path is not touched, so the
   overhead comparison stays like for like. Predictions, fixed now:
   - **P1 size.** Binary proof ≤ 50 % of the text proof's bytes on every UNSAT proof of the run-3 corpus; on the
-    r3sat n = 250 proofs 35–45 % (a text literal is 3–5 bytes plus a space; the varint is 1 byte below variable 64,
+    r3sat n = 250 proofs 35–45 % (a text literal is 3–5 bytes plus a space; the varint is 1 byte below variable 64, <!-- unguarded: 250 — instance size n -->
     2 bytes to 8,191).
   - **P2 overhead.** Same protocol as E6 (interval 50, release CLI, 5 reps, median wall, `/dev/null`), same four
     instances, text measured again beside binary in the same session: text was +17 / +16 / +10 / +11 %; binary
@@ -163,3 +163,37 @@ rejected otherwise — recorded, not scored.
     `read_lit` decodes the code 1 ("−0") as literal 0, i.e. as a clause terminator; `parse_drat_binary` rejects
     it, as the binary LRAT decoders do since 11-08.
   - Error-sign ledger continues: every surprise with its direction.
+  - **2026-11-11, measured (campaign `~/staging/2026-11-11-bdrat-campaign/`, text run then binary run with the
+    same release binary and seeds; summaries `text/summary.md`, `binary/summary.md`; compare script
+    `compare-bdrat.py` in the session scratchpad, watched to report 0 differences on text-vs-itself and exactly 1
+    on a planted verdict flip):**
+    - **P3 MET.** Binary run: 82 instances, 54 UNSAT / 28 SAT; drat-trim default 54/54, `-f` 54/54, lrat-check
+      54/54, cake_lpr 54/54; `-v -W` ignoring 0; models 28/28; kissat disagreements 0; kills none. Per-instance
+      comparison with the text run on 11 columns (verdicts, step and deletion counts): **0 differences**;
+      negative-control rows identical (30 vs 30). The text run itself reproduces run 3 of 11-01 exactly.
+    - **P1 PARTLY MISSED.** 54 UNSAT proofs: ratio binary/text min 0.329, **median 0.443**, max 1.000. The <!-- unguarded: 54 — campaign tally, ~/staging/2026-11-11-bdrat-campaign/binary/ -->
+      "≤ 50 % on every proof" clause fails on 14 cnfuzz proofs of 1–11 steps (2–83 text bytes), where the fixed <!-- unguarded: 14 — campaign tally, proofs above the size line -->
+      per-step cost dominates: the empty-clause-only proof is `0\n` in text and `a\0` in binary, 2 bytes each.
+      Every proof above 11 steps is under 0.50. The n = 250 band was predicted 0.35–0.45; measured
+      **0.430–0.458** — the upper end 0.8 points over. Error-sign ledger: both misses are in the direction of
+      *smaller* binary gains than predicted, i.e. against the thesis that binary pays; the tests' 0.34–0.43 on
+      PHP and 60-variable random instances had anchored the band too low for 250-variable literals, which take
+      two varint bytes above variable 63 [the band should have been derived from the literal-size distribution,
+      not from the unit-test corpus].
+    - **P4 MET.** drat-trim announced "turning on binary mode checking" on all 54 UNSAT binary proofs with no <!-- unguarded: 54 — campaign tally -->
+      flag; the 5 files it did not announce on are the 0-byte logs of SAT answers (`cnfuzz_s15`, `cnfuzz_s25`,
+      `parity20/40/80`), which have no first byte to detect.
+    - **P5 MET.** In-crate: `parse_drat_binary` == `parse_drat` step for step on PHP(3–7) at interval 50 and 16
+      random UNSAT instances (test `binary_and_text_drat_are_the_same_proof`); campaign: step and deletion
+      counts from the script's own independent decoder equal the text run's on all 54 (part of the P3 columns).
+    - **P6 MET.** Three mutants on copies (sign bit inverted; prefix byte 98; terminator dropped): each failed
+      `writer_format_binary`, `binary_and_text_drat_are_the_same_proof` and `binary_proofs_verify_with_drat_trim`
+      (3 of 4 targeted tests; the parser's bad-byte test is unaffected by writer mutants, as it should be). <!-- unguarded: 4 — the tests named in this sentence -->
+      File restored from the scratch copy and `cmp`-verified after each.
+    - **P2 NOT YET MEASURED.** The campaign's built-in timing block ran beside the crate's full test suite on the
+      same six cores and is recorded as contended (`text/timing.csv`, `binary/timing.csv`; it points the same
+      way as the prediction but is not read). The like-for-like measurement waits for the owner's "host is
+      clear" and will be run as `tools/cert-campaign.py --timing-only --timing-reps 5` on the binary run's
+      directory.
+    - Full crate suite after the change: 282 passed, 0 failed, 13 ignored (pre-existing); fmt and clippy
+      `-D warnings` clean. Code commit `6900e1d40`.
