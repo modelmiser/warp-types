@@ -130,3 +130,60 @@ either without a word from the owner. Until then every result is CPU/SimWarp.
 - 2026-11-02 late — **H200 session 3 (pod `wh4ihxhh2twd0z`, 96 host cores, ≈ 20 min of which 7 were the 2.6 GB upload, ≈ $1.8; three sessions ≈ $4.3 total), on the fixed kernel.** PTX: 0 externs, 2 `bar.warp.sync`. **Agreement: 632/632** — device path = CPU reference on 114 genuine proofs, 66 drat-trim outputs from corrupted DRATs, 452 hint-level mutants; 147 verified; 0 errors; 0 table overflows. <!-- unguarded: 632, 114, 66, 452, 147 — session-3 results file -->
   **Pod-only pipeline on the 941 MB binary proof:** read 0.45 s + parallel decode **0.88 s on 32 threads** (4.21 s on 1; 1.05 s on 8; 1.53 s on 96 — oversubscription costs) + device **0.265 s** (4096 blocks; 1024 → 0.44 s; 16384 → 0.32 s) ≈ **1.6 s**, against the CPU route on the same pod: read 0.45 + parse 17.6 + 96-thread check 7.35 = **25.4 s** (≈ 16×). The decoder was held equal to the one-thread decoder on every run (`EQUAL`). The 415 MB proof: decode 0.88 s (96 thr), device 0.117 s; the 44 MB proof: 0.066 s + 0.013 s. What is left on the host now is the read and the decode in about equal measure; the next step is decoding on the device or streaming the decode under the read. <!-- unguarded: 941, 415, 44 — proof sizes in MB -->
   Error-sign ledger, final for this arc: P1–P4 met; P4's "≥ 5×" was met in the first measurement on a cross-machine comparison that the panel rightly refused, and is met again pod-only at ≈ 16× against our own CPU route — the comparison to `lrat-check` itself remains cross-machine and cross-encoding and is reported as such, not as a ratio. P5 held (the typed vocabulary caught nothing the agreement test did not; the panel and the negatives caught everything that was caught).
+
+## Prior-art search, 2026-11-11 (owner: "go read the SAT 2026 paper and do the prior-art search")
+
+**Question.** Is a GPU (or any SIMD) checker of external LRAT/DRAT proofs already published or public,
+and does the SAT 2026 parallel-checking paper change what the README may say? Read-only; nothing posted.
+
+**Götz, Dörr & Schreiber, "A Natively Parallel Proof Framework for Clause-Sharing SAT Solving", SAT 2026
+(LIPIcs 377, art. 17; all 19 pages read from the Dagstuhl PDF).** PalRUP = LRUP (the RUP-only subset of
+LRAT, their footnote 1) split into a proof *fragment* per solver thread with explicit clause-import
+statements; checking = `p` sequential C programs ("pals": `palrup_check`, `palrup_redist`, `palrup_match`)
+that talk only through files on a parallel file system, in three stages (local RUP checking, all-to-all
+redistribution of imported clauses on a √p × √p grid, confirmation). Hardware: SuperMUC-NG CPU nodes, 48
+cores each, up to 64 nodes = 3,072 cores (§5.1). No GPU, SIMD, warp or accelerator anywhere in the paper,
+its related work or its future work (§6: verification in CakeML, trimming, stronger formats). Baselines:
+CaDiCaL + `lrat-trim`, Michaelson et al.'s monolithic proofs, ImpCheck real-time checking. Their only
+"no prior" sentence (§5.2): "there are no prior scalable approaches to constructing explicit proofs with a
+clause-sharing solver at a scale of up to 3072 cores" — about *production* from clause-sharing solvers, not
+about checkers. They place our setting explicitly as prior art: search-space-splitting proofs "can be
+stitched together [25] and can even be checked in parallel [16, 36]" (§2) — Heule & Biere 2015 compositional
+proofs and Tan/Heule/Myreen 2023 `cake_lpr`. Consequence for wording: "parallel LRAT checking" is theirs and
+cake_lpr's; "checking many independent cube proofs in parallel" is cake_lpr's compositional mode (the very
+baseline the EDP record compares against). Neither claims a GPU.
+
+**Searches (each with a positive control).** GitHub repositories (`gh search repos`, control `drat-trim` →
+3 hits): "lrat gpu", "lrat cuda", "drat cuda", "drat gpu checker", "proof checker cuda sat", "unsat proof gpu"
+→ 0 hits each. GitHub code: `"lrat" "__global__"`, `"drat" "__global__" proof`, `"LRAT" "warp" proof checker`
+→ 0 hits; `lrat language:Cuda` → only substring noise. arXiv API over HTTPS (control `all:LRAT` → 13
+entries, none mentioning GPU/CUDA/SIMD/warp in title or abstract): `abs:"proof checking" AND abs:GPU`,
+`abs:DRAT AND abs:GPU`, `abs:"unsatisfiability proof" AND abs:GPU` → 0; `abs:"proof checker" AND (GPU OR
+CUDA)` → one unrelated Coq/LLM paper. Six web searches (standard + extended) → the same corpus every time.
+
+**Nearest neighbours found, none a GPU checker of external proofs.**
+- ParaFROST (Osama, Wijs, Biere; TACAS 2021 / FMSD 2023): DRAT *generated* on the GPU for inprocessing, checked
+  by `drat-trim` on the CPU. Notes that unit propagation on the GPU races, so units are delayed a round.
+- xlog (Dubrovin, Pospelov, Sabitov; arXiv 2609.27203, whitepaper Sep 2026; github BrainyBlaze/xlog, public):
+  a GPU CDCL solver whose `sat_analyze_level0_unsat` kernel replays its *own* trail into a resolution trace
+  and rejects an invalid step ("on-device proof validation"). Internal format, in-memory, part of the solver,
+  no DRAT/LRAT reader, no checking numbers, no comparison to any checker. A self-check, not a checker.
+- Parallel CPU checkers: Manthey & Philipp, "Checking Unsatisfiability Proofs in Parallel" (DRAT backward
+  checking); GRATgen's multithreaded backward phase (Lammich 2017); Schreiber's ImpCheck (SAT 2024: "to our
+  knowledge all LRAT checkers so far are sequential", many sequential checkers side by side, 2,432 cores);
+  PalRUP above; `cake_lpr` compositional mode (STTT 2023, the EDP baseline, 128 processes).
+- Fast sequential: `lrat-trim` (Pollitt/Fleury/Biere SAT 2023), TreeRat (Liang et al., arXiv 1611.04838).
+- Lean-side consumers (LRAT-Catcher, "Streaming LRAT Certificates into Lean Theorems", 2026): per-cube
+  modules checked in parallel by Lean — again CPU, again the compositional shape.
+
+**What may be said, and what may not.** Supported by this search: "no GPU checker of LRAT or DRAT proofs was
+found in the literature, on GitHub or on arXiv as of 2026-11-11; the GPU-side prior art generates proofs
+(ParaFROST) or self-checks a solver's own resolution trace (xlog)." Not supported, and not to be written:
+"first parallel LRAT checker" (PalRUP, ImpCheck, GRATgen, cake_lpr compositional all precede), "first to check
+compositional/cube proofs in parallel" (cake_lpr's compositional mode is exactly that), or "fastest checker"
+in any unqualified form (the §0 caveats of `research/edp-record.md` stand). A "first GPU LRAT checker" sentence
+is consistent with everything found, but absence across these searches is evidence, not proof, and the
+README does not need the sentence: the measured same-machine ratios carry the point. The idea that LRAT
+lemmas are independent and therefore checkable in parallel is stated in the LRAT paper itself (Cruz-Filipe et
+al. 2017) and is not ours; what is ours is the warp-per-lemma formulation, the on-device decode, the SimWarp /
+device verdict equality, and the type system the kernels are written in.
