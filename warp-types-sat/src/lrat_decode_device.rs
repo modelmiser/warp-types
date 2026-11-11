@@ -998,7 +998,13 @@ mod tests {
                 what.into(),
                 cnf.clone(),
                 Proof {
-                    steps: vec![Step::Add { id: 7, lits, hints }],
+                    // The CNF above has 8 clauses: the lemma is id 9. (Round 1 of
+                    // the 2026-11-11 panel grew the CNF from 6 to 8 clauses and
+                    // left this at 7, so `flatten` stopped with IdNotIncreasing
+                    // and every (d) shape compared empty against empty — a check
+                    // that could not fail. The per-shape assertion in the test
+                    // below is the guard.)
+                    steps: vec![Step::Add { id: 9, lits, hints }],
                 },
             ));
         }
@@ -1036,14 +1042,33 @@ mod tests {
     fn check_kernel_codes_equal_simwarp_on_the_battery() {
         let Some(ctx) = ctx() else { return };
         let mut seen = [0usize; 7];
+        let mut vacuous = 0usize;
         for (what, cnf, proof) in code_battery() {
             let fp = super::super::flatten(&cnf, &proof);
+            // A shape that flattens to nothing compares empty against empty
+            // and can never fail. Only a hint corruption planted in the FIRST
+            // lemma may do that (the host rejects at step 0 before any lemma);
+            // it is counted and printed. Every other shape must produce lemmas
+            // — the (d) shapes did not for a day after their CNF grew (panel
+            // 2026-11-11 round 2).
+            if fp.lemma_clause.is_empty() {
+                assert!(
+                    what.contains("corruption") && fp.early.is_some(),
+                    "battery shape {what:?} produced no lemmas (early = {:?})",
+                    fp.early
+                );
+                vacuous += 1;
+                continue;
+            }
             for c in super::super::check_warp_codes(&fp) {
                 seen[c as usize] += 1;
             }
             codes_equal(&ctx, &fp, &what);
         }
-        eprintln!("check kernel battery: codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}", &seen[..6]);
+        eprintln!(
+            "check kernel battery: codes seen Ok/NotUnit/NoConflict/Deleted/Forward/Overflow = {:?}; {vacuous} first-lemma corruption shapes had no lemmas for the kernel",
+            &seen[..6]
+        );
         // Every code the kernel can write is exercised.
         for (c, n) in seen[..6].iter().enumerate() {
             assert!(*n > 0, "code {c} never produced by the battery");

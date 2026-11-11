@@ -948,7 +948,7 @@ proof, blocks 1 / 7 / 64 / 4,096; `--verify-b2` against the HASHED B2 over all 5
 reference:** (a) a propagation chain inside one batch — hint j's unit falsifies hint j+1's
 only other literal (a unit chain of ≥ 6 binary clauses); (b) two hints unit on the same
 literal in one batch with the count at 4,094 before them (the duplicate must NOT trip the
-cap) [CORRECTED below: the reference trips it] and the same at 4,095 (it must, at the first); (c) a conflict at hint j followed by a
+cap) [CORRECTED below, 2026-11-11: the reference trips it] and the same at 4,095 (it must, at the first); (c) a conflict at hint j followed by a
 forward hint at j+1 (code 0, not 4) and a deleted hint at j followed by a conflict at j+1
 (code 3, not 0); (d) hint clauses of 31, 32, 33 and 70 literals (the fallback), the 33-long
 one unit on its last literal; (e) a hint whose only free literal is the lemma's own literal
@@ -973,7 +973,8 @@ mutant = **KILL** (stop, diagnose; no timing claimed).
   1,152 within 1.35× of the best (fewer round trips per lemma → less to hide → occupancy
   matters less; the L2 footprint is unchanged).
 - **P40** zero oracle disagreements (battery, 632 archive files, B2, SimWarp) and 4/4
-  mutants killed; the gpu suite's count grows by the new battery shapes and passes.
+  mutants killed; the gpu suite's count grows by the new battery shapes and passes. [The shapes
+  live inside one test function; the count cannot grow by them — panel round 2, 2026-11-11.]
 - **P41** device peak ≤ 5.3 GB (no new arrays; 5.16 today).
 - **P42** path A2 proofs (`--cumulative`), best of 3: **1.05–1.25×** our proofs' wall.
 - **P43** 415 MB archive proof, `lrat_check` cold ×3: check **≤ 0.12 s** (D2's 0.116–0.120
@@ -1043,7 +1044,7 @@ byte-identical to `kernels.ptx.h`). P46 is answerable from the two PTX snapshots
 (`ptxas -v -arch=sm_89`): **K 35 registers, H 47 registers, 0 spill bytes both, 440 bytes
 cmem[0] both (13 params)** — 12 more registers, no spills; at 47 registers a 256-thread
 block uses 12,032 of the SM's 65,536, so occupancy is not register-limited at 288 or 1,152
-blocks. The clean H protocol run awaits the owner's next clear; its log is `run-all3.log`.]
+blocks. [WRONG — the blocks are 128 threads; corrected in the panel round-1 bracket below, 2026-11-11.] The clean H protocol run awaits the owner's next clear; its log is `run-all3.log`.]
 
 **As measured (2026-11-11 03:17–03:20Z, owner: "go. host is clear."; load 1.30, lean =
 spatch = 0; the log header records the loaded PTX byte-identical to `kernels.ptx.h` and the
@@ -1054,7 +1055,8 @@ the hashed B2, SimWarp 50/50, 5,226/5,226 verified; earlier today the battery (i
 all killed. Then:
 - **P37 MET: warm 4.721 / 4.681 / 4.671 → 4.67 s** (4.0–4.9; point 4.4); **cold 4.852 s**
   (≤ 4.97 MET). **P4 (≤ 5 s) MET for the first time since §3.** 12.9× under the published
-  60.2 s warm (12.4× cold); 42.7× under same-machine lrat-check (199.6 s). Check stage
+  60.2 s warm (12.4× cold); 42.7× under same-machine lrat-check (199.6 s). [Caveats and the
+  same-machine cake_lpr figure in the same paragraph: see the panel round-1 bracket below, 2026-11-11.] Check stage
   co-running 3.76–3.84, scan passes 3.70–3.74, gather 1.76–1.82; combine 0.074.
 - **P37b did NOT fire:** check-thread idle (span − Σcheck − Σcombine) 0.249 / 0.235 / 0.169 s
   (< 0.5; today's K rerun 0.17–0.25 as well). The pipeline is still check-bound after H:
@@ -1072,17 +1074,19 @@ all killed. Then:
 - **P40 MET** (zero disagreements; 4/4 mutants; suite 292 with the new shapes).
 - **P41 MET:** device peak 5.13 GB (≤ 5.3; 42 samples; K read 5.16 in §9 and 6.03 today).
 - **P42 MET:** A2 proofs warm 6.261 / 5.920 / 5.774 → 5.774 s = **1.236×** ours (1.05–1.25);
-  cold 5.751. A2 is now 10.4× under 60.2 s on the published composition too.
+  cold 5.751. A2 is now 10.4× under 60.2 s on the published composition too. [On proofs
+  regenerated HERE with the published pipeline (§7), not the published files — corrected below, 2026-11-11.]
 - **P43 MET:** 415 MB check 0.104–0.107 s (≤ 0.12) — and the D2 drift is gone: K measured
   0.117–0.124 on the same files 4½ hours earlier, H 0.104–0.107, so the drift was in the
-  kernel's hint loop, not the host.
+  kernel's hint loop, not the host. [Overreach — softened in the panel bracket below, 2026-11-11.]
 - **P44 MISSED:** `--serial` total 8.027 (run5), 8.057–8.087 (sweep) against 6.0–7.3 — the
   serial path's other stages are 5.0 s and the check gave back 0.44 s, not the 1.2–2.2 the
   range assumed; the miss is P38's miss, not a second finding.
 - **P45 MET:** hashed 6.603 s (6.3–6.7; F3 6.50) — the hashed path's code is untouched.
 - **P46 reported:** 13 PTX params unchanged; registers K 35 → H 47, 0 spill bytes either.
   Not the P38 limiter: a 256-thread block at 47 registers takes 18 % of the register file,
-  and P39's flattened curve says occupancy matters LESS under H, not more.
+  and P39's flattened curve says occupancy matters LESS under H, not more. [WRONG arithmetic —
+  128-thread blocks; at 1,152 blocks H holds 40 warps/SM to K's 48 — corrected below, 2026-11-11.]
 
 **Tally: 7 of 9 ranges MET (P37 + P4 + cold, P39, P40, P41, P42, P43, P45); P38 and P44
 MISSED; P46 reported.** The honest sentence: **the pipelined wall gained 0.68 s (5.35 →
@@ -1094,7 +1098,9 @@ survive measurement. H removed the per-hint literal-probe chain and the 29-idle-
 and P39 shows the latency it hid is real (the 1,152-block point improved 0.97 s); but the
 per-hint METADATA loads — `hc`, `del`, `cs`, `len`, three scattered lines per hint, ≈ 237 L2
 lines per lemma — are untouched by H and are, by this result, most of the standalone cost,
-and H adds a negation probe per literal lane (≈ 190 lines per lemma). [Reading, not
+and H adds a negation probe per literal lane (≈ 190 lines per lemma). [Both counts wrong:
+≈ 2 scattered lines per hint, and the negation probe shares its line with the literal's slot
+— corrected in the panel brackets below, 2026-11-11.] [Reading, not
 measured.] The next kernel step, if there is one, is a packed 16-byte (deleted-at,
 clause-start, length) record per clause — one line per hint instead of three — and the
 negation probe only for lanes still free; **not pre-registered, not started.**
@@ -1113,7 +1119,8 @@ direct layout; the K kernel's hint loop survives as `lrat_hint_strided` (the has
 the > 32-literal fallback) and as the `kernels-lib.rs.pre-h` snapshot in
 `~/staging/2026-11-10-edp-record-h/`. The record's figure for EDP2_1161 on this machine is
 now **4.67 s warm / 4.85 s cold, launcher default, no flag** (12.9× / 12.4× under the
-published 60.2 s; 42.7× under same-machine lrat-check; A2 proofs 5.77 s, 10.4×). P38 stays
+published 60.2 s; 42.7× under same-machine lrat-check; A2 proofs 5.77 s, 10.4×) [with the §0
+caveats and same-machine cake_lpr 366.9 s = 78.5× as restated in the panel bracket below, 2026-11-11]. P38 stays
 MISSED in the ledger and the no-gain line stays crossed — the decision overrides the rule's
 consequence, not its reading. The arc ends here by the stage-S rule; the §0 caveats travel
 with every sentence above, and nothing leaves the repo before the cross-vendor panel.
@@ -1190,3 +1197,46 @@ the real formula on the host and compares SimWarp's full per-lemma code vector w
 resident pipeline's: **5,226 steps compared, 0 mismatches**, 5,226/5,226 verified. The
 kernel-independent oracle now covers every lemma of every EDP step, not 50 of them; with the
 battery (8 shapes) and the 180-proof archive it is the whole of what P40 rests on.]
+
+[PANEL ROUND 2, 2026-11-11 (`round2/`; 0 CRITICAL, 6 MODERATE, 15 LOW raw; Opus and Grok caught the
+defect below, Fable and composer-2.5 passed it — the split was the signal again):
+- **Round 1's shape-(d) fix was vacuous, and I had marked it FIXED.** Growing the (d) CNF from
+  6 to 8 clauses left the lemma at id 7; `flatten` rejects `id ≤ cnf.len()` as IdNotIncreasing
+  at step 0, so all six (d) shapes — the four old ones and the two new — flattened to NO
+  lemmas, and `codes_equal` compared empty against empty on both sides. The "292 passed" of
+  round 1 covered that, and the battery had no per-shape guard against it: the same check-
+  that-cannot-fail the archive test had the day before, re-made by hand within hours of fixing
+  it. Fixed: lemma id 9; the battery now asserts that every shape produces lemmas, allowing a
+  lemma-less result only for a hint corruption planted in the FIRST lemma (the host rejects at
+  step 0 by design; exactly 1 such shape, counted in the test's output). Re-verified on the
+  fixed tree: battery PASSES (codes seen Ok 66 / NotUnit 4,048 / NoConflict 2,776 / Deleted
+  11,714 / Forward 9 / Overflow 7); mutants on copies, each watched to fail: M-H1 (killed by
+  "small 0"), M-H2 ("duplicate units near the cap 4093"), M-H3 ("synthetic e=false"), **M-H4
+  ("wide 33 then" — the (d) shapes are live again)**, M-H5 (the strided fallback's insert
+  dropped in every layout; killed by a hashed shape), and **M-H6 (the fallback's insert dropped
+  in the DIRECT layout only; killed by "wide 33 propagates": kernel 1 NotUnit vs SimWarp 2
+  NoConflict)** — the defect the old (33 ∨ 35) shape could not see, now seen. Kernel source
+  unchanged except comments; PTX identical; examples rebuilt.
+- **The negation probe costs no extra line.** Codes 2|l| and 2|l|+1 are adjacent 8-byte slots
+  at a 16-byte-aligned offset, so a literal's slot and its negation's always share one
+  128-byte line in the direct layout. "≈ 190 lines per lemma" was false and the follow-on
+  idea "probe the negation only for lanes still free" rested on it — withdrawn. The reading
+  now: ≈ 2 scattered metadata lines per hint plus the literal line; nothing profiled.
+- **Ratios, same paragraph.** Dated inline pointers now sit beside every ratio sentence above
+  (append-only kept: nothing removed, each addition dated). One more caveat belongs with the
+  same-machine ratios (§0.2): lrat-check's 199.6 s and cake_lpr's 366.9 s each pay 5,226
+  process start-ups and CNF parses that the resident pipeline pays once — part of the 42.7×
+  and 78.5× is that.
+- **The K rerun's check-thread idle** (run-all2 runs 2–4) is 0.116 / 0.130 / 0.202 s — "0.12–
+  0.20", not the "0.17–0.25" written in the round-1 bracket.
+- **The even-region assert** is now gated on the direct layout (the hashed path ignores
+  `slots`); `assert!` is not stripped in release builds (one seat said it was — it is
+  `debug_assert!` that is), and it is host-side: the measured binary predates it, the PTX is
+  the same. SimWarp's `LitTable` is hashed-only on the host: the oracle is independent in
+  implementation (host, open addressing) and the agreement with the direct batched path is
+  empirical — the battery, the archive, and all 5,226 EDP steps — not a semantic clone.
+- **Comments fixed:** the kernel header no longer says every lane performs every insert (the
+  batched path's unit lane alone stores; the others read after the `syncwarp`); the
+  launcher's "24 blocks (96 warps) per SM" now says 24 requested, residency 12 (K) / 10 (H).
+- **P40's sentence** "the suite's count grows by the new battery shapes" was wrong in kind:
+  the shapes live in one test; pointer added above. The inline marker at shape (b) is dated.]

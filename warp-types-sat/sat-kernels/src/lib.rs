@@ -312,9 +312,10 @@ pub fn grad_norm_reduce(
 // (slot = literal code, no probing) when every literal code of the proof is
 // below the per-proof region `slots` (a multiple of 32 chosen by the host,
 // `lrat_direct_slots`; it may exceed `TABLE`) — denser and cheaper. Both count occupancy and stop at the
-// same cap, so `TableOverflow` falls on the same lemmas either way. Every
-// lane performs every insert — identical writes to identical slots — so no
-// lane has to read another lane's write except through the barrier below.
+// same cap, so `TableOverflow` falls on the same lemmas either way. In the
+// strided loop every lane performs every insert (identical writes to identical
+// slots); in the batched direct loop the unit's lane alone stores, and the
+// other lanes read it only after the `syncwarp` that closes the batch.
 //
 // Control flow at every collective is warp-uniform: admissibility, the
 // total and the verdict are computed from the same global data by all lanes.

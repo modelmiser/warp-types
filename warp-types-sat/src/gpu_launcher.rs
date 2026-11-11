@@ -1051,8 +1051,9 @@ impl GpuContext {
     }
 
     /// The block count the check launch will use for `blocks` (0 = pick)
-    /// and a per-warp table region of `region` 64-bit slots: **24 blocks (96
-    /// warps) per SM when every resident warp's region together fits the
+    /// and a per-warp table region of `region` 64-bit slots: **24 blocks per SM requested
+    /// (sm_89 holds 48 resident warps: 12 such blocks at K's 35 registers, 10 at
+    /// H's 47) when every resident warp's region together fits the
     /// device's L2, else 6 (24 warps)**. One rule for three measured points
     /// on an RTX 4000 SFF Ada (48 MB L2): the hashed table (32 KB regions,
     /// 151 MB resident) is fastest at 6 per SM, the direct table of a
@@ -1150,7 +1151,9 @@ impl GpuContext {
         // lie inside or both outside, which keeps it equal to the strided
         // loop. `lrat_direct_slots` yields multiples of 32; callers passing
         // their own value get the same guarantee checked here.
-        assert!(slots % 2 == 0, "direct-table region must be even (got {slots})");
+        if direct {
+            assert!(slots % 2 == 0, "direct-table region must be even (got {slots})");
+        }
         let region = if direct { slots } else { TABLE };
         let blocks = self.lrat_check_blocks(blocks, region, n);
         let clause_start = s.clone_htod(&fp.clause_start)?;
