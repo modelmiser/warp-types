@@ -1145,6 +1145,12 @@ impl GpuContext {
         }
         let direct_arg = direct as u32;
         let slots = slots.max(32);
+        // The batched direct path probes a literal AND its negation against
+        // the region bound before the free count; with an even region both
+        // lie inside or both outside, which keeps it equal to the strided
+        // loop. `lrat_direct_slots` yields multiples of 32; callers passing
+        // their own value get the same guarantee checked here.
+        assert!(slots % 2 == 0, "direct-table region must be even (got {slots})");
         let region = if direct { slots } else { TABLE };
         let blocks = self.lrat_check_blocks(blocks, region, n);
         let clause_start = s.clone_htod(&fp.clause_start)?;

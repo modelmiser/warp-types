@@ -969,7 +969,13 @@ mod tests {
         // (d) Hint clauses of 31, 32, 33 and 70 literals; the 33- and 70-wide
         // ones are unit on their last literal, and the hint after each is
         // NotUnit only if that unit was seen (M-H4 truncates to 32 lanes: a
-        // conflict instead). Clause 5 = (33 ∨ 35), 6 = (70 ∨ 71).
+        // conflict instead). Clause 5 = (33 ∨ 35), 6 = (70 ∨ 71). Clauses 7
+        // = (¬33 ∨ 35) and 8 = (¬70 ∨ 71) test the other direction — the
+        // unit found by the STRIDED fallback (the 33- and 70-wide hints run
+        // outside the batch loop) must be visible to the batch that follows:
+        // ¬33 falsified → unit on 35 → the lemma ends NoConflict; a store the
+        // next batch cannot see reads as NotUnit instead (cross-vendor panel
+        // 2026-11-11, Opus seat: (33 ∨ 35) is NotUnit either way).
         let cnf: Vec<Vec<i32>> = vec![
             (1..=31).collect(),
             (1..=32).collect(),
@@ -977,12 +983,16 @@ mod tests {
             (1..=70).collect(),
             vec![33, 35],
             vec![70, 71],
+            vec![-33, 35],
+            vec![-70, 71],
         ];
         for (what, lits, hints) in [
             ("wide 31", (1..=32).collect::<Vec<i32>>(), vec![1i64]),
             ("wide 32", (1..=32).collect(), vec![2]),
             ("wide 33 then", (1..=32).collect(), vec![3, 5]),
             ("wide 70 then", (1..=69).collect(), vec![4, 6]),
+            ("wide 33 propagates", (1..=32).collect(), vec![3, 7]),
+            ("wide 70 propagates", (1..=69).collect(), vec![4, 8]),
         ] {
             out.push((
                 what.into(),

@@ -310,7 +310,8 @@ pub fn grad_norm_reduce(
 // table needs no clearing between lemmas. Two layouts, chosen per launch by
 // the host: HASHED (open addressing on the key) for any proof, and DIRECT
 // (slot = literal code, no probing) when every literal code of the proof is
-// below `TABLE` — denser and cheaper. Both count occupancy and stop at the
+// below the per-proof region `slots` (a multiple of 32 chosen by the host,
+// `lrat_direct_slots`; it may exceed `TABLE`) — denser and cheaper. Both count occupancy and stop at the
 // same cap, so `TableOverflow` falls on the same lemmas either way. Every
 // lane performs every insert — identical writes to identical slots — so no
 // lane has to read another lane's write except through the barrier below.
@@ -585,7 +586,9 @@ unsafe fn lrat_hints_direct_batched(
         let n_fit = fits_mask.count_ones();
         if n_fit == 0 {
             // The next hint alone is wider than 32 lanes: the strided loop,
-            // after the same admissibility tests as below.
+            // after the same admissibility tests as below. (A forward hint
+            // has length 0 and always fits, so the forward test here is a
+            // guard that cannot fire; kept so the two branches read alike.)
             let src = cur & 31;
             if warp.broadcast_lane(data::PerLane::new(m_fwd as u32), src).get() != 0 {
                 return 4;
@@ -633,6 +636,12 @@ unsafe fn lrat_hints_direct_batched(
             lit = *lits.add((cs + off) as usize);
             let k = lrat_code(lit) + 1;
             let kn = lrat_code(-lit) + 1;
+            // Both the literal and its negation must lie in the region: the
+            // negation is probed now (`negp`) rather than at insert time as
+            // `lrat_insert` does. For an EVEN `slots` the two tests agree with
+            // the strided loop's (`code(l) < slots` iff `code(-l) < slots`);
+            // the launcher asserts it, since an odd region would make this
+            // path report 5 where the strided loop reports 0 or 1.
             if k > slots || kn > slots {
                 past = true; // the host's guarantee is broken
             } else {

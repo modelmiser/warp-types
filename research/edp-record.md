@@ -948,7 +948,7 @@ proof, blocks 1 / 7 / 64 / 4,096; `--verify-b2` against the HASHED B2 over all 5
 reference:** (a) a propagation chain inside one batch — hint j's unit falsifies hint j+1's
 only other literal (a unit chain of ≥ 6 binary clauses); (b) two hints unit on the same
 literal in one batch with the count at 4,094 before them (the duplicate must NOT trip the
-cap) and the same at 4,095 (it must, at the first); (c) a conflict at hint j followed by a
+cap) [CORRECTED below: the reference trips it] and the same at 4,095 (it must, at the first); (c) a conflict at hint j followed by a
 forward hint at j+1 (code 0, not 4) and a deleted hint at j followed by a conflict at j+1
 (code 3, not 0); (d) hint clauses of 31, 32, 33 and 70 literals (the fallback), the 33-long
 one unit on its last literal; (e) a hint whose only free literal is the lemma's own literal
@@ -1117,3 +1117,76 @@ published 60.2 s; 42.7× under same-machine lrat-check; A2 proofs 5.77 s, 10.4×
 MISSED in the ledger and the no-gain line stays crossed — the decision overrides the rule's
 consequence, not its reading. The arc ends here by the stage-S rule; the §0 caveats travel
 with every sentence above, and nothing leaves the repo before the cross-vendor panel.
+
+[PANEL ROUND 1, 2026-11-11 (`~/staging/2026-11-11-panel-edp-record/`; seats Opus 5.5 and
+Fable 5.1 on the API, Grok 4.7 and composer-2.5 through the jail; 0 CRITICAL, 13 MODERATE,
+22 LOW raw). Corrections, each verified in the code by the orchestrator before writing:
+- **P46 arithmetic was wrong.** `lrat_check_lemmas` launches 128-thread blocks (4 warps),
+  not 256. On sm_89 (65,536 registers, 48 resident warps per SM, 8-register allocation unit)
+  H's 47 registers allocate 48 × 32 = 1,536 per warp → **40 resident warps = 10 blocks per
+  SM**; K's 35 → 1,280 → the 48-warp cap, 12 blocks. So at 288 blocks (6 per SM, 24 warps)
+  registers bind neither kernel; **at 1,152 blocks H is register-limited to 40 warps per SM
+  against K's 48 — and was still 0.97 s faster there.** P39's reading stands with that
+  correction: the flattened curve was measured with FEWER resident warps, not the same.
+  All four seats refuted the sentence; the orchestrator's arithmetic above is the fix.
+- **What the oracles cover, stated plainly.** `--verify-b2` compares every lemma's code of
+  all 5,226 steps against the SAME kernel binary in the hashed layout; the two paths share
+  the lemma-literal inserts, `lrat_insert`, `lrat_code` and `lrat_hint_strided` (also H's
+  > 32-literal fallback), so a defect in that shared code would cancel. The kernel-INDEPENDENT
+  oracles are SimWarp's `LitTable` (host): the battery (now 6 + 2 shapes, 3 layouts × 4
+  block counts, every lemma), the 180-proof archive (4 block counts, every lemma), and
+  `--simwarp` on the EDP steps — 50 of 5,226 in the protocol run; **extended to all 5,226
+  steps in the bracket that follows.**
+- **The timer.** `total` is the launcher's in-process wall from before the CNF parse
+  (`t0`) to after the last chunk's verdicts (`t4`): it includes the CNF/composition parse
+  (0.007 s), GPU-context creation (0.11–0.19 s), the proof reads and every pipeline stage
+  including combine; it excludes process start-up and teardown and the oracles. The
+  co-running check stage alone sums to 3.76–3.84 s. Read "checks all 5,226 proofs in 4.67 s"
+  as "launcher wall 4.67 s, CNF parse through the last verdict, one process, proofs in page
+  cache".
+- **The ratios, with the caveats in the same paragraph as §4 requires.** 4.671 s launcher
+  wall against the published 60.2 s (another machine, 128 threads, the authors' proofs, an
+  older cake_lpr, a verified checker against an unverified one; 5,226 processes re-parsing
+  the CNF) = 12.9× (cold 4.852 s: 12.4×); against this machine's reruns on OUR proofs,
+  one process per step, one niced core: **lrat-check 199.6 s (text proofs) = 42.7×,
+  cake_lpr 366.9 s = 78.5×.** The A2 figure, 5.774 s, is on proofs regenerated HERE with
+  the published pipeline (iglucose + drat-trim -L, §7), not on the published proof files:
+  10.4× under 60.2 s with the same caveats.
+- **The hint-metadata count was overstated.** The hint ids load coalesced (32 per line);
+  `deleted_at[hc]` is scattered; `clause_start[hc]` and `[hc+1]` are adjacent (one line
+  unless straddling). ≈ **2 scattered lines per hint, ≈ 160 per lemma** — an upper bound
+  with no profile behind it, still marked reading. "A seventh" is an eighth (0.44 / 3.44);
+  1.15× from §9's 3.447, 1.14× from the same-day K rerun's 3.422.
+- **Units.** The sampler reports MiB: the peak was **5,130 MiB** (5.38 GB, 5.01 GiB). P41's
+  "≤ 5.3 GB (5.16 today)" and §9's "5.16 GB" used the same mistaken convention for 5,162
+  MiB, so the verdict stands in consistent units (5,130 ≤ 5,300 MiB).
+- **The `kn > slots` test.** The batched path tests a literal AND its negation against the
+  region bound before the free count; the strided loop tests the literal there and the
+  unit's negation at insert time. For an even region the two agree exactly (codes 2|l| and
+  2|l|+1 lie on the same side of an even bound); `lrat_direct_slots` returns multiples of
+  32, and the launcher now asserts evenness, so the divergence (code 5 where the strided
+  loop says 0 or 1) is unreachable. Kernel unchanged; the measured PTX is the committed PTX.
+- **Shape (d) was one-directional.** `(33 ∨ 35)` after the 33-wide hint is NotUnit whether
+  or not `¬33` was stored, so it killed M-H4 but never tested that the strided fallback's
+  insert is seen by the batch that follows. Added `(¬33 ∨ 35)` and `(¬70 ∨ 71)` as "wide 33 /
+  70 propagates" (SimWarp: NoConflict; an invisible store would read NotUnit). The battery
+  is 6 + 2 shapes; the built (e) is "both lemma literals in the hint clause", not the
+  sentence's "own literal negated". Full gpu suite on the current tree: **292 passed, 0
+  failed, 13 ignored** (`warp-types-sat` lib target; 13 more in the other targets) — the
+  "289 + 3 = 292" above was two invocations of this count; §9's "291" lacked one
+  `archive_agreement_*` test that `LRAT_CHECK` now enables.
+- **Stamps.** The shape-(b) bracket was written at 20:3xZ, AFTER the contended run (20:20Z)
+  and before the clean one; its content (cap before lookup) dates from the build at 20:17Z.
+  The "22:5xZ" bracket was written at 22:4xZ (commit 22:47Z). The archive oracle prints
+  `SKIPPED` when `LRAT_ARCHIVE_DIRS` is unset — by design, the archive lives outside the
+  tree; the vacuous pass that was fixed is the set-but-empty case.
+- **The drift sentence** overreached: H measures 0.104–0.107 s where K measured 0.117–0.124 s
+  on the same files the same day; the cause of K's drift since 11-04 stays open.
+- **Tally wording:** 7 of the 9 pre-registered ranges P37–P45 MET (P4 and the cold bound are
+  clauses of P37); P38 and P44 MISSED; P46 reported.]
+[SIMWARP ON EVERY STEP, 2026-11-11 03:54–03:59Z (`simwarp-all.txt`, host load 4.2 — not a
+timing run): `edp_resident --simwarp 5226` re-decodes every one of the 5,226 steps against
+the real formula on the host and compares SimWarp's full per-lemma code vector with the
+resident pipeline's: **5,226 steps compared, 0 mismatches**, 5,226/5,226 verified. The
+kernel-independent oracle now covers every lemma of every EDP step, not 50 of them; with the
+battery (8 shapes) and the 180-proof archive it is the whole of what P40 rests on.]
