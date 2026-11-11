@@ -1320,3 +1320,32 @@ MODERATE survives verification; MODERATE wording findings do not converge):
   design (only non-corruption early shapes are printed). Residual, not fixed: the §10 shapes
   carry no hand-written expected codes — SimWarp is the reference by construction; a drift in
   SimWarp would move a shape's meaning without a failure. That is the oracle design, stated.]
+
+[CONFIRMATION RUN ON THE COMMITTED (CLAMPED) KERNEL, 2026-11-11 05:23–05:26Z — owner: "host is clear".
+The host had been REBOOTED 16 minutes earlier (OS kernel 7.2.6 → 7.2.15; NVIDIA driver 580.178.04
+unchanged); load 0.9; lean = spatch = 0. Log header: HEAD 771321c72, tree clean, loaded PTX
+byte-identical to `kernels.ptx.h3`, tree kernel identical to `kernels-lib.rs.h3`
+(`run-all4.log`, per-run files `h3-run-0523Z/`). Oracles first: `--verify-b2` 0 of 5,226,
+SimWarp 50/50, 5,226/5,226 verified. **Warm 4.537 / 4.546 / 4.614 → 4.54 s; cold 4.596 s**;
+P37b idle 0.230 / 0.212 / 0.239 (not fired); serial check at 288 blocks 2.884 / 2.841 / 2.911
+→ 2.84 s; 576: 3.325–3.354; 1,152: 3.494–3.516; serial total 7.71–7.80; hashed 6.319; A2
+cold 5.379, warm 5.672 / 5.552 / 5.588 → 5.55 s (1.22×); 415 MB check 0.102–0.105; peak
+5,238 MiB. **Reading.** Every stage is 3–5 % faster than at 03:17Z — including the hashed
+path (6.603 → 6.319, −4.3 %), whose code did not change, and the scan and gather stages. The
+shift is the host after the reboot (the driver/library mismatch noted on 11-03 as pending a
+reboot may be what it cleared — not established), not the clamp, which adds one `min` per
+lane per window. Consequences: (1) **the committed kernel's figure is 4.54 s warm / 4.60 s
+cold** — P37 (4.0–4.9) MET again; 4.67 / 4.85 stands as the pre-reboot measurement of
+`kernels.ptx.h`. Ratios on this run: 60.2 / 4.537 = **13.3×** (cold 13.1×); same-machine
+lrat-check 199.6 s = **44.0×**, cake_lpr 366.9 s = **80.9×** — with the §0 caveats, and one
+more now: the K baseline (5.35) and the §5 reruns (199.6, 366.9) were measured BEFORE the
+reboot, so ratios to them cross a ≈ 4 % environmental shift in this kernel's favour; the
+like-for-like comparison inside one run is the hashed path against the default, 6.32 → 4.54 s
+(1.39×). (2) **P38 stays as adjudicated — MISSED, the no-gain line crossed on the
+pre-registered 03:17Z measurement (3.003 s).** On this run the same stage reads 2.84 s, under
+the line; reported, not re-adjudicated. The honest sentence: the standalone kernel sits
+within ≈ 5 % of the 3.0 s line on either side depending on the host's state; the pipeline's
+gain does not depend on that. (3) The arc remains ended by the stage-S rule (idle 0.21–0.24 s
+on our proofs). Aside, not pre-registered: on the A2 proofs the check thread idles 0.68–0.79 s
+per run — that pipeline is PREPARE-bound (its upload and plan stages are larger), which is
+where a scan stage would pay, if ever pursued.]
