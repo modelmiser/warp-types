@@ -201,7 +201,9 @@ fail-closed: no checker is not a pass.
   `research/drat-certification.md`): the 82-instance campaign below rerun
   with binary proofs gives the same verdict on every instance from every
   checker; the proofs are 0.33–0.46 the size of the text ones above eleven
-  steps (median 0.44; proofs of a step or two save almost nothing).
+  steps (median 0.44; proofs of a step or two save almost nothing). Logging
+  overhead on a quiet host, 2026-11-11, over a run that logs nothing: text to
+  `/dev/null` +7–10 %, binary +1.7–2.7 %; to a file +8–12 % and +2–5 %.
   Pure SAT only: theory lemmas are logged
   but are not RUP, so a DPLL(T) proof will not check. **Checked, 2026-11-01:**
   114 UNSAT proofs (54 distinct instances across three runs) from six families (random 3-SAT n = 150–250, PHP(6–8), <!-- unguarded: 114 — campaign tally, research/cert-campaign-2026-11-01/ -->

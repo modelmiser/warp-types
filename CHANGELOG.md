@@ -14,8 +14,11 @@
   run on every instance, drat-trim detects the layout on all 54 without `-i`, and binary proofs are 0.33–0.46 of
   the text size above eleven steps (median 0.44; a proof of one or two steps saves almost nothing — the
   "≤ 50 % on every proof" prediction missed on 14 tiny cnfuzz proofs). Three writer mutants (sign bit, prefix,
-  terminator) each killed by the tests. Logging overhead against text (+10–17 % on 11-01) is not yet measured
-  on a quiet host.
+  terminator) each killed by the tests. Logging overhead on a quiet host (2026-11-11, median of 5, interval 50, each
+  mode against the no-proof run of the same session, PHP(7), PHP(8), r3sat n = 200 and 250): text to `/dev/null`
+  +7–10 %, binary **+1.7–2.7 %**; to a file text +8–12 %, binary +2–5 %. Binary logging costs 0.24–0.30 of what
+  text logging costs. The pre-registered bands (+4–9 % and +3–7 %) were missed from below; the no-gain line
+  (binary within 2 points of text) was cleared by 5–7 points.
 - **Added: the batched LRAT route — the EDP2_1161 compositional proof checked in 4.5 s** (`warp-types-sat`,
   `feature = "gpu"`; pre-registration and ledger: `research/edp-record.md`). Tan, Heule & Myreen (STTT 2023,
   Table 6) checked the Erdős discrepancy instance EDP2_1161 as a compositional proof of 5,226 LRAT-justified

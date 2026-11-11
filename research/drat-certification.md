@@ -195,5 +195,21 @@ rejected otherwise — recorded, not scored.
       way as the prediction but is not read). The like-for-like measurement waits for the owner's "host is
       clear" and will be run as `tools/cert-campaign.py --timing-only --timing-reps 5` on the binary run's
       directory.
+    - **P2 MEASURED, quiet host** (owner: "host is clear", 07:50 local; `nice -n 10 taskset -c 0-5`, lean and
+      spatch counts 0, load 1.9 before the run; `research/cert-campaign-2026-11-11/timing-quiet-host.csv`, the
+      contended file kept beside it in staging as `timing.contended.csv`). Median of 5, interval 50, release CLI,
+      each mode against the no-proof run of the same session. Text to `/dev/null`: +9.7 % PHP(7), +9.1 % PHP(8),
+      +7.6 % r3sat n = 200, +6.8 % n = 250. Binary to `/dev/null`: **+2.3 / +2.7 / +2.1 / +1.7 %**. To a file:
+      text +11.1 / +11.7 / +8.6 / +7.9 %, binary +4.7 / +3.7 / +3.2 / +2.3 %. **No-gain line cleared** on every
+      instance: binary sits 5.0–7.4 points under text, the line was 2. **The predicted bands MISSED, every instance
+      below them**: +4–9 % (PHP) and +3–7 % (r3sat) were predicted, +1.7–2.7 % measured. Error sign: toward the
+      thesis, the first miss in this pre-registration in the design's favour; P1's two went the other way. Part of
+      the miss is the baseline: text itself measured +7–10 % today against +10–17 % on 11-01 on the same instances
+      at the same interval (the host has been rebooted since; the cause is not established and nothing is claimed
+      about it). Read relative to text in the same session, binary logging costs 0.24–0.30 of what text costs; the
+      absolute bands implied 0.25–0.65, so the relative reading sits at the low edge of the prediction and the
+      absolute reading below it. [Correction to the pre-registration's framing, not to the numbers: the bands
+      should have been stated relative to text measured in the same session, since the text figure is itself a
+      measurement and not a constant; the no-gain line was written that way, and it is the clause that held.]
     - Full crate suite after the change: 282 passed, 0 failed, 13 ignored (pre-existing); fmt and clippy
       `-D warnings` clean. Code commit `6900e1d40`.
