@@ -324,7 +324,7 @@ impl ProofLog for NoProof {
 /// Append a decimal integer without allocating (the writers format tens of
 /// millions of numbers; `to_string()` per number was ~1 s per 250 MB).
 #[inline]
-fn push_int(s: &mut String, v: i64) {
+fn push_int(s: &mut Vec<u8>, v: i64) {
     let mut buf = [0u8; 20];
     let mut i = buf.len();
     let neg = v < 0;
@@ -341,8 +341,7 @@ fn push_int(s: &mut String, v: i64) {
         i -= 1;
         buf[i] = b'-';
     }
-    // SAFETY-free: the bytes are ASCII digits and '-'.
-    s.push_str(std::str::from_utf8(&buf[i..]).expect("ascii"));
+    s.extend_from_slice(&buf[i..]);
 }
 
 /// DIMACS integer for a literal: variable `v` is `v + 1`, negated is negative.
@@ -387,7 +386,7 @@ pub struct DratWriter<W: Write> {
     out: W,
     err: Option<io::Error>,
     binary: bool,
-    /// Reused step buffer (binary).
+    /// Reused step buffer (text and binary).
     bbuf: Vec<u8>,
     /// Steps written: (additions, deletions). Additions count the empty clause.
     pub additions: u64,
@@ -435,15 +434,17 @@ impl<W: Write> DratWriter<W> {
             self.bbuf = b;
             return;
         }
-        let prefix = if delete { "d " } else { "" };
-        let mut s = String::with_capacity(prefix.len() + lits.len() * 6 + 2);
-        s.push_str(prefix);
+        let prefix: &[u8] = if delete { b"d " } else { b"" };
+        let mut s = std::mem::take(&mut self.bbuf);
+        s.clear();
+        s.extend_from_slice(prefix);
         for &l in lits {
             push_int(&mut s, dimacs_int(l));
-            s.push(' ');
+            s.push(b' ');
         }
-        s.push_str("0\n");
-        if let Err(e) = self.out.write_all(s.as_bytes()) {
+        s.extend_from_slice(b"0\n");
+        self.bbuf = s;
+        if let Err(e) = self.out.write_all(&self.bbuf) {
             self.err = Some(e);
         }
     }
@@ -484,7 +485,7 @@ pub struct LratWriter<W: Write> {
     next_id: u64,
     last_id: u64,
     /// Reused line buffers (text / binary).
-    sbuf: String,
+    sbuf: Vec<u8>,
     bbuf: Vec<u8>,
     /// Steps written: additions (the empty clause included), deletions (ids),
     /// additions without a chain.
@@ -503,7 +504,7 @@ impl<W: Write> LratWriter<W> {
             binary,
             next_id: n_original as u64 + 1,
             last_id: n_original as u64,
-            sbuf: String::new(),
+            sbuf: Vec::new(),
             bbuf: Vec::new(),
             additions: 0,
             deletions: 0,
@@ -547,16 +548,16 @@ impl<W: Write> LratWriter<W> {
             s.clear();
             push_int(&mut s, id as i64);
             for &l in lits {
-                s.push(' ');
+                s.push(b' ');
                 push_int(&mut s, dimacs_int(l));
             }
-            s.push_str(" 0");
+            s.extend_from_slice(b" 0");
             for &h in hints {
-                s.push(' ');
+                s.push(b' ');
                 push_int(&mut s, h as i64);
             }
-            s.push_str(" 0\n");
-            self.write(s.as_bytes());
+            s.extend_from_slice(b" 0\n");
+            self.write(&s);
             self.sbuf = s;
         }
     }
@@ -615,13 +616,13 @@ impl<W: Write> ProofLog for LratWriter<W> {
             let mut s = std::mem::take(&mut self.sbuf);
             s.clear();
             push_int(&mut s, self.last_id as i64);
-            s.push_str(" d");
+            s.extend_from_slice(b" d");
             for &i in ids {
-                s.push(' ');
+                s.push(b' ');
                 push_int(&mut s, i as i64);
             }
-            s.push_str(" 0\n");
-            self.write(s.as_bytes());
+            s.extend_from_slice(b" 0\n");
+            self.write(&s);
             self.sbuf = s;
         }
     }
