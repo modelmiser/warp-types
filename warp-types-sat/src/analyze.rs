@@ -96,6 +96,20 @@ pub(crate) struct AnalyzeWork {
     /// Populated during resolution — each resolved-away variable is a pivot.
     /// Reused across conflicts (cleared at the start of each analysis).
     pub pivots: Vec<u32>,
+    /// When set, analysis also records the three lists below, which are the
+    /// inputs of `lrat_emit::rup_chain_from_analysis` (the RUP chain of the
+    /// learned clause without a second walk of the implication graph).
+    pub record_chain: bool,
+    /// The reason of each pivot, parallel to `pivots`: resolution order,
+    /// which is reverse trail order.
+    pub pivot_reasons: Vec<Reason>,
+    /// Lower-level variables whose reasons the chain needs: each literal
+    /// minimization removed, plus every variable a successful redundancy
+    /// proof marked on the way.
+    pub chain_vars: Vec<u32>,
+    /// Level-0 variables minimization stepped over (it never descends into
+    /// level 0; the emitter walks those cones itself). May repeat.
+    pub chain_level0: Vec<u32>,
 }
 
 impl AnalyzeWork {
@@ -108,6 +122,10 @@ impl AnalyzeWork {
             min_to_clear: Vec::with_capacity(32),
             levels_seen: Vec::new(), // grown on demand per analysis
             pivots: Vec::with_capacity(32),
+            record_chain: false,
+            pivot_reasons: Vec::new(),
+            chain_vars: Vec::new(),
+            chain_level0: Vec::new(),
         }
     }
 
@@ -217,6 +235,11 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     let max_var = trail.num_vars();
     work.ensure_capacity(max_var);
     work.pivots.clear();
+    if work.record_chain {
+        work.pivot_reasons.clear();
+        work.chain_vars.clear();
+        work.chain_level0.clear();
+    }
 
     // Cross-argument boundary (same pattern as run_bcp_watched): every DB
     // literal must index within the trail's per-var arrays. The resolution
@@ -411,6 +434,9 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
 
                 num_at_current_level -= 1;
                 work.pivots.push(entry.lit.var()); // pivot = resolved-away variable
+                if work.record_chain {
+                    work.pivot_reasons.push(entry.reason);
+                }
                 unsafe { *work.seen.get_unchecked_mut(entry.lit.var() as usize) = false };
                 for &lit in reason_lits {
                     let var = lit.var();
@@ -478,9 +504,24 @@ pub(crate) fn analyze_conflict_with_theory<T: TheorySolver>(
     for &l in &learned[1..] {
         if lit_redundant_with(work, trail, db, l, abstract_levels) {
             work.seen[l.var() as usize] = false;
+            if work.record_chain {
+                // The removed literal's own reason is part of the chain; a
+                // level-0 literal's cone is walked by the emitter instead.
+                let level = trail.entry_for_var(l.var()).map_or(0, |e| e.level);
+                if level == 0 {
+                    work.chain_level0.push(l.var());
+                } else {
+                    work.chain_vars.push(l.var());
+                }
+            }
         } else {
             minimized.push(l);
         }
+    }
+    if work.record_chain {
+        // Every variable a successful redundancy proof marked: its reason is
+        // unit, in trail order, under the learned clause's negation.
+        work.chain_vars.extend_from_slice(&work.min_to_clear);
     }
 
     // Clean up DFS marks from successful redundancy proofs
@@ -814,6 +855,7 @@ fn lit_redundant_with(
     abstract_levels: u64,
 ) -> bool {
     let top = work.min_to_clear.len(); // snapshot for rollback on failure
+    let top0 = work.chain_level0.len(); // same, for the level-0 record
     work.min_stack.clear();
 
     // Start by examining the reason for lit's assignment.
@@ -847,6 +889,9 @@ fn lit_redundant_with(
         }
         if let Some(re) = unsafe { trail.entry_for_var_unchecked(rv) } {
             if re.level == 0 {
+                if work.record_chain {
+                    work.chain_level0.push(rv);
+                }
                 continue;
             }
         }
@@ -862,6 +907,7 @@ fn lit_redundant_with(
                 for v in work.min_to_clear.drain(top..) {
                     unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
                 }
+                work.chain_level0.truncate(top0);
                 return false;
             }
         };
@@ -870,6 +916,7 @@ fn lit_redundant_with(
             for v in work.min_to_clear.drain(top..) {
                 unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
             }
+            work.chain_level0.truncate(top0);
             return false;
         }
 
@@ -878,6 +925,7 @@ fn lit_redundant_with(
                 for v in work.min_to_clear.drain(top..) {
                     unsafe { *work.seen.get_unchecked_mut(v as usize) = false };
                 }
+                work.chain_level0.truncate(top0);
                 return false;
             }
             Reason::Propagation(ci) => ci,
@@ -897,6 +945,9 @@ fn lit_redundant_with(
             }
             if let Some(rre) = unsafe { trail.entry_for_var_unchecked(rv) } {
                 if rre.level == 0 {
+                    if work.record_chain {
+                        work.chain_level0.push(rv);
+                    }
                     continue;
                 }
             }

@@ -571,6 +571,7 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
     let mut restarts = LubyRestarts::new(32);
     let mut restart_pending = false;
     let mut analyze_work = AnalyzeWork::new(num_vars as usize);
+    analyze_work.record_chain = lrat_ids.is_some();
 
     // NOTE: VSIDS initialization (initialize_from_clauses) is the CALLER's
     // responsibility. The core deliberately does not initialize: entry points
@@ -991,14 +992,45 @@ fn solve_cdcl_core_inner<T: TheorySolver>(
                         // LRAT: the chain is read off the trail as it stands at
                         // the conflict — before the backtrack below unwinds it.
                         let lrat_chain = lrat_ids.as_ref().map(|ids| {
-                            crate::lrat_emit::rup_chain(
+                            #[cfg(test)]
+                            if crate::lrat_emit::CHAIN_BY_WALK.with(|c| c.get()) {
+                                return crate::lrat_emit::rup_chain(
+                                    &trail,
+                                    db,
+                                    clause,
+                                    &analysis.learned,
+                                    ids,
+                                    &mut chain_scratch,
+                                );
+                            }
+                            let chain = crate::lrat_emit::rup_chain_from_analysis(
                                 &trail,
                                 db,
                                 clause,
-                                &analysis.learned,
+                                &analyze_work,
                                 ids,
                                 &mut chain_scratch,
-                            )
+                            );
+                            // The walk is the reference: in debug builds every
+                            // conflict's chain is checked against it.
+                            #[cfg(debug_assertions)]
+                            {
+                                let saved = chain_scratch.unjustified_literals;
+                                let walk = crate::lrat_emit::rup_chain(
+                                    &trail,
+                                    db,
+                                    clause,
+                                    &analysis.learned,
+                                    ids,
+                                    &mut chain_scratch,
+                                );
+                                chain_scratch.unjustified_literals = saved;
+                                debug_assert_eq!(
+                                    chain, walk,
+                                    "lrat: the analysis chain differs from the walk"
+                                );
+                            }
+                            chain
                         });
 
                         let conflict = propagate.finish_conflict();

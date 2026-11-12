@@ -14,6 +14,7 @@
 //! and gets derived — and neither do level-0 literals (their unit reasons are
 //! collected like any other). Pre-registration: `research/lrat-from-solver.md`.
 
+use crate::analyze::AnalyzeWork;
 use crate::bcp::{CRef, ClauseDb};
 use crate::literal::Lit;
 use crate::trail::{Reason, Trail};
@@ -102,31 +103,10 @@ impl ChainScratch {
     }
 }
 
-/// The RUP chain (clause ids) that refutes `learned` from the current trail,
-/// ending with `conflict`. `learned` may be empty (the final conflict at
-/// level 0).
-pub(crate) fn rup_chain(
-    trail: &Trail,
-    db: &ClauseDb,
-    conflict: CRef,
-    learned: &[Lit],
-    ids: &LratIds,
-    sc: &mut ChainScratch,
-) -> Vec<u64> {
-    if sc.seen.len() < trail.num_vars() {
-        sc.seen.resize(trail.num_vars(), false);
-    }
-    sc.touched.clear();
-    sc.stack.clear();
-    sc.out.clear();
-    for &l in learned {
-        let v = l.var() as usize;
-        if !sc.seen[v] {
-            sc.seen[v] = true;
-            sc.touched.push(v as u32);
-        }
-    }
-    sc.stack.push(conflict);
+/// Pop clauses off `sc.stack`; for each literal whose variable is not yet
+/// seen, mark it, record its reason as `(trail position, id)` in `sc.out`
+/// and push that reason to be examined in turn.
+fn drain_stack(trail: &Trail, db: &ClauseDb, ids: &LratIds, sc: &mut ChainScratch) {
     while let Some(c) = sc.stack.pop() {
         for &l in db.clause(c).literals {
             let v = l.var() as usize;
@@ -157,6 +137,116 @@ pub(crate) fn rup_chain(
             }
         }
     }
+}
+
+/// The same chain as [`rup_chain`], assembled from what 1-UIP analysis
+/// recorded while it worked (`AnalyzeWork::record_chain`): the reasons of
+/// the lower-level variables minimization visited (`chain_vars`) and of the
+/// level-0 cones it stepped over (`chain_level0`, walked here with the
+/// seen-set), sorted by trail position; then the pivots' reasons in trail
+/// order (resolution recorded them in reverse); then the conflict clause.
+/// Every lower-level trail position precedes every current-level one, so
+/// the concatenation is in trail order. Under `debug_assertions` the solver
+/// checks this against the walk on every conflict.
+pub(crate) fn rup_chain_from_analysis(
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict: CRef,
+    work: &AnalyzeWork,
+    ids: &LratIds,
+    sc: &mut ChainScratch,
+) -> Vec<u64> {
+    if sc.seen.len() < trail.num_vars() {
+        sc.seen.resize(trail.num_vars(), false);
+    }
+    sc.touched.clear();
+    sc.stack.clear();
+    sc.out.clear();
+    let entries = trail.entries();
+    // `chain_vars` can name a variable twice: minimization unmarks a removed
+    // literal at once, so a later redundancy proof may reach it again and
+    // mark it as part of its cone. The seen-set keeps each reason once, as
+    // the walk does.
+    for &v in &work.chain_vars {
+        let vi = v as usize;
+        if sc.seen[vi] {
+            continue;
+        }
+        sc.seen[vi] = true;
+        sc.touched.push(v);
+        match trail.position_of(v).map(|p| (p, entries[p].reason)) {
+            Some((p, Reason::Propagation(r))) => sc.out.push((p, ids.id(r))),
+            // Minimization only descends propagation reasons, so this is
+            // unreachable for a consistent trail; counted, as in the walk.
+            _ => sc.unjustified_literals += 1,
+        }
+    }
+    for &v in &work.chain_level0 {
+        let vi = v as usize;
+        if sc.seen[vi] {
+            continue;
+        }
+        sc.seen[vi] = true;
+        sc.touched.push(v);
+        match trail.position_of(v).map(|p| (p, entries[p].reason)) {
+            Some((p, Reason::Propagation(r))) => {
+                sc.out.push((p, ids.id(r)));
+                sc.stack.push(r);
+                drain_stack(trail, db, ids, sc);
+            }
+            _ => sc.unjustified_literals += 1,
+        }
+    }
+    sc.out.sort_unstable_by_key(|&(pos, _)| pos);
+    let mut chain: Vec<u64> = Vec::with_capacity(sc.out.len() + work.pivot_reasons.len() + 1);
+    chain.extend(sc.out.iter().map(|&(_, id)| id));
+    for &r in work.pivot_reasons.iter().rev() {
+        match r {
+            Reason::Propagation(c) => chain.push(ids.id(c)),
+            Reason::Decision | Reason::TheoryPropagation(_) => sc.unjustified_literals += 1,
+        }
+    }
+    chain.push(ids.id(conflict));
+    for &v in &sc.touched {
+        sc.seen[v as usize] = false;
+    }
+    chain
+}
+
+// Test hook: force the walk instead of the analysis by-product, so a test
+// can emit the same instance both ways and compare the bytes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CHAIN_BY_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The RUP chain (clause ids) that refutes `learned` from the current trail,
+/// ending with `conflict`. `learned` may be empty (the final conflict at
+/// level 0). Walks the implication graph; the solver's conflict path uses
+/// [`rup_chain_from_analysis`] and keeps this as the reference.
+pub(crate) fn rup_chain(
+    trail: &Trail,
+    db: &ClauseDb,
+    conflict: CRef,
+    learned: &[Lit],
+    ids: &LratIds,
+    sc: &mut ChainScratch,
+) -> Vec<u64> {
+    if sc.seen.len() < trail.num_vars() {
+        sc.seen.resize(trail.num_vars(), false);
+    }
+    sc.touched.clear();
+    sc.stack.clear();
+    sc.out.clear();
+    for &l in learned {
+        let v = l.var() as usize;
+        if !sc.seen[v] {
+            sc.seen[v] = true;
+            sc.touched.push(v as u32);
+        }
+    }
+    sc.stack.push(conflict);
+    drain_stack(trail, db, ids, sc);
     sc.out.sort_unstable_by_key(|&(pos, _)| pos);
     let mut chain: Vec<u64> = Vec::with_capacity(sc.out.len() + 1);
     chain.extend(sc.out.iter().map(|&(_, id)| id));
@@ -273,6 +363,45 @@ mod tests {
 
     /// Each LRAT fault must flip the in-crate verdict (the oracle is watched
     /// to fail). PHP(6) has well over ten learned clauses.
+    /// P1 of the by-product arc, explicitly: the same instance emitted with
+    /// the walk forced and with the analysis by-product gives the same bytes,
+    /// so every chain is the same sequence. (Debug builds also assert this on
+    /// every conflict inside the solver.)
+    #[test]
+    fn analysis_chain_and_walk_emit_identical_proofs() {
+        let mut cases = vec![
+            pigeonhole_dimacs(5),
+            pigeonhole_dimacs(6),
+            parity_chain_dimacs(8),
+            parity_chain_dimacs(10),
+        ];
+        for seed in 0..24u64 {
+            cases.push(random_3sat(60, 276, seed));
+        }
+        let emit = |text: &str, walk: bool| {
+            super::CHAIN_BY_WALK.with(|c| c.set(walk));
+            let inst = parse_dimacs_str(text).unwrap();
+            let mut buf = Vec::new();
+            let (r, st) =
+                solve_watched_lrat_with(inst.db, inst.num_vars, &mut buf, 20, false).unwrap();
+            super::CHAIN_BY_WALK.with(|c| c.set(false));
+            (r, st.unjustified, buf)
+        };
+        let mut unsat = 0;
+        for text in &cases {
+            let (r1, u1, a) = emit(text, false);
+            let (r2, u2, b) = emit(text, true);
+            assert_eq!(r1, r2);
+            assert_eq!((u1, u2), (0, 0));
+            if let SolveResult::Unsat = r1 {
+                unsat += 1;
+                assert!(!a.is_empty());
+            }
+            assert_eq!(a, b, "analysis chain and walk emit different proofs");
+        }
+        assert!(unsat >= 12, "only {unsat} UNSAT cases compared");
+    }
+
     #[test]
     fn lrat_faults_are_caught() {
         let text = pigeonhole_dimacs(6);
