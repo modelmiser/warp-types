@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- **Changed: the LRAT hint chain is a by-product of conflict analysis** (`warp-types-sat`): when the log wants
+  hints, analysis records each pivot's reason, the variables every successful redundancy proof marks, and the
+  level-0 variables minimization steps over (`AnalyzeWork::{record_chain, pivot_reasons, chain_vars, chain_level0}`);
+  `lrat_emit::rup_chain_from_analysis` assembles the chain from that record. The implication-graph walk
+  (`rup_chain`) stays as the oracle: debug builds compare the two chains on every conflict, and a test emits the
+  corpus both ways and compares bytes. Both text writers now format numbers into a reused byte buffer (`push_int`),
+  no `from_utf8` per number. Output bytes unchanged: every LRAT and DRAT proof of the 182-instance certification
+  corpus is byte-identical to the previous build's; `lrat-check` and `cake_lpr` verify 114 of 114. <!-- unguarded: 182, 114 — corpus size / campaign tally, research/lrat-from-solver-2026-11-11/ -->
+  **Measured 2026-11-11** (pre-registered, `research/lrat-from-solver.md`): instructions over the no-proof run on
+  random 3-SAT n = 200, LRAT text 740 → 385 M (−48 %), DRAT text 246 → 146 M (−41 %); wall time on n = 250, one
+  core, LRAT text +14.9 % → +7.0 %, LRAT binary +11.0 % → +5.0 %, DRAT +4.6 % → +3.3 %. The no-proof path carries
+  +0.6 % instructions for the record flag (+1.4–1.6 % wall in one session). Predictions missed and recorded: analysis
+  growth (+31 M against ≤ 15 M), the LRAT/DRAT instruction ratio (2.64 against ≤ 2.5), DRAT's wall gain (1.3 points
+  against ≤ 1). <!-- unguarded: 200, 250 — instance sizes n -->
 - **Added: binary DRAT** (`warp-types-sat`): `DratWriter::new_binary` / `with_format`,
   `solver::solve_watched_drat_format(db, n, out, interval, binary)`, `hybrid_solve_drat(…, binary)`,
   `proof::parse_drat_binary`, `solve --drat FILE --drat-binary` (`--certify` then runs drat-trim with `-i`), and
@@ -100,7 +114,8 @@
   **Measured 2026-11-03** (pre-registered, `research/lrat-from-solver.md`; `tools/lrat-campaign.py`): all 114 UNSAT (54 distinct instances across the corpus's three runs) <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   proofs of the certification corpus verified by `lrat-check`, `cake_lpr` and the in-crate checker, with no
   `drat-trim` in the path. Two predictions missed, both in the design's favour and recorded: logging overhead ≈ 4×
-  the DRAT logger's (+14 % text / +10 % binary vs +4 %, after a `CRef`-indexed id table and allocation-free number
+  the DRAT logger's (+14 % text / +10 % binary vs +4 % — since 2026-11-11 +7 % / +5 % vs +3 %, see the by-product
+  entry above; after a `CRef`-indexed id table and allocation-free number
   formatting — the DRAT writer gained from the latter too), and the end-to-end gain over DRAT + `drat-trim` is 2.8× at the median, 1.2× on the largest
   instances this solver finishes (untrimmed proofs grow 4× on long runs). **`lrat-trim`** (`lrat::trim`,
   `lrat::write_text`) then trims by backward reachability through the hints, linear and without propagation:

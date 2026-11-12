@@ -1,0 +1,5 @@
+== control (bad proof) output:
+c NOT VERIFIED
+c allocated 1024 4537 420
+c Added clauses = 1117.  Deleted clauses = 667.  Max live clauses = 450
+c verification time = 0.02 secs

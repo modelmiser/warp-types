@@ -222,15 +222,19 @@ fail-closed: no checker is not a pass.
   `solve --lrat FILE [--lrat-binary]` write clause ids and the RUP chain of
   every learned clause as the solver runs, so the proof checks with
   `lrat-check`, `cake_lpr` or the checker below with no `drat-trim` pass;
-  `--certify` with `--lrat` runs `lrat-check`. Each chain is derived from the
-  final learned clause by walking the implication graph and emitting the
-  reasons in trail order (`research/lrat-from-solver.md`). **Measured
+  `--certify` with `--lrat` runs `lrat-check`. Each chain is recorded during
+  conflict analysis — the pivots' reasons, the cones minimization proves, the
+  level-0 units it steps over — and emitted in trail order; a walk of the
+  implication graph from the learned clause is kept as the oracle and compared
+  against it in debug builds (`research/lrat-from-solver.md`). **Measured
   2026-11-03** on the certification corpus: all 114 UNSAT answers' proofs (54 distinct instances; the corpus's three runs share instances) <!-- unguarded: 114 — campaign tally, research/lrat-from-solver-2026-11-03/ -->
   verified by `lrat-check`, `cake_lpr` and this crate's checker. Costs, stated
-  because the pre-registration predicted better: logging overhead about 3× the
-  DRAT logger's (+14 % text, +10 % binary, vs +4 % for DRAT, of solve time on
-  random 3-SAT n = 250, one core; was +20 % before the id table became a
-  vector and the number formatting stopped allocating); proof <!-- unguarded: 250 — instance size n -->
+  because the pre-registration predicted better: logging overhead about 2× the
+  DRAT logger's (+7 % text, +5 % binary, vs +3 % for DRAT, of solve time on
+  random 3-SAT n = 250, one core, measured 2026-11-11; +14 % / +10 % vs +4 %
+  before the chain became a by-product of analysis and the writers formatted
+  into a byte buffer, +20 % before the id table became a vector and the number
+  formatting stopped allocating); proof <!-- unguarded: 250 — instance size n -->
   bytes about equal to `drat-trim -L`'s output on short runs and 4× on long
   ones (nothing is trimmed); end to end against the DRAT + `drat-trim` route
   2.8× faster at the median and 1.2× on the largest instances this solver

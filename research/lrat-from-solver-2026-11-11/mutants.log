@@ -1,0 +1,14 @@
+2026-11-12T05:02:48Z
+== m1 pivots not reversed
+m1: test exit=101 test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s FAILED: pigeonhole_proofs_verify random_3sat_proofs_verify_with_deletions_and_compaction analysis_chain_and_walk_emit_identical_proofs lrat_faults_are_caught test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s 
+restored+cmp ok
+== m2 level-0 cones ignored
+m2: test exit=101 test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s FAILED: pigeonhole_proofs_verify random_3sat_proofs_verify_with_deletions_and_compaction analysis_chain_and_walk_emit_identical_proofs lrat_faults_are_caught test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s 
+restored+cmp ok
+== m3 minimization marks not recorded
+m3: test exit=101 test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s FAILED: random_3sat_proofs_verify_with_deletions_and_compaction pigeonhole_proofs_verify analysis_chain_and_walk_emit_identical_proofs lrat_faults_are_caught test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.02s 
+restored+cmp ok
+== control: restored sources
+control: test exit=0 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.21s FAILED: 
+release solve rebuilt from restored sources: IDENTICAL to solve.new
+2026-11-12T05:03:23Z
