@@ -196,4 +196,4 @@ warp-types/
 
 ## License
 
-MIT
+MIT. Copyright (c) ModelMiser. The full text is in [LICENSE](LICENSE).

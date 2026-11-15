@@ -1,5 +1,6 @@
 [package]
 name = "warp-types-sat-fuzz"
+license = "MIT"
 version = "0.0.0"
 publish = false
 edition = "2021"
