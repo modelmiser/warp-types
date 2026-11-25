@@ -1250,6 +1250,51 @@ mod tests {
         }
     }
 
+    /// The one literal with no table key: `-(2^31 - 1)` has code `u32::MAX`,
+    /// and `code + 1` wraps to 0. Until 2026-11-25 the direct layout then
+    /// stored to the slot BEFORE the warp's region (`k - 1` with `k == 0`) —
+    /// the last slot of the neighbouring warp's region, or far outside the
+    /// table for warp 0. The kernel and SimWarp must both fail that lemma
+    /// closed and leave its neighbours' verdicts alone, in both layouts. Only
+    /// a hand-built proof reaches this; the parser caps variables at 2^26.
+    #[test]
+    fn check_kernel_fails_closed_on_the_literal_with_no_key() {
+        use crate::lrat::{Proof, Step};
+        let Some(ctx) = ctx() else { return };
+        let cnf = vec![vec![1], vec![-1]];
+        let no_key = -i32::MAX;
+        let add = |id: u64, lit: i32| Step::Add {
+            id,
+            lits: vec![lit],
+            hints: vec![1, 2],
+        };
+        // enough lemmas that several warps are in play, the bad one mid-way
+        let mut steps: Vec<Step> = (0..40u64).map(|k| add(3 + k, 2 + k as i32)).collect();
+        steps[17] = add(3 + 17, no_key);
+        let fp = super::super::flatten(&cnf, &Proof { steps });
+        let want: Vec<u8> = super::super::check_warp_codes(&fp)
+            .iter()
+            .map(|&c| c as u8)
+            .collect();
+        let mut expect = vec![0u8; 40];
+        expect[17] = 5;
+        assert_eq!(want, expect, "SimWarp fails only the lemma with no key");
+        let lits = ctx.stream().clone_htod(&fp.lits).unwrap();
+        let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
+        for blocks in [1u32, 7] {
+            let hashed = ctx
+                .check_lrat_codes_mode(&fp, &lits, &hints, blocks, Some(false))
+                .unwrap();
+            assert_eq!(hashed, want, "hashed, blocks={blocks}");
+            for slots in [128u32, 4096] {
+                let direct = ctx
+                    .launch_lrat_check(&fp, &lits, &hints, blocks, true, slots)
+                    .unwrap();
+                assert_eq!(direct, want, "direct, blocks={blocks}, slots={slots}");
+            }
+        }
+    }
+
     /// A caller-supplied block count past the kernel's 32-bit table
     /// arithmetic (blocks · 4 warps · 4,096 slots ≥ 2^32 from 262,144 blocks)
     /// is clamped, not wrapped. The proof needs more lemmas than that, or the

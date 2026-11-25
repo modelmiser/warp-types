@@ -1685,7 +1685,11 @@ impl LitTable {
         if self.count >= Self::CAP - 1 {
             return false;
         }
-        let k = Self::code(l) + 1;
+        // code u32::MAX (the literal -(2^31 - 1)) has no key: fail closed, as
+        // the kernel's `lrat_insert` does
+        let Some(k) = Self::code(l).checked_add(1) else {
+            return false;
+        };
         let mut i = Self::hash(k);
         loop {
             if self.slots[i] == 0 {
@@ -1702,7 +1706,9 @@ impl LitTable {
     /// Is `l` falsified (its code present)?
     #[inline]
     fn falsified(&self, l: i32) -> bool {
-        let k = Self::code(l) + 1;
+        let Some(k) = Self::code(l).checked_add(1) else {
+            return false; // never inserted (see `insert`)
+        };
         let mut i = Self::hash(k);
         loop {
             let s = self.slots[i];

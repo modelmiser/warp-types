@@ -352,13 +352,19 @@ fn lrat_hash(k: u32) -> u32 {
 /// # Safety
 ///
 /// `table` must be valid for reads over this warp's region: slots
-/// `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)` otherwise.
-/// The region must belong to this warp alone. The other lanes of the warp may
-/// run the same call at the same time (they store identical values); no other
-/// thread may write the region.
+/// `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)` otherwise,
+/// and `base` plus the region size must not exceed `u32::MAX` (the index is
+/// formed in `u32`). No thread outside this warp may write the region.
 #[inline(always)]
 unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32) -> bool {
-    let k = lrat_code(l) + 1;
+    // `code + 1` is the key; for the one literal whose code is u32::MAX
+    // (-(2^31 - 1)) it wraps to 0, and `k - 1` would then index one slot
+    // BEFORE the region. No real proof has such a literal (the parser caps
+    // variables far below); fail closed.
+    let k = lrat_code(l).wrapping_add(1);
+    if k == 0 {
+        return false;
+    }
     if direct {
         // The caller has already refused codes past the region (it turns them
         // into TableOverflow); the bound keeps even a broken caller inside
@@ -397,11 +403,21 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 ///
 /// # Safety
 ///
-/// `table` must be valid for reads and writes over this warp's region: slots
-/// `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)` otherwise.
-/// The region must belong to this warp alone. The other lanes of the warp may
-/// run the same call at the same time (they store identical values); no other
-/// thread may write the region.
+/// - `table` must be valid for reads and writes over this warp's region:
+///   slots `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)`
+///   otherwise, and `base` plus the region size must not exceed `u32::MAX`
+///   (the index is formed in `u32`). No thread outside this warp may touch
+///   the region.
+/// - `*count` must be this lemma's true occupancy of the region (the number
+///   of slots carrying `stamp`). The hashed probe loop has no bound of its
+///   own: it ends because the cap test above keeps one slot free.
+/// - Every lane of the warp calls this with the same arguments, and the
+///   kernel relies on the lanes doing so IN LOCKSTEP: all of them load the
+///   slot before any of them stores to it, so all of them see the same thing
+///   and `*count` stays the same in every lane. That is how a converged warp
+///   executes in practice; the PTX ISA does not promise it on sm_70 and
+///   later. If one lane's store were seen by another lane's load, the two
+///   would count differently and later diverge at the cap test.
 #[inline(always)]
 unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32, count: &mut u32) -> bool {
     // The cap comes FIRST, before the key is looked up — exactly as SimWarp's
@@ -411,7 +427,14 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slot
     if *count >= LRAT_TABLE - 1 {
         return false;
     }
-    let k = lrat_code(l) + 1;
+    // `code + 1` wraps to 0 for the one literal whose code is u32::MAX
+    // (-(2^31 - 1)); `k - 1` would then index one slot BEFORE the region.
+    // Until 2026-11-25 this was not caught (`0 > slots` is false) and the
+    // direct layout stored to `table[base - 1]` (cross-vendor panel).
+    let k = lrat_code(l).wrapping_add(1);
+    if k == 0 {
+        return false;
+    }
     // Direct layout: a code past the region means the host's guarantee is
     // broken — fail closed (TableOverflow: no verdict) rather than alias.
     if direct && k > slots {
@@ -487,8 +510,11 @@ unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
 /// - Warp: all 32 lanes are converged and all execute this call with the same
 ///   arguments, `lane` excepted (it ends in a raw full-mask `syncwarp`).
 ///   `*count` is the same in every lane.
-/// - `lits` must be valid for reads over `[cs, ce)`.
-/// - `table`: as [`lrat_insert`], for the same `base`, `direct` and `slots`.
+/// - `lits` must be valid for reads over `[cs, ce)`, with `cs <= ce` and
+///   `ce <= u32::MAX - 63` (the walk forms `cs + lane` and steps by 32 in
+///   `u32`).
+/// - `table` and `*count`: as [`lrat_insert`], for the same `base`, `direct`
+///   and `slots`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn lrat_hint_strided(
@@ -581,8 +607,9 @@ unsafe fn lrat_hint_strided(
 ///   `deleted_at[hc]`, `clause_start[hc]` and `clause_start[hc + 1]` must be
 ///   readable, `clause_start[hc] <= clause_start[hc + 1]`, and `lits` must be
 ///   valid for reads over `[clause_start[hc], clause_start[hc + 1])`.
-/// - `table`: as [`lrat_insert`] with `direct = true`, for the same `base`
-///   and `slots`.
+/// - `table` and `*count`: as [`lrat_insert`] with `direct = true`, for the
+///   same `base` and `slots`. A hint wider than 32 literals goes through
+///   [`lrat_hint_strided`], whose index requirement applies to its clause.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 unsafe fn lrat_hints_direct_batched(
@@ -692,15 +719,17 @@ unsafe fn lrat_hints_direct_batched(
         let mut past = false;
         if valid {
             lit = *lits.add((cs + off) as usize);
-            let k = lrat_code(lit) + 1;
-            let kn = lrat_code(-lit) + 1;
+            // wrapping: a code of u32::MAX gives key 0 (see `lrat_insert`),
+            // refused just below with the codes past the region
+            let k = lrat_code(lit).wrapping_add(1);
+            let kn = lrat_code(lit.wrapping_neg()).wrapping_add(1);
             // Both the literal and its negation must lie in the region: the
             // negation is probed now (`negp`) rather than at insert time as
             // `lrat_insert` does. For an EVEN `slots` the two tests agree with
             // the strided loop's (`code(l) < slots` iff `code(-l) < slots`);
             // the launcher asserts it, since an odd region would make this
             // path report 5 where the strided loop reports 0 or 1.
-            if k > slots || kn > slots {
+            if k == 0 || kn == 0 || k > slots || kn > slots {
                 past = true; // the host's guarantee is broken
             } else {
                 let e = *table.add((base + k - 1) as usize);
@@ -783,6 +812,24 @@ unsafe fn lrat_hints_direct_batched(
 /// (research/edp-record.md §9: `slots` may exceed `LRAT_TABLE`; the
 /// occupancy cap stays `LRAT_TABLE - 1`). `codes[i]` receives lemma `i`'s
 /// code.
+///
+/// Host obligations — the kernel checks none of these; they are the
+/// preconditions of the `unsafe` helpers it calls:
+/// - `clause_start` is a prefix array: nondecreasing, with one entry past the
+///   last clause, and every range `[clause_start[c], clause_start[c + 1])`
+///   lies inside `lits`.
+/// - For every `i < num_lemmas`: `lemma_clause[i]`, `lemma_step[i]`,
+///   `hint_start[i]` and `hint_start[i + 1]` are readable; `hint_start` is
+///   nondecreasing and its ranges lie inside `hints`; `lemma_clause[i]` and
+///   `lemma_clause[i] + 1` index `clause_start`.
+/// - Every hint value below its lemma's `lemma_clause[i]` indexes
+///   `deleted_at` and `clause_start` (with `+ 1`).
+/// - `codes` holds `num_lemmas` bytes; `table` is as described above; every
+///   array length is at most `u32::MAX - 64`.
+///
+/// `lrat_warp::flatten` builds arrays with these properties. The launcher
+/// (`gpu_launcher::launch_lrat_check`) verifies sizes only, and `FlatProof`'s
+/// fields are public, so a hand-built `FlatProof` is the caller's obligation.
 #[warp_kernel]
 pub fn lrat_check_lemmas(
     lits: *const i32,
@@ -1070,7 +1117,9 @@ fn dec_scan_compose(warp: &Warp<All>, lane: u32, table: u32) -> u32 {
 ///   and `o_del_pos` from `del_base` for its deletions. Those counts are the
 ///   ones a pass-1 call with the same `bytes`, `len`, `lo` and `hi` returned
 ///   in `out_counts`, so the bytes must not change between the passes, and no
-///   other slice's records may share those ranges.
+///   other slice's records may share those ranges. Pass 2 may be called only
+///   for a slice whose pass-1 call returned `DEC_CLEAN`: for any other flag
+///   the host sizes that slice's ranges as empty.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 unsafe fn dec_slice_warp(
@@ -1668,7 +1717,11 @@ pub fn lrat_scan_slices_serial(
 ///
 /// # Safety
 ///
-/// `seg_dst` must be valid for reads over `[0, n_seg)`.
+/// `seg_dst` must be valid for reads over `[0, n_seg)`. For the result to be
+/// a segment the callers can index with — they read `seg_src[k]` and subtract
+/// `seg_dst[k]` from `i` — `n_seg >= 1`, `seg_dst[0] == 0` and `seg_dst` must
+/// be nondecreasing; with `n_seg == 0` this returns 0 without reading, and
+/// the caller's `seg_src[0]` is then out of bounds.
 #[inline(always)]
 unsafe fn dec_segment_of(seg_dst: *const u32, n_seg: u32, i: u32) -> u32 {
     let mut lo = 0u32;

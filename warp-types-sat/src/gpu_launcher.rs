@@ -1045,9 +1045,13 @@ impl GpuContext {
 
     /// The direct layout's region size for a proof whose largest literal
     /// code is `max_code`: whole 128-byte lines of 64-bit slots, at least one
-    /// (`research/edp-record.md` §9). Every code of the proof is below it.
+    /// (`research/edp-record.md` §9). Every code of the proof is below it —
+    /// except for `max_code > u32::MAX - 32`, where no u32 region can hold the
+    /// code: the result saturates at the largest multiple of 32 (it wrapped to
+    /// 0 until 2026-11-25) and the kernel fails such a lemma closed. Only a
+    /// hand-built literal reaches that; the parser caps variables at 2^26.
     pub fn lrat_direct_slots(max_code: u32) -> u32 {
-        (max_code / 32 + 1) * 32
+        (max_code / 32 + 1).saturating_mul(32) & !31
     }
 
     /// The block count the check launch will use for `blocks` (0 = pick)
