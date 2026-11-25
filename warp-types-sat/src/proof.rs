@@ -834,6 +834,57 @@ fn rup(active: &std::collections::HashMap<Vec<i64>, usize>, clause: &[i64]) -> b
     }
 }
 
+/// Reading an external checker's verdict, for the tests of this crate that
+/// run one (`proof::tests`, `lrat::tests`). The same rule as the shipped
+/// tools (`solve --certify`, `tools/cert-campaign.py`): a banner counts only
+/// as a WHOLE LINE of stdout, and only with exit status 0. Until 2026-11-25
+/// these tests matched the banner as a substring and ignored the exit status,
+/// so a checker that printed it and then died, or printed it inside another
+/// line, counted as having verified.
+#[cfg(test)]
+pub(crate) mod banner {
+    /// Is `banner` a whole line of `stdout`? `\r` and `\n` both end a line
+    /// (drat-trim separates its progress output with `\r`).
+    pub(crate) fn has_line(stdout: &[u8], banner: &str) -> bool {
+        String::from_utf8_lossy(stdout)
+            .split(['\r', '\n'])
+            .any(|l| l.trim() == banner)
+    }
+
+    /// Verified: exit status 0, the line `yes`, and no line `no`.
+    pub(crate) fn verified(exit_ok: bool, stdout: &[u8], yes: &str, no: Option<&str>) -> bool {
+        exit_ok && has_line(stdout, yes) && !no.is_some_and(|n| has_line(stdout, n))
+    }
+
+    /// [`verified`] for drat-trim.
+    pub(crate) fn drat_trim(out: &std::process::Output) -> bool {
+        verified(
+            out.status.success(),
+            &out.stdout,
+            "s VERIFIED",
+            Some("s NOT VERIFIED"),
+        )
+    }
+
+    #[test]
+    fn a_banner_counts_only_as_a_whole_line_with_exit_zero() {
+        let v =
+            |ok, text: &str| verified(ok, text.as_bytes(), "s VERIFIED", Some("s NOT VERIFIED"));
+        assert!(v(true, "c parsing\ns VERIFIED\n"));
+        assert!(v(true, "c 10%\rc 90%\rs VERIFIED\r\n"), "\\r ends a line");
+        assert!(!v(false, "s VERIFIED\n"), "printed the banner, then died");
+        assert!(!v(true, "c the line s VERIFIED would mean success\n"));
+        assert!(!v(true, "s VERIFIED UNSAT\n"), "another checker's banner");
+        assert!(!v(true, "s NOT VERIFIED\n"));
+        assert!(!v(true, "s VERIFIED\ns NOT VERIFIED\n"), "both: refuse");
+        assert!(!v(true, ""));
+        // without a refusal line (lrat-check, cake_lpr)
+        assert!(verified(true, b"c VERIFIED\n", "c VERIFIED", None));
+        assert!(!verified(true, b"c NOT VERIFIED\n", "c VERIFIED", None));
+        assert!(!verified(true, b"s VERIFIED\n", "s VERIFIED UNSAT", None));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -999,20 +1050,16 @@ mod tests {
             let text = pigeonhole_dimacs(n);
             let (r, bin, _) = drat_both_layouts(&text, interval);
             assert_eq!(r, SolveResult::Unsat);
-            let auto = drat_trim_output(&format!("bin-php{n}"), &text, &bin, &[]).unwrap();
+            let (auto_ok, auto) =
+                drat_trim_output(&format!("bin-php{n}"), &text, &bin, &[]).unwrap();
             assert!(
                 auto.contains("turning on binary mode"),
                 "PHP({n}): drat-trim did not detect the binary layout:\n{auto}"
             );
-            assert!(
-                auto.contains("s VERIFIED") && !auto.contains("s NOT VERIFIED"),
-                "PHP({n}) autodetect:\n{auto}"
-            );
-            let forced = drat_trim_output(&format!("bin-php{n}-i"), &text, &bin, &["-i"]).unwrap();
-            assert!(
-                forced.contains("s VERIFIED") && !forced.contains("s NOT VERIFIED"),
-                "PHP({n}) -i:\n{forced}"
-            );
+            assert!(auto_ok, "PHP({n}) autodetect:\n{auto}");
+            let (forced_ok, forced) =
+                drat_trim_output(&format!("bin-php{n}-i"), &text, &bin, &["-i"]).unwrap();
+            assert!(forced_ok, "PHP({n}) -i:\n{forced}");
         }
     }
 
@@ -1121,9 +1168,15 @@ mod tests {
         })
     }
 
-    /// Run drat-trim on proof BYTES with extra args; returns its whole stdout,
-    /// or `None` when no checker is configured.
-    fn drat_trim_output(tag: &str, cnf: &str, proof: &[u8], extra: &[&str]) -> Option<String> {
+    /// Run drat-trim on proof BYTES with extra args; returns whether it
+    /// verified ([`super::banner::drat_trim`]) and its whole stdout, or `None`
+    /// when no checker is configured.
+    fn drat_trim_output(
+        tag: &str,
+        cnf: &str,
+        proof: &[u8],
+        extra: &[&str],
+    ) -> Option<(bool, String)> {
         let bin = drat_trim_bin()?;
         let dir =
             std::env::temp_dir().join(format!("warp-types-sat-drat-{}-{tag}", std::process::id()));
@@ -1138,7 +1191,10 @@ mod tests {
             .args(extra)
             .output()
             .expect("DRAT_TRIM is set or drat-trim is on PATH but it did not run");
-        Some(String::from_utf8_lossy(&out.stdout).replace('\r', "\n"))
+        Some((
+            super::banner::drat_trim(&out),
+            String::from_utf8_lossy(&out.stdout).replace('\r', "\n"),
+        ))
     }
 
     /// Run drat-trim with extra args; returns its `s ...` verdict line, or
@@ -1158,10 +1214,10 @@ mod tests {
             .args(extra)
             .output()
             .expect("DRAT_TRIM is set or drat-trim is on PATH but it did not run");
-        let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
-        Some(if text.contains("s NOT VERIFIED") {
+        // Whole lines, and `s VERIFIED` only with exit status 0.
+        Some(if super::banner::has_line(&out.stdout, "s NOT VERIFIED") {
             "s NOT VERIFIED".to_string()
-        } else if text.contains("s VERIFIED") {
+        } else if super::banner::drat_trim(&out) {
             "s VERIFIED".to_string()
         } else {
             format!("(no verdict; exit {:?})", out.status.code())
@@ -1462,7 +1518,7 @@ mod tests {
                 .expect("run drat-trim");
             let stdout = String::from_utf8_lossy(&out.stdout);
             assert!(
-                stdout.contains("s VERIFIED"),
+                super::banner::drat_trim(&out),
                 "drat-trim did not verify PHP({n}):\n{stdout}\n{}",
                 String::from_utf8_lossy(&out.stderr)
             );

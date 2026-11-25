@@ -10,12 +10,14 @@
   were not committed; re-running it reproduces the same result.
 - **Changed (behaviour): `Warp::sync` and `fence::threadfence` now emit code on `nvptx64`.** Both emitted nothing
   on any target through 0.4.3. Other targets are unchanged (nothing emitted).
-  - `Warp<S>::sync()`: every lane takes a full-mask `vote.sync.ballot` of `true` (the warp's live lanes), and each
-    live lane in `S` then executes `bar.warp.sync` with membermask `S::MASK & live`; lanes outside `S` skip the
-    barrier. The intersection is there because the PTX ISA (9.5) does not exempt exited or missing lanes for
-    `bar.warp.sync` as it does for `shfl.sync` / `vote.sync`, and in a partial last warp `S::MASK` names lanes
-    that do not exist. It rests on one thing the ISA does not state in so many words for `vote.sync.ballot`: that
-    a missing lane contributes 0 (stated for `activemask` and the older `vote.ballot`).
+  - `Warp<S>::sync()`: each lane in `S` takes a `vote.sync.ballot` of `true` over `S::MASK` (the live lanes of
+    `S`) and then executes `bar.warp.sync` with membermask `S::MASK & live`; lanes outside `S` execute neither,
+    and `sync` waits for no lane outside `S`. The ballot is there because the PTX ISA (9.5) does not exempt
+    exited or missing lanes for `bar.warp.sync` as it does for `shfl.sync` / `vote.sync`, and in a partial last
+    warp `S::MASK` names lanes that do not exist. It rests on two things the ISA does not state in so many words
+    for a never-launched lane under `vote.sync.ballot`: that the ballot does not wait for it, and that it
+    contributes 0 (the ISA says "non-exited" for the wait, and says an exited or inactive thread contributes 0
+    for `activemask` and the older `vote.ballot`).
   - `sync` still rests on the `Warp<S>` witness: a forged handle, or a live lane that never arrives, hangs it or
     leaves it undefined. "Trusted entry points" on `kernel_entry` gains items for launch geometry and for a lane
     that never arrives; `gpu::syncwarp`'s `# Safety` quotes the ISA.
@@ -25,20 +27,43 @@
     nothing and returns `T::default()`) with the fence as its one real instruction — and that lanes of one warp
     reading each other's data need `sync()`, which suffices on its own there.
   - `scripts/check-ptx-operands.sh` matches the emitted instruction sequence for `Warp<Even>`, `Warp<Odd>` and
-    `Warp<All>`, each register tied to the next: ballot over the full mask, `and` with the set's mask, this
-    lane's bit of that value tested, a branch on the negated test skipping exactly the barrier, the barrier's
-    operand that same value. It fails when the barrier is given the plain set mask and when the guard is
-    inverted. It is a check of emitted code under the pinned toolchain, not of run-time legality.
+    `Warp<All>` with every register tied to the one before it and nothing allowed in between: `%laneid`, this
+    lane's bit tested against the set's mask, a branch on that test to a label, a predicate set to true, a
+    ballot of that predicate over the set's mask, the result ANDed with the mask, the barrier with that value,
+    the label. It fails when the barrier is given the plain set mask, when the guard is inverted and when the
+    ballot's predicate is not constant true. It is a check of emitted code under the pinned toolchain, not of
+    run-time legality.
   - Observed by hand on an RTX 4000 Ada (compute 8.9), not reproducible from this repository (the runner is not
     committed): the ballot reported exactly the live lanes for block sizes 1, 16, 20, 33, 48 and 63, and the
     probe kernels gave correct output without a hang on full, multi-warp and partial blocks.
 - **Fixed: an out-of-region table index in the LRAT check kernels** (`warp-types-sat`). The table key is
   `code + 1`; for the one literal whose code is `u32::MAX` (`-(2^31 - 1)`) it wrapped to 0, the direct layout's
   bound test (`k > slots`) let it through, and `k - 1` indexed the slot before the warp's region — the
-  neighbouring warp's last slot, or far outside the table. `lrat_falsified`, `lrat_insert` and the batched hint
-  loop now fail such a literal closed (TableOverflow), `SimWarp`'s table does the same, and
-  `lrat_direct_slots` saturates where it used to wrap to 0. Only a hand-built `FlatProof` reaches this (the
-  parser caps variables at 2^26). A device test builds one and fails without the fix.
+  neighbouring warp's last slot, or far outside the table. `lrat_insert` and the batched hint loop now fail such
+  a literal closed (TableOverflow), `lrat_falsified` reports it as not present, and `SimWarp`'s table does the
+  same. The launcher now refuses, before any launch, a proof with a literal of magnitude `2^31 - 1` or more
+  (`lrat_max_code` reports `u32::MAX` for it; `i32::MIN` and `2^31 - 1` have the same problem through their
+  negations). `lrat_direct_slots` saturates where it wrapped to 0 in release builds, and a direct region past
+  `LRAT_DIRECT_SLOTS_MAX` (`u32::MAX / 4`, the kernel's 32-bit table arithmetic) is refused or, when the layout
+  is not forced, replaced by the hashed layout. Only a hand-built `FlatProof` reaches any of this (the parser
+  caps variables at 2^26). A device test builds one; it fails with the insert guard removed.
+- **Fixed: the device launchers validate what the kernels index with** (`warp-types-sat`, `gpu` feature). They
+  checked aggregate sizes only, and `FlatProof`'s fields are public, so safe host code could make the kernels
+  read device memory out of bounds.
+  - `FlatProof::check_device_invariants` (new, host-only): every `clause_start` entry lies
+    inside the literal array, `hint_start` is a prefix array inside the hint array, `deleted_at` / `lemma_step`
+    have the right lengths, every lemma names a clause whose range is not inverted. (`clause_start` is not
+    required to be nondecreasing throughout: the batch route's layout restarts at each proof's region.) `check_lrat_codes*` run it before every launch and return an error; the lemma count is bounded
+    against the kernel's 32-bit stride.
+  - `decode_lrat_slices_device` refuses a `len` past the bytes on the device and a slice count past `u32`.
+  - `gather_lrat_payloads` checks its host segment lists: source 0 or 1, every segment inside its source, the
+    lengths adding up to the output.
+  - **Breaking:** `gather_lits_into` and `gather_hints_into` are now `unsafe fn`. Their segment lists live on
+    the device, so the launcher cannot check what they say; they check the view lengths and state the rest as a
+    `# Safety` contract. `gather_lrat_payloads` is the checked way in.
+- **Fixed: `lrat_batch_device::check_pipelined` hung on an error.** When a chunk's prepare or check returned an
+  error, the reader thread stayed blocked sending to a channel nobody read and the call never returned. The
+  checker now closes the channel on its way out.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`. The insert
   contract states an assumption the kernel has always made: the lanes of a warp execute an insert in lockstep,
@@ -49,8 +74,9 @@
   `tools/cert-campaign.py`, `tools/lrat-campaign.py`, `tools/lrat-mutate.py`, `smt-crosscheck` and three
   `reproduce/` scripts (where `lrat-check`'s exit status was also read from the wrong command). `cake_lpr` was
   seen to exit 0 on a truncated proof it rejected (PHP(6), 2026-11-25; not archived here), so the banner stays
-  necessary; the exit status alone is never a verdict. Test-only parsers in `proof.rs` and `lrat.rs` still use
-  the substring match.
+  necessary; the exit status alone is never a verdict. The crate's own tests that run an external checker
+  (`proof.rs`, `lrat.rs`) used the substring match too; they now share one whole-line, exit-checked helper
+  (`proof::banner`, test-only) with a test of its own.
 - **Added: binary DRAT** (`warp-types-sat`): `DratWriter::new_binary` / `with_format`,
   `solver::solve_watched_drat_format(db, n, out, interval, binary)`, `hybrid_solve_drat(…, binary)`,
   `proof::parse_drat_binary`, `solve --drat FILE --drat-binary` (`--certify` then runs drat-trim with `-i`), and

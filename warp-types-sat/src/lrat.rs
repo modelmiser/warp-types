@@ -1133,7 +1133,13 @@ mod tests {
                     .arg(&p)
                     .output()
                     .expect("run lrat-check");
-                let theirs = String::from_utf8_lossy(&ext.stdout).contains("c VERIFIED");
+                // lrat-check exits 0 whatever it found: the line is the verdict.
+                let theirs = crate::proof::banner::verified(
+                    ext.status.success(),
+                    &ext.stdout,
+                    "c VERIFIED",
+                    None,
+                );
                 n += 1;
                 if ours == theirs {
                     agreed += 1;
@@ -1146,7 +1152,12 @@ mod tests {
                         .arg(&p)
                         .output()
                         .expect("run cake_lpr");
-                    let cv = String::from_utf8_lossy(&o.stdout).contains("s VERIFIED");
+                    let cv = crate::proof::banner::verified(
+                        o.status.success(),
+                        &o.stdout,
+                        "s VERIFIED UNSAT",
+                        None,
+                    );
                     assert_eq!(ours, cv, "{stem}: ours vs cake_lpr");
                 }
                 verified += usize::from(ours);
