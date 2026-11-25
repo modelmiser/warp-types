@@ -28,6 +28,10 @@ DT=6  # this machine runs a live stack: six cores, niced
 # this script lost every CPU timing to that).
 now() { date +%s%N; }
 el() { local ms=$(( ($2 - $1) / 1000000 )); printf "%d.%03d" $((ms / 1000)) $((ms % 1000)); }
+# A checker verified only if it exited 0 AND printed the banner as a whole line. cake_lpr exits 0 on a proof it
+# rejects, so the exit code alone is no verdict; a substring match alone accepts a checker that printed the banner
+# and then died. (Until 2026-11-25 lrat-check's exit was read from the timestamp call after it, i.e. never.)
+verified() { [ "$1" -eq 0 ] && printf '%s\n' "$2" | tr '\r' '\n' | grep -qxE "[[:space:]]*$3[[:space:]]*" && echo VERIFIED || echo NOT; }
 
 echo "name,t_solve,bytes_untrimmed,t_trim,bytes_trimmed,t_decode,t_device,gpu_verdict,t_lrat_check,lrat_check,t_cake,cake" > "$CSV"
 log "=== (A) Solver → binary LRAT → trim → device check, per instance (decode threads $DT) ==="
@@ -43,10 +47,10 @@ for c in "$CHAIN"/cnf/*.cnf; do
     td=$(echo "$g" | grep -oE 'flat-decode\([0-9]+\) [0-9.]+' | grep -oE '[0-9.]+$' | head -1)
     tg=$(echo "$g" | grep -oE 'device [0-9.]+s' | grep -oE '[0-9.]+' | head -1)
     gv=$(echo "$g" | grep -E '^s ' | head -1 | cut -c3-)
-    t4=$(now); lcout=$("$LC" "$c" "$o.t.lrat" 2>&1); t5=$(now)
-    lcv=$([ $? -eq 0 ] && echo "$lcout" | grep -q "c VERIFIED" && echo VERIFIED || echo NOT)
-    t6=$(now); ck=$("$CAKE" "$c" "$o.t.blrat" 2>&1); t7=$(now)
-    ckv=$(echo "$ck" | grep -q "s VERIFIED" && echo VERIFIED || echo NOT)
+    t4=$(now); lcout=$("$LC" "$c" "$o.t.lrat" 2>&1); lcrc=$?; t5=$(now)
+    lcv=$(verified "$lcrc" "$lcout" "c VERIFIED")
+    t6=$(now); ck=$("$CAKE" "$c" "$o.t.blrat" 2>&1); ckrc=$?; t7=$(now)
+    ckv=$(verified "$ckrc" "$ck" "s VERIFIED UNSAT")
     echo "$n,$(el $t0 $t1),$b0,$(el $t2 $t3),$b1,${td:-},${tg:-},${gv:-none},$(el $t4 $t5),$lcv,$(el $t6 $t7),$ckv" >> "$CSV"
     echo "$n: solve $(el $t0 $t1)s trim $(el $t2 $t3)s bytes $b0->$b1 decode ${td:-?}s device ${tg:-?}s gpu=${gv:-none} lrat-check=$lcv ($(el $t4 $t5)s) cake=$ckv ($(el $t6 $t7)s)" | tee -a "$R"
     rm -f "$o.blrat" "$o.t.lrat"
@@ -54,7 +58,7 @@ done
 
 log "=== (B) One large external proof, same machine: lrat-check (text) / cake_lpr (binary) / device (binary) ==="
 c=$CHAIN/big.cnf
-t0=$(now); "$LC" "$c" $CHAIN/big.lrat > $OUT/big.lc.txt 2>&1; t1=$(now); log "lrat-check (text, $(stat -c %s $CHAIN/big.lrat) bytes): $(el $t0 $t1)s $(grep -c 'c VERIFIED' $OUT/big.lc.txt)"
-t0=$(now); "$CAKE" "$c" $CHAIN/big.blrat > $OUT/big.ck.txt 2>&1; t1=$(now); log "cake_lpr (binary, $(stat -c %s $CHAIN/big.blrat) bytes): $(el $t0 $t1)s $(grep -c 's VERIFIED' $OUT/big.ck.txt)"
+t0=$(now); "$LC" "$c" $CHAIN/big.lrat > $OUT/big.lc.txt 2>&1; rc=$?; t1=$(now); log "lrat-check (text, $(stat -c %s $CHAIN/big.lrat) bytes): $(el $t0 $t1)s $(verified $rc "$(cat $OUT/big.lc.txt)" "c VERIFIED")"
+t0=$(now); "$CAKE" "$c" $CHAIN/big.blrat > $OUT/big.ck.txt 2>&1; rc=$?; t1=$(now); log "cake_lpr (binary, $(stat -c %s $CHAIN/big.blrat) bytes): $(el $t0 $t1)s $(verified $rc "$(cat $OUT/big.ck.txt)" "s VERIFIED UNSAT")"
 LRAT_GPU=1 LRAT_GPU_BLOCKS=4096 LRAT_SKIP_SLOW=1 LRAT_DECODE_THREADS=$DT "$CHK" "$c" $CHAIN/big.blrat 4 2>&1 | grep -E "^c read|^c flat|^c gpu|^s " | tee -a "$R"
 log "=== DONE ==="

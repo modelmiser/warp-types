@@ -70,7 +70,8 @@ for d in /tmp/lrat-archive/*/; do
         if ! echo "$out" | grep -q "^s "; then err=$((err+1)); [ $err -le 3 ] && echo "ERROR $b (exit $rc): $(echo "$out" | grep -E 'panicked|Error|error' | head -2 | tr '\n' ' ')" | tee -a "$R"
         elif echo "$out" | grep -q "DISAGREE"; then dis=$((dis+1)); echo "DISAGREE $b: $(echo "$out" | grep -E '^c gpu|^s ' | tr '\n' ' ')" | tee -a "$R"
         else ok=$((ok+1)); fi
-        echo "$out" | grep -q "^s VERIFIED" && ver=$((ver+1))
+        # verified = exit 0 AND the whole line (the checker exits 1 on NOT VERIFIED, 3 on a GPU disagreement)
+        [ $rc -eq 0 ] && echo "$out" | grep -qx "s VERIFIED" && ver=$((ver+1))
     done
 done
 log "archive: $n proofs, $ok agree, $dis disagree, ${err:-0} errors, $ver verified"
