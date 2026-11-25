@@ -68,6 +68,9 @@ bash scripts/check-ptx-operands.sh
 echo "pre-push: paper sync (section files == paper.md spans)"
 bash scripts/check-paper-sync.sh
 
+echo "pre-push: axiom scan (lean/axiom-scan.txt == what AxiomScan.lean prints)"
+bash scripts/check-axiom-scan.sh
+
 echo "pre-push: doc count freshness"
 bash scripts/check-doc-counts.sh
 

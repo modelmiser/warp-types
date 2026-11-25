@@ -15,7 +15,7 @@ This catches three classes of bugs:
 
 ## Theorems Proven
 
-Core theorems are fully machine-checked. Zero sorry; a `CollectAxioms` scan of all 530 theorem constants in the `WarpTypes.*` modules (2026-10-18) finds only Lean's standard `propext`, `Classical.choice`, `Quot.sound`. <!-- unguarded: 530 — CollectAxioms scan count (all theorem constants in WarpTypes.*), dated 2026-10-18; the guard totals only Basic + Metatheory -->
+Core theorems are fully machine-checked. Zero sorry; a `CollectAxioms` scan of all 530 theorem constants in the `WarpTypes.*` modules (2026-10-18) finds only Lean's standard `propext`, `Classical.choice`, `Quot.sound`. The scan is `AxiomScan.lean`, its output `axiom-scan.txt` (reproduced 2026-11-25); `scripts/check-axiom-scan.sh` and CI compare the two. <!-- unguarded: 530 — CollectAxioms scan count (all theorem constants in WarpTypes.*), lean/axiom-scan.txt, kept current by scripts/check-axiom-scan.sh -->
 
 | Theorem | Statement | File |
 |---------|-----------|------|
@@ -58,7 +58,7 @@ Requires Lean 4.28.0. No external Lake dependencies.
 lake build
 ```
 
-The build completes with zero errors and zero sorry; no axioms beyond Lean's standard three. Warnings are limited to unused simp arguments (cosmetic).
+The build completes with zero errors and zero sorry; no axioms beyond Lean's standard three. To re-run the axiom scan: `lake env lean AxiomScan.lean` (it fails if any theorem depends on another axiom; a `sorry` would show as `sorryAx`). Warnings are limited to unused simp arguments (cosmetic).
 
 ## Repository Structure
 

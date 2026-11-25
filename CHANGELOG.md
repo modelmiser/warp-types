@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- **Added: the axiom scan is in the repository.** `lean/AxiomScan.lean` walks every theorem constant of the modules
+  `WarpTypes.lean` imports, runs `Lean.collectAxioms` on each, and fails if any depends on an axiom outside
+  `propext`, `Classical.choice`, `Quot.sound` (a `sorry` shows up as `sorryAx`). Its output is committed as
+  `lean/axiom-scan.txt`; `scripts/check-axiom-scan.sh` (pre-push) and the Lean CI workflow regenerate it and
+  compare. The READMEs' sentence about the axiom footprint previously rested on a scan whose script and output
+  were not committed; re-running it reproduces the same result.
 - **Changed (behaviour): `Warp::sync` and `fence::threadfence` now emit code on `nvptx64`.** Both emitted nothing
   on any target through 0.4.3. `Warp<S>::sync()` is `bar.warp.sync` with membermask `S::MASK`, behind the same
   lane guard `shuffle_xor_within` uses (a lane outside `S` skips it, because `diverge_*` emits no branch and a

@@ -1,0 +1,19 @@
+axiom scan — Lean 4.28.0
+theorem constants per module:
+  WarpTypes.Basic: 65
+  WarpTypes.Core: 64
+  WarpTypes.CoreMetatheory: 94
+  WarpTypes.Csp: 75
+  WarpTypes.Fence: 10
+  WarpTypes.Generic: 2
+  WarpTypes.Metatheory: 101
+  WarpTypes.Protocol: 84
+  WarpTypes.Reduce: 10
+  WarpTypes.SolExperiment: 25
+total theorem constants: 530
+depending on no axiom: 253
+axioms used (number of theorem constants depending on each):
+  Classical.choice: 28
+  Quot.sound: 146
+  propext: 277
+RESULT: every theorem constant depends only on propext, Classical.choice, Quot.sound

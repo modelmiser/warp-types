@@ -21,3 +21,10 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           lake-package-directory: lean
+      # Every theorem constant depends only on propext / Classical.choice /
+      # Quot.sound, and the committed scan output is current. The scan exits
+      # non-zero on any other axiom (a `sorry` is `sorryAx`).
+      - name: Axiom scan
+        run: |
+          lake env lean AxiomScan.lean > /tmp/axiom-scan.txt
+          diff -u axiom-scan.txt /tmp/axiom-scan.txt

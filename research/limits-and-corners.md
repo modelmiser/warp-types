@@ -49,8 +49,10 @@ this note's reading, not the READMEs':
 
 1. That is an axiom footprint, not the whole trust base. The Lean kernel and toolchain are trusted, and so is the
    fidelity of the definitions to the intended calculus.
-2. The scan's script and output are not in the repository, so its exact module scope cannot be checked from here.
-   `CoreExperiment.lean` and `CspCoreExperiment.lean` are not imported by `WarpTypes.lean`.
+2. The scan covers the modules `WarpTypes.lean` imports. (When this note was first written the scan's script and
+   output were not in the repository; they are now `lean/AxiomScan.lean` and `lean/axiom-scan.txt`, checked by
+   `scripts/check-axiom-scan.sh`.) `CoreExperiment.lean` and `CspCoreExperiment.lean` are not imported by
+   `WarpTypes.lean` and are outside it.
 3. The theorems are about a Lean calculus. That the Rust crates follow it is not mechanised: the paper lists
    "Verified Rust implementation via Aeneas translation" as remaining work (`paper/paper.md` §9.2) and records a
    difference in §4.8 — the mechanized `shuffle` consumes its warp operand where the Rust method borrows `&self`;
