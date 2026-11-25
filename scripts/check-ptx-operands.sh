@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guard: the membermask and width operands the typed API promises actually reach
-# the emitted `shfl.sync` instructions, `Warp::sync` is a guarded `bar.warp.sync`
-# with the set's mask, `fence::threadfence` is a `membar.gl`, and `Warp<Empty>::shuffle_xor_within` is
+# the emitted `shfl.sync` instructions, `Warp::sync` is a guarded ballot plus
+# `bar.warp.sync` over the set's live lanes, `fence::threadfence` is a `membar.gl`, and `Warp<Empty>::shuffle_xor_within` is
 # rejected by the DEVICE build. Builds tools/ptxprobe for nvptx64 (no GPU needed;
 # the nvptx CI job already has the target) and reads the PTX.
 #
@@ -65,30 +65,31 @@ mask_check probe_tile8_down  down -1 'Tile shuffle keeps the full-warp membermas
 check probe_within_even 'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
 check probe_within_even '@%p[0-9]+ bra' 'a predicated branch is present (guard)'
 check probe_within_odd  'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
-# Warp::sync and fence::threadfence (no-ops on every target through 0.4.3). `sync` first takes a full-mask ballot
-# of `true` (the warp's live lanes), intersects it with the set's mask, and issues the barrier with THAT register
-# as membermask, behind a guard on the same register. The whole sequence is matched in order on the flattened
-# entry: ballot over -1 -> `and` with the set's mask (absent for All: the ballot register is the membermask) ->
-# the lane's bit of that register tested -> a branch on the test's negation to a label -> the barrier, the only
-# instruction skipped, with that register as its operand -> the label. A barrier with an immediate mask (no
-# live-lane intersection), an unguarded barrier, an inverted guard or a guard on another value all fail. This is
-# a check of the code this pinned toolchain emits; a different instruction selection needs a new pattern. What
-# it cannot show is run-time legality (the Warp<S> witness) or what a device's ballot reports for missing lanes.
-guarded_sync() {  # entry, the set's 32-bit mask immediate ("" for All), description
-  local ballot='vote\.sync\.ballot\.b32[[:space:]]+(%r[0-9]+), %p[0-9]+, -1;[[:space:]]*'
-  local members
-  if [ -n "$2" ]; then members="and\\.b32[[:space:]]+(%r[0-9]+), \\1, $2;[[:space:]]*"; else members='()'; fi
-  local m; if [ -n "$2" ]; then m='\2'; else m='\1'; fi
-  local guard="mov\\.u32[[:space:]]+(%r[0-9]+), %laneid;[[:space:]]*and\\.b32[[:space:]]+(%r[0-9]+), \\3, 31;[[:space:]]*shr\\.u32[[:space:]]+(%r[0-9]+), $m, \\4;[[:space:]]*and\\.b32[[:space:]]+(%r[0-9]+), \\5, 1;[[:space:]]*setp\\.ne\\.b32[[:space:]]+(%p[0-9]+), \\6, 0;[[:space:]]*not\\.pred[[:space:]]+(%p[0-9]+), \\7;[[:space:]]*@\\8 bra[[:space:]]+(\\\$L__BB[0-9_]+);[[:space:]]*bar\\.warp\\.sync[[:space:]]+$m;[[:space:]]*\\9:"
-  if section "$1" | grep -vE '^[[:space:]]*//' | tr '\n' ' ' | grep -qE "$ballot$members$guard"; then
-    echo "ok   $1: $3"
-  else
-    echo "FAIL $1: $3"; fail=1
-  fi
+# Warp::sync and fence::threadfence (no-ops on every target through 0.4.3). `sync` guards on this lane's bit of
+# the set's mask; inside the guard it takes a ballot of TRUE over the set's mask, ANDs the result with the mask
+# (absent for All) and issues the barrier with THAT register as membermask. The whole sequence is matched in
+# order on the flattened entry, comments stripped, with nothing allowed in between and every register tied to
+# the one before it:
+#   %laneid -> masked lane index -> (1 << it) & the set's mask -> test against 0 -> branch on THAT predicate to a
+#   label -> a predicate set to true -> ballot of THAT predicate over the set's mask -> `and` of THAT result with
+#   the mask -> barrier with THAT value -> the label.
+# So these all fail: a barrier with an immediate mask (no live-lane intersection), a ballot of anything but
+# constant true or over another mask, an unguarded barrier, an inverted guard, a guard on another value, and any
+# extra instruction between the branch and the label. This is a check of the code the pinned toolchain emits; a
+# different instruction selection needs a new pattern. It cannot show run-time legality (the Warp<S> witness) or
+# what a device's ballot reports for missing lanes. Needs GNU grep -P (more than nine back-references).
+S='[[:space:]]*'
+guarded_sync() {  # entry, 64-bit mask immediate, 32-bit mask immediate, description   (a sub-warp)
+  local re="mov\.u32[[:space:]]+(%r[0-9]+), %laneid;${S}and\.b32[[:space:]]+(%r[0-9]+), \g{1}, 63;${S}mov\.b64[[:space:]]+(%rd[0-9]+), 1;${S}shl\.b64[[:space:]]+(%rd[0-9]+), \g{3}, \g{2};${S}and\.b64[[:space:]]+(%rd[0-9]+), \g{4}, $2;${S}setp\.eq\.b64[[:space:]]+(%p[0-9]+), \g{5}, 0;${S}@\g{6} bra[[:space:]]+(\\\$L__BB[0-9_]+);${S}mov\.pred[[:space:]]+(%p[0-9]+), -1;${S}vote\.sync\.ballot\.b32[[:space:]]+(%r[0-9]+), \g{8}, $3;${S}and\.b32[[:space:]]+(%r[0-9]+), \g{9}, $3;${S}bar\.warp\.sync[[:space:]]+\g{10};${S}\g{7}:"
+  if section "$1" | grep -vE '^[[:space:]]*//' | tr '\n' ' ' | grep -qP -- "$re"; then echo "ok   $1: $4"; else echo "FAIL $1: $4"; fail=1; fi
 }
-guarded_sync probe_sync_even 1431655765  'Warp<Even>::sync: ballot & Even::MASK is the membermask, guard on it skips exactly the barrier'
-guarded_sync probe_sync_odd  -1431655766 'Warp<Odd>::sync: ballot & Odd::MASK is the membermask, guard on it skips exactly the barrier'
-guarded_sync probe_fence     ''          'Warp<All>::sync: the ballot is the membermask, guard on it skips exactly the barrier'
+guarded_sync_all() {  # entry, description   (Warp<All>: the mask is all ones, the guard tests lane < 32)
+  local re="mov\.u32[[:space:]]+(%r[0-9]+), %laneid;${S}and\.b32[[:space:]]+(%r[0-9]+), \g{1}, 32;${S}setp\.ne\.b32[[:space:]]+(%p[0-9]+), \g{2}, 0;${S}@\g{3} bra[[:space:]]+(\\\$L__BB[0-9_]+);${S}mov\.pred[[:space:]]+(%p[0-9]+), -1;${S}vote\.sync\.ballot\.b32[[:space:]]+(%r[0-9]+), \g{5}, -1;${S}bar\.warp\.sync[[:space:]]+\g{6};${S}\g{4}:"
+  if section "$1" | grep -vE '^[[:space:]]*//' | tr '\n' ' ' | grep -qP -- "$re"; then echo "ok   $1: $2"; else echo "FAIL $1: $2"; fail=1; fi
+}
+guarded_sync probe_sync_even 1431655765 1431655765  'Warp<Even>::sync: guard on the lane bit, ballot of true over Even::MASK, barrier with ballot & Even::MASK'
+guarded_sync probe_sync_odd  2863311530 -1431655766 'Warp<Odd>::sync: guard on the lane bit, ballot of true over Odd::MASK, barrier with ballot & Odd::MASK'
+guarded_sync_all probe_fence 'Warp<All>::sync: guard, ballot of true over the full mask, barrier with the ballot'
 for e in probe_sync_even probe_sync_odd probe_fence; do
   n=$(section $e | grep -cE 'bar\.warp\.sync' || true)
   if [ "$n" = 1 ]; then echo "ok   $e: exactly one bar.warp.sync"; else echo "FAIL $e: expected 1 bar.warp.sync, got $n"; fail=1; fi

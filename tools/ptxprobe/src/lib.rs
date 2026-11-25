@@ -113,9 +113,10 @@ pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
     *out.add(tid as usize) = acc;
 }
 
-/// `Warp<Even>::sync`: `bar.warp.sync` with membermask `Even::MASK`
-/// (1431655765), behind the lane guard — a lane outside `Even` must not
-/// execute a barrier that does not name it.
+/// `Warp<Even>::sync`: behind the lane guard — a lane outside `Even` must
+/// execute neither instruction — a ballot of `true` over `Even::MASK`
+/// (1431655765), then `bar.warp.sync` whose membermask is that ballot ANDed
+/// with `Even::MASK` (the live lanes of `Even`).
 #[no_mangle]
 pub unsafe extern "ptx-kernel" fn probe_sync_even(out: *mut u32) {
     let (w, _odd) = Warp::kernel_entry().diverge_even_odd();
@@ -124,7 +125,8 @@ pub unsafe extern "ptx-kernel" fn probe_sync_even(out: *mut u32) {
     *out.add(tid as usize) = tid;
 }
 
-/// Same on `Warp<Odd>`: membermask `Odd::MASK` (-1431655766 as i32).
+/// Same on `Warp<Odd>`: ballot over `Odd::MASK` (-1431655766 as i32), barrier
+/// with the ballot ANDed with it.
 #[no_mangle]
 pub unsafe extern "ptx-kernel" fn probe_sync_odd(out: *mut u32) {
     let (_even, w) = Warp::kernel_entry().diverge_even_odd();
@@ -134,7 +136,8 @@ pub unsafe extern "ptx-kernel" fn probe_sync_odd(out: *mut u32) {
 }
 
 /// `fence::threadfence`: `membar.gl` after the complement-proved full write.
-/// It opens with a full-warp `sync()` (`bar.warp.sync -1`): the script requires
+/// It opens with a full-warp `sync()` (a ballot over the full mask, then
+/// `bar.warp.sync` with the ballot as membermask): the script requires
 /// every probe kernel to contain a convergent call, and a fence alone is not one.
 #[no_mangle]
 pub unsafe extern "ptx-kernel" fn probe_fence(out: *mut u32) {
@@ -151,8 +154,9 @@ pub unsafe extern "ptx-kernel" fn probe_fence(out: *mut u32) {
     });
 }
 
-/// What a full-mask ballot of `true` returns in each lane: the mask `Warp::sync`
-/// intersects its membermask with. Not checked by the script (its value is a
+/// What a full-mask ballot of `true` returns in each lane: the live lanes, as
+/// `Warp<All>::sync` reads them (a sub-warp's `sync` takes the same ballot
+/// over its own mask). Not checked by the script (its value is a
 /// run-time fact); launched by hand on partial blocks to see which lanes a
 /// device reports.
 #[no_mangle]

@@ -1,8 +1,10 @@
 //! Fence-divergence interaction types (§5.6).
 //!
 //! Global memory writes from diverged warps must be carefully tracked.
-//! A fence is only valid after ALL lanes have written — which requires
-//! the same complement proof used for merge.
+//! A fence is only valid after ALL lanes have written — which, in this model,
+//! means every lane's write STEP has been recorded, by the same complement
+//! proof used for merge. The states below record steps taken in the type;
+//! they do not observe a store (see "in the model", below).
 //!
 //! # Type-state protocol
 //!
@@ -51,7 +53,7 @@ use core::marker::PhantomData;
 /// forgery of write-state transitions.
 pub trait WriteState: crate::active_set::sealed::Sealed {}
 
-/// No writes have occurred.
+/// No write step has been recorded.
 #[derive(Debug, Clone, Copy)]
 pub struct Unwritten;
 #[allow(private_interfaces)]
@@ -62,7 +64,7 @@ impl crate::active_set::sealed::Sealed for Unwritten {
 }
 impl WriteState for Unwritten {}
 
-/// Partial write: only lanes in `S` have written.
+/// Partial write: the write step has been recorded for the lanes in `S` only.
 #[derive(Debug, Clone, Copy)]
 pub struct PartialWrite<S: ActiveSet> {
     _phantom: PhantomData<S>,
@@ -75,7 +77,7 @@ impl<S: ActiveSet> crate::active_set::sealed::Sealed for PartialWrite<S> {
 }
 impl<S: ActiveSet> WriteState for PartialWrite<S> {}
 
-/// All lanes have written (complement-verified).
+/// The write step has been recorded for all lanes (complement-verified).
 #[derive(Debug, Clone, Copy)]
 pub struct FullWrite;
 #[allow(private_interfaces)]
