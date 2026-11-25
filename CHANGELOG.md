@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- **Changed (behaviour): `Warp::sync` and `fence::threadfence` now emit code on `nvptx64`.** Both emitted nothing
+  on any target through 0.4.3. `Warp<S>::sync()` is `bar.warp.sync` with membermask `S::MASK`, behind the same
+  lane guard `shuffle_xor_within` uses (a lane outside `S` skips it, because `diverge_*` emits no branch and a
+  lane the membermask does not name must not execute the barrier). `threadfence(FullWrite)` is `membar.gl`. Other
+  targets are unchanged (nothing emitted). `GlobalRegion<Fenced>::read` is unchanged and now documented as what
+  it is: a model step that reads no memory and returns `T::default()`, since a `GlobalRegion` is phantom.
+  `scripts/check-ptx-operands.sh` checks the emitted PTX (membermask immediate, guard, `membar.gl`) through two
+  new probe kernels; both were also launched on an RTX 4000 Ada (compute 8.9) over full, multi-warp and partial
+  blocks without a hang or a wrong result. Like the typed shuffles, `sync` relies on the `Warp<S>` witness: if a
+  lane in `S` does not arrive, the barrier waits for it.
+- **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
+  stdout containing `s VERIFIED` and ignored the checker's exit status, so a checker that printed the banner and
+  then died, or only mentioned it in a comment line, certified the answer. The same match was in
+  `tools/cert-campaign.py`, `tools/lrat-campaign.py`, `tools/lrat-mutate.py`, `smt-crosscheck` and three
+  `reproduce/` scripts (where `lrat-check`'s exit status was also read from the wrong command). `cake_lpr` exits 0
+  on a proof it rejects, so the banner stays necessary; the exit status alone is never a verdict.
 - **Changed: the LRAT hint chain is a by-product of conflict analysis** (`warp-types-sat`): when the log wants
   hints, analysis records each pivot's reason, the variables every successful redundancy proof marks, and the
   level-0 variables minimization steps over (`AnalyzeWork::{record_chain, pivot_reasons, chain_vars, chain_level0}`);

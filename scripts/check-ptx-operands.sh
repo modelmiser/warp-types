@@ -64,6 +64,13 @@ mask_check probe_tile8_down  down -1 'Tile shuffle keeps the full-warp membermas
 check probe_within_even 'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
 check probe_within_even '@%p[0-9]+ bra' 'a predicated branch is present (guard)'
 check probe_within_odd  'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
+# Warp::sync and fence::threadfence (no-ops on every target through 0.4.3): the barrier carries the
+# set's membermask as an immediate and sits behind the lane guard; the fence is a membar.gl
+check probe_sync_even 'bar\.warp\.sync[[:space:]]+1431655765;' 'Warp<Even>::sync is bar.warp.sync with Even::MASK'
+check probe_sync_even 'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
+check probe_sync_even '@%p[0-9]+ bra' 'a predicated branch is present (guard)'
+check probe_fence 'bar\.warp\.sync[[:space:]]+-1;' 'Warp<All>::sync is bar.warp.sync with the full-warp mask'
+check probe_fence 'membar\.gl;' 'threadfence lowers to membar.gl'
 # tiles: width-confined c
 check probe_tile8_down  'shfl\.sync\.down\.b32[[:space:]]+%r[0-9]+, %r[0-9]+, (%r[0-9]+|1), (6151|%r[0-9]+), (%r[0-9]+|-1);' 'Tile<8> down carries c = 0x1807'
 if ! section probe_tile8_down | grep -qE "6151"; then echo "FAIL probe_tile8_down: c = 6151 absent"; fail=1; fi

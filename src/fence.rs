@@ -295,9 +295,14 @@ where
 ///
 /// Only callable on `GlobalRegion<FullWrite>` — the type system ensures
 /// all lanes have written before the fence.
+///
+/// On `nvptx64` this emits `membar.gl` (`__threadfence()`), executed by every
+/// lane that reaches the call. On every other target it emits nothing; it
+/// emitted nothing on any target through 0.4.3.
 #[inline]
 pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
-    // In real implementation: __threadfence()
+    #[cfg(target_arch = "nvptx64")]
+    crate::gpu::threadfence();
     GlobalRegion {
         _brand: PhantomData,
         _state: PhantomData,
@@ -305,12 +310,15 @@ pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
 }
 
 impl GlobalRegion<'_, Fenced> {
-    /// Read from a fenced global region. Safe because:
-    /// 1. All lanes have written (FullWrite)
-    /// 2. Fence ensures visibility (Fenced)
+    /// The read step of the protocol. **A model only: it reads no memory and
+    /// returns `T::default()`.** `GlobalRegion` is phantom — zero-sized, with
+    /// no address — so there is nothing here to load from. What the type
+    /// records is that a read is permitted at this point: all lanes have
+    /// written (`FullWrite`) and the fence has been issued (`Fenced`). Do the
+    /// actual load through your own pointer after [`threadfence`] returns.
     #[inline]
     pub fn read<T: Default>(&self) -> T {
-        T::default() // placeholder
+        T::default() // model placeholder: no memory behind a GlobalRegion
     }
 }
 

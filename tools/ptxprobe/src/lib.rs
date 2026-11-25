@@ -20,7 +20,9 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 pub unsafe extern "ptx-kernel" fn probe_within_even(out: *mut i32) {
     let (w, _odd) = Warp::kernel_entry().diverge_even_odd();
     let tid = warp_types::gpu::thread_id_x();
-    let v = w.shuffle_xor_within(data::PerLane::new(tid as i32), 2).get();
+    let v = w
+        .shuffle_xor_within(data::PerLane::new(tid as i32), 2)
+        .get();
     *out.add(tid as usize) = v;
 }
 
@@ -29,7 +31,9 @@ pub unsafe extern "ptx-kernel" fn probe_within_even(out: *mut i32) {
 pub unsafe extern "ptx-kernel" fn probe_within_odd(out: *mut i32) {
     let (_even, w) = Warp::kernel_entry().diverge_even_odd();
     let tid = warp_types::gpu::thread_id_x();
-    let v = w.shuffle_xor_within(data::PerLane::new(tid as i32), 2).get();
+    let v = w
+        .shuffle_xor_within(data::PerLane::new(tid as i32), 2)
+        .get();
     *out.add(tid as usize) = v;
 }
 
@@ -86,7 +90,10 @@ pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
     acc ^= w.broadcast_lane(data::PerLane::new(tid as i32), 3).get() as u32;
     let t16: Tile<16> = w.tile();
     acc ^= t16.shuffle_xor(data::PerLane::new(tid as i32), 1).get() as u32;
-    acc ^= t16.partition_8().shuffle_down(data::PerLane::new(tid as i32), 1).get() as u32;
+    acc ^= t16
+        .partition_8()
+        .shuffle_down(data::PerLane::new(tid as i32), 1)
+        .get() as u32;
     acc ^= t16.partition_4().size() as u32;
     // dynamic divergence and merge
     let w2: Warp<All> = w.diverge_dynamic(0x0000_FFFF).merge();
@@ -106,6 +113,34 @@ pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
     *out.add(tid as usize) = acc;
 }
 
+/// `Warp<Even>::sync`: `bar.warp.sync` with membermask `Even::MASK`
+/// (1431655765), behind the lane guard — a lane outside `Even` must not
+/// execute a barrier that does not name it.
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_sync_even(out: *mut u32) {
+    let (w, _odd) = Warp::kernel_entry().diverge_even_odd();
+    let tid = warp_types::gpu::thread_id_x();
+    w.sync();
+    *out.add(tid as usize) = tid;
+}
+
+/// `fence::threadfence`: `membar.gl` after the complement-proved full write.
+/// It opens with a full-warp `sync()` (`bar.warp.sync -1`): the script requires
+/// every probe kernel to contain a convergent call, and a fence alone is not one.
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_fence(out: *mut u32) {
+    let tid = warp_types::gpu::thread_id_x();
+    Warp::kernel_entry().sync();
+    *out.add(tid as usize) = tid;
+    fence::GlobalRegion::with_region(|region| {
+        let (even, odd) = Warp::kernel_entry().diverge_even_odd();
+        let (ra, rb) = region.split();
+        let (_even, pa) = even.global_store(ra);
+        let (_odd, pb) = odd.global_store(rb);
+        let _fenced = fence::threadfence(fence::merge_writes(pa, pb));
+    });
+}
+
 /// Negative probe (feature `empty-probe`): `Warp<Empty>` has no lanes, and the
 /// inline const assert in `shuffle_xor_within` must reject this instantiation at
 /// codegen. The script expects this build to fail with E0080.
@@ -114,7 +149,9 @@ pub unsafe extern "ptx-kernel" fn probe_api_surface(out: *mut u32) {
 pub unsafe extern "ptx-kernel" fn probe_within_empty(out: *mut i32) {
     let w: Warp<Empty> = DynWarp::from_mask_32(0).ascribe::<Empty>().unwrap();
     let tid = warp_types::gpu::thread_id_x();
-    let v = w.shuffle_xor_within(data::PerLane::new(tid as i32), 0).get();
+    let v = w
+        .shuffle_xor_within(data::PerLane::new(tid as i32), 0)
+        .get();
     *out.add(tid as usize) = v;
 }
 

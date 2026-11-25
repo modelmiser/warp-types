@@ -139,13 +139,31 @@ impl<S: ActiveSet> Warp<S> {
         S::MASK.count_ones()
     }
 
-    /// Intended barrier synchronization for active lanes.
+    /// Barrier synchronization for the active lanes: `__syncwarp(S::MASK)`.
     ///
-    /// **Currently a no-op on every target:** it does not emit `__syncwarp`.
-    /// The intended lowering is `__syncwarp(S::MASK)`, naming only active lanes.
+    /// On `nvptx64` each lane in `S` executes `bar.warp.sync` with membermask
+    /// `S::MASK`; a lane outside `S` skips it (`diverge_*` emits no branch, so
+    /// every lane of the warp reaches this call, and a lane that is not named
+    /// in the membermask must not execute the barrier). On every other target
+    /// — the CPU model, `amdgcn` — it emits nothing.
+    ///
+    /// It was a no-op on every target through 0.4.3.
+    ///
+    /// Like the typed shuffles, it relies on the `Warp<S>` witness: every lane
+    /// in `S` must actually arrive here, or the barrier waits for a lane that
+    /// never comes (see "Trusted entry points" on [`Warp::kernel_entry`]).
     #[inline]
     pub fn sync(&self) {
-        // In real implementation: __syncwarp(S::MASK)
+        #[cfg(target_arch = "nvptx64")]
+        if (S::MASK >> crate::gpu::lane_id()) & 1 == 1 {
+            // SAFETY: `syncwarp` needs the membermask to name the executing
+            // lane — the guard above — and every named lane to execute a
+            // barrier with the same mask: every lane in `S` reaches this call
+            // (the witness; `diverge_*` emits no branch) and passes the same
+            // constant. `as u32`: nvptx64 warps are 32-lane (`warp64` +
+            // nvptx64 is a compile error, lib.rs).
+            unsafe { crate::gpu::syncwarp(S::MASK as u32) }
+        }
     }
 }
 
