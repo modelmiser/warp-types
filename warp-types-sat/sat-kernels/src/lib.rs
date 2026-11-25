@@ -348,6 +348,14 @@ fn lrat_hash(k: u32) -> u32 {
 /// bounded loop is the property a reader can check). `slots` is the direct
 /// layout's region size (research/edp-record.md §9); the hashed layout
 /// ignores it.
+///
+/// # Safety
+///
+/// `table` must be valid for reads over this warp's region: slots
+/// `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)` otherwise.
+/// The region must belong to this warp alone. The other lanes of the warp may
+/// run the same call at the same time (they store identical values); no other
+/// thread may write the region.
 #[inline(always)]
 unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32) -> bool {
     let k = lrat_code(l) + 1;
@@ -386,6 +394,14 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 /// The previous version capped PROBES at 4,095, which still admitted a
 /// 4,096th key whenever the hole was within reach — then the table was full
 /// and a miss looped forever (cross-vendor panel, 2026-11-02).
+///
+/// # Safety
+///
+/// `table` must be valid for reads and writes over this warp's region: slots
+/// `[base, base + slots)` when `direct`, `[base, base + LRAT_TABLE)` otherwise.
+/// The region must belong to this warp alone. The other lanes of the warp may
+/// run the same call at the same time (they store identical values); no other
+/// thread may write the region.
 #[inline(always)]
 unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32, count: &mut u32) -> bool {
     // The cap comes FIRST, before the key is looked up — exactly as SimWarp's
@@ -424,6 +440,11 @@ unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slot
 }
 
 /// Warp-wide OR of a per-lane mask (butterfly; every lane ends with the OR).
+///
+/// # Safety
+///
+/// Raw full-mask warp collectives: all 32 lanes of the warp must be converged
+/// and must all execute this call, reached by warp-uniform control flow.
 #[inline(always)]
 unsafe fn lrat_warp_or(mut v: u32) -> u32 {
     v |= v.gpu_shfl_xor(16);
@@ -435,6 +456,13 @@ unsafe fn lrat_warp_or(mut v: u32) -> u32 {
 }
 
 /// Inclusive prefix sum of a per-lane value across the warp (shuffle-up scan).
+///
+/// # Safety
+///
+/// Raw full-mask warp collectives: all 32 lanes of the warp must be converged
+/// and must all execute this call, reached by warp-uniform control flow.
+/// `lane` should be the calling lane's index (0..32); a wrong value gives a
+/// wrong sum, not undefined behaviour.
 #[inline(always)]
 unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
     let mut stride = 1u32;
@@ -453,6 +481,14 @@ unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
 /// than 32 literals): each lane strides over the clause, the free count is
 /// reduced, the single free literal's negation is inserted. Returns `0xFF`
 /// when the hint is unit and the lemma continues, otherwise the lemma's code.
+///
+/// # Safety
+///
+/// - Warp: all 32 lanes are converged and all execute this call with the same
+///   arguments, `lane` excepted (it ends in a raw full-mask `syncwarp`).
+///   `*count` is the same in every lane.
+/// - `lits` must be valid for reads over `[cs, ce)`.
+/// - `table`: as [`lrat_insert`], for the same `base`, `direct` and `slots`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn lrat_hint_strided(
@@ -533,6 +569,20 @@ unsafe fn lrat_hint_strided(
 /// the code and no later hint's store is issued. A hint wider than 32
 /// literals is resolved alone by `lrat_hint_strided`. Returns the lemma's
 /// code (2 = every hint was unit and none conflicted).
+///
+/// # Safety
+///
+/// - Warp: all 32 lanes are converged and all execute this call with the same
+///   arguments, `lane` excepted (raw full-mask shuffles and `syncwarp`).
+///   `lane` is the calling lane's index (0..32); `*count` is the same in
+///   every lane.
+/// - `hints` must be valid for reads over `[hs, he)`.
+/// - For every hint value `hc` in that range with `hc < lemma_dense`:
+///   `deleted_at[hc]`, `clause_start[hc]` and `clause_start[hc + 1]` must be
+///   readable, `clause_start[hc] <= clause_start[hc + 1]`, and `lits` must be
+///   valid for reads over `[clause_start[hc], clause_start[hc + 1])`.
+/// - `table`: as [`lrat_insert`] with `direct = true`, for the same `base`
+///   and `slots`.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 unsafe fn lrat_hints_direct_batched(
@@ -1005,6 +1055,22 @@ fn dec_scan_compose(warp: &Warp<All>, lane: u32, table: u32) -> u32 {
 
 /// Decode slice `si` with the warp formulation. Returns the flag; counts and
 /// end through the out-params (identical in every lane).
+///
+/// # Safety
+///
+/// - Warp: all 32 lanes are converged and all execute this call with the same
+///   arguments, `lane` excepted; `lane` is the calling lane's index (0..32).
+/// - `bytes` must be valid for reads over `[0, len)`.
+/// - `pass != 2`: none of the `st_*` / `o_*` pointers is dereferenced.
+/// - `pass == 2`: each record array must be valid for writes from its base
+///   for as many records as this slice yields — `st_pos`, `st_id`,
+///   `st_after`, `st_tag`, `st_rat`, `st_lit_end`, `st_hint_end`,
+///   `st_del_end` from `step_base` for its steps; `o_lits` from `lit_base`
+///   for its literals; `o_hints` from `hint_base` for its hints; `o_del_id`
+///   and `o_del_pos` from `del_base` for its deletions. Those counts are the
+///   ones a pass-1 call with the same `bytes`, `len`, `lo` and `hi` returned
+///   in `out_counts`, so the bytes must not change between the passes, and no
+///   other slice's records may share those ranges.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 unsafe fn dec_slice_warp(
@@ -1349,6 +1415,11 @@ pub fn lrat_scan_slices(
 
 /// One varint for the serial kernel: value and the offset after it, or
 /// `None`-equivalent (ok = false) on truncation / more than 10 bytes.
+///
+/// # Safety
+///
+/// `bytes` must be valid for reads over `[0, len)`. Nothing at or past `len`
+/// is read.
 #[inline(always)]
 unsafe fn dec_varint(bytes: *const u8, len: u64, pos: &mut u64) -> (u64, bool) {
     let mut x = 0u64;
@@ -1594,6 +1665,10 @@ pub fn lrat_scan_slices_serial(
 
 /// Segment of output index `i`: the last `k` with `seg_dst[k] <= i`
 /// (`seg_dst[0] == 0`, `n_seg >= 1`).
+///
+/// # Safety
+///
+/// `seg_dst` must be valid for reads over `[0, n_seg)`.
 #[inline(always)]
 unsafe fn dec_segment_of(seg_dst: *const u32, n_seg: u32, i: u32) -> u32 {
     let mut lo = 0u32;
