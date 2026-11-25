@@ -42,9 +42,9 @@ So a property the types cannot decide does **not** always become a run-time chec
 documented caller obligations.
 
 **The Lean mechanization (`lean/WarpTypes/`).** The corner is the kernel-checked logic of Lean. `lean/README.md`
-reports zero `sorry` and "a `CollectAxioms` scan of all 530 theorem constants in the `WarpTypes.*` modules
+reports zero `sorry` and "a `CollectAxioms` scan of all 530 theorem constants in the `WarpTypes.*` modules <!-- unguarded: 530 — quoted from lean/README.md and README.md; CollectAxioms scan dated 2026-10-18 -->
 (2026-10-18)" that "finds only Lean's standard `propext`, `Classical.choice`, `Quot.sound`"; the README's
-Soundness row says all 530 theorem constants "in the library" depend only on those three. Three things here are
+Soundness row says all 530 theorem constants "in the library" depend only on those three. Three things here are <!-- unguarded: 530 — quoted from lean/README.md and README.md; CollectAxioms scan dated 2026-10-18 -->
 this note's reading, not the READMEs':
 
 1. That is an axiom footprint, not the whole trust base. The Lean kernel and toolchain are trusted, and so is the
@@ -57,9 +57,8 @@ this note's reading, not the READMEs':
    "the Rust borrow is not modelled".
 
 None of this bears on the consistency of Lean's logic, which, if consistent, Lean cannot prove of itself
-(Gödel II). One wording in the repository is stronger than the others: `paper/paper.md` §9.2 (and its source
-`paper/future-and-conclusion.md`) says "no axioms" where §4.8 of the same paper and both READMEs name the three
-standard ones. This note follows the READMEs.
+(Gödel II). (The review of this note found `paper/paper.md` §9.2 saying "no axioms" where §4.8 and both READMEs
+name the three standard ones; §9.2 was corrected the same day to "no axioms beyond Lean's standard three".)
 
 **Certified UNSAT answers (`warp-types-sat`).** The corner is the small-trusted-kernel pattern: an untrusted
 solver, a checked certificate. A certificate is per instance and UNSAT-only, for the `solve_watched_drat` /
@@ -80,7 +79,7 @@ solver, a checked certificate. A certificate is per instance and UNSAT-only, for
 
 `research/drat-certification.md` records by fault injection what a `VERIFIED` does and does not establish: in
 `drat-trim`'s default backward mode a corrupted lemma outside the extracted core passes (forward mode `-f` caught
-all ten), and a proof with its final `0` dropped is accepted. `research/lrat-from-solver.md` describes the later
+them all); and a final `0` dropped from the log is accepted. `research/lrat-from-solver.md` describes the later
 route that emits LRAT from the solver and takes `drat-trim` out of the path.
 
 **`unsafe`.** These are escape hatches, and they are not uniformly discharged. The typed shuffles rely on
