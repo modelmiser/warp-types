@@ -196,8 +196,10 @@ pub fn solve_watched_with(db: ClauseDb, num_vars: u32, reduce_interval: u64) -> 
 ///
 /// Every learned clause, every deleted clause and (on `Unsat`) the empty
 /// clause are written in DRAT text format against the input formula's
-/// variables (1-based, as in DIMACS), so the proof checks with `drat-trim` or
-/// `cake_lpr` against the DIMACS file `db` was parsed from. On `Sat` or
+/// variables (1-based, as in DIMACS), so the proof checks with `drat-trim`
+/// against the DIMACS file `db` was parsed from — and, through the LRAT that
+/// `drat-trim -L` extracts from it, with `cake_lpr`, which reads LRAT and not
+/// DRAT. On `Sat` or
 /// `Unknown` the log is still written but proves nothing. Returns the first
 /// I/O error if writing failed; the solve itself is unaffected by it.
 /// See [`crate::proof`].

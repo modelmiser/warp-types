@@ -6,9 +6,9 @@ Warp-level shuffle operations on diverged (partially active) warps are undefined
 
 ## What This Formalizes
 
-The type system models GPU warp resources as linear values typed by their active lane sets (32-bit bitmasks). Let-bound warp handles must be consumed exactly once — diverged, merged, or shuffled — enforced by a linearity condition on let-bindings. Shuffle operations are restricted to fully-converged warps (`Warp<All>`), making it a type error to shuffle on a subset of lanes.
+The type system models GPU warp resources as values typed by their active lane sets (32-bit bitmasks), affine for warps. A let-bound warp *name* must be used exactly once — to diverge, merge, or shuffle — enforced by a linearity condition on let-bindings; the handle it names can still be dropped (`fst`/`snd`, see Scope), so a warp is consumed by at most one evaluated use, not exactly one. Shuffle operations are restricted to fully-converged warps (`Warp<All>`), making it a type error to shuffle on a subset of lanes.
 
-This catches three classes of bugs:
+Of three classes of bugs it catches two:
 - **Shuffle on diverged warp**: reading from inactive lanes (undefined behavior)
 - **Missing merge** is NOT caught: a bound name must be used once, but `fst`/`snd` can drop the handle it produces — see Scope
 - **Mismatched merge**: merging non-complementary subsets
