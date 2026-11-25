@@ -570,7 +570,7 @@ unsafe fn lrat_hint_strided(
     let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
     let src = voted.trailing_zeros() & 31;
     let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-    let ok = lrat_insert(table, base, stamp, direct, slots, -unit, count);
+    let ok = lrat_insert(table, base, stamp, direct, slots, unit.wrapping_neg(), count);
     warp_types::gpu::syncwarp(0xffff_ffff);
     if !ok {
         return 5;
@@ -777,7 +777,7 @@ unsafe fn lrat_hints_direct_batched(
             if flags == 0 {
                 *count += 1;
                 if lane == ul {
-                    let kn = lrat_code(-u) + 1;
+                    let kn = lrat_code(u.wrapping_neg()).wrapping_add(1);
                     *table.add((base + kn - 1) as usize) = ((stamp as u64) << 32) | kn as u64;
                 }
             }
@@ -815,9 +815,13 @@ unsafe fn lrat_hints_direct_batched(
 ///
 /// Host obligations — the kernel checks none of these; they are the
 /// preconditions of the `unsafe` helpers it calls:
-/// - `clause_start` is a prefix array: nondecreasing, with one entry past the
-///   last clause, and every range `[clause_start[c], clause_start[c + 1])`
-///   lies inside `lits`.
+/// - `clause_start` has one entry past the last clause and no entry exceeds
+///   the length of `lits`. A range `[clause_start[c], clause_start[c + 1])`
+///   that is inverted is read as an EMPTY clause (nothing is loaded): no
+///   lemma's own clause may be inverted, and no hint may name one — an empty
+///   hint is an immediate conflict. (The array is not required to be
+///   nondecreasing throughout: the batch route concatenates regions that
+///   each restart at the shared CNF.)
 /// - For every `i < num_lemmas`: `lemma_clause[i]`, `lemma_step[i]`,
 ///   `hint_start[i]` and `hint_start[i + 1]` are readable; `hint_start` is
 ///   nondecreasing and its ranges lie inside `hints`; `lemma_clause[i]` and
@@ -825,11 +829,18 @@ unsafe fn lrat_hints_direct_batched(
 /// - Every hint value below its lemma's `lemma_clause[i]` indexes
 ///   `deleted_at` and `clause_start` (with `+ 1`).
 /// - `codes` holds `num_lemmas` bytes; `table` is as described above; every
-///   array length is at most `u32::MAX - 64`.
+///   array length is at most `u32::MAX - 64`; `num_lemmas + W` does not exceed
+///   `u32::MAX` (the warps stride over the lemmas in `u32`); `W * region` does
+///   not exceed `u32::MAX`.
+/// - No literal has `|l| >= 2^31 - 1` (see `lrat_max_code`). The kernel fails
+///   the lemmas it can tell are affected closed, but the device and `SimWarp`
+///   are not guaranteed to agree on a proof that has one.
 ///
 /// `lrat_warp::flatten` builds arrays with these properties. The launcher
-/// (`gpu_launcher::launch_lrat_check`) verifies sizes only, and `FlatProof`'s
-/// fields are public, so a hand-built `FlatProof` is the caller's obligation.
+/// (`gpu_launcher::launch_lrat_check`) checks the ones that concern the host
+/// arrays (`FlatProof::check_device_invariants`) and the sizes. It cannot see
+/// hint VALUES, which may exist only on the device: those remain the
+/// obligation of whoever built the proof arrays.
 #[warp_kernel]
 pub fn lrat_check_lemmas(
     lits: *const i32,
@@ -873,9 +884,11 @@ pub fn lrat_check_lemmas(
             k += 1;
         }
         // Writes before reads. The lanes write identical values to identical
-        // slots, so no lane depends on another's write — but without a
-        // barrier a lane could in principle observe another lane's
-        // key/stamp pair half-updated (two stores, weakly ordered). The
+        // slots, so no lane needs another's write for the VALUE it will read
+        // back — but without a barrier a lane could in principle observe
+        // another lane's key/stamp pair half-updated (two stores, weakly
+        // ordered). (The insert loop above does depend on the lanes running
+        // in lockstep for `count`; see `lrat_insert`'s `# Safety`.) The
         // barrier is warp-uniform (`code` is the same in every lane).
         warp_types::gpu::syncwarp(0xffff_ffff);
         if code != 5 {
@@ -952,7 +965,16 @@ pub fn lrat_max_code(lits: *const i32, n: u32, out: *mut u32, num_blocks: u32) {
     let mut i = bid * 256 + tid;
     let mut m = 0u32;
     while i < n {
-        let c = lrat_code(*lits.add(i as usize));
+        // A literal with |l| >= 2^31 - 1 has no usable code: `-(2^31 - 1)`
+        // has code u32::MAX (its key wraps to 0), `2^31 - 1` has a negation
+        // with no key, and `i32::MIN` is its own negation and wraps to code
+        // 1. All three report u32::MAX here, which the launcher refuses.
+        let l = *lits.add(i as usize);
+        let c = if l.unsigned_abs() >= i32::MAX as u32 {
+            u32::MAX
+        } else {
+            lrat_code(l)
+        };
         if c > m {
             m = c;
         }

@@ -1254,13 +1254,16 @@ mod tests {
     /// and `code + 1` wraps to 0. Until 2026-11-25 the direct layout then
     /// stored to the slot BEFORE the warp's region (`k - 1` with `k == 0`) —
     /// the last slot of the neighbouring warp's region, or far outside the
-    /// table for warp 0. The kernel and SimWarp must both fail that lemma
-    /// closed and leave its neighbours' verdicts alone, in both layouts. Only
-    /// a hand-built proof reaches this; the parser caps variables at 2^26.
+    /// table for warp 0. Three things are checked, the first without a GPU:
+    /// SimWarp fails that lemma closed and no other; the launcher refuses the
+    /// proof outright (no DIMACS variable is that large); and the kernel
+    /// itself, reached past the launcher's literal check, fails the lemma
+    /// closed in both layouts and leaves its neighbours' verdicts alone.
+    /// Only a hand-built proof reaches any of this; the parser caps variables
+    /// at 2^26.
     #[test]
     fn check_kernel_fails_closed_on_the_literal_with_no_key() {
         use crate::lrat::{Proof, Step};
-        let Some(ctx) = ctx() else { return };
         let cnf = vec![vec![1], vec![-1]];
         let no_key = -i32::MAX;
         let add = |id: u64, lit: i32| Step::Add {
@@ -1279,19 +1282,160 @@ mod tests {
         let mut expect = vec![0u8; 40];
         expect[17] = 5;
         assert_eq!(want, expect, "SimWarp fails only the lemma with no key");
+        let Some(ctx) = ctx() else { return };
         let lits = ctx.stream().clone_htod(&fp.lits).unwrap();
         let hints = ctx.stream().clone_htod(&fp.hints).unwrap();
+        assert_eq!(ctx.lrat_max_code(&lits).unwrap(), u32::MAX);
+        for direct in [None, Some(false), Some(true)] {
+            let err = ctx
+                .check_lrat_codes_mode(&fp, &lits, &hints, 1, direct)
+                .expect_err("the launcher must refuse a literal with no key");
+            assert!(
+                err.to_string().contains("outside the kernel's range"),
+                "{err}"
+            );
+        }
+        // i32::MIN (its own negation) and 2^31 - 1 (no key for its negation)
+        for l in [i32::MIN, i32::MAX] {
+            let d = ctx.stream().clone_htod(&[1, l, -3]).unwrap();
+            assert_eq!(ctx.lrat_max_code(&d).unwrap(), u32::MAX, "literal {l}");
+        }
+        // past the launcher's literal check: the kernel's own guard
         for blocks in [1u32, 7] {
-            let hashed = ctx
-                .check_lrat_codes_mode(&fp, &lits, &hints, blocks, Some(false))
-                .unwrap();
-            assert_eq!(hashed, want, "hashed, blocks={blocks}");
-            for slots in [128u32, 4096] {
-                let direct = ctx
-                    .launch_lrat_check(&fp, &lits, &hints, blocks, true, slots)
+            for (direct, slots) in [(false, 0u32), (true, 128), (true, 4096)] {
+                let got = ctx
+                    .launch_lrat_check(&fp, &lits, &hints, blocks, direct, slots)
                     .unwrap();
-                assert_eq!(direct, want, "direct, blocks={blocks}, slots={slots}");
+                assert_eq!(got, want, "direct={direct}, blocks={blocks}, slots={slots}");
             }
+        }
+        // a forced direct launch whose region is past the 32-bit table arithmetic
+        let too_wide = crate::gpu_launcher::LRAT_DIRECT_SLOTS_MAX + 32;
+        let err = ctx
+            .launch_lrat_check(&fp, &lits, &hints, 1, true, too_wide)
+            .expect_err("a region past u32::MAX / 4 must be refused");
+        assert!(err.to_string().contains("32-bit table arithmetic"), "{err}");
+    }
+
+    /// The launcher refuses proof arrays the kernel would index out of
+    /// bounds with. `FlatProof`'s fields are public; until 2026-11-25 only
+    /// aggregate sizes were checked and each of these reached the device.
+    #[test]
+    fn launcher_refuses_malformed_proof_arrays() {
+        use crate::lrat::{Proof, Step};
+        let Some(ctx) = ctx() else { return };
+        let cnf = vec![vec![1, 2], vec![-1, 2], vec![1, -2], vec![-1, -2]];
+        let steps = vec![
+            Step::Add {
+                id: 5,
+                lits: vec![2],
+                hints: vec![1, 2],
+            },
+            Step::Add {
+                id: 6,
+                lits: vec![],
+                hints: vec![5, 3, 4],
+            },
+        ];
+        let good = super::super::flatten(&cnf, &Proof { steps });
+        assert_eq!(ctx.check_lrat_codes(&good, 1).unwrap(), vec![0, 0]);
+        let n_clauses = good.clause_start.len() as u32 - 1;
+        type Corrupt = Box<dyn Fn(&mut super::super::FlatProof)>;
+        let cases: Vec<(&str, Corrupt)> = vec![
+            ("inverted lemma clause", Box::new(|p| p.clause_start[5] = 0)),
+            (
+                "clause range past the literals",
+                Box::new(|p| *p.clause_start.last_mut().unwrap() += 1000),
+            ),
+            (
+                "lemma names no clause",
+                Box::new(move |p| p.lemma_clause[0] = n_clauses + 7),
+            ),
+            (
+                "hint range past the hints",
+                Box::new(|p| *p.hint_start.last_mut().unwrap() += 1000),
+            ),
+            ("short deleted_at", Box::new(|p| p.deleted_at.truncate(1))),
+            ("short lemma_step", Box::new(|p| p.lemma_step.truncate(1))),
+        ];
+        for (what, corrupt) in cases {
+            let mut bad = good.clone();
+            corrupt(&mut bad);
+            for direct in [Some(false), Some(true)] {
+                let lits = ctx.stream().clone_htod(&bad.lits).unwrap();
+                let hints = ctx.stream().clone_htod(&bad.hints).unwrap();
+                let err = ctx
+                    .check_lrat_codes_mode(&bad, &lits, &hints, 1, direct)
+                    .expect_err(what);
+                assert!(
+                    err.to_string().contains("malformed proof arrays"),
+                    "{what}: {err}"
+                );
+            }
+        }
+    }
+
+    /// The decode launch refuses a length past the bytes on the device, and
+    /// the host-segment gather refuses segments that leave their sources.
+    #[test]
+    fn decode_and_gather_refuse_out_of_range_requests() {
+        use crate::gpu_launcher::GatherSeg;
+        let Some(ctx) = ctx() else { return };
+        let s = ctx.stream();
+        let d_bytes = s.clone_htod(&[0u8; 16]).unwrap();
+        let err = match ctx.decode_lrat_slices_device(&d_bytes, 17, 8, true, 1, false) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("decode accepted len 17 over 16 bytes"),
+        };
+        assert!(err.contains("past the 16 bytes"), "{err}");
+
+        let raw_lits = s.clone_htod(&[1i32, 2, 3, 4]).unwrap();
+        let raw_hints = s.clone_htod(&[1u64, 2, 3, 4]).unwrap();
+        let dense_of = [0u32, 1, 2, 3, 4];
+        let seg = |sel, src, len| GatherSeg { sel, src, len };
+        let run = |lit_segs: &[GatherSeg], lit_total: usize| {
+            ctx.gather_lrat_payloads(
+                lit_segs,
+                &[seg(0, 0, 4)],
+                &raw_lits,
+                &raw_hints,
+                &[9, 9],
+                &[],
+                &dense_of,
+                lit_total,
+                4,
+                1,
+            )
+        };
+        // in range: 4 from the device array, 2 from the extra buffer
+        let (lits, _, bad) = run(&[seg(0, 0, 4), seg(1, 0, 2)], 6).unwrap();
+        assert_eq!(s.clone_dtoh(&lits).unwrap(), vec![1, 2, 3, 4, 9, 9]);
+        assert_eq!(bad, None);
+        for (what, segs, total, needle) in [
+            (
+                "past the device source",
+                vec![seg(0, 2, 4)],
+                4usize,
+                "reads 2..6",
+            ),
+            ("past the extra source", vec![seg(1, 1, 2)], 2, "reads 1..3"),
+            ("no such source", vec![seg(2, 0, 1)], 1, "selects source 2"),
+            (
+                "lengths do not add up",
+                vec![seg(0, 0, 2)],
+                3,
+                "hold 2 elements",
+            ),
+            ("offset wraps u32", vec![seg(0, u32::MAX, 2)], 2, "reads"),
+        ] {
+            let err = match run(&segs, total) {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("{what}: accepted"),
+            };
+            assert!(
+                err.contains("malformed literal segments") && err.contains(needle),
+                "{what}: {err}"
+            );
         }
     }
 

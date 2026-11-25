@@ -255,6 +255,111 @@ pub fn flatten(cnf: &[Vec<i32>], proof: &Proof) -> FlatProof {
 }
 
 impl FlatProof {
+    /// The relations between the index arrays that the device check
+    /// (`sat-kernels::lrat_check_lemmas`) trusts and cannot test: it indexes
+    /// `lits`, `hints`, `clause_start` and `deleted_at` with the values held
+    /// here. [`flatten`] and the decoders build arrays that satisfy them, but
+    /// the fields are public, so the launcher checks before every launch
+    /// (until 2026-11-25 it checked aggregate sizes only). `lits_len` and
+    /// `hints_len` are the lengths of the literal and hint arrays the kernel
+    /// will be given — this struct's own, or the device arrays of a resident
+    /// proof whose `lits` / `hints` here are empty.
+    ///
+    /// Hint VALUES are not inspected (they may live on the device): the
+    /// kernel reads `clause_start` / `deleted_at` only for a hint below its
+    /// lemma's own clause index, and that index is checked here.
+    pub fn check_device_invariants(&self, lits_len: usize, hints_len: usize) -> Result<(), String> {
+        let n_clauses = match self.clause_start.len().checked_sub(1) {
+            Some(n) => n,
+            None => {
+                return Err(
+                    "clause_start is empty (it needs one entry past the last clause)".into(),
+                )
+            }
+        };
+        // Memory safety needs every entry inside the literals: the kernel
+        // reads `[clause_start[c], clause_start[c + 1])` and reads nothing
+        // when that range is inverted. The array need NOT be nondecreasing
+        // throughout: the batch route (`lrat_batch_device`) lays several
+        // proofs' regions end to end, each restarting at the shared CNF, so
+        // it decreases at every region boundary. (A first version of this
+        // check demanded a global prefix array and refused every batch.)
+        if let Some(c) = self
+            .clause_start
+            .iter()
+            .position(|&v| v as usize > lits_len)
+        {
+            return Err(format!(
+                "clause_start[{c}] is {}, past the {lits_len} literals",
+                self.clause_start[c]
+            ));
+        }
+        if self.deleted_at.len() < n_clauses {
+            return Err(format!(
+                "deleted_at has {} entries for {n_clauses} clauses",
+                self.deleted_at.len()
+            ));
+        }
+        let n = self.lemma_clause.len();
+        if self.lemma_step.len() != n {
+            return Err(format!(
+                "lemma_step has {} entries for {n} lemmas",
+                self.lemma_step.len()
+            ));
+        }
+        if self.hint_start.len() != n + 1 {
+            return Err(format!(
+                "hint_start has {} entries for {n} lemmas (it needs {})",
+                self.hint_start.len(),
+                n + 1
+            ));
+        }
+        if let Some(i) = self.hint_start.windows(2).position(|w| w[0] > w[1]) {
+            return Err(format!(
+                "hint_start decreases at lemma {i} ({} then {})",
+                self.hint_start[i],
+                self.hint_start[i + 1]
+            ));
+        }
+        let hints_end = self.hint_start[n] as usize;
+        if hints_end > hints_len {
+            return Err(format!(
+                "hint_start ends at {hints_end}, past the {hints_len} hints"
+            ));
+        }
+        if let Some(i) = self
+            .lemma_clause
+            .iter()
+            .position(|&c| c as usize >= n_clauses)
+        {
+            return Err(format!(
+                "lemma {i} names clause {}, but there are {n_clauses} clauses",
+                self.lemma_clause[i]
+            ));
+        }
+        // An inverted range reads as an EMPTY clause. For a lemma that would
+        // be a different lemma from the one stored, so refuse it here. For a
+        // hinted clause it would be an immediate conflict; hint values are
+        // not visible here, so that part is the builder's: `flatten` and the
+        // decoders produce no inverted range, and the batch route's only
+        // ones are region boundaries, which its id table never maps a hint to.
+        if let Some(i) = self
+            .lemma_clause
+            .iter()
+            .position(|&c| self.clause_start[c as usize] > self.clause_start[c as usize + 1])
+        {
+            let c = self.lemma_clause[i] as usize;
+            return Err(format!(
+                "lemma {i}'s clause {c} has an inverted range ({} then {})",
+                self.clause_start[c],
+                self.clause_start[c + 1]
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl FlatProof {
     /// Decode binary LRAT straight into the flat layout — no per-step
     /// allocation, ids mapped through a dense vector. This is the host-side
     /// cost that the device path pays; the text/`Proof` route exists for the
@@ -1841,7 +1946,7 @@ fn warp_check_lemma(fp: &FlatProof, i: usize, table: &mut LitTable) -> LemmaCode
                     ballot.trailing_zeros()
                 };
                 let unit = per_lane.shuffle_idx(src).lane(0).1;
-                if !table.insert(-unit) {
+                if !table.insert(unit.wrapping_neg()) {
                     return LemmaCode::TableOverflow;
                 }
             }
@@ -1977,6 +2082,94 @@ fn dense_id(fp: &FlatProof, dense: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the device check trusts about a `FlatProof`: a flattened proof
+    /// passes, and each broken relation is refused by name.
+    #[test]
+    fn device_invariants_accept_a_flattened_proof_and_refuse_each_broken_relation() {
+        let cnf = vec![vec![1, 2], vec![-1, 2], vec![1, -2], vec![-1, -2]];
+        let proof = Proof {
+            steps: vec![
+                Step::Add {
+                    id: 5,
+                    lits: vec![2],
+                    hints: vec![1, 2],
+                },
+                Step::Add {
+                    id: 6,
+                    lits: vec![],
+                    hints: vec![5, 3, 4],
+                },
+            ],
+        };
+        let good = flatten(&cnf, &proof);
+        let (nl, nh) = (good.lits.len(), good.hints.len());
+        assert_eq!(good.check_device_invariants(nl, nh), Ok(()));
+        assert_eq!(good.lemma_clause.len(), 2, "the fixture has two lemmas");
+        let refused = |what: &str, f: &dyn Fn(&mut FlatProof), lits: usize, hints: usize| {
+            let mut bad = good.clone();
+            f(&mut bad);
+            let r = bad.check_device_invariants(lits, hints);
+            assert!(r.is_err(), "{what}: accepted");
+            r.unwrap_err()
+        };
+        assert!(
+            refused("empty clause_start", &|p| p.clause_start.clear(), nl, nh).contains("empty")
+        );
+        // Lemma 0 is clause 4: inverting ITS range is refused …
+        assert!(
+            refused("inverted lemma clause", &|p| p.clause_start[5] = 0, nl, nh)
+                .contains("inverted range")
+        );
+        // … but a decrease elsewhere is the batch route's region boundary.
+        let mut restart = good.clone();
+        restart.clause_start[2] = 0;
+        assert_eq!(restart.check_device_invariants(nl, nh), Ok(()));
+        assert!(refused("clause range past lits", &|_| (), nl - 1, nh).contains("past the"));
+        assert!(refused(
+            "short deleted_at",
+            &|p| {
+                p.deleted_at.pop();
+            },
+            nl,
+            nh
+        )
+        .contains("deleted_at"));
+        assert!(refused(
+            "short lemma_step",
+            &|p| {
+                p.lemma_step.pop();
+            },
+            nl,
+            nh
+        )
+        .contains("lemma_step"));
+        assert!(refused(
+            "short hint_start",
+            &|p| {
+                p.hint_start.pop();
+            },
+            nl,
+            nh
+        )
+        .contains("hint_start has"));
+        assert!(refused(
+            "decreasing hint_start",
+            &|p| p.hint_start[1] = u32::MAX,
+            nl,
+            nh
+        )
+        .contains("hint_start decreases"));
+        assert!(refused("hint range past hints", &|_| (), nl, nh - 1).contains("past the"));
+        let n_clauses = good.clause_start.len() as u32 - 1;
+        assert!(refused(
+            "lemma names no clause",
+            &|p| p.lemma_clause[1] = n_clauses,
+            nl,
+            nh
+        )
+        .contains("names clause"));
+    }
     use crate::lrat::{check_sequential, parse_cnf_ints, parse_text};
 
     const CNF: &str = "p cnf 2 4\n1 2 0\n-1 2 0\n1 -2 0\n-1 -2 0\n";

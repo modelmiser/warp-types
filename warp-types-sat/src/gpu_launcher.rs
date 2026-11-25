@@ -35,6 +35,14 @@ pub const DEC_NONE: u32 = 2;
 /// an extrapolation, not a measurement.
 pub const LRAT_DIRECT_TABLE_BUDGET: u64 = 1 << 30;
 
+/// The largest per-warp region the direct layout can be launched with: the
+/// kernel forms `warp * region` and the table size in `u32`, and a block has
+/// four warps (`sat-kernels::LRAT_WARPS_PER_BLOCK`), so even one block needs
+/// `4 * region <= u32::MAX`. A multiple of 32, like every region
+/// [`GpuContext::lrat_direct_slots`] yields. (Far past the table budget above:
+/// only a forced direct launch can ask for it.)
+pub const LRAT_DIRECT_SLOTS_MAX: u32 = (u32::MAX / 4) & !31;
+
 /// GPU context holding CUDA device, stream, and loaded kernels.
 ///
 /// Created once, reused across gradient iterations. Device buffers for
@@ -574,9 +582,18 @@ impl GpuContext {
     ) -> Result<DeviceSlices, GpuError> {
         use std::time::Instant;
         let s = &self.stream;
+        // The kernels read `bytes[..len]` on the caller's word.
+        if len > d_bytes.len() {
+            return Err(GpuError::Cuda(format!(
+                "decode: len {len} is past the {} bytes on the device",
+                d_bytes.len()
+            )));
+        }
         let len = len as u64;
         let slice = slice.max(1);
-        let n_slices = len.div_ceil(slice as u64) as u32;
+        let n_slices = u32::try_from(len.div_ceil(slice as u64)).map_err(|_| {
+            GpuError::Cuda("decode: too many slices for the kernel's 32-bit slice index".into())
+        })?;
         if n_slices == 0 {
             return Err(GpuError::Cuda("decode: empty input".into()));
         }
@@ -791,6 +808,21 @@ impl GpuContext {
     ) -> Result<GatheredPayloads, GpuError> {
         let s = &self.stream;
         let blocks = blocks.max(1);
+        // The kernels index the sources with the segments' values.
+        check_gather_segs(
+            "literal",
+            lit_segs,
+            raw_lits.len(),
+            extra_lits.len(),
+            lit_total,
+        )?;
+        check_gather_segs(
+            "hint",
+            hint_segs,
+            raw_hints.len(),
+            extra_hints.len(),
+            hint_total,
+        )?;
         let prefix = |segs: &[GatherSeg]| -> (Vec<u32>, Vec<u32>, Vec<u32>) {
             let mut dst = Vec::with_capacity(segs.len().max(1));
             let mut src = Vec::with_capacity(segs.len().max(1));
@@ -887,8 +919,24 @@ impl GpuContext {
     /// batched resident route, `lrat_warp::batch_device`): `n_out` literals
     /// into `out` from `n_seg` segments `(dst, src, sel)`, source 0 = `src0`,
     /// source 1 = `src1`. Nothing is launched for `n_out == 0`.
+    ///
+    /// The lengths are checked here (`n_seg` against the three segment views,
+    /// `n_out` against `out`). The segment CONTENTS live on the device and are
+    /// not: that is the caller's obligation.
+    ///
+    /// # Safety
+    ///
+    /// The first `n_seg` entries of the segment views must describe a gather
+    /// that stays inside its arrays: `seg_dst[0] == 0`, `seg_dst` is
+    /// nondecreasing and below `n_out`; `seg_sel[k]` is 0 or 1; and for every
+    /// output index `i < n_out` in segment `k` (the last `k` with
+    /// `seg_dst[k] <= i`), `seg_src[k] + (i - seg_dst[k])` is below the length
+    /// of the source `seg_sel[k]` selects (`src0` or `src1`) and does not
+    /// overflow `u32`. Otherwise the kernel reads device memory out of bounds.
+    /// [`GpuContext::gather_lrat_payloads`] takes host segments and checks
+    /// all of this; it is the safe way in. (A safe `fn` until 2026-11-25.)
     #[allow(clippy::too_many_arguments)]
-    pub fn gather_lits_into(
+    pub unsafe fn gather_lits_into(
         &self,
         seg_dst: &cudarc::driver::CudaView<'_, u32>,
         seg_src: &cudarc::driver::CudaView<'_, u32>,
@@ -903,7 +951,24 @@ impl GpuContext {
         if n_out == 0 || n_seg == 0 {
             return Ok(());
         }
+        let n_s = n_seg as usize;
+        if seg_dst.len() < n_s
+            || seg_src.len() < n_s
+            || seg_sel.len() < n_s
+            || out.len() < n_out as usize
+        {
+            return Err(GpuError::Cuda(format!(
+                "gather literals: {n_seg} segments / {n_out} outputs do not fit the views \
+                 (segments {}/{}/{}, out {})",
+                seg_dst.len(),
+                seg_src.len(),
+                seg_sel.len(),
+                out.len()
+            )));
+        }
         let blocks = blocks.max(1);
+        // SAFETY: the launch passes device pointers whose lengths were just
+        // checked; what the segments SAY is this function's own `# Safety`.
         unsafe {
             self.stream
                 .launch_builder(&self.kernels.lrat_gather_lits)
@@ -930,8 +995,18 @@ impl GpuContext {
     /// `dense_len`-entry table `dense_of` (0 = never added), written to `out`
     /// as `dense - 1`; the first index whose id maps to 0 lands in `bad`
     /// (atomic minimum; the caller pre-fills it with `u32::MAX`).
+    ///
+    /// The lengths are checked here (`n_seg`, `n_out`, `dense_len`, and `bad`
+    /// holding one element); a hint id at or past `dense_len` is treated as
+    /// never added by the kernel itself. The segment contents are not checked.
+    ///
+    /// # Safety
+    ///
+    /// As [`GpuContext::gather_lits_into`]: the first `n_seg` segment entries
+    /// must describe a gather that stays inside `src0` / `src1`.
+    /// (A safe `fn` until 2026-11-25.)
     #[allow(clippy::too_many_arguments)]
-    pub fn gather_hints_into(
+    pub unsafe fn gather_hints_into(
         &self,
         seg_dst: &cudarc::driver::CudaView<'_, u32>,
         seg_src: &cudarc::driver::CudaView<'_, u32>,
@@ -949,7 +1024,28 @@ impl GpuContext {
         if n_out == 0 || n_seg == 0 {
             return Ok(());
         }
+        let n_s = n_seg as usize;
+        if seg_dst.len() < n_s
+            || seg_src.len() < n_s
+            || seg_sel.len() < n_s
+            || out.len() < n_out as usize
+            || dense_of.len() < dense_len as usize
+            || bad.is_empty()
+        {
+            return Err(GpuError::Cuda(format!(
+                "gather hints: {n_seg} segments / {n_out} outputs / dense table {dense_len} do not fit \
+                 the views (segments {}/{}/{}, out {}, dense {}, bad {})",
+                seg_dst.len(),
+                seg_src.len(),
+                seg_sel.len(),
+                out.len(),
+                dense_of.len(),
+                bad.len()
+            )));
+        }
         let blocks = blocks.max(1);
+        // SAFETY: lengths checked above; the segments' contents are this
+        // function's own `# Safety`.
         unsafe {
             self.stream
                 .launch_builder(&self.kernels.lrat_gather_hints)
@@ -1048,8 +1144,10 @@ impl GpuContext {
     /// (`research/edp-record.md` §9). Every code of the proof is below it —
     /// except for `max_code > u32::MAX - 32`, where no u32 region can hold the
     /// code: the result saturates at the largest multiple of 32 (it wrapped to
-    /// 0 until 2026-11-25) and the kernel fails such a lemma closed. Only a
-    /// hand-built literal reaches that; the parser caps variables at 2^26.
+    /// 0 until 2026-11-25). A result past [`LRAT_DIRECT_SLOTS_MAX`] cannot be
+    /// used: the launcher falls back to the hashed layout, or refuses a forced
+    /// direct launch. Only a hand-built literal reaches that; the parser caps
+    /// variables at 2^26.
     pub fn lrat_direct_slots(max_code: u32) -> u32 {
         (max_code / 32 + 1).saturating_mul(32) & !31
     }
@@ -1070,8 +1168,11 @@ impl GpuContext {
     /// wrapped the allocation size).
     pub fn lrat_check_blocks(&self, blocks: u32, region: u32, n: u32) -> u32 {
         use cudarc::driver::sys::CUdevice_attribute::*;
-        const WPB: u32 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
-        let max_blocks = (u32::MAX / (WPB * region.max(1))).min(1 << 16);
+        const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
+                            // u64: `WPB * region` itself overflowed u32 for a region past
+                            // u32::MAX / 4 (cross-vendor panel, 2026-11-25). Such a region gives 0
+                            // here; `launch_lrat_check` refuses it before any allocation.
+        let max_blocks = (u32::MAX as u64 / (WPB * region.max(1) as u64)).min(1 << 16) as u32;
         let blocks = if blocks == 0 {
             let ctx = self.stream.context();
             let sms = ctx
@@ -1080,7 +1181,7 @@ impl GpuContext {
             let l2 = ctx
                 .attribute(CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
                 .map_or(0, |v| v.max(0) as u64);
-            let resident = sms as u64 * 24 * WPB as u64 * region as u64 * 8;
+            let resident = sms as u64 * 24 * WPB * region as u64 * 8;
             sms * if resident <= l2 { 24 } else { 6 }
         } else {
             blocks
@@ -1111,16 +1212,40 @@ impl GpuContext {
         }
         const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
         let n = fp.lemma_clause.len() as u32;
-        let slots = Self::lrat_direct_slots(self.lrat_max_code(lits)?);
-        let direct = direct.unwrap_or_else(|| {
-            let blocks = self.lrat_check_blocks(blocks, slots, n) as u64;
-            blocks * WPB * slots as u64 * 8 <= LRAT_DIRECT_TABLE_BUDGET
-        });
+        // `lrat_max_code` reports u32::MAX for a literal with |l| >= 2^31 - 1:
+        // its table key, or its negation's, does not exist (the kernels'
+        // `code + 1` wraps), and i32::MIN is its own negation. No DIMACS
+        // variable is that large; refuse the proof rather than check it.
+        let max_code = self.lrat_max_code(lits)?;
+        if max_code == u32::MAX {
+            return Err(GpuError::Cuda(
+                "LRAT check: a literal with |l| >= 2^31 - 1 is outside the kernel's range".into(),
+            ));
+        }
+        let slots = Self::lrat_direct_slots(max_code);
+        let fits = slots <= LRAT_DIRECT_SLOTS_MAX;
+        let direct = match direct {
+            Some(true) if !fits => {
+                return Err(GpuError::Cuda(format!(
+                    "LRAT check: the direct layout needs a region of {slots} slots per warp, \
+                     past the kernel's 32-bit table arithmetic ({LRAT_DIRECT_SLOTS_MAX})"
+                )))
+            }
+            Some(d) => d,
+            None => {
+                fits && {
+                    let blocks = self.lrat_check_blocks(blocks, slots, n) as u64;
+                    blocks * WPB * slots as u64 * 8 <= LRAT_DIRECT_TABLE_BUDGET
+                }
+            }
+        };
         self.launch_lrat_check(fp, lits, hints, blocks, direct, slots)
     }
 
-    /// The check launch itself, layout and direct region size given. Neither
-    /// is verified here: in the direct layout the kernel fails a lemma closed
+    /// The check launch itself, layout and direct region size given. The
+    /// proof's index arrays are validated
+    /// ([`crate::lrat_warp::FlatProof::check_device_invariants`]); the layout
+    /// and the region size are not: in the direct layout the kernel fails a lemma closed
     /// (TableOverflow) when it meets a code at or past `slots`; the tests call
     /// this directly with an undersized `slots` to watch that happen.
     pub(crate) fn launch_lrat_check(
@@ -1148,8 +1273,21 @@ impl GpuContext {
         if n == 0 {
             return Ok(Vec::new());
         }
+        // The kernel indexes with these arrays' VALUES and cannot test them;
+        // `FlatProof`'s fields are public, so check before every launch.
+        fp.check_device_invariants(lits.len(), hints.len())
+            .map_err(|why| GpuError::Cuda(format!("LRAT check: malformed proof arrays: {why}")))?;
         let direct_arg = direct as u32;
         let slots = slots.max(32);
+        // `base = warp * region` and the allocation size are formed in u32:
+        // with a region past u32::MAX / 4 even one block's four warps wrap,
+        // and the table is under-allocated (cross-vendor panel, 2026-11-25).
+        if direct && slots > LRAT_DIRECT_SLOTS_MAX {
+            return Err(GpuError::Cuda(format!(
+                "LRAT check: a direct region of {slots} slots per warp is past the kernel's \
+                 32-bit table arithmetic ({LRAT_DIRECT_SLOTS_MAX})"
+            )));
+        }
         // The batched direct path probes a literal AND its negation against
         // the region bound before the free count; with an even region both
         // lie inside or both outside, which keeps it equal to the strided
@@ -1163,6 +1301,12 @@ impl GpuContext {
         }
         let region = if direct { slots } else { TABLE };
         let blocks = self.lrat_check_blocks(blocks, region, n);
+        // The warps stride over the lemmas in u32 (`i += blocks * WPB`).
+        if n as u64 + blocks as u64 * WPB as u64 > u32::MAX as u64 {
+            return Err(GpuError::Cuda(
+                "LRAT check: too many lemmas for the kernel's 32-bit lemma index".into(),
+            ));
+        }
         let clause_start = s.clone_htod(&fp.clause_start)?;
         let deleted_at = s.clone_htod(&fp.deleted_at)?;
         let lemma_clause = s.clone_htod(&fp.lemma_clause)?;
@@ -1249,6 +1393,49 @@ pub struct DeviceSlices {
 /// dense-index hint array, and the global index of the first hint naming an
 /// id never added, if any.
 pub type GatheredPayloads = (CudaSlice<i32>, CudaSlice<u32>, Option<usize>);
+
+/// Host-side check of a segment list for [`GpuContext::gather_lrat_payloads`]:
+/// every segment selects source 0 or 1, lies inside that source, and the
+/// lengths add up to exactly `total` without overflowing the kernels' `u32`
+/// indices. The kernels index the sources with these values and test nothing.
+fn check_gather_segs(
+    what: &str,
+    segs: &[GatherSeg],
+    src0_len: usize,
+    src1_len: usize,
+    total: usize,
+) -> Result<(), GpuError> {
+    let bad = |why: String| {
+        Err(GpuError::Cuda(format!(
+            "gather: malformed {what} segments: {why}"
+        )))
+    };
+    if total > u32::MAX as usize {
+        return bad(format!("total {total} does not fit a u32"));
+    }
+    let mut acc = 0u64;
+    for (k, g) in segs.iter().enumerate() {
+        let src_len = match g.sel {
+            0 => src0_len,
+            1 => src1_len,
+            other => return bad(format!("segment {k} selects source {other}")),
+        };
+        if g.src as u64 + g.len as u64 > src_len as u64 {
+            return bad(format!(
+                "segment {k} reads {}..{} of a source with {src_len} elements",
+                g.src,
+                g.src as u64 + g.len as u64
+            ));
+        }
+        acc += g.len as u64;
+    }
+    if acc != total as u64 {
+        return bad(format!(
+            "the segments hold {acc} elements, the output {total}"
+        ));
+    }
+    Ok(())
+}
 
 /// One segment for the device gathers: `len` elements from source `sel`
 /// (0 = the raw decode array, 1 = the host's extra buffer) at `src`.

@@ -812,17 +812,23 @@ pub fn prepare_chunk(
         let mut d_lits: CudaSlice<i32> = s.alloc_zeros(n_l.max(1))?;
         let mut d_hints: CudaSlice<u32> = s.alloc_zeros(n_h.max(1))?;
         let mut d_bad: CudaSlice<u32> = s.clone_htod(&vec![u32::MAX; n.max(1)])?;
-        ctx.gather_lits_into(
-            &d_ld.slice(..),
-            &d_ls.slice(..),
-            &d_lse.slice(..),
-            n_ls as u32,
-            &raw_lits,
-            &d_xl,
-            &mut d_lits.slice_mut(..),
-            n_l as u32,
-            opts.gather_blocks,
-        )?;
+        // SAFETY: `ld` / `ls` / `lse` were built by this function from the
+        // routes' own segment lists — destinations are a running prefix from
+        // 0, sources are offsets into `raw_lits` (the device decode's array)
+        // or `extra_lits` (uploaded as `d_xl`) — and uploaded unchanged.
+        unsafe {
+            ctx.gather_lits_into(
+                &d_ld.slice(..),
+                &d_ls.slice(..),
+                &d_lse.slice(..),
+                n_ls as u32,
+                &raw_lits,
+                &d_xl,
+                &mut d_lits.slice_mut(..),
+                n_l as u32,
+                opts.gather_blocks,
+            )?;
+        }
         for (j, r) in routes.iter().enumerate() {
             let o = offs[j];
             match r {
@@ -833,20 +839,26 @@ pub fn prepare_chunk(
                     let blocks = opts
                         .gather_blocks
                         .min(((o.n_hints as u32).div_ceil(32)).max(1));
-                    ctx.gather_hints_into(
-                        &d_hd.slice(o.hseg..o.hseg + o.n_hseg),
-                        &d_hs.slice(o.hseg..o.hseg + o.n_hseg),
-                        &d_hse.slice(o.hseg..o.hseg + o.n_hseg),
-                        o.n_hseg as u32,
-                        &raw_hints,
-                        &d_xh,
-                        &d_tab.slice(o.tab..o.tab + o.n_tab),
-                        o.n_tab as u32,
-                        &mut d_hints.slice_mut(o.h..o.h + o.n_hints),
-                        o.n_hints as u32,
-                        &mut d_bad.slice_mut(j..j + 1),
-                        blocks,
-                    )?;
+                    // SAFETY: this proof's hint segments (`hseg_*[o.hseg..]`,
+                    // built above: destinations a running prefix from 0,
+                    // sources offsets into `raw_hints` or `extra_hints`),
+                    // uploaded unchanged.
+                    unsafe {
+                        ctx.gather_hints_into(
+                            &d_hd.slice(o.hseg..o.hseg + o.n_hseg),
+                            &d_hs.slice(o.hseg..o.hseg + o.n_hseg),
+                            &d_hse.slice(o.hseg..o.hseg + o.n_hseg),
+                            o.n_hseg as u32,
+                            &raw_hints,
+                            &d_xh,
+                            &d_tab.slice(o.tab..o.tab + o.n_tab),
+                            o.n_tab as u32,
+                            &mut d_hints.slice_mut(o.h..o.h + o.n_hints),
+                            o.n_hints as u32,
+                            &mut d_bad.slice_mut(j..j + 1),
+                            blocks,
+                        )?;
+                    }
                 }
                 Route::Host(..) => {
                     if o.n_hints > 0 {
@@ -1003,7 +1015,12 @@ pub fn check_pipelined(
     let (tx_bytes, rx_bytes) = sync_channel::<(usize, Vec<Vec<u8>>, (f64, f64))>(1);
     let (tx_prep, rx_prep) = sync_channel::<Result<Prepared, GpuError>>(0);
     let threads = opts.threads.max(1);
-    let rx_bytes = Mutex::new(rx_bytes);
+    // `Option` so the checker can CLOSE the channel on its way out. Until
+    // 2026-11-25 the receiver outlived the scope: when the checker returned
+    // an error and the preparers stopped, the reader stayed blocked in
+    // `send` on a channel nobody would read, and the scope never joined —
+    // an error from any chunk but the last few hung the caller.
+    let rx_bytes = Mutex::new(Some(rx_bytes));
     std::thread::scope(|s| -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
         // Reader.
         let load = &load;
@@ -1022,7 +1039,10 @@ pub fn check_pipelined(
         for prep_ctx in &prep_ctxs {
             let tx_prep = tx_prep.clone();
             s.spawn(move || loop {
-                let msg = rx_bytes.lock().unwrap().recv();
+                let msg = match rx_bytes.lock().unwrap().as_ref() {
+                    Some(rx) => rx.recv(),
+                    None => return, // the checker has left
+                };
                 let Ok((k, bytes, read)) = msg else { return };
                 let (lo, hi) = chunks[k];
                 let proofs: Vec<&[u8]> = bytes.iter().map(Vec::as_slice).collect();
@@ -1038,27 +1058,36 @@ pub fn check_pipelined(
         }
         drop(tx_prep);
         // Checker (this thread), in chunk order.
-        let mut out = Vec::with_capacity(chunks.len());
-        let mut pending: BTreeMap<usize, Prepared> = BTreeMap::new();
-        for msg in rx_prep {
-            let p = msg?;
-            pending.insert(p.0, p);
-            while let Some((k, p, read, prepare)) = pending.remove(&out.len()) {
-                debug_assert_eq!(k, out.len());
-                let a = Instant::now();
-                let o = check_prepared(&check_ctx, p)?;
-                let check = (at(a), at(Instant::now()));
-                out.push((
-                    o,
-                    PipeTimes {
-                        read,
-                        prepare,
-                        check,
-                    },
-                ));
+        let check_all = || -> Result<Vec<(ChunkOutcome, PipeTimes)>, GpuError> {
+            let mut out = Vec::with_capacity(chunks.len());
+            let mut pending: BTreeMap<usize, Prepared> = BTreeMap::new();
+            for msg in rx_prep {
+                let p = msg?;
+                pending.insert(p.0, p);
+                while let Some((k, p, read, prepare)) = pending.remove(&out.len()) {
+                    debug_assert_eq!(k, out.len());
+                    let a = Instant::now();
+                    let o = check_prepared(&check_ctx, p)?;
+                    let check = (at(a), at(Instant::now()));
+                    out.push((
+                        o,
+                        PipeTimes {
+                            read,
+                            prepare,
+                            check,
+                        },
+                    ));
+                }
             }
-        }
-        Ok(out)
+            Ok(out)
+        };
+        let out = check_all();
+        // `rx_prep` is gone (moved into `check_all`), so a preparer's next
+        // send fails and it returns. Dropping the bytes receiver does the
+        // same for the reader. A preparer blocked in `recv` holds this lock
+        // only until the reader sends or finishes, so this cannot deadlock.
+        rx_bytes.lock().unwrap().take();
+        out
     })
 }
 
