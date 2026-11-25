@@ -25,7 +25,7 @@ A future `#[warp_typed]` proc macro could further optimize this pattern by autom
 
 ## 9.2 Formal Mechanization
 
-Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and no axioms. Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
+Our core metatheory is fully mechanized in Lean 4 (§4.8): progress, preservation, and the substitution lemma are all machine-checked with zero `sorry` and no axioms beyond Lean's standard three (`propext`, `Classical.choice`, `Quot.sound`; §4.8). Five bug untypability proofs are also mechanized. Nested divergence is generalized (`IsComplement s1 s2 parent`), and all four loop typing rules (§5.1) are mechanized with progress, preservation, and substitution coverage. Remaining future work:
 - Mechanize set-preserving shuffle (§4.6)
 - Model `loopConvergent`'s collective-predicate requirement (currently uses fuel bound)
 - Verified Rust implementation via Aeneas translation
