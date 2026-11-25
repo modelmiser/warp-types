@@ -157,8 +157,23 @@ fn run_lrat_check(cnf: &str, proof: &str) -> Result<(), String> {
     }
 }
 
+/// Did drat-trim verify? Only when it exited 0 AND printed the line
+/// `s VERIFIED` (a whole line, not a substring) and no `s NOT VERIFIED` line.
+/// `stdout` may carry `\r`-terminated progress output; both `\r` and `\n`
+/// end a line. Until 2026-11-25 the banner was matched as a substring and
+/// the exit status ignored, so a checker that printed it and then died — or
+/// merely mentioned it in a comment line — certified the answer.
+fn drat_trim_verified(exit_ok: bool, stdout: &str) -> bool {
+    let (mut yes, mut no) = (false, false);
+    for l in stdout.split(['\r', '\n']).map(str::trim) {
+        yes |= l == "s VERIFIED";
+        no |= l == "s NOT VERIFIED";
+    }
+    exit_ok && yes && !no
+}
+
 /// Locate drat-trim (`$DRAT_TRIM`, else `PATH`) and run it on `cnf proof`.
-/// Ok only when its output contains `s VERIFIED`.
+/// Fail-closed: Ok only when [`drat_trim_verified`] says so.
 fn run_drat_trim(cnf: &str, proof: &str, binary: bool) -> Result<(), String> {
     let bin = env::var("DRAT_TRIM").ok().or_else(|| {
         env::var_os("PATH").and_then(|p| {
@@ -179,8 +194,8 @@ fn run_drat_trim(cnf: &str, proof: &str, binary: bool) -> Result<(), String> {
     let out = cmd
         .output()
         .map_err(|e| format!("could not run {bin}: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
-    if text.contains("s VERIFIED") && !text.contains("s NOT VERIFIED") {
+    let text = String::from_utf8_lossy(&out.stdout);
+    if drat_trim_verified(out.status.success(), &text) {
         Ok(())
     } else {
         Err(format!(
@@ -433,7 +448,31 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::model_check;
+    use super::{drat_trim_verified, model_check};
+
+    #[test]
+    fn drat_trim_verdict_needs_a_zero_exit_and_the_whole_line() {
+        // what drat-trim prints: progress ended by \r, then the banner
+        let real = "c parsing\rc 100%\rs VERIFIED\nc verification time: 0.1\n";
+        assert!(drat_trim_verified(true, real));
+        // the banner printed, then the checker died
+        assert!(!drat_trim_verified(false, real));
+        // the banner only as a substring of another line
+        assert!(!drat_trim_verified(
+            true,
+            "c this is s VERIFIED only in passing\n"
+        ));
+        assert!(
+            !drat_trim_verified(true, "s VERIFIED UNSAT\n"),
+            "another tool's banner"
+        );
+        // both banners: refuse
+        assert!(!drat_trim_verified(true, "s VERIFIED\ns NOT VERIFIED\n"));
+        assert!(!drat_trim_verified(true, "s NOT VERIFIED\n"));
+        assert!(!drat_trim_verified(true, ""));
+        // Windows line ends and padding are still the banner
+        assert!(drat_trim_verified(true, "  s VERIFIED \r\n"));
+    }
 
     #[test]
     fn model_check_accepts_and_rejects() {

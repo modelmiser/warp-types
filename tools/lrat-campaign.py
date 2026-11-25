@@ -21,6 +21,11 @@ usage: lrat-campaign.py --archive DIR[,DIR..] --out DIR --solve BIN --drat-trim 
 """
 import argparse, csv, os, subprocess, sys, time
 
+def verified(rc, out, banner):
+    """VERIFIED needs exit 0 AND `banner` as a whole line. cake_lpr exits 0 on a proof it rejects, so the exit
+    code alone is not a verdict; a substring match alone accepts a checker that printed the banner and died."""
+    return rc == 0 and banner in {l.strip() for l in out.replace("\r", "\n").split("\n")}
+
 def run(cmd, timeout):
     t0 = time.perf_counter()
     try:
@@ -77,11 +82,11 @@ def main():
             stat = [l for l in out.split("\n") if "LRAT proof written" in l]
             row["lrat_stats"] = stat[0].split("(", 1)[1].rstrip(")") if stat else ""
             t_lc, rc, out = run([a.lrat_check, cnf, lrat], a.timeout)
-            row["lrat_check"] = "VERIFIED" if rc == 0 and "c VERIFIED" in out else "NOT"
+            row["lrat_check"] = "VERIFIED" if verified(rc, out, "c VERIFIED") else "NOT"
             row["t_lrat_check"] = f"{t_lc:.3f}"
             if a.cake_lpr:
                 t_ck, rc, out = run([a.cake_lpr, cnf, lrat], a.timeout)
-                row["cake_lpr"] = "VERIFIED" if "s VERIFIED" in out else "NOT"
+                row["cake_lpr"] = "VERIFIED" if verified(rc, out, "s VERIFIED UNSAT") else "NOT"
                 row["t_cake_lpr"] = f"{t_ck:.3f}"
             if a.ours:
                 t_o, rc, out = run([a.ours, cnf, lrat, "4"], a.timeout)
@@ -95,7 +100,7 @@ def main():
             tl = base + ".tl.lrat"
             t_trim, rc, out = run([a.drat_trim, cnf, drat, "-L", tl], a.timeout)
             row["t_drat_trim"] = f"{t_trim:.3f}"
-            row["drat_trim"] = "VERIFIED" if "s VERIFIED" in out else "NOT"
+            row["drat_trim"] = "VERIFIED" if verified(rc, out, "s VERIFIED") else "NOT"
             row["tl_bytes"] = os.path.getsize(tl) if os.path.exists(tl) else ""
             if os.path.exists(tl):
                 t_lc2, rc, out = run([a.lrat_check, cnf, tl], a.timeout)

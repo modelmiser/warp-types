@@ -97,12 +97,18 @@ def run(cmd, timeout):
     except subprocess.TimeoutExpired:
         return -9, "TIMEOUT", time.time() - t
 
-def verdict(out):
-    """drat-trim: `s VERIFIED` / `s NOT VERIFIED`; lrat-check: `c VERIFIED` or `c FAILED`/`c ERROR` and
-    exit 0 either way (so the exit code is useless); cake_lpr: `s VERIFIED UNSAT` or an error message."""
-    out = out.replace("\r", "\n")
-    if "s NOT VERIFIED" in out: return "NOT VERIFIED"
-    if "s VERIFIED" in out or "\nc VERIFIED" in out or out.startswith("c VERIFIED"): return "VERIFIED"
+VERIFIED_LINES = {"s VERIFIED", "c VERIFIED", "s VERIFIED UNSAT"}  # drat-trim, lrat-check, cake_lpr
+
+def verdict(out, rc=None):
+    """A checker's verdict. VERIFIED needs BOTH a whole banner line (`s VERIFIED` from drat-trim, `c VERIFIED`
+    from lrat-check, `s VERIFIED UNSAT` from cake_lpr) and, when `rc` is given, exit 0. Neither alone is enough:
+    cake_lpr exits 0 on a proof it rejects (measured 2026-11-25), so the exit code cannot stand in for the banner;
+    and until 2026-11-25 the banner was matched as a substring with the exit code ignored, so a checker that
+    printed it and then died counted as VERIFIED. All three exit 0 when they do verify (measured the same day).
+    Pass `rc` for every checker run; leave it out only for solver output (`s UNSATISFIABLE` …)."""
+    lines = {l.strip() for l in out.replace("\r", "\n").split("\n")}
+    if "s NOT VERIFIED" in lines: return "NOT VERIFIED"
+    if lines & VERIFIED_LINES: return "VERIFIED" if rc in (None, 0) else "NOT VERIFIED"
     if "c FAILED" in out or "c ERROR" in out: return "NOT VERIFIED"
     if "s UNSATISFIABLE" in out: return "UNSAT"
     if "s SATISFIABLE" in out: return "SAT"
@@ -227,17 +233,17 @@ def main():
             row["proof_sha"] = sha(proof); row["proof_lines"] = len(lines)
             row["d_lines"] = sum(1 for l in lines if l.startswith("d "))
             row["unit_d_lines"] = sum(1 for l in lines if l.startswith("d ") and len(l.split()) == 3)
-            rc, o, t = run([a.drat_trim, str(cnf), str(proof)], a.check_timeout); row["dt_default"] = verdict(o); row["dt_s"] = f"{t:.3f}"
+            rc, o, t = run([a.drat_trim, str(cnf), str(proof)], a.check_timeout); row["dt_default"] = verdict(o, rc); row["dt_s"] = f"{t:.3f}"
             rc2, o2, _ = run([a.drat_trim, str(cnf), str(proof), "-v", "-W"], a.check_timeout)
             row["dt_vW_exit"] = rc2; row["dt_vW_ignoring"] = o2.count("ignoring deletion")
-            rc3, o3, _ = run([a.drat_trim, str(cnf), str(proof), "-f"], a.check_timeout); row["dt_forward"] = verdict(o3)
+            rc3, o3, _ = run([a.drat_trim, str(cnf), str(proof), "-f"], a.check_timeout); row["dt_forward"] = verdict(o3, rc3)
             lrat = out / "proof" / f"{name}.lrat"
             run([a.drat_trim, str(cnf), str(proof), "-L", str(lrat)], a.check_timeout)
             if lrat.exists():
                 row["lrat_lines"] = sum(1 for _ in open(lrat))
-                rc4, o4, _ = run([a.lrat_check, str(cnf), str(lrat)], a.check_timeout); row["lrat_check"] = verdict(o4)
+                rc4, o4, _ = run([a.lrat_check, str(cnf), str(lrat)], a.check_timeout); row["lrat_check"] = verdict(o4, rc4)
                 if a.cake_lpr:
-                    rc5, o5, _ = run([a.cake_lpr, str(cnf), str(lrat)], a.check_timeout); row["cake_lpr"] = verdict(o5)
+                    rc5, o5, _ = run([a.cake_lpr, str(cnf), str(lrat)], a.check_timeout); row["cake_lpr"] = verdict(o5, rc5)
             for k in ("dt_default", "dt_forward", "lrat_check", "cake_lpr"):
                 if row[k] and row[k] != "VERIFIED": kills.append(f"{name}: {k} = {row[k]} on a genuine proof")
             if row["unit_d_lines"] or row["dt_vW_ignoring"]: kills.append(f"{name}: unit deletions present/ignored ({row['unit_d_lines']}, {row['dt_vW_ignoring']})")
@@ -247,11 +253,12 @@ def main():
                 for kind in ("flip", "drop0", "delorig"):
                     bad = out / "proof" / f"{name}.{kind}.drat"  # text, decoded from the binary proof when --drat-binary
                     bad.write_text(corrupt(text, kind).replace("__ORIG__", first + " 0"))
-                    n1 = verdict(run([a.drat_trim, str(cnf), str(bad)], a.check_timeout)[1])
-                    n2 = verdict(run([a.drat_trim, str(cnf), str(bad), "-f"], a.check_timeout)[1])
+                    checked = lambda cmd: (lambda r: verdict(r[1], r[0]))(run(cmd, a.check_timeout))
+                    n1 = checked([a.drat_trim, str(cnf), str(bad)])
+                    n2 = checked([a.drat_trim, str(cnf), str(bad), "-f"])
                     bl = out / "proof" / f"{name}.{kind}.lrat"; run([a.drat_trim, str(cnf), str(bad), "-L", str(bl)], a.check_timeout)
-                    n3 = verdict(run([a.lrat_check, str(cnf), str(bl)], a.check_timeout)[1]) if bl.exists() else "NO-LRAT"
-                    n4 = verdict(run([a.cake_lpr, str(cnf), str(bl)], a.check_timeout)[1]) if (a.cake_lpr and bl.exists()) else ""
+                    n3 = checked([a.lrat_check, str(cnf), str(bl)]) if bl.exists() else "NO-LRAT"
+                    n4 = checked([a.cake_lpr, str(cnf), str(bl)]) if (a.cake_lpr and bl.exists()) else ""
                     negs.append(dict(name=name, kind=kind, dt_default=n1, dt_forward=n2, lrat_check=n3, cake_lpr=n4))
         rows.append(row)
         print(f"{name:22s} {row['solve']:8s} kissat={row['kissat']:8s} d={row['d_lines']!s:5s} dt={row['dt_default']:13s} fwd={row['dt_forward']:13s} lrat={row['lrat_check']:13s} cake={row['cake_lpr']}", flush=True)

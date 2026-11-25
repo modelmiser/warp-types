@@ -81,6 +81,11 @@ def mutate(steps, kind, rng):
         raise ValueError(kind)
     return steps
 
+def verified(rc, out, banner):
+    """VERIFIED needs exit 0 AND `banner` as a whole line. cake_lpr exits 0 on a proof it rejects, so the exit
+    code alone is not a verdict; a substring match alone accepts a checker that printed the banner and died."""
+    return rc == 0 and banner in {l.strip() for l in out.replace("\r", "\n").split("\n")}
+
 def run(cmd, timeout=600):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -124,10 +129,10 @@ def main():
                 row = {"name": name, "kind": kind, "lrat_check": "", "cake_lpr": "", "ours": ""}
                 if a.lrat_check:
                     rc, out = run([a.lrat_check, cnf, lp])
-                    row["lrat_check"] = "VERIFIED" if "c VERIFIED" in out and rc == 0 else "NOT"
+                    row["lrat_check"] = "VERIFIED" if verified(rc, out, "c VERIFIED") else "NOT"
                 if a.cake_lpr:
                     rc, out = run([a.cake_lpr, cnf, lp])
-                    row["cake_lpr"] = "VERIFIED" if "s VERIFIED" in out else "NOT"
+                    row["cake_lpr"] = "VERIFIED" if verified(rc, out, "s VERIFIED UNSAT") else "NOT"
                 if a.ours:
                     rc, out = run([a.ours, cnf, lp, "1"])
                     v = [l for l in out.split("\n") if l.startswith("c sequential:")]

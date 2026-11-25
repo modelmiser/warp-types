@@ -85,6 +85,17 @@ fn random_formula(rng: &mut Rng, terms: &[TermId], n_lits: usize) -> SmtFormula 
     SmtFormula::And(lits)
 }
 
+/// A checker verified only if it exited 0 AND printed `banner` as a whole
+/// line. `cake_lpr` exits 0 on a proof it rejects, so the exit code alone
+/// is no verdict; a substring match alone accepts a checker that printed
+/// the banner and then died (both were accepted until 2026-11-25).
+fn banner_line(o: &process::Output, banner: &str) -> bool {
+    o.status.success()
+        && String::from_utf8_lossy(&o.stdout)
+            .split(['\r', '\n'])
+            .any(|l| l.trim() == banner)
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut n_euf = 200usize;
@@ -286,8 +297,7 @@ fn main() {
                             .arg(&lrat_path)
                             .output()
                             .expect("lrat-check");
-                        let good = o.status.success()
-                            && String::from_utf8_lossy(&o.stdout).contains("c VERIFIED");
+                        let good = banner_line(&o, "c VERIFIED");
                         ok &= good;
                         pc.push_str(if good { "lc:ok " } else { "lc:NOT " });
                     }
@@ -297,7 +307,7 @@ fn main() {
                             .arg(&lrat_path)
                             .output()
                             .expect("cake_lpr");
-                        let good = String::from_utf8_lossy(&o.stdout).contains("s VERIFIED");
+                        let good = banner_line(&o, "s VERIFIED UNSAT");
                         ok &= good;
                         pc.push_str(if good { "cake:ok" } else { "cake:NOT" });
                     }
