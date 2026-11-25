@@ -64,7 +64,8 @@ impl Warp<crate::active_set::All> {
     /// A `Warp<S>` is a zero-sized witness that the lanes in `S` are the
     /// converged lanes of this hardware warp. No constructor inspects
     /// hardware state, so the witness is trusted, not unforgeable. Every
-    /// `unsafe` block in the typed shuffles relies on it, and these are the
+    /// `unsafe` block in the typed shuffles relies on it, as does the one in
+    /// [`Warp::sync`], and these are the
     /// routes that produce one without hardware evidence:
     ///
     /// 1. `Warp::kernel_entry()` itself: it can be called anywhere, including
@@ -84,6 +85,18 @@ impl Warp<crate::active_set::All> {
     /// 5. The `research` feature (host-only, `cfg(not(target_arch = "nvptx64"))`)
     ///    compiles design explorations whose `diverge`/`merge` mint handles
     ///    freely. Never enable it for device code.
+    /// 6. Launch geometry: `kernel_entry()` claims all 32 lanes of the warp. A
+    ///    block whose thread count is not a multiple of 32 has a last warp
+    ///    with fewer live lanes, and the claim is false there. The collectives
+    ///    differ in what follows. `shfl.sync` and `vote.sync` wait only for
+    ///    the *non-exited* lanes named (PTX ISA 9.5), so they do not hang, but
+    ///    a value sourced from a missing lane is undefined. `bar.warp.sync`
+    ///    has no such exemption in the ISA's text — it waits for "all threads
+    ///    corresponding to membermask" — so [`Warp::sync`] on a partial warp
+    ///    is outside what the ISA defines. Launch full warps.
+    /// 7. A lane that never arrives: a lane in `S` that spins in the panic
+    ///    handler, or returns early through a raw branch, before a collective
+    ///    the others execute leaves them waiting for it.
     ///
     /// Everything else that yields a handle — `diverge_*`, `merge`, `Warp::tile`,
     /// `Tile::partition_*`, `DynDiverge::merge`, the fence witnesses — consumes
@@ -143,25 +156,39 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// On `nvptx64` each lane in `S` executes `bar.warp.sync` with membermask
     /// `S::MASK`; a lane outside `S` skips it (`diverge_*` emits no branch, so
-    /// every lane of the warp reaches this call, and a lane that is not named
-    /// in the membermask must not execute the barrier). On every other target
-    /// — the CPU model, `amdgcn` — it emits nothing.
+    /// every lane of the warp reaches this call, and the instruction is
+    /// undefined for an executing lane its membermask does not name). On every
+    /// other target — the CPU model, `amdgpu` — it emits nothing, as does
+    /// `Warp<Empty>::sync()` on any target (no lane passes the guard).
+    ///
+    /// The barrier also orders memory among the lanes that take part: a lane
+    /// may store, `sync()`, and then read what the other lanes of `S` stored
+    /// (PTX ISA 9.5, `bar.warp.sync`).
     ///
     /// It was a no-op on every target through 0.4.3.
     ///
-    /// Like the typed shuffles, it relies on the `Warp<S>` witness: every lane
-    /// in `S` must actually arrive here, or the barrier waits for a lane that
-    /// never comes (see "Trusted entry points" on [`Warp::kernel_entry`]).
-    #[inline]
+    /// **It relies on the `Warp<S>` witness, like the typed shuffles, and is
+    /// less forgiving than they are.** Every lane in `S` must exist and must
+    /// arrive here with the same `S`: the barrier waits for all of them, and
+    /// the ISA does not exempt exited or missing lanes as it does for
+    /// `shfl.sync`. A forged or stale handle, a partial last warp, or a lane
+    /// that never arrives makes this call hang or leaves it undefined — see
+    /// items 1–4, 6 and 7 of "Trusted entry points" on [`Warp::kernel_entry`].
+    #[inline(always)]
     pub fn sync(&self) {
         #[cfg(target_arch = "nvptx64")]
         if (S::MASK >> crate::gpu::lane_id()) & 1 == 1 {
-            // SAFETY: `syncwarp` needs the membermask to name the executing
-            // lane — the guard above — and every named lane to execute a
-            // barrier with the same mask: every lane in `S` reaches this call
-            // (the witness; `diverge_*` emits no branch) and passes the same
-            // constant. `as u32`: nvptx64 warps are 32-lane (`warp64` +
-            // nvptx64 is a compile error, lib.rs).
+            // SAFETY: `syncwarp` asks two things. (1) The membermask names the
+            // executing lane: the guard above. (2) Every lane the membermask
+            // names executes a barrier with the same mask. (2) is NOT
+            // established here; it is the `Warp<S>` witness, taken on trust:
+            // the lanes of `S` are live, converged lanes of this warp and all
+            // of them reach this call (`diverge_*` emits no branch) with the
+            // same constant `S::MASK`. Where the witness is false — the
+            // trusted entry points on `kernel_entry`, a partial last warp, a
+            // lane that never arrives — the barrier hangs or is undefined.
+            // `as u32`: nvptx64 warps are 32-lane (`warp64` + nvptx64 is a
+            // compile error, lib.rs).
             unsafe { crate::gpu::syncwarp(S::MASK as u32) }
         }
     }

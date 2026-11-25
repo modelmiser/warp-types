@@ -27,6 +27,9 @@
 #[inline(always)]
 pub fn lane_id() -> u32 {
     let id: u32;
+    // SAFETY: reads a PTX special register into a fresh register. No memory
+    // is touched, nothing is written, and the register is defined in every
+    // thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %laneid;", out(reg32) id) };
     id
 }
@@ -47,6 +50,9 @@ pub fn lane_id() -> u32 {
 #[inline(always)]
 pub fn thread_id_x() -> u32 {
     let id: u32;
+    // SAFETY: reads a PTX special register into a fresh register. No memory
+    // is touched, nothing is written, and the register is defined in every
+    // thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %tid.x;", out(reg32) id) };
     id
 }
@@ -57,6 +63,9 @@ pub fn thread_id_x() -> u32 {
 #[inline(always)]
 pub fn block_id_x() -> u32 {
     let id: u32;
+    // SAFETY: reads a PTX special register into a fresh register. No memory
+    // is touched, nothing is written, and the register is defined in every
+    // thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %ctaid.x;", out(reg32) id) };
     id
 }
@@ -67,6 +76,9 @@ pub fn block_id_x() -> u32 {
 #[inline(always)]
 pub fn block_dim_x() -> u32 {
     let dim: u32;
+    // SAFETY: reads a PTX special register into a fresh register. No memory
+    // is touched, nothing is written, and the register is defined in every
+    // thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %ntid.x;", out(reg32) dim) };
     dim
 }
@@ -181,10 +193,11 @@ mod nvvm {
 ///
 /// The instruction WAITS: it blocks until every *non-exited* lane named in
 /// `mask` has executed a `shfl.sync` with the same qualifiers and the same
-/// mask. (Paraphrase of the PTX ISA's `shfl.sync` section, from memory of the
-/// text; the ISA is not vendored in this repository and the 2026-10-18 panel
-/// could not verify it offline — check against the current ISA before relying
-/// on a detail beyond "named lanes rendezvous; an unnamed executing lane is UB".) Two consequences the previous wording got wrong. Naming a live lane
+/// mask. (PTX ISA 9.5, `shfl.sync`: it "will cause executing thread to wait
+/// until all non-exited threads corresponding to membermask have executed
+/// shfl.sync with the same qualifiers and same membermask value"; read from
+/// the vendor's page 2026-11-25 — the ISA is not vendored in this repository.)
+/// Two consequences the previous wording got wrong. Naming a live lane
 /// that never arrives HANGS — it is not undefined behavior. Naming a lane that
 /// has already exited is fine; exited lanes are excluded from the wait.
 ///
@@ -368,9 +381,19 @@ pub unsafe fn ballot_sync(mask: u32, predicate: bool) -> u32 {
 ///
 /// # Safety
 ///
-/// `mask` must name the executing lane, and every lane named in `mask` must
-/// eventually execute a `bar.warp.sync` with the same mask — otherwise the
-/// barrier deadlocks or has undefined behavior (PTX `bar.warp.sync`).
+/// `mask` must name the executing lane: "The behavior of bar.warp.sync is
+/// undefined if the executing thread is not in the membermask" (PTX ISA 9.5,
+/// read from the vendor's page 2026-11-25).
+///
+/// Every lane named in `mask` must execute a `bar.warp.sync` with the same
+/// mask: the instruction makes the executing thread "wait until all threads
+/// corresponding to membermask have executed a bar.warp.sync with the same
+/// membermask value". Unlike `shfl.sync` and `vote.sync`, that sentence does
+/// not say "non-exited": the ISA gives no exemption for a named lane that has
+/// exited or does not exist (the last warp of a block whose size is not a
+/// multiple of 32), so naming one is outside what the ISA defines. A named
+/// live lane that never arrives leaves the others waiting. On `.target sm_6x`
+/// and below the named lanes must additionally execute it in convergence.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn syncwarp(mask: u32) {
@@ -379,9 +402,18 @@ pub unsafe fn syncwarp(mask: u32) {
 
 /// Thread fence (global memory ordering).
 /// PTX: `membar.gl`
+///
+/// Orders THIS thread's memory operations and nothing else: it "guarantees
+/// that prior memory accesses requested by this thread … are performed at the
+/// specified level, before later memory operations requested by this thread"
+/// (PTX ISA 9.5). It does not wait for any other thread; to read what other
+/// lanes of the warp stored, use a barrier ([`syncwarp`]).
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn threadfence() {
+    // SAFETY: `membar.gl` takes no operands, reads and writes no register and
+    // no memory of its own, and is valid in any thread; it only constrains the
+    // order of this thread's memory operations.
     unsafe {
         core::arch::asm!("membar.gl;");
     }

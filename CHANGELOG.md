@@ -10,14 +10,24 @@
   were not committed; re-running it reproduces the same result.
 - **Changed (behaviour): `Warp::sync` and `fence::threadfence` now emit code on `nvptx64`.** Both emitted nothing
   on any target through 0.4.3. `Warp<S>::sync()` is `bar.warp.sync` with membermask `S::MASK`, behind the same
-  lane guard `shuffle_xor_within` uses (a lane outside `S` skips it, because `diverge_*` emits no branch and a
-  lane the membermask does not name must not execute the barrier). `threadfence(FullWrite)` is `membar.gl`. Other
-  targets are unchanged (nothing emitted). `GlobalRegion<Fenced>::read` is unchanged and now documented as what
-  it is: a model step that reads no memory and returns `T::default()`, since a `GlobalRegion` is phantom.
-  `scripts/check-ptx-operands.sh` checks the emitted PTX (membermask immediate, guard, `membar.gl`) through two
-  new probe kernels; both were also launched on an RTX 4000 Ada (compute 8.9) over full, multi-warp and partial
-  blocks without a hang or a wrong result. Like the typed shuffles, `sync` relies on the `Warp<S>` witness: if a
-  lane in `S` does not arrive, the barrier waits for it.
+  lane guard `shuffle_xor_within` uses (a lane outside `S` skips it: `diverge_*` emits no branch, and the
+  instruction is undefined for an executing lane its membermask does not name). `threadfence(FullWrite)` is
+  `membar.gl`. Other targets are unchanged (nothing emitted).
+  - `sync` rests on the `Warp<S>` witness and is less forgiving than the shuffles: the barrier waits for every
+    lane it names, and the PTX ISA (9.5) does not exempt exited or missing lanes for `bar.warp.sync` as it does
+    for `shfl.sync` / `vote.sync`. A partial last warp (block size not a multiple of 32), a forged handle or a
+    lane that never arrives is outside what the ISA defines. "Trusted entry points" on `kernel_entry` gains
+    items for launch geometry and for a lane that never arrives; `gpu::syncwarp`'s `# Safety` now quotes the ISA.
+  - `membar.gl` orders the executing lane's own memory operations only. The `fence` module's docs now say what
+    the module is: a typestate model over a phantom `GlobalRegion` (`global_store` stores nothing, `read` loads
+    nothing and returns `T::default()`), with the fence as its one real instruction; lanes that read each
+    other's data need a barrier as well.
+  - `scripts/check-ptx-operands.sh` matches the emitted sequence in order for `Warp<Even>` and `Warp<Odd>` (lane
+    bit tested against the set's mask, branch on that predicate skipping exactly the barrier) and the
+    `membar.gl`; it fails on an unguarded barrier and on an inverted guard. That is a check of emitted code, not
+    of run-time legality. Run by hand on an RTX 4000 Ada (compute 8.9): the three probe kernels over full and
+    multi-warp blocks gave correct output with no hang; partial blocks also ran clean on that card, which the
+    ISA does not promise. The runner is not in the repository.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
   stdout containing `s VERIFIED` and ignored the checker's exit status, so a checker that printed the banner and
   then died, or only mentioned it in a comment line, certified the answer. The same match was in

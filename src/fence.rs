@@ -20,7 +20,19 @@
 //! Two partial writes from *different* `GlobalRegion::with_region` calls have
 //! different lifetimes and **cannot** be merged — the compiler rejects it.
 //!
-//! This turns both memory ordering bugs and cross-region confusion into type errors.
+//! This turns both memory ordering bugs and cross-region confusion into type errors
+//! **in the model**. What the module actually does is narrower:
+//!
+//! - `GlobalRegion` is phantom: zero-sized, bound to no address. `global_store`
+//!   and `global_store_complement` store nothing; they record, in the type,
+//!   that a set of lanes has done its writes. `read` loads nothing.
+//! - On `nvptx64`, [`threadfence`] is the one step that emits code: a
+//!   `membar.gl`, which orders the executing lane's OWN memory operations. It
+//!   does not make one lane's stores visible to another by itself; lanes that
+//!   read each other's data need a barrier as well ([`Warp::sync`]).
+//! - Nothing ties a `GlobalRegion` to the pointer your kernel really writes
+//!   through. The protocol is a discipline the types help you follow, not a
+//!   check on your memory traffic.
 
 use crate::active_set::{ActiveSet, ComplementOf, ComplementWithin};
 use crate::warp::Warp;
@@ -185,7 +197,8 @@ impl<'r> GlobalRegion<'r, Unwritten> {
 
 /// Warp writes to a global region, producing a partial write.
 impl<S: ActiveSet> Warp<S> {
-    /// Store values to global memory.
+    /// Record that the lanes of `S` have written the region. **Stores nothing**
+    /// — the region is phantom; do the real store through your own pointer.
     ///
     /// Returns the warp (unchanged) and a partially-written region
     /// that tracks which lanes have written. The lifetime `'r` is
@@ -209,8 +222,9 @@ impl<S: ActiveSet> Warp<S> {
         )
     }
 
-    /// Store values to a region that already has a partial write from
-    /// complementary lanes, producing a full write.
+    /// Record a write to a region that already has a partial write from
+    /// complementary lanes, producing a full write. **Stores nothing**, as
+    /// [`Warp::global_store`].
     ///
     /// Returns the warp (unchanged) so it can still be merged.
     /// The lifetime `'r` must match — both writes must target the same region.
@@ -293,12 +307,15 @@ where
 
 /// Issue a thread fence after all writes are complete.
 ///
-/// Only callable on `GlobalRegion<FullWrite>` — the type system ensures
-/// all lanes have written before the fence.
+/// Only callable on `GlobalRegion<FullWrite>` — the types record that every
+/// lane's write step has been taken (complement proof) before the fence. They
+/// do not observe the writes themselves, and nothing here waits for a lane.
 ///
 /// On `nvptx64` this emits `membar.gl` (`__threadfence()`), executed by every
-/// lane that reaches the call. On every other target it emits nothing; it
-/// emitted nothing on any target through 0.4.3.
+/// lane that reaches the call: each lane's own prior memory operations are
+/// ordered before its later ones at global level (PTX ISA 9.5, `membar`). On
+/// every other target it emits nothing; it emitted nothing on any target
+/// through 0.4.3.
 #[inline]
 pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
     #[cfg(target_arch = "nvptx64")]
@@ -314,8 +331,12 @@ impl GlobalRegion<'_, Fenced> {
     /// returns `T::default()`.** `GlobalRegion` is phantom — zero-sized, with
     /// no address — so there is nothing here to load from. What the type
     /// records is that a read is permitted at this point: all lanes have
-    /// written (`FullWrite`) and the fence has been issued (`Fenced`). Do the
-    /// actual load through your own pointer after [`threadfence`] returns.
+    /// written (`FullWrite`) and the fence has been issued (`Fenced`).
+    ///
+    /// For a real load through your own pointer: the fence orders only the
+    /// executing lane's own operations, so a lane reading what OTHER lanes
+    /// stored must also pass a barrier first — store, [`threadfence`],
+    /// `Warp::sync()` on a handle covering the lanes involved, then load.
     #[inline]
     pub fn read<T: Default>(&self) -> T {
         T::default() // model placeholder: no memory behind a GlobalRegion

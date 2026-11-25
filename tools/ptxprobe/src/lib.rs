@@ -124,16 +124,26 @@ pub unsafe extern "ptx-kernel" fn probe_sync_even(out: *mut u32) {
     *out.add(tid as usize) = tid;
 }
 
+/// Same on `Warp<Odd>`: membermask `Odd::MASK` (-1431655766 as i32).
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_sync_odd(out: *mut u32) {
+    let (_even, w) = Warp::kernel_entry().diverge_even_odd();
+    let tid = warp_types::gpu::thread_id_x();
+    w.sync();
+    *out.add(tid as usize) = tid;
+}
+
 /// `fence::threadfence`: `membar.gl` after the complement-proved full write.
 /// It opens with a full-warp `sync()` (`bar.warp.sync -1`): the script requires
 /// every probe kernel to contain a convergent call, and a fence alone is not one.
 #[no_mangle]
 pub unsafe extern "ptx-kernel" fn probe_fence(out: *mut u32) {
     let tid = warp_types::gpu::thread_id_x();
-    Warp::kernel_entry().sync();
+    let warp: Warp<All> = Warp::kernel_entry();
+    warp.sync();
     *out.add(tid as usize) = tid;
     fence::GlobalRegion::with_region(|region| {
-        let (even, odd) = Warp::kernel_entry().diverge_even_odd();
+        let (even, odd) = warp.diverge_even_odd();
         let (ra, rb) = region.split();
         let (_even, pa) = even.global_store(ra);
         let (_odd, pb) = odd.global_store(rb);

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Guard: the membermask and width operands the typed API promises actually reach
-# the emitted `shfl.sync` instructions, and `Warp<Empty>::shuffle_xor_within` is
+# the emitted `shfl.sync` instructions, `Warp::sync` is a guarded `bar.warp.sync`
+# with the set's mask, `fence::threadfence` is a `membar.gl`, and `Warp<Empty>::shuffle_xor_within` is
 # rejected by the DEVICE build. Builds tools/ptxprobe for nvptx64 (no GPU needed;
 # the nvptx CI job already has the target) and reads the PTX.
 #
@@ -64,11 +65,24 @@ mask_check probe_tile8_down  down -1 'Tile shuffle keeps the full-warp membermas
 check probe_within_even 'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
 check probe_within_even '@%p[0-9]+ bra' 'a predicated branch is present (guard)'
 check probe_within_odd  'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
-# Warp::sync and fence::threadfence (no-ops on every target through 0.4.3): the barrier carries the
-# set's membermask as an immediate and sits behind the lane guard; the fence is a membar.gl
-check probe_sync_even 'bar\.warp\.sync[[:space:]]+1431655765;' 'Warp<Even>::sync is bar.warp.sync with Even::MASK'
-check probe_sync_even 'mov\.u32[[:space:]]+%r[0-9]+, %laneid;' 'lane_id is read (guard present)'
-check probe_sync_even '@%p[0-9]+ bra' 'a predicated branch is present (guard)'
+# Warp::sync and fence::threadfence (no-ops on every target through 0.4.3). The barrier must carry the set's
+# membermask AND sit behind the lane guard with the right polarity, so the whole sequence is matched in order on
+# the flattened entry: the lane's bit is tested against the set's mask, `setp.eq … 0` sets a predicate, the
+# branch on THAT predicate jumps to a label, the barrier is the only instruction skipped, and the label follows
+# it. An unguarded barrier, an inverted guard (`setp.ne`) or a guard around something else all fail. This is a
+# check of the code this toolchain emits (pinned nightly); a different instruction selection would need a new
+# pattern. What it cannot show is that the barrier is LEGAL at run time — that is the Warp<S> witness.
+guarded_sync() {  # entry, 64-bit mask immediate, 32-bit barrier operand, description
+  if section "$1" | tr '\n' ' ' | grep -qE "mov\.u32[[:space:]]+%r[0-9]+, %laneid;.*and\.b64[[:space:]]+(%rd[0-9]+), %rd[0-9]+, $2;[[:space:]]*setp\.eq\.b64[[:space:]]+(%p[0-9]+), \1, 0;[[:space:]]*@\2 bra[[:space:]]+(\\\$L__BB[0-9_]+);[[:space:]]*bar\.warp\.sync[[:space:]]+$3;[[:space:]]*\3:"; then
+    echo "ok   $1: $4"
+  else
+    echo "FAIL $1: $4"; fail=1
+  fi
+}
+guarded_sync probe_sync_even 1431655765 1431655765  'Warp<Even>::sync: lane bit tested against Even::MASK, branch skips exactly bar.warp.sync Even::MASK'
+guarded_sync probe_sync_odd  2863311530 -1431655766 'Warp<Odd>::sync: lane bit tested against Odd::MASK, branch skips exactly bar.warp.sync Odd::MASK'
+n=$(section probe_sync_even | grep -cE 'bar\.warp\.sync' || true)
+if [ "$n" = 1 ]; then echo "ok   probe_sync_even: exactly one bar.warp.sync"; else echo "FAIL probe_sync_even: expected 1 bar.warp.sync, got $n"; fail=1; fi
 check probe_fence 'bar\.warp\.sync[[:space:]]+-1;' 'Warp<All>::sync is bar.warp.sync with the full-warp mask'
 check probe_fence 'membar\.gl;' 'threadfence lowers to membar.gl'
 # tiles: width-confined c
