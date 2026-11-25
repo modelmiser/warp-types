@@ -151,6 +151,16 @@ pub unsafe extern "ptx-kernel" fn probe_fence(out: *mut u32) {
     });
 }
 
+/// What a full-mask ballot of `true` returns in each lane: the mask `Warp::sync`
+/// intersects its membermask with. Not checked by the script (its value is a
+/// run-time fact); launched by hand on partial blocks to see which lanes a
+/// device reports.
+#[no_mangle]
+pub unsafe extern "ptx-kernel" fn probe_live_ballot(out: *mut u32) {
+    let tid = warp_types::gpu::thread_id_x();
+    *out.add(tid as usize) = warp_types::gpu::ballot_sync(0xFFFF_FFFF, true);
+}
+
 /// Negative probe (feature `empty-probe`): `Warp<Empty>` has no lanes, and the
 /// inline const assert in `shuffle_xor_within` must reject this instantiation at
 /// codegen. The script expects this build to fail with E0080.

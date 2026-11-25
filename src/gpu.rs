@@ -28,8 +28,8 @@
 pub fn lane_id() -> u32 {
     let id: u32;
     // SAFETY: reads a PTX special register into a fresh register. No memory
-    // is touched, nothing is written, and the register is defined in every
-    // thread of a kernel.
+    // is touched, nothing but that output register is written, and the
+    // special register is defined in every thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %laneid;", out(reg32) id) };
     id
 }
@@ -51,8 +51,8 @@ pub fn lane_id() -> u32 {
 pub fn thread_id_x() -> u32 {
     let id: u32;
     // SAFETY: reads a PTX special register into a fresh register. No memory
-    // is touched, nothing is written, and the register is defined in every
-    // thread of a kernel.
+    // is touched, nothing but that output register is written, and the
+    // special register is defined in every thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %tid.x;", out(reg32) id) };
     id
 }
@@ -64,8 +64,8 @@ pub fn thread_id_x() -> u32 {
 pub fn block_id_x() -> u32 {
     let id: u32;
     // SAFETY: reads a PTX special register into a fresh register. No memory
-    // is touched, nothing is written, and the register is defined in every
-    // thread of a kernel.
+    // is touched, nothing but that output register is written, and the
+    // special register is defined in every thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %ctaid.x;", out(reg32) id) };
     id
 }
@@ -77,8 +77,8 @@ pub fn block_id_x() -> u32 {
 pub fn block_dim_x() -> u32 {
     let dim: u32;
     // SAFETY: reads a PTX special register into a fresh register. No memory
-    // is touched, nothing is written, and the register is defined in every
-    // thread of a kernel.
+    // is touched, nothing but that output register is written, and the
+    // special register is defined in every thread of a kernel.
     unsafe { core::arch::asm!("mov.u32 {}, %ntid.x;", out(reg32) dim) };
     dim
 }
@@ -392,8 +392,11 @@ pub unsafe fn ballot_sync(mask: u32, predicate: bool) -> u32 {
 /// not say "non-exited": the ISA gives no exemption for a named lane that has
 /// exited or does not exist (the last warp of a block whose size is not a
 /// multiple of 32), so naming one is outside what the ISA defines. A named
-/// live lane that never arrives leaves the others waiting. On `.target sm_6x`
-/// and below the named lanes must additionally execute it in convergence.
+/// live lane that never arrives leaves the others waiting. On older targets
+/// the ISA asks more: "For .target sm_6x or below, all threads in membermask
+/// must execute the same bar.warp.sync instruction in convergence, and only
+/// threads belonging to some membermask can be active when the bar.warp.sync
+/// instruction is executed. Otherwise, the behavior is undefined."
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub unsafe fn syncwarp(mask: u32) {
@@ -403,11 +406,15 @@ pub unsafe fn syncwarp(mask: u32) {
 /// Thread fence (global memory ordering).
 /// PTX: `membar.gl`
 ///
-/// Orders THIS thread's memory operations and nothing else: it "guarantees
-/// that prior memory accesses requested by this thread … are performed at the
-/// specified level, before later memory operations requested by this thread"
-/// (PTX ISA 9.5). It does not wait for any other thread; to read what other
-/// lanes of the warp stored, use a barrier ([`syncwarp`]).
+/// It "guarantees that prior memory accesses requested by this thread … are
+/// performed at the specified level, before later memory operations requested
+/// by this thread", where a write "has been performed when the value written
+/// has become visible to other threads at the specified level" (PTX ISA 9.5).
+/// So it makes THIS thread's earlier stores visible before its later
+/// operations. It does not wait for any other thread, so a reader cannot tell
+/// from it whether another lane has stored yet: within a warp, lanes are
+/// ordered against each other by a barrier ([`syncwarp`]), which is enough on
+/// its own there.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]
 pub fn threadfence() {
@@ -420,7 +427,7 @@ pub fn threadfence() {
 }
 
 // ============================================================================
-// AMD GCN intrinsics (amdgcn target)
+// AMD GCN intrinsics (`target_arch = "amdgpu"`)
 // ============================================================================
 
 // AMD GPUs use DPP (Data-Parallel Primitives) for intra-wavefront communication.

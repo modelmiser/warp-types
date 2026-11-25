@@ -9,45 +9,48 @@
   compare. The READMEs' sentence about the axiom footprint previously rested on a scan whose script and output
   were not committed; re-running it reproduces the same result.
 - **Changed (behaviour): `Warp::sync` and `fence::threadfence` now emit code on `nvptx64`.** Both emitted nothing
-  on any target through 0.4.3. `Warp<S>::sync()` is `bar.warp.sync` with membermask `S::MASK`, behind the same
-  lane guard `shuffle_xor_within` uses (a lane outside `S` skips it: `diverge_*` emits no branch, and the
-  instruction is undefined for an executing lane its membermask does not name). `threadfence(FullWrite)` is
-  `membar.gl`. Other targets are unchanged (nothing emitted).
-  - `sync` rests on the `Warp<S>` witness and is less forgiving than the shuffles: the barrier waits for every
-    lane it names, and the PTX ISA (9.5) does not exempt exited or missing lanes for `bar.warp.sync` as it does
-    for `shfl.sync` / `vote.sync`. A partial last warp (block size not a multiple of 32), a forged handle or a
-    lane that never arrives is outside what the ISA defines. "Trusted entry points" on `kernel_entry` gains
-    items for launch geometry and for a lane that never arrives; `gpu::syncwarp`'s `# Safety` now quotes the ISA.
-  - `membar.gl` orders the executing lane's own memory operations only. The `fence` module's docs now say what
-    the module is: a typestate model over a phantom `GlobalRegion` (`global_store` stores nothing, `read` loads
-    nothing and returns `T::default()`), with the fence as its one real instruction; lanes that read each
-    other's data need a barrier as well.
-  - `scripts/check-ptx-operands.sh` matches the emitted sequence in order for `Warp<Even>` and `Warp<Odd>` (lane
-    bit tested against the set's mask, branch on that predicate skipping exactly the barrier) and the
-    `membar.gl`; it fails on an unguarded barrier and on an inverted guard. That is a check of emitted code, not
-    of run-time legality. Run by hand on an RTX 4000 Ada (compute 8.9): the three probe kernels over full and
-    multi-warp blocks gave correct output with no hang; partial blocks also ran clean on that card, which the
-    ISA does not promise. The runner is not in the repository.
+  on any target through 0.4.3. Other targets are unchanged (nothing emitted).
+  - `Warp<S>::sync()`: every lane takes a full-mask `vote.sync.ballot` of `true` (the warp's live lanes), and each
+    live lane in `S` then executes `bar.warp.sync` with membermask `S::MASK & live`; lanes outside `S` skip the
+    barrier. The intersection is there because the PTX ISA (9.5) does not exempt exited or missing lanes for
+    `bar.warp.sync` as it does for `shfl.sync` / `vote.sync`, and in a partial last warp `S::MASK` names lanes
+    that do not exist. It rests on one thing the ISA does not state in so many words for `vote.sync.ballot`: that
+    a missing lane contributes 0 (stated for `activemask` and the older `vote.ballot`).
+  - `sync` still rests on the `Warp<S>` witness: a forged handle, or a live lane that never arrives, hangs it or
+    leaves it undefined. "Trusted entry points" on `kernel_entry` gains items for launch geometry and for a lane
+    that never arrives; `gpu::syncwarp`'s `# Safety` quotes the ISA.
+  - `threadfence(FullWrite)` is `membar.gl`: the executing lane's earlier stores become visible at global level
+    before its later operations. It does not wait for other lanes. The `fence` module's docs now say what the
+    module is — a typestate model over a phantom `GlobalRegion` (`global_store` stores nothing, `read` loads
+    nothing and returns `T::default()`) with the fence as its one real instruction — and that lanes of one warp
+    reading each other's data need `sync()`, which suffices on its own there.
+  - `scripts/check-ptx-operands.sh` matches the emitted instruction sequence for `Warp<Even>`, `Warp<Odd>` and
+    `Warp<All>`, each register tied to the next: ballot over the full mask, `and` with the set's mask, this
+    lane's bit of that value tested, a branch on the negated test skipping exactly the barrier, the barrier's
+    operand that same value. It fails when the barrier is given the plain set mask and when the guard is
+    inverted. It is a check of emitted code under the pinned toolchain, not of run-time legality.
+  - Observed by hand on an RTX 4000 Ada (compute 8.9), not reproducible from this repository (the runner is not
+    committed): the ballot reported exactly the live lanes for block sizes 1, 16, 20, 33, 48 and 63, and the
+    probe kernels gave correct output without a hang on full, multi-warp and partial blocks.
+- **Fixed: an out-of-region table index in the LRAT check kernels** (`warp-types-sat`). The table key is
+  `code + 1`; for the one literal whose code is `u32::MAX` (`-(2^31 - 1)`) it wrapped to 0, the direct layout's
+  bound test (`k > slots`) let it through, and `k - 1` indexed the slot before the warp's region — the
+  neighbouring warp's last slot, or far outside the table. `lrat_falsified`, `lrat_insert` and the batched hint
+  loop now fail such a literal closed (TableOverflow), `SimWarp`'s table does the same, and
+  `lrat_direct_slots` saturates where it used to wrap to 0. Only a hand-built `FlatProof` reaches this (the
+  parser caps variables at 2^26). A device test builds one and fails without the fix.
+- **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
+  `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`. The insert
+  contract states an assumption the kernel has always made: the lanes of a warp execute an insert in lockstep,
+  which the PTX ISA does not promise on sm_70 and later.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
   stdout containing `s VERIFIED` and ignored the checker's exit status, so a checker that printed the banner and
   then died, or only mentioned it in a comment line, certified the answer. The same match was in
   `tools/cert-campaign.py`, `tools/lrat-campaign.py`, `tools/lrat-mutate.py`, `smt-crosscheck` and three
-  `reproduce/` scripts (where `lrat-check`'s exit status was also read from the wrong command). `cake_lpr` exits 0
-  on a proof it rejects, so the banner stays necessary; the exit status alone is never a verdict.
-- **Changed: the LRAT hint chain is a by-product of conflict analysis** (`warp-types-sat`): when the log wants
-  hints, analysis records each pivot's reason, the variables every successful redundancy proof marks, and the
-  level-0 variables minimization steps over (`AnalyzeWork::{record_chain, pivot_reasons, chain_vars, chain_level0}`);
-  `lrat_emit::rup_chain_from_analysis` assembles the chain from that record. The implication-graph walk
-  (`rup_chain`) stays as the oracle: debug builds compare the two chains on every conflict, and a test emits the
-  corpus both ways and compares bytes. Both text writers now format numbers into a reused byte buffer (`push_int`),
-  no `from_utf8` per number. Output bytes unchanged: every LRAT and DRAT proof of the 182-instance certification
-  corpus is byte-identical to the previous build's; `lrat-check` and `cake_lpr` verify 114 of 114. <!-- unguarded: 182, 114 — corpus size / campaign tally, research/lrat-from-solver-2026-11-11/ -->
-  **Measured 2026-11-11** (pre-registered, `research/lrat-from-solver.md`): instructions over the no-proof run on
-  random 3-SAT n = 200, LRAT text 740 → 385 M (−48 %), DRAT text 246 → 146 M (−41 %); wall time on n = 250, one
-  core, LRAT text +14.9 % → +7.0 %, LRAT binary +11.0 % → +5.0 %, DRAT +4.6 % → +3.3 %. The no-proof path carries
-  +0.6 % instructions for the record flag (+1.4–1.6 % wall in one session). Predictions missed and recorded: analysis
-  growth (+31 M against ≤ 15 M), the LRAT/DRAT instruction ratio (2.64 against ≤ 2.5), DRAT's wall gain (1.3 points
-  against ≤ 1). <!-- unguarded: 200, 250 — instance sizes n -->
+  `reproduce/` scripts (where `lrat-check`'s exit status was also read from the wrong command). `cake_lpr` was
+  seen to exit 0 on a truncated proof it rejected (PHP(6), 2026-11-25; not archived here), so the banner stays
+  necessary; the exit status alone is never a verdict. Test-only parsers in `proof.rs` and `lrat.rs` still use
+  the substring match.
 - **Added: binary DRAT** (`warp-types-sat`): `DratWriter::new_binary` / `with_format`,
   `solver::solve_watched_drat_format(db, n, out, interval, binary)`, `hybrid_solve_drat(…, binary)`,
   `proof::parse_drat_binary`, `solve --drat FILE --drat-binary` (`--certify` then runs drat-trim with `-i`), and

@@ -27,9 +27,12 @@
 //!   and `global_store_complement` store nothing; they record, in the type,
 //!   that a set of lanes has done its writes. `read` loads nothing.
 //! - On `nvptx64`, [`threadfence`] is the one step that emits code: a
-//!   `membar.gl`, which orders the executing lane's OWN memory operations. It
-//!   does not make one lane's stores visible to another by itself; lanes that
-//!   read each other's data need a barrier as well ([`Warp::sync`]).
+//!   `membar.gl`, which makes the executing lane's own earlier stores visible
+//!   at global level before its later operations. It does not wait for other
+//!   lanes, so a reader cannot know from it that another lane has stored yet.
+//!   Lanes of one warp that read each other's data need a barrier
+//!   ([`Warp::sync`]), and for them the barrier alone is enough; the fence
+//!   matters for observers outside the warp.
 //! - Nothing ties a `GlobalRegion` to the pointer your kernel really writes
 //!   through. The protocol is a discipline the types help you follow, not a
 //!   check on your memory traffic.
@@ -312,8 +315,8 @@ where
 /// do not observe the writes themselves, and nothing here waits for a lane.
 ///
 /// On `nvptx64` this emits `membar.gl` (`__threadfence()`), executed by every
-/// lane that reaches the call: each lane's own prior memory operations are
-/// ordered before its later ones at global level (PTX ISA 9.5, `membar`). On
+/// lane that reaches the call: each lane's own earlier stores become visible
+/// at global level before its later operations (PTX ISA 9.5, `membar`). On
 /// every other target it emits nothing; it emitted nothing on any target
 /// through 0.4.3.
 #[inline]
@@ -333,10 +336,12 @@ impl GlobalRegion<'_, Fenced> {
     /// records is that a read is permitted at this point: all lanes have
     /// written (`FullWrite`) and the fence has been issued (`Fenced`).
     ///
-    /// For a real load through your own pointer: the fence orders only the
-    /// executing lane's own operations, so a lane reading what OTHER lanes
-    /// stored must also pass a barrier first — store, [`threadfence`],
-    /// `Warp::sync()` on a handle covering the lanes involved, then load.
+    /// For a real load through your own pointer, of data other lanes of the
+    /// warp stored: store, `Warp::sync()` on a handle covering the lanes
+    /// involved, then load — the barrier orders memory among the lanes that
+    /// take part (PTX ISA 9.5, `bar.warp.sync`). [`threadfence`] does not wait
+    /// for anyone and is not what makes that load safe; it is for observers
+    /// outside the warp.
     #[inline]
     pub fn read<T: Default>(&self) -> T {
         T::default() // model placeholder: no memory behind a GlobalRegion

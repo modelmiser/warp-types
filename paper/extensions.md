@@ -273,7 +273,7 @@ fn safe_fence_pattern(warp: Warp<All>) {
 }
 ```
 
-This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate, and it emits no fence instruction itself (§6.9). The Lean fence rule (§4.8) gates on write-*permission* coverage (`group all`), not on writes performed.
+This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate; since the release after 0.4.3 it also emits `membar.gl` on `nvptx64` (it emitted nothing before), while the region and its `read` remain a model with no memory behind them (§6.9). The Lean fence rule (§4.8) gates on write-*permission* coverage (`group all`), not on writes performed.
 
 ## 5.7 Summary
 

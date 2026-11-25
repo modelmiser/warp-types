@@ -89,14 +89,22 @@ impl Warp<crate::active_set::All> {
     ///    block whose thread count is not a multiple of 32 has a last warp
     ///    with fewer live lanes, and the claim is false there. The collectives
     ///    differ in what follows. `shfl.sync` and `vote.sync` wait only for
-    ///    the *non-exited* lanes named (PTX ISA 9.5), so they do not hang, but
-    ///    a value sourced from a missing lane is undefined. `bar.warp.sync`
+    ///    the *non-exited* lanes named (PTX ISA 9.5); the ISA does not say in
+    ///    so many words that a lane which was never launched counts as exited,
+    ///    but the devices measured treat it so and the shuffles do not hang. A
+    ///    value sourced from a missing lane is undefined. `bar.warp.sync`
     ///    has no such exemption in the ISA's text — it waits for "all threads
-    ///    corresponding to membermask" — so [`Warp::sync`] on a partial warp
-    ///    is outside what the ISA defines. Launch full warps.
-    /// 7. A lane that never arrives: a lane in `S` that spins in the panic
-    ///    handler, or returns early through a raw branch, before a collective
-    ///    the others execute leaves them waiting for it.
+    ///    corresponding to membermask" — so [`Warp::sync`] does not pass
+    ///    `S::MASK` to it: it names only the lanes a full-mask ballot reports
+    ///    as live (see its documentation for what that rests on). Prefer
+    ///    full warps all the same; the shuffles' data hazard is unchanged.
+    /// 7. A live lane that never arrives: a lane that spins in the panic
+    ///    handler, or sits in a raw branch that skips the call, while the
+    ///    others execute a collective that names it, leaves them waiting. A
+    ///    lane that has EXITED is different: `shfl.sync` and `vote.sync` do
+    ///    not wait for it (item 6); the ISA does not say that of
+    ///    `bar.warp.sync`, which is why `sync` names only lanes its ballot
+    ///    reports.
     ///
     /// Everything else that yields a handle — `diverge_*`, `merge`, `Warp::tile`,
     /// `Tile::partition_*`, `DynDiverge::merge`, the fence witnesses — consumes
@@ -154,12 +162,29 @@ impl<S: ActiveSet> Warp<S> {
 
     /// Barrier synchronization for the active lanes: `__syncwarp(S::MASK)`.
     ///
-    /// On `nvptx64` each lane in `S` executes `bar.warp.sync` with membermask
-    /// `S::MASK`; a lane outside `S` skips it (`diverge_*` emits no branch, so
-    /// every lane of the warp reaches this call, and the instruction is
-    /// undefined for an executing lane its membermask does not name). On every
-    /// other target — the CPU model, `amdgpu` — it emits nothing, as does
-    /// `Warp<Empty>::sync()` on any target (no lane passes the guard).
+    /// On `nvptx64` every lane of the warp first takes a full-mask ballot of
+    /// `true`, which reports the warp's live lanes. Each live lane in `S` then
+    /// executes `bar.warp.sync` with membermask `S::MASK & live`; a lane
+    /// outside `S` skips the barrier (`diverge_*` emits no branch, so every
+    /// lane of the warp reaches this call, and the barrier is undefined for an
+    /// executing lane its membermask does not name). On every other target —
+    /// the CPU model, `amdgpu` — it emits nothing. `Warp<Empty>::sync()` emits
+    /// the ballot and no barrier (no lane passes the guard).
+    ///
+    /// Why the ballot: the barrier waits for every lane it names, and the PTX
+    /// ISA (9.5) does not exempt exited or missing lanes for `bar.warp.sync`
+    /// as it does for `shfl.sync` and `vote.sync`. In the last warp of a block
+    /// whose size is not a multiple of 32, `S::MASK` names lanes that do not
+    /// exist. The ballot is a `vote.sync`, which waits only for non-exited
+    /// lanes, and it hands every live lane the same mask, so they all pass
+    /// the barrier the same membermask. (`activemask` would not do: it is not
+    /// a rendezvous, so two lanes could read different masks.) What this
+    /// rests on beyond the ISA's text: that a lane which does not exist
+    /// contributes 0 to `vote.sync.ballot`. The ISA says so for `activemask`
+    /// and for the older `vote.ballot`, not in so many words for
+    /// `vote.sync.ballot`; an RTX 4000 Ada reports exactly the live lanes
+    /// (block sizes 1, 16, 20, 33, 48, 63). If a device reported a missing
+    /// lane as 1, `sync` would name it, as it did before the ballot.
     ///
     /// The barrier also orders memory among the lanes that take part: a lane
     /// may store, `sync()`, and then read what the other lanes of `S` stored
@@ -167,29 +192,42 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// It was a no-op on every target through 0.4.3.
     ///
-    /// **It relies on the `Warp<S>` witness, like the typed shuffles, and is
-    /// less forgiving than they are.** Every lane in `S` must exist and must
-    /// arrive here with the same `S`: the barrier waits for all of them, and
-    /// the ISA does not exempt exited or missing lanes as it does for
-    /// `shfl.sync`. A forged or stale handle, a partial last warp, or a lane
-    /// that never arrives makes this call hang or leaves it undefined — see
-    /// items 1–4, 6 and 7 of "Trusted entry points" on [`Warp::kernel_entry`].
+    /// On `.target sm_6x` and below the ISA also requires that only lanes
+    /// named in some membermask be active at the barrier, so a subset barrier
+    /// is undefined there; the crate is built for sm_70 and later.
+    ///
+    /// **It relies on the `Warp<S>` witness, like the typed shuffles.** Every
+    /// live lane of the warp must reach this call (the ballot waits for them),
+    /// and every live lane in `S` must reach it with the same `S` (the barrier
+    /// waits for them). A forged or stale handle, or a lane that never
+    /// arrives, makes this call hang or leaves it undefined — see items 1–4
+    /// and 7 of "Trusted entry points" on [`Warp::kernel_entry`].
     #[inline(always)]
     pub fn sync(&self) {
         #[cfg(target_arch = "nvptx64")]
-        if (S::MASK >> crate::gpu::lane_id()) & 1 == 1 {
-            // SAFETY: `syncwarp` asks two things. (1) The membermask names the
-            // executing lane: the guard above. (2) Every lane the membermask
-            // names executes a barrier with the same mask. (2) is NOT
-            // established here; it is the `Warp<S>` witness, taken on trust:
-            // the lanes of `S` are live, converged lanes of this warp and all
-            // of them reach this call (`diverge_*` emits no branch) with the
-            // same constant `S::MASK`. Where the witness is false — the
-            // trusted entry points on `kernel_entry`, a partial last warp, a
-            // lane that never arrives — the barrier hangs or is undefined.
+        {
+            // SAFETY (ballot): `ballot_sync` needs the membermask to name the
+            // executing lane — the full mask names every lane — and waits for
+            // the non-exited lanes it names. That all of those reach this
+            // call is NOT established here; it is the `Warp<S>` witness, taken
+            // on trust (`diverge_*` emits no branch, so lanes outside `S`
+            // arrive too).
+            let live = unsafe { crate::gpu::ballot_sync(0xFFFF_FFFF, true) };
             // `as u32`: nvptx64 warps are 32-lane (`warp64` + nvptx64 is a
             // compile error, lib.rs).
-            unsafe { crate::gpu::syncwarp(S::MASK as u32) }
+            let members = (S::MASK as u32) & live;
+            if (members >> crate::gpu::lane_id()) & 1 == 1 {
+                // SAFETY (barrier): `syncwarp` asks two things. (1) The
+                // membermask names the executing lane: the guard above tests
+                // this lane's bit of the very mask passed. (2) Every lane the
+                // membermask names executes a barrier with the same mask:
+                // `members` is the same in every live lane (one ballot result
+                // and a constant), and it names only lanes the ballot reports
+                // live; that each of them is in fact here, behind the same
+                // handle, is again the witness, taken on trust. Where the
+                // witness is false the barrier hangs or is undefined.
+                unsafe { crate::gpu::syncwarp(members) }
+            }
         }
     }
 }
