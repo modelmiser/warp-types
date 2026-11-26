@@ -85,10 +85,14 @@
   by a shuffle after the barrier, and a barrier opens every lemma (the batched direct path, which already had
   one writer per store, can leave a lemma right after a store). Verdicts are unchanged on the test proofs. What
   this removes is the dependence of the occupancy count on lane scheduling; it is argued from the PTX ISA's text
-  for `bar.warp.sync`, not demonstrated on a device that schedules lanes apart. The EDP record figure below (4.54 s) was measured BEFORE this change. A same-session comparison
-  on 2026-11-25, on a host that was not quiet (four other solver jobs on the pinned cores; not comparable with
-  4.54 s; the logs are not in the repository), gave warm totals 5.75 / 5.87 / 5.91 s before and 5.72 / 5.77 / 6.00 s, then 5.91 / 6.01 / 6.04 s
-  after: no difference at that resolution. A quiet-host re-measurement has not been made.
+  for `bar.warp.sync`, not demonstrated on a device that schedules lanes apart. Re-timed on 2026-11-25 after
+  the other jobs on the host were stopped (an interactive desktop application still running): the EDP record
+  pipeline reads **4.71 s warm (4.712 / 4.756 / 4.769) / 4.86 s cold** on the committed kernel, hashed table
+  6.72 s, the published composition's proofs 6.04 s warm / 6.07 s cold, device memory peak 5,142 MiB. The kernel
+  before this change read 4.82 / 4.89 / 4.89 s in the same session, and the committed kernel 5.00 / 5.02 / 5.02 s
+  when run again after it: the session drifted about 6 % over five minutes and does not separate the two. The
+  4.54 s / 4.60 s in the entry below is the 2026-11-11 measurement of the earlier kernel. Logs are not in the
+  repository; every number is in `research/edp-record.md`.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
@@ -122,7 +126,8 @@
   Table 6) checked the Erdős discrepancy instance EDP2_1161 as a compositional proof of 5,226 LRAT-justified
   lemmas, the last one empty, with cake_lpr in 60.2 s on 128 threads (3,871.7 s on one). The same 5,226
   lemmas, each re-proved by this crate's solver and its LRAT trimmed (25.2 M lemma lines, 2.0 G hints, 6.9 GB
-  binary), now check in **4.54 s warm / 4.60 s cold** in one process, CNF parse to last verdict, on an RTX 4000
+  binary), check in **4.54 s warm / 4.60 s cold** (the 2026-11-11 kernel; 4.71 s / 4.86 s on the committed one,
+  see the single-writer entry above) in one process, CNF parse to last verdict, on an RTX 4000
   SFF Ada with six host threads; the same trimmed proofs take `lrat-check` 199.6 s (text) and `cake_lpr`
   366.9 s (binary) on that machine, one step at a time on one thread — both reruns predate a host reboot that
   sped this pipeline ≈ 4 %, so the like-for-like figure inside one run is the hashed table, 6.32 s against

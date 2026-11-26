@@ -1372,3 +1372,32 @@ hashed pair differs by 5 % against NEW; one run each on a contended host does no
 and does not exclude it. **The committed kernel has no quiet-host figure; 4.54 s / 4.60 s remains
 the figure of the kernel before `f7d06888f`.** Owed: the protocol on a quiet host, with the memory
 sampler on both kernels.]
+
+[QUIET-HOST RE-TIME OF THE COMMITTED KERNEL, 2026-11-26 01:46–01:51Z. Owner: "stop the four solver
+jobs and re-time"; the four were stopped at 01:44:26Z. Load 1.35 / 3.38 / 4.85 at the start (falling
+from my own build); lean = spatch = yices = cadical = 0; an interactive desktop application at ≈ 0.34 of a
+core and a python at 0.17 were running. NEW = HEAD `263663b86` (single-writer inserts, a barrier
+opening every lemma, the inverted-range guard), tree clean; OLD = worktree at `35a66ad8d`. Log
+`~/staging/2026-11-25-edp-retime/clean/run-all6.log`.
+Oracles on NEW: `--verify-b2` 0 mismatching steps of 5,226; SimWarp 50/50; 5,226/5,226 verified in
+every run.
+NEW, protocol order: **cold 4.860; warm 4.712 / 4.756 / 4.769 → 4.71 s**; device memory peak
+5,142 MiB; serial control check 2.968, total 8.165; serial check at 288 blocks 2.993 / 3.042 /
+3.018, at 576: 3.440 / 3.417 / 3.497, at 1,152: 3.655 / 3.700 / 3.708; hashed 6.776 (later 6.724 /
+6.752); A2 cold 6.068, warm 6.041 / 6.218 / 6.385 → 6.04; 415 MB check 0.106 / 0.112 / 0.107.
+OLD, run after NEW's protocol: warm 4.821 / 4.885 / 4.887 → 4.82; memory peak 5,174 MiB; hashed
+6.641 / 6.795 / 6.750; serial check at 288: 3.229 / 3.218 / 3.234.
+NEW again, after OLD: warm 4.999 / 5.022 / 5.021.
+**Reading.** (1) The session DRIFTED: the same NEW binary read 4.71–4.77 s at 01:46–01:47Z and
+5.00–5.02 s at 01:51Z (check stage 3.78–3.82 → 4.06–4.12 s), about 6 % in five minutes, with OLD's
+4.82–4.89 (check 3.92–3.95) in between in time and in value. The cause was not measured (GPU
+temperature was not logged; 53 °C a few minutes after the run). So this session does not separate
+the two kernels: the ordering NEW < OLD < NEW-again is the ordering of the clock. The hashed runs,
+taken at three different times, agree (6.64–6.80 both kernels). (2) The 6,070 MiB peak of the
+contended run was the session, not the change: 5,142 against OLD's 5,174 here. (3) **The committed
+kernel's figure is 4.71 s warm / 4.86 s cold**: 60.2 / 4.712 = 12.8× (cold 12.4×); against the
+hashed table in the same run, 6.72 → 4.71 s (1.43×). It is 3.8 % above the 11-11 figure of the
+earlier kernel (4.54); this run cannot say how much of that is the kernel (one more barrier and one
+shuffle per lemma, one writer instead of 32) and how much the host. P37 (4.0–4.9) is still met;
+the A2 figure moved more (5.55 → 6.04 s warm), in its PREPARE-bound stages. Owed if the split
+matters: OLD and NEW interleaved run by run, with GPU temperature logged.]

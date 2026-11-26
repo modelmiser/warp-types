@@ -307,25 +307,24 @@ fail-closed: no checker is not a pass.
   checked the Erdős discrepancy instance as 5,226 LRAT-justified lemmas with
   `cake_lpr` in 60.2 s on 128 threads (3,871.7 s on one). The same 5,226
   lemmas, each re-proved by this crate's solver and trimmed (25.2 M lemma
-  lines, 2.0 G hints, 6.9 GB binary LRAT), check in **4.54 s warm / 4.60 s
+  lines, 2.0 G hints, 6.9 GB binary LRAT), check in **4.71 s warm / 4.86 s
   cold** in one process, CNF parse to last verdict — read, decode, scan,
   gather, check — on the RTX 4000 SFF Ada with six host threads, against
   `lrat-check` 199.6 s (text) and `cake_lpr` 366.9 s (binary) on the same
   trimmed proofs and machine, one step at a time on one thread; both reruns
   predate a host reboot that sped this pipeline ≈ 4 %, so the like-for-like
-  figure inside one run is the hashed table, 6.32 s against 4.54 s. The 4.54 s figure is
-  the 2026-11-11 measurement; the check kernel's table inserts have since
-  become single-writer (2026-11-25). The two kernels were compared in one
-  session that day on a host that was NOT quiet (four other solver jobs on
-  the pinned cores, so these totals are not comparable with 4.54 s): warm
-  5.75 / 5.87 / 5.91 s before the change, 5.72 / 5.77 / 6.00 s and
-  5.91 / 6.01 / 6.04 s after, with all 5,226 steps verified and the old
-  route's codes equal on every step. No difference shows at that
-  resolution; a quiet-host re-measurement has not been made. Stated
+  figure inside one run is the hashed table, 6.72 s against 4.71 s. The figures are
+  from 2026-11-25, on the committed kernel (table inserts single-writer, a
+  barrier per lemma). On 2026-11-11 the kernel before that change measured
+  4.54 s warm / 4.60 s cold; in the 2026-11-25 session that older kernel
+  measured 4.82 / 4.89 / 4.89 s warm, between the committed kernel's
+  4.71 / 4.76 / 4.77 s before it and 5.00 / 5.02 / 5.02 s after it. The
+  session drifted about 6 % over five minutes, so it does not separate the
+  two kernels; an interactive desktop application was running on the host, no batch jobs. Stated
   with the number every time: the underlying proofs are ours, not the
   published ones (proofs of the published composition made with iglucose
   and drat-trim, 3,414 lemmas returned as strict subsets and the derivations
-  turned into refutations through a unit rule, check in 5.55 s warm / 5.38 s
+  turned into refutations through a unit rule, check in 6.04 s warm / 6.07 s
   cold); the published figure re-read the CNF 5,226 times in 5,226
   processes; the published hardware and `cake_lpr` are older; `cake_lpr` is
   a verified checker and this one is not, and it is RUP-only. How: a chunk
