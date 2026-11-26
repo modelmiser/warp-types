@@ -55,8 +55,8 @@ via `cuda-memcheck --tool synccheck`, not by observing wrong output.
 **Significance:** In CUB itself — the library virtually all CUDA reduction/scan
 code depends on. Whether or not this instance is real, the source-level pattern
 — a membermask computed by code the compiler may predicate — has no
-counterpart in the typed API, where the mask is a type and has no register to
-predicate. (A raw intrinsic call, or a raw branch around one, remains
+counterpart in the typed API's shuffles, where the mask is a type and has no
+register to predicate. (A raw intrinsic call, or a raw branch around one, remains
 possible outside that API: the paper's §6.9.)
 
 ### 3. PIConGPU #2514 — Hardcoded Full Mask in Divergent Branch
@@ -117,7 +117,8 @@ require a breaking API change across the entire CUDA ecosystem. The old
 `__shfl` gave no way to specify which threads participate. The new `__shfl_sync`
 requires an explicit mask — but the mask is still a runtime value that can be
 wrong (Bugs 1 and 3 are wrong masks; Bug 2 is a suspected one, unconfirmed;
-Bug 4 is correct-looking source miscompiled around the intrinsic).
+Bug 4 is correct-looking source, undefined for the lanes that skip a branch,
+which the compiler may legally transform).
 
 ### 6. Volta Independent Thread Scheduling Made It Worse
 
@@ -129,7 +130,7 @@ work in most cases (implicit convergence).
 Volta: threads within a warp can genuinely interleave. *"can lead to a rather
 different set of threads participating in the executed code than intended."*
 
-Code that was latent UB on Pascal became observable bugs on Volta.
+Code that was latent UB on Pascal could become observable bugs on Volta.
 
 ---
 
@@ -162,12 +163,12 @@ on different lanes still needs a branch that the typed fragment does not cover
 ## Argument Structure for the Paper
 
 The evidence is used for the paper's closing claim in §7.5, quoted whole
-(Evidence 5–6 are the deprecation it mentions, Evidence 7 the programs that
-prohibit divergence; the CUB report, Bug 2, is unconfirmed and the paragraph
-does not rely on it):
+(Evidence 5 is the deprecation it mentions, Evidence 7 — Hazy — the kind of
+program that prohibits divergence; the CUB report, Bug 2, is unconfirmed and
+the paragraph does not rely on it):
 
 <!-- quote:paper §7.5 -->
-> We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
+> We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that correct-looking source — undefined for the lanes that skip a branch — can be compiled into code its author did not intend). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
 <!-- /quote -->
 
 ---
@@ -194,5 +195,5 @@ global memory. The paper is citable for:
 - "Debugging can prove to be an extremely challenging task" (§4.2)
 - "Guaranteeing both data consistency and deadlock avoidance is non-trivial" (§4)
 
-It is NOT citable for shuffle-safety evidence specifically. Use Bugs 1–4 and
-Evidence 5 above for that.
+It is NOT citable for shuffle-safety evidence specifically. Use Bugs 1, 3 and 4
+(Bug 2 only as a suspected report) and Evidence 5 above for that.

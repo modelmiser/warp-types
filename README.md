@@ -37,7 +37,7 @@ let merged: Warp<All> = merge(evens, odds);
 let partner = merged.shuffle_xor(data, 1);  // OK
 ```
 
-The type system is **strictly more permissive** than current best practice (which prohibits divergence) while being **safer, within the typed fragment,** than the CUDA status quo (which allows it unchecked; Limitations below lists what the fragment excludes).
+The type system is, as a discipline, **more permissive** than current best practice (which prohibits divergence; lanes running different operations still need a branch outside the typed fragment) while being **safer, within the typed fragment,** than the CUDA status quo (which allows it unchecked; Limitations below lists what the fragment excludes).
 
 ## Key Ideas
 

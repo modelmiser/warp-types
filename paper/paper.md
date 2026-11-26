@@ -23,7 +23,7 @@ The bug class is severe enough that NVIDIA deprecated the entire `__shfl` API fa
 
 State-of-the-art practitioners have responded by avoiding the problem entirely. The Hazy megakernel [2025], a recent persistent-thread megakernel, keeps execution warp-uniform by design, so its collectives run with all 32 lanes active. Divergence avoidance is reinforced by performance: divergent warps serialize execution across branches, so warp-uniform execution also maximizes SIMD throughput. This works, but at the cost of expressiveness: algorithms that naturally benefit from lane-level heterogeneity (adaptive sorting, predicated filters, work-stealing within a warp) cannot be expressed in this style.
 
-Our type system offers a third path: lane-level divergence that is type-checked rather than forbidden — in code that expresses divergence through `diverge`/`merge`, a full-warp collective is not available on a diverged handle. It is strictly more permissive than the divergence-prohibition approach exemplified by Hazy (which maintains warp-uniform execution) while being safer than CUDA's `__shfl_sync` API for programs in the typed fragment (the mask is fixed by the type rather than deferred to runtime; §6.9 lists what the fragment excludes). The gap between `__shfl_sync` and compile-time safety is concrete: `__activemask()` returns the current execution mask, which hardware always accepts—but a shuffle using `__activemask()` inside divergent code silently communicates among the wrong subset of lanes [CUDA Programming Guide §K.6]. Our type system closes this gap because the active set is a type-level property, not a runtime value.
+Our type system offers a third path: lane-level divergence that is type-checked rather than forbidden — in code that expresses divergence through `diverge`/`merge`, a full-warp collective is not available on a diverged handle. As a discipline it is more permissive than the divergence-prohibition approach exemplified by Hazy (which maintains warp-uniform execution; §7.3 says what the types do and do not relax) while being safer than CUDA's `__shfl_sync` API for programs in the typed fragment (the mask is fixed by the type rather than deferred to runtime; §6.9 lists what the fragment excludes). The gap between `__shfl_sync` and compile-time safety is concrete: `__activemask()` returns the current execution mask, which hardware always accepts—but a shuffle using `__activemask()` inside divergent code silently communicates among the wrong subset of lanes [CUDA Programming Guide §K.6]. Our type system closes this gap for collectives called as methods on a handle, because there the active set is a type-level property, not a runtime value.
 
 ## 1.1 Our Approach: Linear Typestate for Divergence
 
@@ -76,7 +76,7 @@ This paper makes the following contributions:
 
 2. **A soundness proof** (§4). We prove that well-typed programs in the mechanized calculus satisfy progress and preservation, ensuring they never read from inactive lanes. SHUFFLE-WITHIN is outside the mechanized fragment, and the Rust crate is affine with an unrestricted `kernel_entry` (§6.9).
 
-3. **A zero-overhead implementation** (§6). We implement our type system as a Rust library using traits and generics. Types are erased at compile time—the generated code is identical to untyped Rust equivalents (byte-identical PTX verified).
+3. **A zero-overhead implementation** (§6). We implement our type system as a Rust library using traits and generics. Types are erased at compile time—the generated code is identical to untyped Rust equivalents (byte-identical PTX verified). This is the static core; the gradual and dynamic layers of §5 check at run time.
 
 4. **Practical patterns for GPU programming** (§5). We show how to type common GPU idioms including reductions, scans, and filters, and extend the core system to handle loops and arbitrary predicates.
 
@@ -1169,7 +1169,7 @@ The key insight: not every problem needs warp typestate. We identify where our c
 
 # 6. Implementation
 
-We implement warp typestate as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
+We implement warp typestate as a Rust library. This section describes the encoding, explains why its static core achieves zero runtime overhead, and discusses practical considerations.
 
 ## 6.1 Type Encoding
 
@@ -1298,7 +1298,7 @@ This is not a runtime check—the method literally doesn't exist for `Warp<Even>
 
 ## 6.2 Zero Overhead
 
-Our implementation has zero runtime overhead. The types exist only at compile time.
+The static core of our implementation has zero runtime overhead: its types exist only at compile time.
 
 ### Proof: Generated Assembly
 
@@ -1502,7 +1502,7 @@ The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling o
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
-- **Zero runtime overhead**: Types are erased
+- **Zero runtime overhead** (static core): Types are erased
 - **Good error messages**: Rust's diagnostics explain what's wrong
 - **Familiar syntax**: Looks like normal Rust code
 - **Easy adoption**: Wrap existing code incrementally
@@ -1606,7 +1606,7 @@ Our prototype includes 335 unit tests and 50 example tests across 8 worked bug e
 
 ### Zero Overhead by Construction
 
-Our types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
+The static core's types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
 
 - `Warp<S>` contains only `PhantomData<S>`, which has zero size and zero runtime representation.
 - `ActiveSet` is a trait with `const MASK: u64`—resolved at compile time.
@@ -1695,7 +1695,7 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 Warp typestate provides compile-time guarantees for the typed fragment (§6.9 lists what lies outside it), at zero runtime cost for the static core. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
-We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
+We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that correct-looking source — undefined for the lanes that skip a branch — can be compiled into code its author did not intend). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
 
 ---
 
@@ -1836,7 +1836,7 @@ Habermaier and Knapp [ESOP 2012] formalize the SIMT execution model — lockstep
 
 ### Hazy Megakernel (2025)
 
-The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
+The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. As a discipline our type system is more permissive: uniform programs type-check trivially (as Hazy's would), and a program may hold diverged handles, on which full-warp collectives are unavailable until a merge. Lanes running different operations still need a branch the typed fragment does not cover (§6.9, §7.3). Within the typed fragment, divergence becomes *checkable* rather than *forbidden*.
 
 ## 8.6 Static Collectives and Clocks
 
@@ -1862,7 +1862,7 @@ The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single per
 | synccheck | Runtime detection | We prevent at compile time |
 | Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
 | Habermaier & Knapp (ESOP 2012) | Lockstep semantics correctness | We integrate with the compiler via traits |
-| Hazy megakernel | Prohibit divergence | We make divergence safe |
+| Hazy megakernel | Prohibit divergence | We make divergence checkable within the typed fragment |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |
 

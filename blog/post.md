@@ -121,7 +121,7 @@ We also implemented:
 
 The state of the art for GPU warp safety is: don't diverge. Persistent thread programs like the Hazy megakernel maintain warp-uniform execution — all lanes always active, no divergence, no shuffle bugs. It works, but it prohibits an entire class of algorithms.
 
-Our type system is **strictly more permissive**: you CAN diverge, you CAN have sub-warps with different active sets, you just can't do a full-warp shuffle until you merge back. Within the typed API, divergence becomes something the compiler checks rather than something you forbid.
+Our type system is **strictly more permissive**: you CAN diverge, you CAN have sub-warps with different active sets, you just can't do a full-warp shuffle on a diverged handle — you merge back first. Within the typed API, divergence becomes something the compiler checks rather than something you forbid.
 
 The core insight is transferable to any language with phantom types or zero-cost abstractions. The `ComplementOf` pattern (compile-time proof of set complement) works in Rust, Haskell, Scala, Swift, and potentially C++ with concepts.
 
@@ -136,7 +136,7 @@ AMD GPUs use 64-lane wavefronts — twice NVIDIA's width. We verified mask corre
 
 The NVIDIA-style 5-stage reduce silently produces half-sums on AMD. No crash, no error — just wrong answers. What prevents this is our width-parameterized primitives (a stage-count logic bug is outside the active-set type guarantee): the `warp64` feature switches masks to 64-bit and the library's reduction is written against the platform width, so the 5-stage version simply isn't what you get.
 
-Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined). Wrong either way. The type system catches both.
+Diverged shuffles on AMD return 0 for masked-out lanes (NVIDIA returns undefined). Wrong either way. Within the typed API, the type system rejects both.
 
 ## The Artifact
 

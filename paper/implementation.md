@@ -1,6 +1,6 @@
 # 6. Implementation
 
-We implement warp typestate as a Rust library. This section describes the encoding, explains why it achieves zero runtime overhead, and discusses practical considerations.
+We implement warp typestate as a Rust library. This section describes the encoding, explains why its static core achieves zero runtime overhead, and discusses practical considerations.
 
 ## 6.1 Type Encoding
 
@@ -129,7 +129,7 @@ This is not a runtime check—the method literally doesn't exist for `Warp<Even>
 
 ## 6.2 Zero Overhead
 
-Our implementation has zero runtime overhead. The types exist only at compile time.
+The static core of our implementation has zero runtime overhead: its types exist only at compile time.
 
 ### Proof: Generated Assembly
 
@@ -333,7 +333,7 @@ The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling o
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:
-- **Zero runtime overhead**: Types are erased
+- **Zero runtime overhead** (static core): Types are erased
 - **Good error messages**: Rust's diagnostics explain what's wrong
 - **Familiar syntax**: Looks like normal Rust code
 - **Easy adoption**: Wrap existing code incrementally

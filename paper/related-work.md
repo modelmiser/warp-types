@@ -135,7 +135,7 @@ Habermaier and Knapp [ESOP 2012] formalize the SIMT execution model — lockstep
 
 ### Hazy Megakernel (2025)
 
-The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. Our type system is strictly more permissive: uniform programs type-check trivially (as Hazy's would), while lane-heterogeneous programs become expressible with explicit type annotations. We make divergence *safe* rather than *forbidden*.
+The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single persistent-thread kernel with an on-GPU interpreter, maintaining warp-uniform execution—all 32 lanes execute the same operation, every shuffle uses `MASK_ALL`. This is safe but restrictive. As a discipline our type system is more permissive: uniform programs type-check trivially (as Hazy's would), and a program may hold diverged handles, on which full-warp collectives are unavailable until a merge. Lanes running different operations still need a branch the typed fragment does not cover (§6.9, §7.3). Within the typed fragment, divergence becomes *checkable* rather than *forbidden*.
 
 ## 8.6 Static Collectives and Clocks
 
@@ -161,7 +161,7 @@ The Hazy megakernel [Hazy Research 2025] fuses ~100 operations into a single per
 | synccheck | Runtime detection | We prevent at compile time |
 | Halide / TVM | Scheduling avoids bad code | We type-check divergent code directly |
 | Habermaier & Knapp (ESOP 2012) | Lockstep semantics correctness | We integrate with the compiler via traits |
-| Hazy megakernel | Prohibit divergence | We make divergence safe |
+| Hazy megakernel | Prohibit divergence | We make divergence checkable within the typed fragment |
 | DPJ | Determinism | We do lane safety |
 | Rust ownership | Memory | We do active sets |
 

@@ -24,7 +24,7 @@ import WarpTypes.CoreMetatheory
 
   Domain interpretation (unchanged):
   - PSet n   : write mask over an n-byte buffer (bit i ↔ byte i)
-  - .group s : linear permission to write exactly bytes in s
+  - .group s : permission to write exactly bytes in s (affine: it can be dropped)
   - diverge  : split a permission by predicate
   - merge    : combine complementary sub-permissions (THE gate)
   - write    : bulk write payload under permission; threads permission
@@ -35,7 +35,7 @@ import WarpTypes.CoreMetatheory
   a byte was stored. So the theorems below say when a `fence` is typable from
   the permissions held, not that writes were or were not performed. Two
   theorem names say "partial write" / "full write"; they predate this wording
-  and are kept because other files refer to them.
+  and are kept because comments in other files refer to them.
 -/
 
 -- ============================================================================

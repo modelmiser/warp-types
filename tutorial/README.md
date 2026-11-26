@@ -120,7 +120,7 @@ error[E0599]: no method named `shuffle_xor` found for struct `Warp<Even>` in the
 
 The compiler tells you exactly what happened: `shuffle_xor` exists on `Warp<All>` but not `Warp<Even>`. The fix is clear — `merge(evens, odds)` to get `Warp<All>` back.
 
-This is why the cuda-samples #398 bug is impossible in our type system. The buggy pattern requires shuffling with only some lanes active. That code cannot be written — it's a type error.
+This is why the cuda-samples #398 pattern does not type-check in the typed API: it needs a shuffle on a handle with only some lanes active, and that method does not exist there. (Raw intrinsics, a raw branch around a full-warp shuffle, and a fresh `kernel_entry()` are outside this guarantee — see Limitations in the main README.)
 
 ## 5. Writing a GPU Kernel
 

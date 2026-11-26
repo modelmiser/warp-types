@@ -107,9 +107,16 @@
   misspelt, missing or truncated quote fails), and its other statements are corrected. The paper itself said
   the type system makes lane-level divergence "safe rather than forbidden" and "could safely relax" a
   restriction "with compile-time safety guarantees" (§1, §7.3, §7.5, §10; the blog post): these now say
-  type-checked or checkable, within the typed fragment, and that running different operations on different
-  lanes still needs a branch the typed fragment does not cover. What the check cannot see is unmarked prose in
-  the hand-kept files.
+  type-checked or checkable, within the typed fragment; §7.3 and §8.5 say that with `diverge`/`merge` full-warp
+  collectives are unavailable on a diverged handle, and that running different operations on different lanes
+  still needs a branch the typed fragment does not cover; "strictly more permissive" became "as a discipline,
+  more permissive" (paper §1, both READMEs); "zero runtime overhead" is tied to the static core where the
+  paper states it (§1.2, §6, §7.2, `paper/README.md`); the tutorial no longer calls the cuda-samples bug
+  "impossible". Comments in `lean/WarpTypes/Fence.lean` say the fence rule gates on permission coverage, not
+  on writes performed. NOT done: `INTEGRATION.md` still describes the C++ header as giving the "same
+  guarantee", and the status line of `README.md` says "zero runtime overhead" without the qualifier. What the
+  check cannot see is unmarked prose in the hand-kept files, and which paragraph of a named section a block
+  quotes.
 - **Paper §5.6 corrected: what a fence does, and that the fence typestate is a model.** The section said a
   fence "is only meaningful after all lanes have written"; the PTX ISA says `membar` concerns the executing
   thread's own accesses and describes no waiting for others, and ordering between lanes of a warp is

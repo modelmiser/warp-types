@@ -92,7 +92,7 @@ Our prototype includes 335 unit tests and 50 example tests across 8 worked bug e
 
 ### Zero Overhead by Construction
 
-Our types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
+The static core's types impose zero runtime overhead—not measured to be negligible, but *guaranteed by construction*:
 
 - `Warp<S>` contains only `PhantomData<S>`, which has zero size and zero runtime representation.
 - `ActiveSet` is a trait with `const MASK: u64`—resolved at compile time.
@@ -181,5 +181,5 @@ These limitations are real but narrowly scoped. The first two are addressed by o
 
 Warp typestate provides compile-time guarantees for the typed fragment (§6.9 lists what lies outside it), at zero runtime cost for the static core. For uniform programs (the dominant style in practice), it is invisible. For lane-heterogeneous programs, it makes divergence explicit—replacing implicit bugs with explicit types.
 
-We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
+We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that correct-looking source — undefined for the lanes that skip a branch — can be compiled into code its author did not intend). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
 
