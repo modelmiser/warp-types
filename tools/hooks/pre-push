@@ -65,7 +65,7 @@ done
 echo "pre-push: PTX operands (membermask / width reach shfl.sync)"
 bash scripts/check-ptx-operands.sh
 
-echo "pre-push: paper sync (section files == paper.md spans)"
+echo "pre-push: paper sync (section files == paper.md spans, whole-file coverage, marked quotes)"
 bash scripts/check-paper-sync.sh
 
 echo "pre-push: axiom scan (lean/axiom-scan.txt == what AxiomScan.lean prints)"

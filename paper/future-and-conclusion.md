@@ -78,7 +78,7 @@ Several limitations remain:
 
 GPU warp programming is notoriously error-prone. Shuffles that read from inactive lanes produce undefined behavior—bugs that compile silently, work sometimes, and fail unpredictably. NVIDIA's own reference code contains these bugs. A plasma physics simulation ran for months with undefined behavior undetected on pre-Volta hardware. The vendor deprecated an entire API family to address the problem. State-of-the-art persistent thread programs maintain warp-uniform execution rather than manage divergence.
 
-We presented **warp typestate**, a linear type system that makes lane-level divergence safe rather than forbidden:
+We presented **warp typestate**, a linear type system that makes lane-level divergence type-checked rather than forbidden, for code within the typed fragment:
 
 1. **Warps carry active set types** (`Warp<Even>`, `Warp<All>`), tracking which lanes are active.
 

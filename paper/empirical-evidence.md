@@ -4,11 +4,11 @@
 
 ## Purpose
 
-The paper's contribution statement, quoted from §1.2 (the sync check
-compares this block with `paper.md`, so it cannot drift from it):
+The paper's contribution statement — the lead paragraph of §1.2, whole (the
+sync check fails if this block stops being that paragraph of `paper.md`):
 
-<!-- quote:paper -->
-> We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design).
+<!-- quote:paper §1.2 -->
+> We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design). We further extend the approach to a model of an intra-warp fence discipline (§5.6), where the same complement proof ensures that the write steps recorded in the type cover the whole warp before a fence is typed; the region in that model is phantom, and the types observe no store.
 <!-- /quote -->
 
 This document provides the empirical grounding that reviewers will demand:
@@ -54,8 +54,10 @@ via `cuda-memcheck --tool synccheck`, not by observing wrong output.
 
 **Significance:** In CUB itself — the library virtually all CUDA reduction/scan
 code depends on. Whether or not this instance is real, the source-level pattern
-— a membermask computed by code the compiler may predicate — is ill-typed in
-our system, where the mask is a type and has no register to predicate.
+— a membermask computed by code the compiler may predicate — has no
+counterpart in the typed API, where the mask is a type and has no register to
+predicate. (A raw intrinsic call, or a raw branch around one, remains
+possible outside that API: the paper's §6.9.)
 
 ### 3. PIConGPU #2514 — Hardcoded Full Mask in Divergent Branch
 
@@ -71,8 +73,9 @@ fix (PR #2600) was preventive, targeting Volta's independent thread scheduling.
 Found during CUDA 9 migration, not by observing incorrect results. Took 3 months
 from report to fix (PR #2600).
 
-**Significance:** Real scientific simulation. Silent corruption means potentially
-wrong published results.
+**Significance:** Real scientific simulation. The undefined behaviour went
+unnoticed for months; no wrong output was observed, but had it corrupted data,
+published results were at stake.
 
 ### 4. LLVM #155682 — shfl_sync Causes Branch Elimination
 
@@ -113,7 +116,8 @@ optimization. Source-level reasoning is insufficient.
 require a breaking API change across the entire CUDA ecosystem. The old
 `__shfl` gave no way to specify which threads participate. The new `__shfl_sync`
 requires an explicit mask — but the mask is still a runtime value that can be
-wrong (as bugs 1-4 demonstrate).
+wrong (Bugs 1 and 3 are wrong masks; Bug 2 is a suspected one, unconfirmed;
+Bug 4 is correct-looking source miscompiled around the intrinsic).
 
 ### 6. Volta Independent Thread Scheduling Made It Worse
 
@@ -148,38 +152,33 @@ run different ops.
 **What this means:** State-of-the-art practitioners treat lane-level divergence
 as too dangerous to manage, even with `__shfl_sync`. They prohibit it
 architecturally rather than handling it. Our type system could relax this
-restriction — allowing lane-level heterogeneity, with a compile-time check
-that a full-warp collective is not reached on a diverged handle, for code
-that expresses its divergence through `diverge`/`merge` (the guarantee's
-scope, §1.2 above; the paper's §6.9 lists what stays trusted).
+restriction as a discipline: with `diverge`/`merge`, full-warp collectives are
+unavailable on a diverged handle at compile time. Running different operations
+on different lanes still needs a branch that the typed fragment does not cover
+(the paper's §6.9), so the execution model is not relaxed by the types alone.
 
 ---
 
 ## Argument Structure for the Paper
 
-The evidence supports the "third path" framing:
+The evidence is used for the paper's closing claim in §7.5, quoted whole
+(Evidence 5–6 are the deprecation it mentions, Evidence 7 the programs that
+prohibit divergence; the CUB report, Bug 2, is unconfirmed and the paragraph
+does not rely on it):
 
-> We do not claim shuffle bugs are the most *frequent* GPU bug class. We claim
-> they are the most *insidious*: they produce silent corruption rather than
-> crashes, survive testing at common configurations, and resist source-level
-> reasoning (see Bug 4, compiler interaction). Even NVIDIA's own reference code
-> and core library contain shuffle-mask bugs (Bugs 1-2). The vendor deprecated
-> an entire API family to address the problem (Evidence 5-6), but the replacement
-> still relies on runtime masks that can be wrong.
-
-> State-of-the-art persistent thread programs avoid the problem by prohibiting
-> lane-level divergence entirely (Evidence 7). Our type system is a
-> *compile-time type discipline* that makes lane-level divergence checkable
-> rather than forbidden, within the typed fragment (runtime and hardware mechanisms make particular forms safe by
-> other means, and Descend statically rejects synchronization on conditional
-> thread groups — see the paper's §7.5 and §8).
+<!-- quote:paper §7.5 -->
+> We do not claim shuffle-divergence bugs are the most *frequent* GPU bug class. We claim they are the most *insidious*: they produce silent data corruption rather than crashes, survive testing at common configurations, and resist source-level reasoning (Bug 4 demonstrates that even correct source can produce wrong code). NVIDIA deprecated an entire API family to address the problem; their replacement still relies on runtime masks that programmers get wrong. State-of-the-art persistent thread programs avoid the problem by prohibiting lane-level divergence entirely. Our type system is a *compile-time type discipline* that makes lane-level divergence checkable rather than forbidden, within the typed fragment (runtime and hardware mechanisms — CG static tiles, ISPC's compiler-managed masks — make particular forms safe by other means, and Descend statically rejects synchronization on conditional thread groups; §8).
+<!-- /quote -->
 
 ---
 
 ## Scope Boundary (Explicit)
 
-**In scope:** Intra-warp shuffle, ballot, vote, and other collective operations
-on diverged lanes. This is what `Warp<S>` types track.
+**In scope:** Full-warp collectives (shuffle, ballot, reductions) reached on a
+diverged handle, in code that expresses its divergence through
+`diverge`/`merge`. A `Warp<S>` records the lanes a handle claims, not the lanes
+that execute, and a raw branch around an intrinsic is outside the typed
+fragment (the paper's §6.9).
 
 **Partially addressed:** Intra-warp fence-divergence interactions are modelled in §5.6 by a typestate over a phantom region (recorded write steps; the types observe no store). **Remaining out of scope:** Cross-warp fence interactions — where warp A diverges and warp B's fence depends on A's contribution via global memory. This is a cross-warp, cross-memory-domain problem that requires extending the type system beyond intra-warp active sets.
 
@@ -195,5 +194,5 @@ global memory. The paper is citable for:
 - "Debugging can prove to be an extremely challenging task" (§4.2)
 - "Guaranteeing both data consistency and deadlock avoidance is non-trivial" (§4)
 
-It is NOT citable for shuffle-safety evidence specifically. Use Bugs 1-5 above
-for that.
+It is NOT citable for shuffle-safety evidence specifically. Use Bugs 1–4 and
+Evidence 5 above for that.

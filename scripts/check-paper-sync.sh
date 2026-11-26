@@ -1,70 +1,106 @@
 #!/usr/bin/env bash
-# Guard: every numbered section file must be identical to its span of paper/paper.md,
-# the spans must make up ALL of paper.md (sections 1..10, nothing before, nothing else),
-# and every block marked `<!-- quote:paper -->` … `<!-- /quote -->` in a paper/*.md file
-# that is not a section file must appear verbatim in paper.md.
-# The fork this prevents shipped contradictory Cooperative-Groups/ISPC verdicts and
-# placeholder references in the DOI'd assembled paper (found at the 2026-08-13 gate).
+# Guard, three parts:
+#  1. every numbered section file is identical to its span of paper/paper.md;
+#  2. those spans make up all of paper.md: its top-level sections are numbered exactly 1..10 and nothing
+#     but whitespace precedes section 1 (compared up to trailing whitespace and the `---` separator that
+#     ends a section, as part 1 always was);
+#  3. quotes of the paper in the hand-kept paper files. A block
+#         <!-- quote:paper §7.5 -->
+#         > text
+#         <!-- /quote -->
+#     must be, whitespace aside, one WHOLE paragraph of paper.md lying under the numbered heading named in
+#     the marker — not a fragment of one (a quote cut off before its qualifications is the drift this is
+#     for). Anything that looks like a quote marker but is not exactly one is an error, and the files in
+#     EXPECT must carry exactly the stated number of blocks, so deleting or misspelling a marker fails
+#     too. What part 3 cannot see: prose in those files that paraphrases the paper without a marker.
+# The fork part 1 prevents shipped contradictory Cooperative-Groups/ISPC verdicts and placeholder
+# references in the DOI'd assembled paper (found at the 2026-08-13 gate). Parts 2 and 3 date from
+# 2026-11-25: text before section 1 or a section 11 passed unnoticed, and paper/empirical-evidence.md
+# paraphrased §1.2 without the qualifications the paper had since added.
 set -u
 cd "$(dirname "$0")/.."
 fail=0
 python3 - <<'PY' || fail=1
-import re, sys
+import glob, os, re, sys
 p = open('paper/paper.md').read()
+# A `# N. ` line inside a code fence would be taken for a section; it then breaks the 1..10 numbering
+# below and fails, which is the safe direction.
 secs = re.split(r'(?m)^(?=# \d+\. )', p)
 mapping = {1:'introduction.md',2:'background.md',3:'core-type-system.md',4:'metatheory.md',5:'extensions.md',6:'implementation.md',7:'evaluation.md',8:'related-work.md'}
-fac_parts = []
+EXPECT = {'empirical-evidence.md': 2}   # hand-kept file -> exact number of marked quotes it must carry
 bad = []
-# Until 2026-11-25 text before section 1, and any section numbered past 10, belonged
-# to no file and was skipped, with "9 files match" printed all the same.
-nums = []
+
+def read(name):
+    try:
+        return open('paper/' + name).read()
+    except OSError as e:
+        bad.append("%s cannot be read (%s)" % (name, e.strerror))
+        return None
+
+# ---- parts 1 and 2
+nums, fac_parts = [], []
 for s in secs:
     m = re.match(r'# (\d+)\.', s)
     if not m:
         if s.strip():
             bad.append("paper.md has %d bytes before '# 1.' that belong to no section file" % len(s))
         continue
-    nums.append(int(m.group(1)))
-if nums != list(range(1, 11)):
-    bad.append("paper.md's top-level sections are numbered %s, expected 1..10" % nums)
-checked = 0
-for s in secs:
-    m = re.match(r'# (\d+)\.', s)
-    if not m: continue
-    n = int(m.group(1))
+    n = int(m.group(1)); nums.append(n)
     body = re.sub(r'\n---\s*$', '', s.rstrip()) + '\n'
     if n in mapping:
-        checked += 1
-        if open('paper/'+mapping[n]).read() != body:
+        t = read(mapping[n])
+        if t is not None and t != body:
             bad.append(mapping[n])
-    elif n in (9,10):
+    elif n in (9, 10):
         fac_parts.append(body)
-checked += 1
-if open('paper/future-and-conclusion.md').read() != '\n---\n\n'.join(fac_parts):
+if nums != list(range(1, 11)):
+    bad.append("paper.md's top-level sections are numbered %s, expected 1..10" % nums)
+t = read('future-and-conclusion.md')
+if t is not None and t != '\n---\n\n'.join(fac_parts):
     bad.append('future-and-conclusion.md')
-if checked != 9 and not bad:
-    bad.append("only %d of 9 section files were compared" % checked)
-# Quotes of the paper in the hand-kept files (appendix, README): verbatim or fail.
-import glob, os
+
+# ---- part 3
+norm = lambda x: ' '.join(x.split())
+paras = []   # (normalised paragraph, number of the last numbered heading above it)
+cur = None
+for block in re.split(r'\n\s*\n', p):
+    h = re.match(r'#{1,6} (\d+(?:\.\d+)*)[. ]', block)
+    if h:
+        cur = h.group(1)
+        continue
+    paras.append((norm(block), cur))
+OPEN = re.compile(r'<!-- quote:paper §(\d+(?:\.\d+)*) -->')
 section_files = set(mapping.values()) | {'future-and-conclusion.md', 'paper.md'}
-norm = lambda t: ' '.join(t.split())
-pn = norm(p)
 quotes = 0
 for f in sorted(glob.glob('paper/*.md')):
-    if os.path.basename(f) in section_files: continue
+    name = os.path.basename(f)
+    if name in section_files: continue
     t = open(f).read()
-    opens = t.count('<!-- quote:paper -->'); blocks = re.findall(r'(?s)<!-- quote:paper -->\n(.*?)<!-- /quote -->', t)
-    if opens != len(blocks):
-        bad.append("%s: %d quote markers opened, %d closed" % (f, opens, len(blocks)))
-    for b in blocks:
+    markers = re.findall(r'<!--[^>]*quote[^>]*-->', t)
+    for mk in markers:
+        if not (OPEN.fullmatch(mk) or mk == '<!-- /quote -->'):
+            bad.append("%s: %r looks like a quote marker but is not one" % (f, mk))
+    blocks = re.findall(r'(?s)<!-- quote:paper §(\d+(?:\.\d+)*) -->\n(.*?)\n<!-- /quote -->', t)
+    n_open = len(OPEN.findall(t)); n_close = t.count('<!-- /quote -->')
+    if not (n_open == n_close == len(blocks)):
+        bad.append("%s: %d quote markers opened, %d closed, %d well-formed blocks" % (f, n_open, n_close, len(blocks)))
+    if name in EXPECT and len(blocks) != EXPECT[name]:
+        bad.append("%s carries %d marked quote(s); %d are required" % (f, len(blocks), EXPECT[name]))
+    for sec, b in blocks:
         quotes += 1
         q = norm('\n'.join(re.sub(r'^> ?', '', l) for l in b.split('\n')))
-        if not q or q not in pn:
-            bad.append("%s: a block marked as a quote of the paper is not in paper.md: %r…" % (f, q[:60]))
+        hits = [s for (pp, s) in paras if pp == q]
+        if not q or not hits:
+            bad.append("%s: the block quoting §%s is not a whole paragraph of paper.md: %r…" % (f, sec, q[:60]))
+        elif sec not in hits:
+            bad.append("%s: the block says §%s; that paragraph is under §%s in paper.md" % (f, sec, ', §'.join(map(str, hits))))
+for name in EXPECT:
+    if not os.path.exists('paper/' + name):
+        bad.append("%s is missing (it must carry %d marked quote(s))" % (name, EXPECT[name]))
 if bad:
     print("PAPER SYNC DRIFT:", "; ".join(bad))
     print("Fix: edit paper/paper.md (canonical) and regenerate, or vice versa — never one side.")
     sys.exit(1)
-print("paper sync OK (9 section files match paper.md, which they cover entirely; %d marked quote(s) verbatim)" % quotes)
+print("paper sync OK (9 section files match paper.md and cover it; %d marked quote(s) are whole paragraphs of the section they name)" % quotes)
 PY
 exit $fail
