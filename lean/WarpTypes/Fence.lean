@@ -8,8 +8,9 @@ import WarpTypes.CoreMetatheory
   FenceTy / FenceExpr / FenceCtx / FenceHasType as a self-contained inductive
   stack (271 lines). Post-port, it is a thin domain view over `CoreHasType`:
   concrete instance (ByteBuf = PSet 8), the four theorem stack (diverge
-  partition delegate, `fence_requires_all` inversion, negative partial-write
-  instance, positive full-write instance), and two helpers.
+  partition delegate, `fence_requires_all` inversion, negative
+  partial-permission instance, positive full-permission instance), and two
+  helpers.
 
   The ~87 lines of core typing rules previously duplicated between this file
   and Csp.lean / Reduce.lean now live in Core.lean as monomorphic + parametric
@@ -27,7 +28,14 @@ import WarpTypes.CoreMetatheory
   - diverge  : split a permission by predicate
   - merge    : combine complementary sub-permissions (THE gate)
   - write    : bulk write payload under permission; threads permission
-  - fence    : barrier; requires full-buffer permission (gate on `.group (PSet.all n)`)
+  - fence    : the gated step; requires full-buffer permission (gate on `.group (PSet.all n)`)
+
+  What is gated is PERMISSION coverage. The calculus has no memory: `write`
+  consumes a payload and hands the permission back, and nothing records that
+  a byte was stored. So the theorems below say when a `fence` is typable from
+  the permissions held, not that writes were or were not performed. Two
+  theorem names say "partial write" / "full write"; they predate this wording
+  and are kept because other files refer to them.
 -/
 
 -- ============================================================================
@@ -147,10 +155,12 @@ private theorem fence_fst_diverge_groupval_type {n : Nat}
     cases tag <;> · simp only [tagToFinalExpr] at hExpr; cases hExpr
 
 -- ============================================================================
--- NEGATIVE instance: fence after partial write is untypable
+-- NEGATIVE instance: fence while holding only a partial permission is untypable
 -- ============================================================================
 
-/-- Fencing after writing only a proper sub-region of the buffer is untypable.
+/-- Fencing while holding the permission for only a proper sub-region of the
+    buffer is untypable. The term contains no `write`: what it lacks is
+    permission coverage, whatever was or was not written.
 
     Fence-domain analog of `collective_after_diverge_untypable` (CSP) and
     `shuffle_diverged_untypable` (GPU). Proof body unchanged from pre-port:
@@ -168,8 +178,8 @@ theorem fence_after_partial_write_untypable {n : Nat}
   simp only [CoreTy.group.injEq] at heq
   exact absurd heq.symm hne
 
-/-- Concrete ByteBuf instance: fencing after writing only the low nibble is
-    untypable. Parallel to `j1_collective_after_column_split`. -/
+/-- Concrete ByteBuf instance: fencing with only the low nibble's permission
+    is untypable. Parallel to `j1_collective_after_column_split`. -/
 theorem bytebuf_fence_after_low_nibble_only :
     ¬ ∃ ctx', CoreHasType []
       (.fence
@@ -181,8 +191,9 @@ theorem bytebuf_fence_after_low_nibble_only :
 -- POSITIVE instance: merge two nibble permissions and fence
 -- ============================================================================
 
-/-- Writing the low nibble, writing the high nibble, merging the permissions
-    via `IsComplement`, and fencing is well-typed. Validates that
+/-- A `write` under the low nibble's permission, a `write` under the high
+    nibble's, merging the two returned permissions via `IsComplement`, and
+    fencing is well-typed. Validates that
     `mergeFamily` at tag `.group` and `finalizeFamily` at tag `.group`
     compose correctly. -/
 theorem fence_after_full_write_typable :

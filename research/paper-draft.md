@@ -221,8 +221,8 @@ Four per-domain theorems: <!-- unguarded: Four — per-file Lean theorem count; 
 
 - `fence_diverge_partition`: re-export of the generic diverge partition via `core_diverge_partition`.
 - `fence_requires_all`: inversion theorem extracting the `PSet.all n` premise from any well-typed `fence` expression. This is the first theorem that exercises the §5 double-witness inversion pattern: the proof cases on `CoreHasType`, encounters the two surviving parametric branches (`mergeFamily` and `finalizeFamily`), cases on `tag`, and closes the dead branches by constructor-clash contradiction.
-- `fence_after_partial_write_untypable`: fencing after writing only a proper sub-region of the buffer is untypable. Same proof shape as the GPU and CSP untypability witnesses.
-- `fence_after_full_write_typable`: writing the low nibble, writing the high nibble, merging the permissions via `nibble_complement : PSet.IsComplementAll ByteBuf.lowNibble ByteBuf.highNibble`, and fencing is well-typed. This positive instance exercises both `mergeFamily` and `finalizeFamily` at tag `.group` in a single derivation.
+- `fence_after_partial_write_untypable`: fencing while holding the permission for only a proper sub-region of the buffer is untypable (the term contains no `write`; the gate is permission coverage, and the name predates that wording). Same proof shape as the GPU and CSP untypability witnesses.
+- `fence_after_full_write_typable`: a `write` under the low nibble's permission, a `write` under the high nibble's, merging the returned permissions via `nibble_complement : PSet.IsComplementAll ByteBuf.lowNibble ByteBuf.highNibble`, and fencing is well-typed. This positive instance exercises both `mergeFamily` and `finalizeFamily` at tag `.group` in a single derivation.
 
 Three metatheory corollaries — `fence_progress`, `fence_preservation`, `fence_type_safety` — are one-line specialisations of the corresponding `CoreMetatheory` theorems at `n = 8`. They are the payoff of the §3.3 factoring: Fence inherits full-depth reduction metatheory without any Fence-specific proof content.
 
