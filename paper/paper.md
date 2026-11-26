@@ -1113,21 +1113,24 @@ Descend ensures no data races and also rejects synchronization on conditional or
 
 ## 5.6 Fence-Divergence Interactions
 
-Global memory writes from diverged warps raise an ordering question: when may a value stored by one group of lanes be read back by another, or published to observers outside the warp? On NVIDIA hardware two instructions bear on it, and they do different things. `bar.warp.sync` (`Warp::sync`) is a rendezvous: the lanes it names wait for one another, and it orders memory among them, so a lane may store, synchronise, and then read what the other lanes stored. `membar` (`__threadfence()`) is not a rendezvous: it makes the *executing* lane's earlier stores visible, at the chosen level, before that lane's later memory operations, and it waits for no other lane. A fence therefore says nothing about whether the other lanes have stored yet. (Earlier versions of this section said a fence "is only meaningful after all lanes have written"; the PTX ISA does not say that.)
+Global memory writes from diverged warps raise an ordering question: when may a value stored by one group of lanes be read back by another, or published to observers outside the warp? Two of the instructions this crate emits bear on it, and they do different things. `bar.warp.sync` is a rendezvous: the lanes it names wait for one another, and it orders memory among them, so a lane may store, synchronise, and then read what the other lanes it synchronised with stored. (`Warp::sync` issues it on `nvptx64` in the code after 0.4.3, inside a lane guard and over the live lanes of the handle's set; through 0.4.3 `sync` emitted nothing, and a barrier over part of a warp is defined only on sm_70 and later.) `membar` (`__threadfence()`) is not a rendezvous: it makes the *executing* lane's earlier memory accesses performed — its stores visible — at the chosen level, before that lane's later memory operations, and the PTX ISA describes no waiting for any other lane. A fence therefore says nothing about whether the other lanes have stored yet.
 
-We model a publication discipline on top of this with a typestate machine over a *phantom* region: a fence can be typed only once the write-step calls recorded for the region cover the whole warp. The discipline is a design choice of the model, not something the hardware requires of `membar`. The region is bound to no address, and its operations store and load nothing: the partial states record, in the type, the lane set of the handle on which a write step was called (`diverge` emits no branch, so which lanes *execute* a call is not what is recorded — §6.9). What the types enforce is the order of those recorded steps — not that a store took place, which remains the program's own obligation, through its own pointer. A lane that reads another lane's data inside the warp needs `Warp::sync`, not the fence:
+We model a publication discipline on top of this with a typestate machine over a *phantom* region: a fence can be typed only once the write-step calls recorded for the region cover the whole warp. The discipline is a design choice of the model, not something the hardware requires of `membar`. The region is bound to no address, and its operations store and load nothing: a partial state carries a lane set in its type — the set of the handle on which a write step was called, or, after `merge_writes_within`, the parent set into which two complementary partial states were merged (`diverge` emits no branch, so which lanes *execute* a call is not what is recorded — §6.9). What the types enforce is the order of those recorded steps — not that a store took place, which remains the program's own obligation, through its own pointer. A lane that reads another lane's data inside the warp needs `Warp::sync` on a handle whose set covers both lanes, not the fence:
 
 ```
 GlobalRegion<Unwritten>
   → Warp<S>.global_store() → GlobalRegion<PartialWrite<S>>
+then EITHER (two regions obtained by `split`)
   → merge_writes(PartialWrite<S₁>, PartialWrite<S₂>) → GlobalRegion<FullWrite>
       where S₁: ComplementOf<S₂>
+OR (one region)
   → Warp<S₂>.global_store_complement(PartialWrite<S₁>) → GlobalRegion<FullWrite>
       where S₂: ComplementOf<S₁>
+then
   → threadfence(FullWrite) → GlobalRegion<Fenced>
 ```
 
-The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures that the recorded write steps cover complementary lane sets before a fence. A fence on a region whose recorded steps cover only part of the warp is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is. The same qualifications apply (§6.9): the complement proof checks set shape, not provenance, and the fence instruction is also reachable without any proof through the public `gpu::threadfence()`.
+The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures that the recorded write steps cover complementary lane sets before a fence. A fence on a region whose recorded steps cover only part of the warp is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is. The same qualifications apply (§6.9): the complement proof checks set shape, not provenance, and on `nvptx64` the fence instruction is also reachable without any proof through the public `gpu::threadfence()`.
 
 ```rust
 fn safe_fence_pattern(warp: Warp<All>) {
@@ -1135,7 +1138,7 @@ fn safe_fence_pattern(warp: Warp<All>) {
     let region = GlobalRegion::new();
 
     // Each half records its write step (the store itself goes through the program's own pointer)
-    let (evens, partial) = evens.global_store(region);
+    let (_evens, partial) = evens.global_store(region);
     let (_odds, full) = odds.global_store_complement(partial);  // ComplementOf<Even> for Odd
 
     // Fence only once both halves are recorded — FullWrite required by type
@@ -1144,7 +1147,7 @@ fn safe_fence_pattern(warp: Warp<All>) {
 }
 ```
 
-This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope and partial writes from two different regions cannot be merged, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate; in the code after 0.4.3 (unreleased at the time of writing) it also emits `membar.gl` on `nvptx64` (through 0.4.3 it emitted nothing), while the region and its `read` remain a model with no memory behind them (§6.9): `read` returns a default value. The Lean fence rule (`lean/WarpTypes/Fence.lean`, an instance of the family-parametric core of §4.8: `finalizeFamily` at tag `.group`) gates on write-*permission* coverage (`group all`), not on writes performed.
+This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope and partial writes from two different regions cannot be merged, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate; in the code after 0.4.3 (unreleased at the time of writing) it also emits `membar.gl` on `nvptx64` (through 0.4.3 it emitted nothing), while the region and its `read` remain a model with no memory behind them (§6.9): `read` returns a default value. The Lean fence rule (`lean/WarpTypes/Fence.lean`, an instance of the family-parametric core of §4.8: `finalizeFamily` at tag `.group`) gates on write-*permission* coverage (the operand's type must be `.group (PSet.all n)`), not on writes performed.
 
 ## 5.7 Summary
 
@@ -1939,7 +1942,7 @@ The hardware bug class is real: when a tile diverges and doesn't SEND, its pipel
 Several limitations remain:
 - Higher-order protocols (protocols parameterized by protocols)
 - Compilation overhead at scale (untested on large codebases)
-- Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — §5.6 models an intra-warp publication discipline over a phantom region — ordering between the lanes of one warp is the barrier's job, `Warp::sync` — but cross-warp ordering remains open)
+- Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory). §5.6 models an intra-warp publication discipline over a phantom region; ordering between the lanes of one warp is the barrier's job (`Warp::sync` on a handle covering them). Cross-warp ordering remains open.
 
 # 10. Conclusion
 

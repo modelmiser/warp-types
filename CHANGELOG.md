@@ -97,6 +97,11 @@
   repository; every number is in `research/edp-record.md`.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
+- **Paper §5.6 corrected: what a fence does, and that the fence typestate is a model.** The section said a
+  fence "is only meaningful after all lanes have written"; the PTX ISA says `membar` concerns the executing
+  thread's own accesses and describes no waiting for others, and ordering between lanes of a warp is
+  `bar.warp.sync`. The abstract and §5.6 also described the phantom `GlobalRegion` typestate as tracking real
+  writes. Both are reworded (paper, `src/fence.rs` docs, README Limitations); §6.9 gains a subsection.
 - **Fixed: the campaign tools read a checker's verdict from stdout only** (`tools/cert-campaign.py`,
   `tools/lrat-campaign.py`, `tools/lrat-mutate.py`). They concatenated stdout and stderr before looking for the
   banner, so a banner printed on stderr counted (tried with a stand-in checker: accepted before, refused now).

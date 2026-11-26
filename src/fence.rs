@@ -14,8 +14,13 @@
 //! GlobalRegion::with_region(|region| {
 //!   // region: GlobalRegion<'r, Unwritten>
 //!   //   → Warp<S1>.global_store() → GlobalRegion<'r, PartialWrite<S1>>
+//!   // then EITHER (two regions from `split`)
 //!   //   → merge_writes(PartialWrite<S1>, PartialWrite<S2>) → GlobalRegion<'r, FullWrite>
 //!   //     (requires S1: ComplementOf<S2>, same 'r)
+//!   // OR (one region)
+//!   //   → Warp<S2>.global_store_complement(PartialWrite<S1>) → GlobalRegion<'r, FullWrite>
+//!   //     (requires S2: ComplementOf<S1>)
+//!   // then
 //!   //   → threadfence(FullWrite) → GlobalRegion<'r, Fenced>
 //! })
 //! ```
@@ -32,7 +37,7 @@
 //! - `GlobalRegion` is phantom: zero-sized, bound to no address. `global_store`
 //!   and `global_store_complement` store nothing; they record, in the type,
 //!   a write step for a handle's lane set. `read` loads nothing.
-//! - On `nvptx64`, [`threadfence`] is the one step that emits code: a
+//! - On `nvptx64`, [`threadfence`] is the one step that emits an instruction of its own: a
 //!   `membar.gl`, which makes the executing lane's own earlier stores visible
 //!   at global level before its later operations. It does not wait for other
 //!   lanes, so a reader cannot know from it that another lane has stored yet.
@@ -92,7 +97,7 @@ impl crate::active_set::sealed::Sealed for FullWrite {
 }
 impl WriteState for FullWrite {}
 
-/// Fence has been issued after full write.
+/// The fence step has been taken, from `FullWrite`.
 #[derive(Debug, Clone, Copy)]
 pub struct Fenced;
 #[allow(private_interfaces)]
@@ -205,7 +210,7 @@ impl<'r> GlobalRegion<'r, Unwritten> {
     }
 }
 
-/// Warp writes to a global region, producing a partial write.
+/// Write steps: a warp handle records a step on a region.
 impl<S: ActiveSet> Warp<S> {
     /// Record a write step for the lane set `S` of this handle. **Stores nothing**
     /// — the region is phantom; do the real store through your own pointer.
@@ -216,8 +221,8 @@ impl<S: ActiveSet> Warp<S> {
     ///
     /// **Note:** Even `Warp<All>` produces `PartialWrite<All>`, not `FullWrite`.
     /// Use `global_store_complement` with the complement's partial write to
-    /// advance to `FullWrite`. The sequential path is:
-    /// `warp.global_store(region)` → `warp.global_store_complement(partial)` → `FullWrite`.
+    /// advance to `FullWrite`: `a.global_store(region)` on one handle, then
+    /// `b.global_store_complement(partial)` on a handle for the COMPLEMENTARY set.
     #[inline]
     pub fn global_store<'r>(
         self,
@@ -232,8 +237,8 @@ impl<S: ActiveSet> Warp<S> {
         )
     }
 
-    /// Record a write to a region that already has a partial write from
-    /// complementary lanes, producing a full write. **Stores nothing**, as
+    /// Record a write step on a region whose partial state carries the
+    /// COMPLEMENTARY lane set, producing `FullWrite`. **Stores nothing**, as
     /// [`Warp::global_store`].
     ///
     /// Returns the warp (unchanged) so it can still be merged.
@@ -317,8 +322,8 @@ where
 
 /// Issue a thread fence once the recorded write steps cover the warp.
 ///
-/// Only callable on `GlobalRegion<FullWrite>` — the types record that every
-/// lane's write step has been taken (complement proof) before the fence. They
+/// Only callable on `GlobalRegion<FullWrite>` — the lane sets of the recorded
+/// write steps are complements covering the warp (complement proof). The types
 /// do not observe the writes themselves, and nothing here waits for a lane.
 ///
 /// On `nvptx64` this emits `membar.gl` (`__threadfence()`), executed by every
