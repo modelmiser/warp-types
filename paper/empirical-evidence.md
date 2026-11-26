@@ -4,13 +4,12 @@
 
 ## Purpose
 
-The paper's contribution statement is:
+The paper's contribution statement, quoted from §1.2 (the sync check
+compares this block with `paper.md`, so it cannot drift from it):
 
-> (paraphrasing §1.2) A linear typestate system that tracks which lanes are
-> active at each program point and statically eliminates diverged shuffle and
-> ballot operations. Well-typed programs cannot perform unsafe warp operations
-> on inactive lanes. The guarantee is zero-overhead — enforcement is purely
-> compile-time.
+<!-- quote:paper -->
+> We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design).
+<!-- /quote -->
 
 This document provides the empirical grounding that reviewers will demand:
 **the bug class is real, silent, and hard to prevent manually.**
@@ -148,9 +147,11 @@ run different ops.
 
 **What this means:** State-of-the-art practitioners treat lane-level divergence
 as too dangerous to manage, even with `__shfl_sync`. They prohibit it
-architecturally rather than handling it. Our type system could safely relax
-this restriction — allowing lane-level heterogeneity with compile-time safety
-guarantees that the architectural approach cannot provide.
+architecturally rather than handling it. Our type system could relax this
+restriction — allowing lane-level heterogeneity, with a compile-time check
+that a full-warp collective is not reached on a diverged handle, for code
+that expresses its divergence through `diverge`/`merge` (the guarantee's
+scope, §1.2 above; the paper's §6.9 lists what stays trusted).
 
 ---
 
@@ -168,8 +169,8 @@ The evidence supports the "third path" framing:
 
 > State-of-the-art persistent thread programs avoid the problem by prohibiting
 > lane-level divergence entirely (Evidence 7). Our type system is a
-> *compile-time type discipline* that makes lane-level divergence safe rather
-> than forbidden (runtime and hardware mechanisms make particular forms safe by
+> *compile-time type discipline* that makes lane-level divergence checkable
+> rather than forbidden, within the typed fragment (runtime and hardware mechanisms make particular forms safe by
 > other means, and Descend statically rejects synchronization on conditional
 > thread groups — see the paper's §7.5 and §8).
 

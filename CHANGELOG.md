@@ -97,6 +97,13 @@
   repository; every number is in `research/edp-record.md`.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
+- **Paper sync check tightened; the evidence appendix quotes §1.2 instead of paraphrasing it.**
+  `scripts/check-paper-sync.sh` ignored anything in `paper/paper.md` outside sections 1–10 (text before section 1
+  or an added section 11 passed with "9 files match"); it now requires the section spans to be the whole file.
+  `paper/empirical-evidence.md`, which no gate read, paraphrased the contribution statement without the two
+  qualifications the paper has since added (divergence expressed through `diverge`/`merge`; zero overhead for
+  the static core). It now carries the statement verbatim in a marked block that the check compares with
+  `paper.md`, and two sentences of its own are qualified the same way.
 - **Paper §5.6 corrected: what a fence does, and that the fence typestate is a model.** The section said a
   fence "is only meaningful after all lanes have written"; the PTX ISA says `membar` concerns the executing
   thread's own accesses and describes no waiting for others, and ordering between lanes of a warp is
