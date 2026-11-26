@@ -312,13 +312,19 @@ pub fn grad_norm_reduce(
 // (slot = literal code, no probing) when every literal code of the proof is
 // below the per-proof region `slots` (a multiple of 32 chosen by the host,
 // `lrat_direct_slots`; it may exceed `TABLE`) — denser and cheaper. Both count occupancy and stop at the
-// same cap, so `TableOverflow` falls on the same lemmas either way. In the
-// strided loop every lane performs every insert (identical writes to identical
-// slots); in the batched direct loop the unit's lane alone stores, and the
-// other lanes read it only after the `syncwarp` that closes the batch.
+// same cap, so `TableOverflow` falls on the same lemmas either way. Every
+// store has ONE writer: lane 0 for a lemma's own literals and for a strided
+// hint's unit, the unit's lane in the batched direct loop. The other lanes
+// read the table only after a `syncwarp`, and learn the outcome and the
+// occupancy by a shuffle from the writer, so neither depends on how the
+// lanes of the warp are scheduled against each other. (Until 2026-11-25 all
+// 32 lanes performed the first two kinds of insert, and the occupancy was
+// the same in every lane only if they ran in lockstep.)
 //
 // Control flow at every collective is warp-uniform: admissibility, the
 // total and the verdict are computed from the same global data by all lanes.
+// The one lane-dependent branch that stores (`lane == 0`) rejoins at a
+// full-mask barrier before any collective.
 // Codes: 0 Ok, 1 NotUnit, 2 NoConflict, 3 DeletedHint, 4 ForwardHint,
 // 5 TableOverflow (same numbering as `lrat_warp::LemmaCode`).
 // ============================================================================
@@ -411,13 +417,15 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 /// - `*count` must be this lemma's true occupancy of the region (the number
 ///   of slots carrying `stamp`). The hashed probe loop has no bound of its
 ///   own: it ends because the cap test above keeps one slot free.
-/// - Every lane of the warp calls this with the same arguments, and the
-///   kernel relies on the lanes doing so IN LOCKSTEP: all of them load the
-///   slot before any of them stores to it, so all of them see the same thing
-///   and `*count` stays the same in every lane. That is how a converged warp
-///   executes in practice; the PTX ISA does not promise it on sm_70 and
-///   later. If one lane's store were seen by another lane's load, the two
-///   would count differently and later diverge at the cap test.
+/// - ONE lane of the warp calls this (the check kernel uses lane 0), and no
+///   other lane touches the region until a `bar.warp.sync` over the warp has
+///   followed the call. The caller then gives the other lanes the result and
+///   the new `*count` by a shuffle from that lane. Until 2026-11-25 all 32
+///   lanes called this with the same arguments, which made `*count` depend on
+///   the lanes running in lockstep (every lane loading the slot before any
+///   stored to it): a lane that saw another lane's store would not count the
+///   key. That is how a converged warp runs in practice, but the PTX ISA does
+///   not promise it on sm_70 and later (cross-vendor panel, 2026-11-25).
 #[inline(always)]
 unsafe fn lrat_insert(table: *mut u64, base: u32, stamp: u32, direct: bool, slots: u32, l: i32, count: &mut u32) -> bool {
     // The cap comes FIRST, before the key is looked up — exactly as SimWarp's
@@ -508,8 +516,10 @@ unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
 /// # Safety
 ///
 /// - Warp: all 32 lanes are converged and all execute this call with the same
-///   arguments, `lane` excepted (it ends in a raw full-mask `syncwarp`).
-///   `*count` is the same in every lane.
+///   arguments, `lane` excepted (it ends in a raw full-mask `syncwarp` and
+///   a broadcast from lane 0). `*count` is the same in every lane, on entry
+///   and on return; `lane` must be the calling lane's index, since lane 0
+///   alone performs the insert.
 /// - `lits` must be valid for reads over `[cs, ce)`, with `cs <= ce` and
 ///   `ce <= u32::MAX - 63` (the walk forms `cs + lane` and steps by 32 in
 ///   `u32`).
@@ -570,9 +580,18 @@ unsafe fn lrat_hint_strided(
     let voted = warp.ballot(data::PerLane::new(free > 0)).mask_u32().get();
     let src = voted.trailing_zeros() & 31;
     let unit = warp.broadcast_lane(data::PerLane::new(last), src).get();
-    let ok = lrat_insert(table, base, stamp, direct, slots, unit.wrapping_neg(), count);
+    // One writer (lane 0), then the barrier, then lane 0's result and
+    // occupancy to every lane: see `lrat_insert`'s `# Safety`. The occupancy
+    // is at most `LRAT_TABLE - 1`, so bit 31 is free for the failure flag.
+    let mut packed = 0u32;
+    if lane == 0 {
+        let ok = lrat_insert(table, base, stamp, direct, slots, unit.wrapping_neg(), count);
+        packed = *count | ((!ok as u32) << 31);
+    }
     warp_types::gpu::syncwarp(0xffff_ffff);
-    if !ok {
+    let packed = warp.broadcast_lane(data::PerLane::new(packed), 0).get();
+    *count = packed & 0x7fff_ffff;
+    if packed >> 31 != 0 {
         return 5;
     }
     0xFF
@@ -873,24 +892,34 @@ pub fn lrat_check_lemmas(
         let ls = *clause_start.add(lemma_dense as usize);
         let le = *clause_start.add(lemma_dense as usize + 1);
         let mut code: u8 = 2; // NoConflict unless a hint conflicts
-        let mut count = 0u32; // this lemma's table occupancy (identical in every lane)
-        // Lemma literals are false. Every lane inserts (identical writes).
-        let mut k = ls;
-        while k < le {
-            if !lrat_insert(table, base, stamp, direct, slots, *lits.add(k as usize), &mut count) {
-                code = 5;
-                break;
+        // This lemma's table occupancy. Lane 0 counts; every lane holds the
+        // same value after each broadcast below and in the hint paths.
+        let mut count = 0u32;
+        // Lemma literals are false. ONE lane inserts them (lane 0): with 32
+        // lanes inserting, `count` was the same in every lane only if they
+        // ran in lockstep (see `lrat_insert`'s `# Safety`).
+        let mut packed = 0u32;
+        if lane == 0 {
+            let mut k = ls;
+            while k < le {
+                if !lrat_insert(table, base, stamp, direct, slots, *lits.add(k as usize), &mut count) {
+                    packed = 1 << 31; // TableOverflow
+                    break;
+                }
+                k += 1;
             }
-            k += 1;
+            packed |= count; // at most LRAT_TABLE - 1: bit 31 is the flag
         }
-        // Writes before reads. The lanes write identical values to identical
-        // slots, so no lane needs another's write for the VALUE it will read
-        // back — but without a barrier a lane could in principle observe
-        // another lane's key/stamp pair half-updated (two stores, weakly
-        // ordered). (The insert loop above does depend on the lanes running
-        // in lockstep for `count`; see `lrat_insert`'s `# Safety`.) The
-        // barrier is warp-uniform (`code` is the same in every lane).
+        // Writes before reads: lane 0's stores, the barrier, then the other
+        // lanes' probes — the order the PTX ISA documents for `bar.warp.sync`.
+        // Every lane executes the barrier and the broadcast (the branch above
+        // is the only lane-dependent control flow before them).
         warp_types::gpu::syncwarp(0xffff_ffff);
+        let packed = warp.broadcast_lane(data::PerLane::new(packed), 0).get();
+        count = packed & 0x7fff_ffff;
+        if packed >> 31 != 0 {
+            code = 5;
+        }
         if code != 5 {
             let hs = *hint_start.add(i as usize);
             let he = *hint_start.add(i as usize + 1);

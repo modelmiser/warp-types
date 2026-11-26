@@ -926,6 +926,42 @@ mod tests {
                 Proof { steps },
             ));
         }
+        // (b') The same overflow, FOLLOWED by lemmas that the same warp checks
+        // next. The lemma at the cap overflows at its first unit insert; the
+        // eight after it (every warp gets one at up to two blocks) each need
+        // two unit inserts and a conflict. The occupancy must be the same in
+        // every lane when the cap is tested: if only the inserting lane held
+        // the true count, it alone would leave the full lemma, and the warp's
+        // lanes would be at different lemmas for the collectives that follow.
+        // (With one lemma per warp, as in (b), that goes unnoticed: only lane
+        // 0 writes the code. Found by a mutant that survived, 2026-11-25; on
+        // this shape that mutant does not return — the kernel hangs.)
+        let cnf: Vec<Vec<i32>> = vec![
+            vec![1, 5000],
+            vec![2, 5000],
+            vec![3, 5001],
+            vec![-5000, -5001],
+            vec![6001],
+            vec![-6001, 6002],
+            vec![-6002, 6003],
+        ];
+        let mut steps = vec![Step::Add {
+            id: 100,
+            lits: (1..=4095).collect(),
+            hints: vec![1, 2, 3, 4],
+        }];
+        for k in 0..8u64 {
+            steps.push(Step::Add {
+                id: 101 + k,
+                lits: vec![6003],
+                hints: vec![5, 6, 7],
+            });
+        }
+        out.push((
+            "overflow then more lemmas in the warp".into(),
+            cnf,
+            Proof { steps },
+        ));
         // (c) Order of failures: a conflict at hint j then a forward hint at
         // j+1 — the NEXT lemma's id, since flatten stops at an unknown id —
         // (code 0, not 4: a batch-cut control, since both admissibility
@@ -1101,7 +1137,8 @@ mod tests {
             // leave later steps unchecked while the comparison still passed.
             // Older shapes may stop early by design (e.g. "small 0" ends on an
             // unknown hint id); those are printed so the list stays visible.
-            const SECTION_10: [&str; 11] = [
+            const SECTION_10: [&str; 12] = [
+                "overflow then more lemmas",
                 "chain",
                 "duplicate units",
                 "conflict then forward",
@@ -1127,7 +1164,17 @@ mod tests {
                     fp.early
                 );
             }
-            for c in super::super::check_warp_codes(&fp) {
+            let model = super::super::check_warp_codes(&fp);
+            if what.starts_with("overflow then more lemmas") {
+                use super::super::LemmaCode::{Ok as Fine, TableOverflow};
+                let mut want = vec![TableOverflow];
+                want.extend([Fine; 8]);
+                assert_eq!(
+                    model, want,
+                    "{what}: the shape is not what its comment says"
+                );
+            }
+            for c in model {
                 seen[c as usize] += 1;
             }
             codes_equal(&ctx, &fp, &what);
