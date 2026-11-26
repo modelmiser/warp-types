@@ -68,7 +68,7 @@ The fix is to merge back to `Warp<All>` before shuffling—the type system guide
 
 ## 1.2 Contributions
 
-We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design). We further extend the approach to intra-warp memory fence ordering (§5.6), where the same complement proof ensures all lanes have written before a fence executes.
+We present a linear typestate system for intra-warp divergence that statically eliminates diverged shuffle and ballot operations. Well-typed programs that express divergence exclusively through the system's `diverge`/`merge` combinators cannot perform unsafe warp operations on inactive lanes; a raw data-dependent branch around a warp intrinsic remains outside the guarantee (§4.7, §6.9). For the static core the guarantee is zero-overhead—enforcement is purely compile-time (the gradual/dynamic layers of §5 check at runtime, by design). We further extend the approach to a model of intra-warp memory fence ordering (§5.6), where the same complement proof ensures that every lane's write step has been recorded in the type before a fence is typed; the region in that model is phantom, and no store is observed.
 
 This paper makes the following contributions:
 

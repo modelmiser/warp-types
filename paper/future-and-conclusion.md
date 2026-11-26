@@ -70,7 +70,7 @@ The hardware bug class is real: when a tile diverges and doesn't SEND, its pipel
 Several limitations remain:
 - Higher-order protocols (protocols parameterized by protocols)
 - Compilation overhead at scale (untested on large codebases)
-- Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is handled in §5.6, but cross-warp ordering remains open)
+- Cross-warp fence interactions (warp A diverges, warp B's fence depends on A's contribution via global memory — the intra-warp case is modelled in §5.6, over a phantom region, but cross-warp ordering remains open)
 
 ---
 
