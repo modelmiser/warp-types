@@ -121,6 +121,9 @@
 //! - [`simwarp`] — Multi-lane warp simulator with real shuffle semantics (testing)
 
 #![cfg_attr(target_arch = "nvptx64", no_std)]
+// amdgpu has no `std` either. Without this the build fails before it can
+// print the `compile_error!` below that names the real reason.
+#![cfg_attr(target_arch = "amdgpu", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
 // `abi_ptx` is deliberately NOT listed: this crate declares no
 // `extern "ptx-kernel"` entry point. The ABI is emitted by
@@ -158,6 +161,20 @@ pub const WARP_SIZE: u32 = 64;
 compile_error!(
     "feature `warp64` targets 64-lane hardware; nvptx64 warps are 32-lane — \
      build without `warp64` for NVIDIA targets"
+);
+
+// The AMD device path is not implemented. `src/gpu.rs` holds placeholders for
+// it (a shuffle that returns its own value, an all-ones exec mask) and no
+// `lane_id`, no `GpuShuffle` impls and no `no_std` setup, so until 2026-11-25
+// a build for `amdgcn-amd-amdhsa` (which the pinned nightly lists) failed
+// with some 150 unrelated errors — and had those been patched over, the
+// placeholders would have run on a device as single-lane identities. Refuse
+// by name instead.
+#[cfg(target_arch = "amdgpu")]
+compile_error!(
+    "warp-types has no AMD device path yet: the amdgpu shuffles in src/gpu.rs are \
+     placeholders. Build for a CPU target (the `warp64` feature models 64-lane \
+     wavefronts there) or for nvptx64."
 );
 
 // ============================================================================

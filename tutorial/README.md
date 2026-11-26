@@ -293,7 +293,7 @@ The mask is dynamic but the complement is structural — `DynDiverge` guarantees
 - The `ComplementOf` pattern (compile-time proof of set complement) is reusable
 
 ### Known Limitations
-- AMD MI300X verified for mask correctness; full GPU execution path requires amdgcn Rust target (not yet available)
+- AMD MI300X verified for mask correctness; there is no AMD device path yet (the crate refuses an `amdgcn-amd-amdhsa` build)
 - Nightly Rust required for GPU kernel compilation (`abi_ptx`, `asm_experimental_arch`); the type system itself works on stable
 
 ---

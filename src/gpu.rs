@@ -10,7 +10,7 @@
 //! | Target | Shuffle behavior | Mask width | Status |
 //! |--------|-----------------|------------|--------|
 //! | nvptx64 | Real `shfl.sync.*` instructions | 32-bit | Implemented |
-//! | amdgpu | DPP row_xmask / ds_bpermute | 64-bit | Stubbed |
+//! | amdgpu | DPP row_xmask / ds_bpermute | 64-bit | Not buildable: placeholders only, `compile_error!` in `lib.rs` |
 //! | CPU | Identity (returns own value) | N/A | Emulation |
 //!
 //! **CPU emulation caveat:** Shuffle-XOR returns `self` on CPU, which makes
@@ -439,7 +439,10 @@ pub fn threadfence() {
 // AMD wavefronts are 64 lanes (CDNA) or 32/64 (RDNA wave32/wave64 mode).
 // The exec mask is 64-bit (s[exec_lo:exec_hi]).
 //
-// These stubs will be filled when amdgcn target support is available in Rust.
+// These are PLACEHOLDERS, not implementations: each returns its input (or
+// all-ones). `lib.rs` refuses an amdgpu build with a `compile_error!`, so
+// they cannot reach a device. There is no amdgpu `lane_id` or `GpuShuffle`
+// impl either.
 
 /// AMD DPP row XOR: each lane exchanges with lane (lane_id XOR mask).
 /// Equivalent to NVIDIA's shfl.sync.bfly — butterfly pattern.

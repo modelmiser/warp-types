@@ -61,13 +61,21 @@
   - **Breaking:** `gather_lits_into` and `gather_hints_into` are now `unsafe fn`. Their segment lists live on
     the device, so the launcher cannot check what they say; they check the view lengths and state the rest as a
     `# Safety` contract. `gather_lrat_payloads` is the checked way in.
+- **Changed: an `amdgpu` build is refused by name.** The crate never built for `amdgcn-amd-amdhsa` (no `lane_id`,
+  no `GpuShuffle` impls, no `no_std` setup — some 150 errors), and its AMD intrinsics are placeholders that return
+  their input. `lib.rs` now carries a `compile_error!` saying so; the README's "no amdgcn Rust target yet" is
+  replaced (the pinned nightly lists the target).
 - **Fixed: `lrat_batch_device::check_pipelined` hung on an error.** When a chunk's prepare or check returned an
   error, the reader thread stayed blocked sending to a channel nobody read and the call never returned. The
   checker now closes the channel on its way out.
+- **Fixed: the LRAT check kernel no longer assumes the lanes of a warp run in lockstep.** All 32 lanes used to
+  insert a lemma's literals (and a strided hint's unit) into the warp's table, each counting the occupancy for
+  itself; the counts agreed only if every lane loaded a slot before any lane stored to it, which the PTX ISA
+  does not promise on sm_70 and later. Lane 0 alone inserts now; the others get the outcome and the occupancy
+  by a shuffle after the barrier. The batched direct path already had one writer. Verdicts are unchanged on the
+  test proofs; the timing in the EDP record below was measured BEFORE this change and has not been re-measured.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
-  `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`. The insert
-  contract states an assumption the kernel has always made: the lanes of a warp execute an insert in lockstep,
-  which the PTX ISA does not promise on sm_70 and later.
+  `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
   stdout containing `s VERIFIED` and ignored the checker's exit status, so a checker that printed the banner and
   then died, or only mentioned it in a comment line, certified the answer. The same match was in
