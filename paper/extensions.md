@@ -244,19 +244,21 @@ Descend ensures no data races and also rejects synchronization on conditional or
 
 ## 5.6 Fence-Divergence Interactions
 
-Global memory writes from diverged warps introduce a subtle ordering hazard: a `threadfence()` is only meaningful after *all* lanes have written. If some lanes are inactive when the fence executes, subsequent reads may observe stale values — a memory ordering bug that manifests non-deterministically.
+Global memory writes from diverged warps raise an ordering question: when may a value stored by one group of lanes be read back by another, or published to observers outside the warp? On NVIDIA hardware two instructions bear on it, and they do different things. `bar.warp.sync` (`Warp::sync`) is a rendezvous: the lanes it names wait for one another, and it orders memory among them, so a lane may store, synchronise, and then read what the other lanes stored. `membar` (`__threadfence()`) is not a rendezvous: it makes the *executing* lane's earlier stores visible, at the chosen level, before that lane's later memory operations, and it waits for no other lane. A fence therefore says nothing about whether the other lanes have stored yet. (Earlier versions of this section said a fence "is only meaningful after all lanes have written"; the PTX ISA does not say that.)
 
-We model this with a typestate machine over a *phantom* region. The region is bound to no address, and its operations store and load nothing: each state records, in the type, which lanes have taken their write step. What the types enforce is the order of those recorded steps — not that a store took place, which remains the program's own obligation, through its own pointer:
+We model a publication discipline on top of this with a typestate machine over a *phantom* region: a fence can be typed only once the write-step calls recorded for the region cover the whole warp. The discipline is a design choice of the model, not something the hardware requires of `membar`. The region is bound to no address, and its operations store and load nothing: the partial states record, in the type, the lane set of the handle on which a write step was called (`diverge` emits no branch, so which lanes *execute* a call is not what is recorded — §6.9). What the types enforce is the order of those recorded steps — not that a store took place, which remains the program's own obligation, through its own pointer. A lane that reads another lane's data inside the warp needs `Warp::sync`, not the fence:
 
 ```
 GlobalRegion<Unwritten>
   → Warp<S>.global_store() → GlobalRegion<PartialWrite<S>>
   → merge_writes(PartialWrite<S₁>, PartialWrite<S₂>) → GlobalRegion<FullWrite>
       where S₁: ComplementOf<S₂>
+  → Warp<S₂>.global_store_complement(PartialWrite<S₁>) → GlobalRegion<FullWrite>
+      where S₂: ComplementOf<S₁>
   → threadfence(FullWrite) → GlobalRegion<Fenced>
 ```
 
-The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures that the recorded write steps cover complementary lane sets before a fence. A fence on a region whose recorded steps cover only part of the warp is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is (§6.9 lists the trusted entry points).
+The key insight is that `merge_writes` reuses the same `ComplementOf` proof as warp merge — the mechanism that ensures complementary active sets at reconvergence also ensures that the recorded write steps cover complementary lane sets before a fence. A fence on a region whose recorded steps cover only part of the warp is not a runtime error — it is a compile error within the typed API, exactly as a full-warp shuffle on a diverged warp is. The same qualifications apply (§6.9): the complement proof checks set shape, not provenance, and the fence instruction is also reachable without any proof through the public `gpu::threadfence()`.
 
 ```rust
 fn safe_fence_pattern(warp: Warp<All>) {
@@ -265,7 +267,7 @@ fn safe_fence_pattern(warp: Warp<All>) {
 
     // Each half records its write step (the store itself goes through the program's own pointer)
     let (evens, partial) = evens.global_store(region);
-    let full = odds.global_store_complement(partial);  // ComplementOf<Even> for Odd
+    let (_odds, full) = odds.global_store_complement(partial);  // ComplementOf<Even> for Odd
 
     // Fence only once both halves are recorded — FullWrite required by type
     let fenced = threadfence(full);
@@ -273,7 +275,7 @@ fn safe_fence_pattern(warp: Warp<All>) {
 }
 ```
 
-This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate; in the code after 0.4.3 (unreleased at the time of writing) it also emits `membar.gl` on `nvptx64` (through 0.4.3 it emitted nothing), while the region and its `read` remain a model with no memory behind them (§6.9): `read` returns a default value. The Lean fence rule (§4.8) gates on write-*permission* coverage (`group all`), not on writes performed.
+This listing is schematic. The shipped API brands the region with a rank-2 closure (`GlobalRegion::with_region(|region| …)`) so that a region cannot escape its scope and partial writes from two different regions cannot be merged, splits it with `split`, and merges partial writes with `merge_writes`/`merge_writes_within`; `threadfence(FullWrite)` is the typed gate; in the code after 0.4.3 (unreleased at the time of writing) it also emits `membar.gl` on `nvptx64` (through 0.4.3 it emitted nothing), while the region and its `read` remain a model with no memory behind them (§6.9): `read` returns a default value. The Lean fence rule (`lean/WarpTypes/Fence.lean`, an instance of the family-parametric core of §4.8: `finalizeFamily` at tag `.group`) gates on write-*permission* coverage (`group all`), not on writes performed.
 
 ## 5.7 Summary
 
@@ -287,7 +289,7 @@ Our extensions handle:
 | Inter-block | Traditional MPST | Design only (no checker shipped) |
 | Cooperative groups | Hierarchical protocols | Design only (`Subgroup` not implemented) |
 | Memory safety | Compose with Descend | Future work |
-| Fence-divergence | Typestate over recorded write steps (phantom region) | Permission coverage (see §5.6 note) |
+| Fence-divergence | Typestate over recorded write steps (phantom region) | Recorded-step coverage (Rust); permission coverage (Lean) — a model, see §5.6 |
 
 The key insight: not every problem needs warp typestate. We identify where our contribution applies (warp-level quiescence) and where existing techniques suffice (block-level communication, memory safety).
 

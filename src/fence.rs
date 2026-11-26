@@ -1,10 +1,12 @@
 //! Fence-divergence interaction types (§5.6).
 //!
-//! Global memory writes from diverged warps must be carefully tracked.
-//! A fence is only valid after ALL lanes have written — which, in this model,
-//! means every lane's write STEP has been recorded, by the same complement
-//! proof used for merge. The states below record steps taken in the type;
-//! they do not observe a store (see "in the model", below).
+//! A model of a publication discipline for global memory written from
+//! diverged warps: a fence can be typed only once the write STEPS recorded
+//! for the region cover the whole warp, by the same complement proof used
+//! for merge. This is the model's rule, not the hardware's — `membar` waits
+//! for no other lane and says nothing about what they have stored. The
+//! states below record steps taken in the type; they do not observe a store
+//! (see "in the model", below).
 //!
 //! # Type-state protocol
 //!
@@ -22,12 +24,14 @@
 //! Two partial writes from *different* `GlobalRegion::with_region` calls have
 //! different lifetimes and **cannot** be merged — the compiler rejects it.
 //!
-//! This turns both memory ordering bugs and cross-region confusion into type errors
-//! **in the model**. What the module actually does is narrower:
+//! This turns out-of-order steps and cross-region confusion into type errors
+//! **in the model** — no memory traffic is modelled, so it is the sequence of
+//! recorded steps that is checked, not a memory ordering. What the module
+//! actually does is narrower:
 //!
 //! - `GlobalRegion` is phantom: zero-sized, bound to no address. `global_store`
 //!   and `global_store_complement` store nothing; they record, in the type,
-//!   that a set of lanes has done its writes. `read` loads nothing.
+//!   a write step for a handle's lane set. `read` loads nothing.
 //! - On `nvptx64`, [`threadfence`] is the one step that emits code: a
 //!   `membar.gl`, which makes the executing lane's own earlier stores visible
 //!   at global level before its later operations. It does not wait for other
@@ -103,7 +107,8 @@ impl WriteState for Fenced {}
 // Global region with write tracking + region identity
 // ============================================================================
 
-/// A global memory region with type-state tracked write progress.
+/// A phantom stand-in for a global memory region: the type records which
+/// write-step calls have been made. No address, no storage.
 ///
 /// The lifetime `'r` is an *identity brand*: every call to
 /// [`GlobalRegion::with_region`] introduces a fresh, unnameable lifetime,
@@ -135,7 +140,7 @@ impl WriteState for Fenced {}
 ///     });
 /// });
 /// ```
-#[must_use = "GlobalRegion tracks write progress — dropping it loses the write-state proof"]
+#[must_use = "GlobalRegion records write steps in its type — dropping it loses the write-state proof"]
 pub struct GlobalRegion<'r, S: WriteState> {
     // fn(&'r ()) -> &'r () makes 'r invariant (cannot be widened or narrowed).
     // This is critical: covariant 'r would let the compiler unify distinct
@@ -202,11 +207,11 @@ impl<'r> GlobalRegion<'r, Unwritten> {
 
 /// Warp writes to a global region, producing a partial write.
 impl<S: ActiveSet> Warp<S> {
-    /// Record that the lanes of `S` have written the region. **Stores nothing**
+    /// Record a write step for the lane set `S` of this handle. **Stores nothing**
     /// — the region is phantom; do the real store through your own pointer.
     ///
     /// Returns the warp (unchanged) and a partially-written region
-    /// that tracks which lanes have written. The lifetime `'r` is
+    /// whose type carries that lane set. The lifetime `'r` is
     /// preserved, tying the partial write to its origin region.
     ///
     /// **Note:** Even `Warp<All>` produces `PartialWrite<All>`, not `FullWrite`.
@@ -310,7 +315,7 @@ where
     }
 }
 
-/// Issue a thread fence after all writes are complete.
+/// Issue a thread fence once the recorded write steps cover the warp.
 ///
 /// Only callable on `GlobalRegion<FullWrite>` — the types record that every
 /// lane's write step has been taken (complement proof) before the fence. They
@@ -332,11 +337,13 @@ pub fn threadfence(_proof: GlobalRegion<FullWrite>) -> GlobalRegion<Fenced> {
 }
 
 impl GlobalRegion<'_, Fenced> {
-    /// The read step of the protocol. **A model only: it reads no memory and
-    /// returns `T::default()`.** `GlobalRegion` is phantom — zero-sized, with
+    /// The read step of the protocol. **A model only: it loads nothing from
+    /// the region and returns `T::default()`** (whatever that `Default` impl
+    /// does is its own business). `GlobalRegion` is phantom — zero-sized, with
     /// no address — so there is nothing here to load from. What the type
-    /// records is that a read is permitted at this point: all lanes have
-    /// written (`FullWrite`) and the fence has been issued (`Fenced`).
+    /// records is that a read is permitted at this point: the recorded write
+    /// steps cover the warp (`FullWrite`) and the fence step has been taken
+    /// (`Fenced`).
     ///
     /// For a real load through your own pointer, of data other lanes of the
     /// warp stored: store, `Warp::sync()` on a handle covering the lanes
@@ -361,7 +368,7 @@ mod tests {
             let warp: Warp<All> = Warp::new();
             let (evens, odds) = warp.diverge_even_odd();
 
-            // Each half writes to global memory
+            // Each half records its write step (nothing is stored)
             let (evens, partial_even) = evens.global_store(region);
             // evens still usable — global_store returns the warp
 
@@ -371,7 +378,7 @@ mod tests {
             // Warps can still be merged after fence operations
             let _merged: Warp<All> = crate::merge(evens, odds);
 
-            // Fence after full write
+            // Fence once the state is FullWrite
             let fenced = threadfence(full);
             let _val: i32 = fenced.read();
         });

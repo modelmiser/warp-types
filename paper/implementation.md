@@ -326,6 +326,10 @@ Both gaps stem from the same root: Rust is affine (use at most once), not linear
 
 The raw shuffle intrinsics (`GpuShuffle::gpu_shfl_*`) are `unsafe fn`: calling one directly requires `unsafe` and its `# Safety` contract (every lane converged).
 
+### The Fence Typestate Is a Model
+
+`GlobalRegion` (§5.6) is phantom: zero-sized and bound to no address. `global_store` and `global_store_complement` store nothing, `read` returns a default value and loads nothing from the region, and no state observes a store. The typestate orders recorded steps; it does not show that a store happened or that a later load sees it. The fence instruction is also reachable outside the typestate: on `nvptx64`, `gpu::threadfence()` is a public safe function that takes no proof.
+
 ## 6.10 Summary
 
 Our Rust implementation demonstrates that warp typestate can be embedded in an existing systems language with:

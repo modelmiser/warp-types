@@ -148,7 +148,7 @@ warp-types/
 │   ├── tile.rs             # Tile-level warp partitioning
 │   ├── dynamic.rs          # Data-dependent divergence (DynDiverge)
 │   ├── gpu.rs              # PTX/AMDGPU intrinsics + GpuShuffle trait
-│   ├── fence.rs            # Fence-divergence type-state machine
+│   ├── fence.rs            # Fence-divergence typestate (a model: phantom region)
 │   ├── block.rs            # Block-level shared memory + reductions
 │   ├── proof.rs            # Executable soundness sketch (progress, preservation, type safety)
 │   ├── platform.rs         # CpuSimd<N> / GpuWarp32 / GpuWarp64 dual-mode
@@ -192,6 +192,7 @@ warp-types/
 - **Merge checks set shape, not provenance.** `Even` from one `kernel_entry()` handle and `Odd` from another merge without error.
 - **Raw intrinsics are `unsafe`.** `GpuShuffle::gpu_shfl_*` (re-exported for use as a bound) are `unsafe fn` since 0.4.0 (a breaking change): they are raw `shfl.sync` instructions, UB under divergence. Shuffle through `Warp<All>` / `Tile`.
 - **`kernel_entry()` is callable anywhere.** The `Warp<All>` witness is not unforgeable: a fresh handle can be constructed after a diverge, bypassing the typestate discipline. The discipline requires calling it exactly once at kernel entry; nothing enforces that yet.
+- **The fence typestate is a model.** `fence::GlobalRegion` is phantom (no address): `global_store` stores nothing and `read` returns a default value. The types order recorded steps; they do not show that a store happened or that a later load sees it. Within a warp, a lane reads another lane's data after `Warp::sync`, not after a fence; and on `nvptx64` `gpu::threadfence()` is callable without any typestate proof.
 - **Nightly required for GPU kernels.** `#[warp_kernel]` requires `abi_ptx` and `asm_experimental_arch` features. The type system itself works on stable Rust.
 
 ## License

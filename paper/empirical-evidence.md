@@ -180,7 +180,7 @@ The evidence supports the "third path" framing:
 **In scope:** Intra-warp shuffle, ballot, vote, and other collective operations
 on diverged lanes. This is what `Warp<S>` types track.
 
-**Partially addressed:** Intra-warp fence-divergence interactions are now covered by the type-state machine in §5.6. **Remaining out of scope:** Cross-warp fence interactions — where warp A diverges and warp B's fence depends on A's contribution via global memory. This is a cross-warp, cross-memory-domain problem that requires extending the type system beyond intra-warp active sets.
+**Partially addressed:** Intra-warp fence-divergence interactions are modelled in §5.6 by a typestate over a phantom region (recorded write steps; no store is observed by the types). **Remaining out of scope:** Cross-warp fence interactions — where warp A diverges and warp B's fence depends on A's contribution via global memory. This is a cross-warp, cross-memory-domain problem that requires extending the type system beyond intra-warp active sets.
 
 ---
 

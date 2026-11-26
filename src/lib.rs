@@ -108,7 +108,7 @@
 //! - [mod@merge] — Rejoin complementary sub-warps (compile-time verified)
 //! - [`shuffle`] — Full-warp shuffle/ballot/reduce (restricted to `Warp<All>`), `shuffle_xor_within`
 //!   on any `Warp<S>`, + permutation algebra
-//! - [`fence`] — Fence-divergence interactions (§5.6) — type-state write tracking
+//! - [`fence`] — Fence-divergence interactions (§5.6) — typestate over a phantom region; `global_store` stores nothing
 //! - [`block`] — Block-level: shared memory ownership, inter-block sessions, reductions
 //! - `proof` — Soundness proof sketch (progress + preservation)
 //! - [`platform`] — CPU/GPU platform trait for dual-mode algorithms
