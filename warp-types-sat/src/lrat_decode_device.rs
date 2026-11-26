@@ -1431,7 +1431,6 @@ mod tests {
     #[test]
     fn a_hint_naming_an_inverted_range_fails_closed() {
         use crate::lrat::{Proof, Step};
-        let Some(ctx) = ctx() else { return };
         let cnf = vec![vec![1, 2], vec![-1, 2], vec![1, -2], vec![-1, -2]];
         let steps = vec![
             Step::Add {
@@ -1455,6 +1454,12 @@ mod tests {
         let mut bad = good.clone();
         bad.clause_start[2] = 0;
         assert!(bad.clause_start[1] > bad.clause_start[2]);
+        // The host model first: this part runs without a GPU.
+        assert_eq!(
+            super::super::check_warp_codes(&bad)[0],
+            super::super::LemmaCode::TableOverflow
+        );
+        let Some(ctx) = ctx() else { return };
         for direct in [false, true] {
             let lits = ctx.stream().clone_htod(&bad.lits).unwrap();
             let hints = ctx.stream().clone_htod(&bad.hints).unwrap();

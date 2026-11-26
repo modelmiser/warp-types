@@ -328,6 +328,7 @@ pub fn grad_norm_reduce(
 // lane reads that slot from the table again before the barrier that closes
 // the batch, or the one that opens the next lemma: within the batch the
 // insert's effect is replayed in registers).
+// (5 is also the answer to a hint whose clause range is inverted: no verdict.)
 // Codes: 0 Ok, 1 NotUnit, 2 NoConflict, 3 DeletedHint, 4 ForwardHint,
 // 5 TableOverflow (same numbering as `lrat_warp::LemmaCode`).
 // ============================================================================
@@ -524,9 +525,10 @@ unsafe fn lrat_warp_inclusive_sum(lane: u32, mut v: u32) -> u32 {
 ///   a broadcast from lane 0). `*count` is the same in every lane, on entry
 ///   and on return; `lane` must be the calling lane's index, since lane 0
 ///   alone performs the insert.
-/// - `lits` must be valid for reads over `[cs, ce)`, with `cs <= ce` and
+/// - When `cs <= ce`: `lits` must be valid for reads over `[cs, ce)` and
 ///   `ce <= u32::MAX - 63` (the walk forms `cs + lane` and steps by 32 in
-///   `u32`).
+///   `u32`). When `ce < cs` (an inverted range) nothing is read and the
+///   return value is 5.
 /// - `table` and `*count`: as [`lrat_insert`], for the same `base`, `direct`
 ///   and `slots`.
 #[inline(always)]
@@ -636,8 +638,9 @@ unsafe fn lrat_hint_strided(
 /// - `hints` must be valid for reads over `[hs, he)`.
 /// - For every hint value `hc` in that range with `hc < lemma_dense`:
 ///   `deleted_at[hc]`, `clause_start[hc]` and `clause_start[hc + 1]` must be
-///   readable, `clause_start[hc] <= clause_start[hc + 1]`, and `lits` must be
-///   valid for reads over `[clause_start[hc], clause_start[hc + 1])`.
+///   readable, and — unless the range is inverted, in which case nothing is
+///   read and the lemma's code is 5 — `lits` must be valid for reads over
+///   `[clause_start[hc], clause_start[hc + 1])`.
 /// - `table` and `*count`: as [`lrat_insert`] with `direct = true`, for the
 ///   same `base` and `slots`. A hint wider than 32 literals goes through
 ///   [`lrat_hint_strided`], whose index requirement applies to its clause.
@@ -679,9 +682,12 @@ unsafe fn lrat_hints_direct_batched(
                 if hc < lemma_dense {
                     m_del = *deleted_at.add(hc as usize);
                     m_cs = *clause_start.add(hc as usize);
-                    // wrapping: an inverted range gives a length near 2^32,
-                    // which the strided fallback refuses (`ce < cs`)
-                    m_len = (*clause_start.add(hc as usize + 1)).wrapping_sub(m_cs);
+                    // An inverted range gets length u32::MAX outright: it
+                    // can then never fit a batch whatever the two values
+                    // are, and the strided fallback, which rebuilds
+                    // `ce = cs + len` (wrapping, so `cs - 1`), refuses it.
+                    let m_ce = *clause_start.add(hc as usize + 1);
+                    m_len = if m_ce < m_cs { u32::MAX } else { m_ce - m_cs };
                 } else {
                     m_fwd = true;
                 }

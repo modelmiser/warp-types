@@ -1755,6 +1755,7 @@ pub enum LemmaCode {
     DeletedHint = 3,
     ForwardHint = 4,
     /// The per-warp assignment table filled up: no verdict from this path.
+    /// Also the answer when a hint names an inverted `clause_start` range.
     TableOverflow = 5,
     /// No code was written for this lemma. The device code buffer is
     /// pre-filled with this value, so a lemma the kernel never reached fails
@@ -1906,6 +1907,11 @@ fn warp_check_lemma(fp: &FlatProof, i: usize, table: &mut LitTable) -> LemmaCode
             return LemmaCode::DeletedHint;
         }
         let (cs, ce) = (fp.clause_start[h] as usize, fp.clause_start[h + 1] as usize);
+        // An inverted range is not a clause: no verdict, as the kernel
+        // answers (it would otherwise read as empty — a conflict).
+        if ce < cs {
+            return LemmaCode::TableOverflow;
+        }
         let clause = &fp.lits[cs..ce];
         // Each lane strides over the clause: count its free literals and
         // remember one of them.

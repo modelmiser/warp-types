@@ -587,6 +587,8 @@ pub fn prepare_chunk(
             || n_xl > limit
             || n_ls > limit
             || n_hs > limit
+            || n_n > limit
+            || n_xh > limit
         {
             return Err(GpuError::Cuda(
                 "batch_device: chunk too large for the kernels' 32-bit indices".into(),
@@ -1046,7 +1048,7 @@ pub fn check_pipelined(
         for prep_ctx in &prep_ctxs {
             let tx_prep = tx_prep.clone();
             s.spawn(move || loop {
-                let msg = match rx_bytes.lock().unwrap().as_ref() {
+                let msg = match rx_bytes.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                     Some(rx) => rx.recv(),
                     None => return, // the checker has left
                 };

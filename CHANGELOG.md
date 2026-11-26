@@ -55,7 +55,8 @@
     have the right lengths, every lemma names a clause whose range is not inverted. (`clause_start` is not
     required to be nondecreasing throughout: the batch route's layout restarts at each proof's region.) `check_lrat_codes*` run it before every launch and return an error; the lemma count is bounded
     against the kernel's 32-bit stride.
-  - `decode_lrat_slices_device` refuses a `len` past the bytes on the device and a slice count past `u32`.
+  - `decode_lrat_slices_device` refuses a `len` past the bytes on the device and a slice count past `u32` (past `u32::MAX / 2` for the
+    warp-per-slice kernel, whose stride needs the room).
   - `gather_lrat_payloads` checks its host segment lists: source 0 or 1, every segment inside its source, the
     lengths adding up to the output.
   - **Breaking:** `gather_lits_into` and `gather_hints_into` are now `unsafe fn`. Their segment lists live on
@@ -71,7 +72,8 @@
   error path (a test that hung now fails at once); the panic path is not tested.
 - **Fixed: a hint naming an inverted clause range fails its lemma closed.** The check kernel read such a range
   as an empty clause, an immediate conflict that accepts the lemma. `flatten` and the decoders never build one,
-  but `FlatProof`'s fields are public and hint values are not visible to the launcher. Device test, both layouts.
+  but `FlatProof`'s fields are public and hint values are not visible to the launcher. The host model (SimWarp)
+  answers the same; device test, both layouts.
 - **Fixed: unbounded block counts and strides in the gather and max-code launches.** A caller-supplied block
   count of 2^27 made the gather kernels' u32 stride 0 (a kernel that never ends); block counts are clamped and
   the output and literal counts must leave room for one stride. A gather segment check now also bounds

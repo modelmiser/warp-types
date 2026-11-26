@@ -599,7 +599,7 @@ impl GpuContext {
         }
         // The cooperative kernel strides `si += blocks` in u32 with
         // `blocks <= n_slices`: past 2^31 slices the index could wrap.
-        if n_slices > u32::MAX / 2 {
+        if cooperative && n_slices > u32::MAX / 2 {
             return Err(GpuError::Cuda(format!(
                 "decode: {n_slices} slices leave no room for the kernel's u32 stride"
             )));
@@ -814,7 +814,15 @@ impl GpuContext {
         blocks: u32,
     ) -> Result<GatheredPayloads, GpuError> {
         let s = &self.stream;
-        let blocks = blocks.max(1);
+        // One block count serves both launches: bound it against the larger
+        // output (round 5 of the 2026-11-25 panel: this launcher was the one
+        // of three left with a bare `blocks.max(1)`).
+        let too_big = |what: &str, n: usize| {
+            GpuError::Cuda(format!("gather: {what} count {n} does not fit a u32"))
+        };
+        let n_out_max = u32::try_from(lit_total.max(hint_total))
+            .map_err(|_| too_big("output", lit_total.max(hint_total)))?;
+        let blocks = gather_blocks(blocks, n_out_max)?;
         // The kernels index the sources with the segments' values.
         check_gather_segs(
             "literal",
@@ -872,11 +880,12 @@ impl GpuContext {
         let lits: CudaSlice<i32> = s.alloc_zeros(lit_total.max(1))?;
         let hints: CudaSlice<u32> = s.alloc_zeros(hint_total.max(1))?;
         let bad: CudaSlice<u32> = s.clone_htod(&[u32::MAX])?;
-        let n_lseg = ld.len() as u32;
-        let n_hseg = hd.len() as u32;
-        let n_l = lit_total as u32;
+        let n_lseg = u32::try_from(ld.len()).map_err(|_| too_big("literal segment", ld.len()))?;
+        let n_hseg = u32::try_from(hd.len()).map_err(|_| too_big("hint segment", hd.len()))?;
+        let n_l = lit_total as u32; // both totals fit: `gather_blocks` above
         let n_h = hint_total as u32;
-        let dense_len = dense_of.len() as u32;
+        let dense_len =
+            u32::try_from(dense_of.len()).map_err(|_| too_big("dense table", dense_of.len()))?;
         let cfg = LaunchConfig {
             grid_dim: (blocks, 1, 1),
             block_dim: (WARP_SIZE, 1, 1),
@@ -1184,8 +1193,8 @@ impl GpuContext {
         const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
                             // u64: `WPB * region` itself overflowed u32 for a region past
                             // u32::MAX / 4 (cross-vendor panel, 2026-11-25). Such a region gives
-                            // `max_blocks` 0 and so a block count of 1 below; `launch_lrat_check`
-                            // refuses the region before any allocation.
+                            // `max_blocks` 0 and so a block count of 0 from this function;
+                            // `launch_lrat_check` refuses the region before using it.
         let max_blocks = (u32::MAX as u64 / (WPB * region.max(1) as u64)).min(1 << 16) as u32;
         let blocks = if blocks == 0 {
             let ctx = self.stream.context();
@@ -1410,10 +1419,6 @@ pub struct DeviceSlices {
 /// id never added, if any.
 pub type GatheredPayloads = (CudaSlice<i32>, CudaSlice<u32>, Option<usize>);
 
-/// Host-side check of a segment list for [`GpuContext::gather_lrat_payloads`]:
-/// every segment selects source 0 or 1, lies inside that source, and the
-/// lengths add up to exactly `total` without overflowing the kernels' `u32`
-/// indices. The kernels index the sources with these values and test nothing.
 /// The gather kernels stride `i += blocks * 32` in u32: `blocks` is clamped
 /// to 2^16 (a larger count wrapped the stride — to 0 at 2^27, a kernel that
 /// never ends) and `n_out` must leave room for one stride past its end.
@@ -1426,6 +1431,10 @@ fn gather_blocks(blocks: u32, n_out: u32) -> Result<u32, GpuError> {
     Ok(blocks.clamp(1, 1 << 16))
 }
 
+/// Host-side check of a segment list for [`GpuContext::gather_lrat_payloads`]:
+/// every segment selects source 0 or 1, lies inside that source, and the
+/// lengths add up to exactly `total` without overflowing the kernels' `u32`
+/// indices. The kernels index the sources with these values and test nothing.
 fn check_gather_segs(
     what: &str,
     segs: &[GatherSeg],
