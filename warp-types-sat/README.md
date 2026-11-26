@@ -315,12 +315,15 @@ fail-closed: no checker is not a pass.
   predate a host reboot that sped this pipeline ≈ 4 %, so the like-for-like
   figure inside one run is the hashed table, 6.72 s against 4.71 s. The figures are
   from 2026-11-25, on the committed kernel (table inserts single-writer, a
-  barrier per lemma). On 2026-11-11 the kernel before that change measured
-  4.54 s warm / 4.60 s cold; in the 2026-11-25 session that older kernel
-  measured 4.82 / 4.89 / 4.89 s warm, between the committed kernel's
-  4.71 / 4.76 / 4.77 s before it and 5.00 / 5.02 / 5.02 s after it. The
-  session drifted about 6 % over five minutes, so it does not separate the
-  two kernels; an interactive desktop application was running on the host, no batch jobs. Stated
+  barrier per lemma). The change costs
+  nothing measurable: with the kernel before it and the committed one
+  interleaved run by run (24 runs each), the committed kernel's total is
+  0.03 s lower (standard error 0.01 s) and its check stage the same to
+  0.01 s. What does move the figure is the card's temperature: the same
+  binaries read 4.66–4.76 s at 45–51 °C and 4.93–5.08 s at 59–61 °C in
+  that session. The earlier kernel's 4.54 s warm / 4.60 s cold of
+  2026-11-11 was taken shortly after a reboot; no temperature was logged
+  then. Stated
   with the number every time: the underlying proofs are ours, not the
   published ones (proofs of the published composition made with iglucose
   and drat-trim, 3,414 lemmas returned as strict subsets and the derivations

@@ -88,10 +88,12 @@
   for `bar.warp.sync`, not demonstrated on a device that schedules lanes apart. Re-timed on 2026-11-25 after
   the other jobs on the host were stopped (an interactive desktop application still running): the EDP record
   pipeline reads **4.71 s warm (4.712 / 4.756 / 4.769) / 4.86 s cold** on the committed kernel, hashed table
-  6.72 s, the published composition's proofs 6.04 s warm / 6.07 s cold, device memory peak 5,142 MiB. The kernel
-  before this change read 4.82 / 4.89 / 4.89 s in the same session, and the committed kernel 5.00 / 5.02 / 5.02 s
-  when run again after it: the session drifted about 6 % over five minutes and does not separate the two. The
-  4.54 s / 4.60 s in the entry below is the 2026-11-11 measurement of the earlier kernel. Logs are not in the
+  6.72 s, the published composition's proofs 6.04 s warm / 6.07 s cold, device memory peak 5,142 MiB. The change
+  costs nothing measurable: the kernel before it and the committed one, interleaved run by run (24 runs each),
+  differ by 0.03 s in total in the committed kernel's favour (standard error 0.01 s) and by 0.01 s in the check
+  stage. The figure does move with the card's temperature — 4.66–4.76 s at 45–51 °C, 4.93–5.08 s at 59–61 °C,
+  both kernels alike — which is what the first re-time's drift was. The 4.54 s / 4.60 s in the entry below is the
+  2026-11-11 measurement of the earlier kernel, shortly after a reboot, temperature not logged. Logs are not in the
   repository; every number is in `research/edp-record.md`.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.

@@ -1401,3 +1401,28 @@ earlier kernel (4.54); this run cannot say how much of that is the kernel (one m
 shuffle per lemma, one writer instead of 32) and how much the host. P37 (4.0–4.9) is still met;
 the A2 figure moved more (5.55 → 6.04 s warm), in its PREPARE-bound stages. Owed if the split
 matters: OLD and NEW interleaved run by run, with GPU temperature logged.]
+
+[OLD AND NEW INTERLEAVED, GPU TEMPERATURE LOGGED, 2026-11-26 02:37:59–02:42:28Z. Owner: "run the
+interleaved old/new timing with temperature logged". Host checked first: load 1.27 / 0.72 / 0.91,
+nothing above 0.17 of a core, no lean / cargo, card at 40 °C and idle. NEW = the binary of
+`263663b86` (HEAD `db9a14f5b` changed documentation only), OLD = `35a66ad8d`. One discarded warm-up
+run each, then 48 runs in blocks O N N O / N O O N, six of each; temperature, power and clock sampled
+every second (`~/staging/2026-11-25-edp-retime/interleave/run.log`, `temp.log`). Every run verified
+5,226/5,226.
+Totals: OLD mean 4.923, median 4.990, min 4.655, max 5.077; NEW mean 4.897, median 4.932, min
+4.682, max 5.026. Check stage: OLD mean 3.989, NEW 3.980.
+Per block of four (two OLD, two NEW, adjacent in time), NEW − OLD: total −0.026 s (standard error
+0.008, 12 blocks, range −0.070..+0.016, NEW slower in 2); check stage −0.009 s (s.e. 0.010, NEW
+slower in 5).
+By thirds of the session, both kernels together: runs 1–16 total 4.77 (card 45–56 °C at run end),
+17–32 4.97 (56–59 °C), 33–48 4.99 (58–61 °C). First four runs 4.655–4.712 at 45–49 °C; last four
+4.938–5.019 at 59 °C. Power about 49 W under load; the card went 40 → 61 °C in four and a half minutes.
+**Reading.** (1) The single-writer kernel, the barrier per lemma and the inverted-range guard cost
+nothing measurable: the check stage is the same to 0.01 s. The 0.03 s in the total is in the
+host-side stages and is small enough to be build-to-build layout. (2) The drift in the previous
+entry is the CARD WARMING: about 0.3 s (6–7 %) between 45 °C and 60 °C, alike for both kernels.
+A cold-then-three-warm protocol run takes its figure from the first minute and so depends on the
+card's temperature at the start; the 11-11 figure (4.54) was taken 16 minutes after a reboot with
+no temperature logged. (3) So the honest statement of the figure is a band: **4.7 s with the card
+near 45–50 °C, 5.0 s near 60 °C**, on this SFF card; the protocol run's 4.71 / 4.86 stands as
+measured, with its start temperature unrecorded. Future protocol runs log the temperature.]
