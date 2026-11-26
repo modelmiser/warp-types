@@ -4,7 +4,7 @@
 
 A type system that prevents shuffle-from-inactive-lane bugs in GPU warp programming by tracking active lane masks at compile time.
 
-**Status:** Research prototype with real GPU execution. Main crate 335 unit + 50 example tests, plus 46 doc tests workspace-wide (431 total). Zero runtime overhead verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
+**Status:** Research prototype with real GPU execution. Main crate 335 unit + 50 example tests, plus 46 doc tests workspace-wide (431 total). Zero runtime overhead for the static core, verified at Rust MIR, LLVM IR, and NVIDIA PTX levels. Cargo-integrated GPU compilation pipeline. C++20 header (`include/warp_types.h`) for CUDA/HIP interop.
 
 ## The Problem
 

@@ -246,9 +246,9 @@ mkdir build && cd build && cmake .. && make
 
 ## Path 4: C++ Kernels with `warp_types.h`
 
-**Use case:** You write CUDA or HIP kernels in C++ and want the same compile-time safety as the Rust version. No Rust toolchain required.
+**Use case:** You write CUDA or HIP kernels in C++ and want the method-availability check of the Rust version (a weaker guarantee than Rust's — see the limitation below). No Rust toolchain required.
 
-**How it works:** `include/warp_types.h` is a standalone C++20 header that mirrors the Rust type system using concepts and `requires` clauses. `Warp<All>` has shuffle methods; `Warp<Even>` doesn't. Same guarantee, zero overhead.
+**How it works:** `include/warp_types.h` is a standalone C++20 header that mirrors the Rust type system using concepts and `requires` clauses. `Warp<All>` has shuffle methods; `Warp<Even>` doesn't. The types add no runtime overhead. The guarantee is weaker than in Rust: C++ does not consume the original handle on `diverge` (below).
 
 ```cpp
 #include "warp_types.h"
@@ -279,10 +279,10 @@ __global__ void buggy_reduce(int* data) {
 ```
 
 **What you get:**
-- Shuffle/reduce/ballot only on `Warp<All>` — diverged warps can't call them
+- Shuffle/reduce/ballot only on `Warp<All>` — a diverged handle has no such methods (the original `Warp<All>` handle remains usable in C++; see the limitation below)
 - `merge()` requires `ComplementOf` — can't merge `Even + LowHalf`
 - Works with CUDA (`__shfl_xor_sync`), HIP (`__shfl_xor`), and host-only (modeling)
-- Zero runtime overhead — `Warp<S>` is empty
+- No runtime overhead from the types — `Warp<S>` is empty
 
 **Build:**
 ```bash
@@ -291,7 +291,7 @@ nvcc --std=c++20 -I path/to/warp-types/include -o demo my_kernel.cu
 hipcc --std=c++20 -I path/to/warp-types/include -o demo my_kernel.cu
 ```
 
-**Limitation vs Rust:** C++ can't enforce linear types (move-only empty structs). After `diverge_even_odd()`, you *can* still use the original warp handle — C++ trusts you not to. Rust makes this a compile error.
+**Limitation vs Rust:** C++ can't enforce move-only use of the handle. After `diverge_even_odd()`, you *can* still call a full-warp shuffle on the original warp handle — C++ trusts you not to; Rust makes that use a compile error. So in C++ the check catches a shuffle called on a diverged handle, not a shuffle reached while diverged. The limits that apply to the Rust version apply here too (a raw branch around an intrinsic, a second `kernel_entry()`; README Limitations).
 
 **Effort:** 10 minutes. Copy the header, add `-I` flag, use the API.
 

@@ -2,7 +2,8 @@ import WarpTypes.Core
 import WarpTypes.CoreMetatheory
 
 /-
-  Fence / Partial-Write Domain Extension (Level 2c — experiment B, post-port)
+  Fence / Partial-Permission Domain Extension (Level 2c — experiment B, post-port;
+  formerly titled "Partial-Write")
 
   Ported 2026-04-11 onto `WarpTypes.Core`. This file formerly defined
   FenceTy / FenceExpr / FenceCtx / FenceHasType as a self-contained inductive
@@ -23,7 +24,7 @@ import WarpTypes.CoreMetatheory
   constructor-clash contradiction. This is the standard probe-3b pattern.
 
   Domain interpretation (unchanged):
-  - PSet n   : write mask over an n-byte buffer (bit i ↔ byte i)
+  - PSet n   : permission mask over an n-byte buffer (bit i ↔ byte i may be written)
   - .group s : permission to write exactly bytes in s (affine: it can be dropped)
   - diverge  : split a permission by predicate
   - merge    : combine complementary sub-permissions (THE gate)
@@ -42,7 +43,7 @@ import WarpTypes.CoreMetatheory
 -- ByteBuf: PSet 8 instantiation
 -- ============================================================================
 
-/-- An 8-bit write mask: one bit per byte of a word-sized buffer. -/
+/-- An 8-bit permission mask: one bit per byte of a word-sized buffer. -/
 abbrev ByteBuf := PSet 8
 
 namespace ByteBuf

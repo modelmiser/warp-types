@@ -113,8 +113,8 @@
   more permissive" (paper §1, both READMEs); "zero runtime overhead" is tied to the static core where the
   paper states it (§1.2, §6, §7.2, `paper/README.md`); the tutorial no longer calls the cuda-samples bug
   "impossible". Comments in `lean/WarpTypes/Fence.lean` say the fence rule gates on permission coverage, not
-  on writes performed. NOT done: `INTEGRATION.md` still describes the C++ header as giving the "same
-  guarantee", and the status line of `README.md` says "zero runtime overhead" without the qualifier. What the
+  on writes performed. `INTEGRATION.md` no longer says the C++ header gives the "same guarantee": C++
+  does not consume the original handle, so the check there is weaker, and the text says how. What the
   check cannot see is unmarked prose in the hand-kept files, and which paragraph of a named section a block
   quotes.
 - **Paper §5.6 corrected: what a fence does, and that the fence typestate is a model.** The section said a
