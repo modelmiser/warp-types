@@ -165,9 +165,9 @@ compile_error!(
 
 // The AMD device path is not implemented. `src/gpu.rs` holds placeholders for
 // it (a shuffle that returns its own value, an all-ones exec mask) and no
-// `lane_id`, no `GpuShuffle` impls and no `no_std` setup, so until 2026-11-25
-// a build for `amdgcn-amd-amdhsa` (which the pinned nightly lists) failed
-// with some 150 unrelated errors — and had those been patched over, the
+// `lane_id` and no `GpuShuffle` impls, and until 2026-11-25 there was no
+// `no_std` attribute for it either, so a build for `amdgcn-amd-amdhsa`
+// (which the pinned nightly lists) failed with some 150 unrelated errors — and had those been patched over, the
 // placeholders would have run on a device as single-lane identities. Refuse
 // by name instead.
 #[cfg(target_arch = "amdgpu")]

@@ -169,8 +169,8 @@ impl<S: ActiveSet> Warp<S> {
     /// executes `bar.warp.sync` with membermask `S::MASK & live`. A lane
     /// outside `S` executes neither (`diverge_*` emits no branch, so every
     /// lane of the warp reaches this call, and both instructions are undefined
-    /// for an executing lane their membermask does not name). On every other
-    /// target — the CPU model, `amdgpu` — it emits nothing, and
+    /// for an executing lane their membermask does not name). On the CPU
+    /// model it emits nothing (an `amdgpu` build is refused in `lib.rs`), and
     /// `Warp<Empty>::sync()` emits nothing anywhere (no lane passes the guard).
     ///
     /// Why the ballot: the barrier waits for every lane it names, and the PTX
@@ -193,7 +193,12 @@ impl<S: ActiveSet> Warp<S> {
     /// lane under `vote.sync.ballot`. On the one device measured (RTX 4000
     /// Ada) a full-mask ballot reports exactly the live lanes for block sizes
     /// 1, 16, 20, 33, 48 and 63. If a device reported a missing lane as 1,
-    /// `sync` would name it, as it did before the ballot.
+    /// `sync` would name it, as it did before the ballot. The same two
+    /// points are assumed of a lane of `S` that has EXITED (the ISA says the
+    /// ballot does not wait for it; that its bit is 0 is not stated for
+    /// `vote.sync.ballot`), and (3) that every lane taking part receives the
+    /// same ballot value, which is what a ballot is, though the ISA does not
+    /// spell it out.
     ///
     /// The barrier also orders memory among the lanes that take part: a lane
     /// may store, `sync()`, and then read what the other lanes of `S` stored

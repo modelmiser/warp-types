@@ -323,8 +323,11 @@ pub fn grad_norm_reduce(
 //
 // Control flow at every collective is warp-uniform: admissibility, the
 // total and the verdict are computed from the same global data by all lanes.
-// The one lane-dependent branch that stores (`lane == 0`) rejoins at a
-// full-mask barrier before any collective.
+// Two lane-dependent branches store: `lane == 0` (rejoins at a full-mask
+// barrier before any collective) and `lane == ul` in the batched loop (no
+// lane reads that slot from the table again before the barrier that closes
+// the batch, or the one that opens the next lemma: within the batch the
+// insert's effect is replayed in registers).
 // Codes: 0 Ok, 1 NotUnit, 2 NoConflict, 3 DeletedHint, 4 ForwardHint,
 // 5 TableOverflow (same numbering as `lrat_warp::LemmaCode`).
 // ============================================================================
@@ -417,9 +420,10 @@ unsafe fn lrat_falsified(table: *const u64, base: u32, stamp: u32, direct: bool,
 /// - `*count` must be this lemma's true occupancy of the region (the number
 ///   of slots carrying `stamp`). The hashed probe loop has no bound of its
 ///   own: it ends because the cap test above keeps one slot free.
-/// - ONE lane of the warp calls this (the check kernel uses lane 0), and no
-///   other lane touches the region until a `bar.warp.sync` over the warp has
-///   followed the call. The caller then gives the other lanes the result and
+/// - ONE lane of the warp calls this (the check kernel uses lane 0); a
+///   `bar.warp.sync` over the warp has followed any OTHER lane's earlier
+///   store to the region; and no other lane touches the region until a
+///   `bar.warp.sync` has followed this call. The caller then gives the other lanes the result and
 ///   the new `*count` by a shuffle from that lane. Until 2026-11-25 all 32
 ///   lanes called this with the same arguments, which made `*count` depend on
 ///   the lanes running in lockstep (every lane loading the slot before any
@@ -540,6 +544,14 @@ unsafe fn lrat_hint_strided(
     ce: u32,
     count: &mut u32,
 ) -> u8 {
+    // An inverted range is not a clause. Read as it stands it would be an
+    // EMPTY one — an immediate conflict, the one answer that accepts the
+    // lemma — so it fails the lemma closed instead. `cs` and `ce` are the
+    // same in every lane. The batched path sends such a hint here: its
+    // wrapped length is clamped to 33 and never fits a batch.
+    if ce < cs {
+        return 5;
+    }
     // Each lane strides over the clause.
     let mut free = 0u32;
     let mut last = 0i32;
@@ -667,7 +679,9 @@ unsafe fn lrat_hints_direct_batched(
                 if hc < lemma_dense {
                     m_del = *deleted_at.add(hc as usize);
                     m_cs = *clause_start.add(hc as usize);
-                    m_len = *clause_start.add(hc as usize + 1) - m_cs;
+                    // wrapping: an inverted range gives a length near 2^32,
+                    // which the strided fallback refuses (`ce < cs`)
+                    m_len = (*clause_start.add(hc as usize + 1)).wrapping_sub(m_cs);
                 } else {
                     m_fwd = true;
                 }
@@ -701,7 +715,7 @@ unsafe fn lrat_hints_direct_batched(
                 return 3;
             }
             let cs = warp.broadcast_lane(data::PerLane::new(m_cs), src).get();
-            let ce = cs + warp.broadcast_lane(data::PerLane::new(m_len), src).get();
+            let ce = cs.wrapping_add(warp.broadcast_lane(data::PerLane::new(m_len), src).get());
             let c = lrat_hint_strided(warp, lane, lits, table, base, stamp, true, slots, cs, ce, count);
             if c != 0xFF {
                 return c;
@@ -802,7 +816,7 @@ unsafe fn lrat_hints_direct_batched(
             }
             // Later hints of the batch see the insert.
             if valid && q > j {
-                if lit == -u {
+                if lit == u.wrapping_neg() {
                     free = false;
                 }
                 if lit == u {
@@ -836,9 +850,10 @@ unsafe fn lrat_hints_direct_batched(
 /// preconditions of the `unsafe` helpers it calls:
 /// - `clause_start` has one entry past the last clause and no entry exceeds
 ///   the length of `lits`. A range `[clause_start[c], clause_start[c + 1])`
-///   that is inverted is read as an EMPTY clause (nothing is loaded): no
-///   lemma's own clause may be inverted, and no hint may name one — an empty
-///   hint is an immediate conflict. (The array is not required to be
+///   that is inverted loads nothing. No lemma's own clause may be inverted
+///   (it would read as an empty lemma; the launcher refuses it). A HINT that
+///   names an inverted range fails its lemma closed (code 5), in both
+///   layouts. (The array is not required to be
 ///   nondecreasing throughout: the batch route concatenates regions that
 ///   each restart at the shared CNF.)
 /// - For every `i < num_lemmas`: `lemma_clause[i]`, `lemma_step[i]`,
@@ -898,6 +913,12 @@ pub fn lrat_check_lemmas(
         // Lemma literals are false. ONE lane inserts them (lane 0): with 32
         // lanes inserting, `count` was the same in every lane only if they
         // ran in lockstep (see `lrat_insert`'s `# Safety`).
+        // The previous lemma may have ended on an early return right after a
+        // batch lane's store (`lrat_hints_direct_batched`), with no barrier
+        // behind it. Order that store before lane 0's stores to the same
+        // region (cross-vendor panel round 4, 2026-11-25: without this the
+        // older store could land on top of a newer one).
+        warp_types::gpu::syncwarp(0xffff_ffff);
         let mut packed = 0u32;
         if lane == 0 {
             let mut k = ls;

@@ -1422,6 +1422,49 @@ mod tests {
         }
     }
 
+    /// A hint that names an INVERTED `clause_start` range must not read as an
+    /// empty clause (an immediate conflict, which would accept the lemma):
+    /// the kernel fails the lemma closed, in both layouts. The launcher
+    /// cannot refuse this itself — hint values may live only on the device,
+    /// and the batch route's layout has inverted ranges at its region
+    /// boundaries — so the kernel is the guard (panel round 4, 2026-11-25).
+    #[test]
+    fn a_hint_naming_an_inverted_range_fails_closed() {
+        use crate::lrat::{Proof, Step};
+        let Some(ctx) = ctx() else { return };
+        let cnf = vec![vec![1, 2], vec![-1, 2], vec![1, -2], vec![-1, -2]];
+        let steps = vec![
+            Step::Add {
+                id: 5,
+                lits: vec![2],
+                hints: vec![1, 2],
+            },
+            Step::Add {
+                id: 6,
+                lits: vec![],
+                hints: vec![5, 3, 4],
+            },
+        ];
+        let good = super::super::flatten(&cnf, &Proof { steps });
+        // Lemma 0's second hint is clause 1 (dense). Invert that clause's
+        // range: [clause_start[1], clause_start[2]) = [2, 0).
+        assert_eq!(
+            good.hints[1], 1,
+            "the fixture's second hint is dense clause 1"
+        );
+        let mut bad = good.clone();
+        bad.clause_start[2] = 0;
+        assert!(bad.clause_start[1] > bad.clause_start[2]);
+        for direct in [false, true] {
+            let lits = ctx.stream().clone_htod(&bad.lits).unwrap();
+            let hints = ctx.stream().clone_htod(&bad.hints).unwrap();
+            let codes = ctx
+                .check_lrat_codes_mode(&bad, &lits, &hints, 1, Some(direct))
+                .unwrap();
+            assert_eq!(codes[0], 5, "direct = {direct}: codes {codes:?}");
+        }
+    }
+
     /// The decode launch refuses a length past the bytes on the device, and
     /// the host-segment gather refuses segments that leave their sources.
     #[test]

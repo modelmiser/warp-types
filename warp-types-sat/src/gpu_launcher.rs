@@ -597,6 +597,13 @@ impl GpuContext {
         if n_slices == 0 {
             return Err(GpuError::Cuda("decode: empty input".into()));
         }
+        // The cooperative kernel strides `si += blocks` in u32 with
+        // `blocks <= n_slices`: past 2^31 slices the index could wrap.
+        if n_slices > u32::MAX / 2 {
+            return Err(GpuError::Cuda(format!(
+                "decode: {n_slices} slices leave no room for the kernel's u32 stride"
+            )));
+        }
         let t_upload = std::time::Duration::ZERO;
         let s_start: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
         let s_end: CudaSlice<u64> = s.alloc_zeros(n_slices as usize)?;
@@ -966,7 +973,7 @@ impl GpuContext {
                 out.len()
             )));
         }
-        let blocks = blocks.max(1);
+        let blocks = gather_blocks(blocks, n_out)?;
         // SAFETY: the launch passes device pointers whose lengths were just
         // checked; what the segments SAY is this function's own `# Safety`.
         unsafe {
@@ -1043,7 +1050,7 @@ impl GpuContext {
                 bad.len()
             )));
         }
-        let blocks = blocks.max(1);
+        let blocks = gather_blocks(blocks, n_out)?;
         // SAFETY: lengths checked above; the segments' contents are this
         // function's own `# Safety`.
         unsafe {
@@ -1117,8 +1124,14 @@ impl GpuContext {
     /// array (`sat-kernels::lrat_max_code`); 0 for an empty array.
     pub fn lrat_max_code(&self, lits: &CudaSlice<i32>) -> Result<u32, GpuError> {
         let s = &self.stream;
+        // The kernel strides `i += blocks * 256` in u32 (at most 2^18 here):
+        // `n` must leave that much room or the index wraps and never ends.
         let n = u32::try_from(lits.len())
-            .map_err(|_| GpuError::Cuda("lrat_max_code: more than 2^32 - 1 literals".into()))?;
+            .ok()
+            .filter(|&n| n <= u32::MAX - (1 << 18))
+            .ok_or_else(|| {
+                GpuError::Cuda("lrat_max_code: too many literals for a u32 stride".into())
+            })?;
         if n == 0 {
             return Ok(0);
         }
@@ -1170,8 +1183,9 @@ impl GpuContext {
         use cudarc::driver::sys::CUdevice_attribute::*;
         const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
                             // u64: `WPB * region` itself overflowed u32 for a region past
-                            // u32::MAX / 4 (cross-vendor panel, 2026-11-25). Such a region gives 0
-                            // here; `launch_lrat_check` refuses it before any allocation.
+                            // u32::MAX / 4 (cross-vendor panel, 2026-11-25). Such a region gives
+                            // `max_blocks` 0 and so a block count of 1 below; `launch_lrat_check`
+                            // refuses the region before any allocation.
         let max_blocks = (u32::MAX as u64 / (WPB * region.max(1) as u64)).min(1 << 16) as u32;
         let blocks = if blocks == 0 {
             let ctx = self.stream.context();
@@ -1211,7 +1225,8 @@ impl GpuContext {
             return Ok(Vec::new());
         }
         const WPB: u64 = 4; // must equal sat-kernels::LRAT_WARPS_PER_BLOCK
-        let n = fp.lemma_clause.len() as u32;
+        let n = u32::try_from(fp.lemma_clause.len())
+            .map_err(|_| GpuError::Cuda("LRAT check: more than 2^32 - 1 lemmas".into()))?;
         // `lrat_max_code` reports u32::MAX for a literal with |l| >= 2^31 - 1:
         // its table key, or its negation's, does not exist (the kernels'
         // `code + 1` wraps), and i32::MIN is its own negation. No DIMACS
@@ -1269,7 +1284,8 @@ impl GpuContext {
             ));
         }
         let s = &self.stream;
-        let n = fp.lemma_clause.len() as u32;
+        let n = u32::try_from(fp.lemma_clause.len())
+            .map_err(|_| GpuError::Cuda("LRAT check: more than 2^32 - 1 lemmas".into()))?;
         if n == 0 {
             return Ok(Vec::new());
         }
@@ -1398,6 +1414,18 @@ pub type GatheredPayloads = (CudaSlice<i32>, CudaSlice<u32>, Option<usize>);
 /// every segment selects source 0 or 1, lies inside that source, and the
 /// lengths add up to exactly `total` without overflowing the kernels' `u32`
 /// indices. The kernels index the sources with these values and test nothing.
+/// The gather kernels stride `i += blocks * 32` in u32: `blocks` is clamped
+/// to 2^16 (a larger count wrapped the stride — to 0 at 2^27, a kernel that
+/// never ends) and `n_out` must leave room for one stride past its end.
+fn gather_blocks(blocks: u32, n_out: u32) -> Result<u32, GpuError> {
+    if n_out > u32::MAX - (1 << 21) {
+        return Err(GpuError::Cuda(format!(
+            "gather: {n_out} outputs leave no room for the kernel's u32 stride"
+        )));
+    }
+    Ok(blocks.clamp(1, 1 << 16))
+}
+
 fn check_gather_segs(
     what: &str,
     segs: &[GatherSeg],
@@ -1420,7 +1448,9 @@ fn check_gather_segs(
             1 => src1_len,
             other => return bad(format!("segment {k} selects source {other}")),
         };
-        if g.src as u64 + g.len as u64 > src_len as u64 {
+        // `> u32::MAX`: the kernel forms `src + offset` in u32, and a source
+        // longer than 2^32 elements would otherwise let the sum wrap.
+        if g.src as u64 + g.len as u64 > (src_len as u64).min(u32::MAX as u64) {
             return bad(format!(
                 "segment {k} reads {}..{} of a source with {src_len} elements",
                 g.src,

@@ -93,6 +93,10 @@ guarded_sync_all probe_fence 'Warp<All>::sync: guard, ballot of true over the fu
 for e in probe_sync_even probe_sync_odd probe_fence; do
   n=$(section $e | grep -cE 'bar\.warp\.sync' || true)
   if [ "$n" = 1 ]; then echo "ok   $e: exactly one bar.warp.sync"; else echo "FAIL $e: expected 1 bar.warp.sync, got $n"; fail=1; fi
+  # ... and exactly one ballot: the chain above matches ONE guarded ballot; a second, unguarded one elsewhere in
+  # the entry would otherwise pass (panel round 4)
+  n=$(section $e | grep -cE 'vote\.sync\.ballot' || true)
+  if [ "$n" = 1 ]; then echo "ok   $e: exactly one vote.sync.ballot"; else echo "FAIL $e: expected 1 vote.sync.ballot, got $n"; fail=1; fi
 done
 check probe_fence 'membar\.gl;' 'threadfence lowers to membar.gl'
 # tiles: width-confined c

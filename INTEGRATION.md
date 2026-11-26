@@ -340,7 +340,7 @@ A: Zero. `Warp<S>` is `PhantomData`. Verified at MIR, LLVM IR, and PTX levels.
 A: The type system (Path 1) works with any GPU framework. The kernel compilation pipeline (Path 2) currently targets NVIDIA PTX via cudarc. Vulkan/SPIR-V backend is future work.
 
 **Q: What about AMD GPUs?**
-A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. MI300X mask correctness verified. For AMD GPU execution today, use Path 4 (`warp_types.h` with HIP) — Rust doesn't target amdgcn yet.
+A: The mask type is `u64` (supports 64-lane wavefronts). `GpuTarget::Amd` is in the builder. MI300X mask correctness verified. For AMD GPU execution today, use Path 4 (`warp_types.h` with HIP) — the crate has no AMD device path yet (it refuses an `amdgcn-amd-amdhsa` build).
 
 **Q: Can I use warp-types from C++?**
 A: Two options. Path 3: write kernels in Rust, load PTX from C++ via `cuModuleLoad`. Path 4: write kernels in C++ using `include/warp_types.h` for compile-time safety. Both are zero overhead.

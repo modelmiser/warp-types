@@ -835,9 +835,11 @@ fn rup(active: &std::collections::HashMap<Vec<i64>, usize>, clause: &[i64]) -> b
 }
 
 /// Reading an external checker's verdict, for the tests of this crate that
-/// run one (`proof::tests`, `lrat::tests`). The same rule as the shipped
-/// tools (`solve --certify`, `tools/cert-campaign.py`): a banner counts only
-/// as a WHOLE LINE of stdout, and only with exit status 0. Until 2026-11-25
+/// run one (`proof::tests`, `lrat::tests`). The rule `solve --certify` uses:
+/// a banner counts only as a WHOLE LINE of stdout (surrounding blanks
+/// ignored), and only with exit status 0. (`tools/cert-campaign.py` reads
+/// stdout and stderr together and has extra failure lines; it is not
+/// identical.) Until 2026-11-25
 /// these tests matched the banner as a substring and ignored the exit status,
 /// so a checker that printed it and then died, or printed it inside another
 /// line, counted as having verified.

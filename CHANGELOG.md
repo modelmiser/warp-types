@@ -44,7 +44,7 @@
   same. The launcher now refuses, before any launch, a proof with a literal of magnitude `2^31 - 1` or more
   (`lrat_max_code` reports `u32::MAX` for it; `i32::MIN` and `2^31 - 1` have the same problem through their
   negations). `lrat_direct_slots` saturates where it wrapped to 0 in release builds, and a direct region past
-  `LRAT_DIRECT_SLOTS_MAX` (`u32::MAX / 4`, the kernel's 32-bit table arithmetic) is refused or, when the layout
+  `LRAT_DIRECT_SLOTS_MAX` (`u32::MAX / 4` rounded down to a multiple of 32; the kernel's 32-bit table arithmetic) is refused or, when the layout
   is not forced, replaced by the hashed layout. Only a hand-built `FlatProof` reaches any of this (the parser
   caps variables at 2^26). A device test builds one; it fails with the insert guard removed.
 - **Fixed: the device launchers validate what the kernels index with** (`warp-types-sat`, `gpu` feature). They
@@ -67,15 +67,25 @@
   replaced (the pinned nightly lists the target).
 - **Fixed: `lrat_batch_device::check_pipelined` hung on an error.** When a chunk's prepare or check returned an
   error, the reader thread stayed blocked sending to a channel nobody read and the call never returned. The
-  checker now closes the channel on its way out.
+  checker now closes the channel on its way out, by a drop guard so that a panic closes it too. Observed on the
+  error path (a test that hung now fails at once); the panic path is not tested.
+- **Fixed: a hint naming an inverted clause range fails its lemma closed.** The check kernel read such a range
+  as an empty clause, an immediate conflict that accepts the lemma. `flatten` and the decoders never build one,
+  but `FlatProof`'s fields are public and hint values are not visible to the launcher. Device test, both layouts.
+- **Fixed: unbounded block counts and strides in the gather and max-code launches.** A caller-supplied block
+  count of 2^27 made the gather kernels' u32 stride 0 (a kernel that never ends); block counts are clamped and
+  the output and literal counts must leave room for one stride. A gather segment check now also bounds
+  `src + len` by `u32::MAX`.
 - **Fixed: the LRAT check kernel no longer assumes the lanes of a warp run in lockstep.** All 32 lanes used to
   insert a lemma's literals (and a strided hint's unit) into the warp's table, each counting the occupancy for
   itself; the counts agreed only if every lane loaded a slot before any lane stored to it, which the PTX ISA
   does not promise on sm_70 and later. Lane 0 alone inserts now; the others get the outcome and the occupancy
-  by a shuffle after the barrier. The batched direct path already had one writer. Verdicts are unchanged on the
-  test proofs. The EDP record figure below (4.54 s) was measured BEFORE this change. A same-session comparison
+  by a shuffle after the barrier, and a barrier opens every lemma (the batched direct path, which already had
+  one writer per store, can leave a lemma right after a store). Verdicts are unchanged on the test proofs. What
+  this removes is the dependence of the occupancy count on lane scheduling; it is argued from the PTX ISA's text
+  for `bar.warp.sync`, not demonstrated on a device that schedules lanes apart. The EDP record figure below (4.54 s) was measured BEFORE this change. A same-session comparison
   on 2026-11-25, on a host that was not quiet (four other solver jobs on the pinned cores; not comparable with
-  4.54 s), gave warm totals 5.75 / 5.87 / 5.91 s before and 5.72 / 5.77 / 6.00 s, then 5.91 / 6.01 / 6.04 s
+  4.54 s; the logs are not in the repository), gave warm totals 5.75 / 5.87 / 5.91 s before and 5.72 / 5.77 / 6.00 s, then 5.91 / 6.01 / 6.04 s
   after: no difference at that resolution. A quiet-host re-measurement has not been made.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.

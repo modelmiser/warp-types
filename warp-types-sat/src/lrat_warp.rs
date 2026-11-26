@@ -337,12 +337,12 @@ impl FlatProof {
                 self.lemma_clause[i]
             ));
         }
-        // An inverted range reads as an EMPTY clause. For a lemma that would
-        // be a different lemma from the one stored, so refuse it here. For a
-        // hinted clause it would be an immediate conflict; hint values are
-        // not visible here, so that part is the builder's: `flatten` and the
-        // decoders produce no inverted range, and the batch route's only
-        // ones are region boundaries, which its id table never maps a hint to.
+        // An inverted range loads nothing. For a lemma it would read as an
+        // EMPTY lemma, a different one from the one stored, so refuse it
+        // here. Hint values are not visible here (they may live on the
+        // device); the kernel itself fails a lemma closed when a hint names
+        // an inverted range. `flatten` and the decoders produce none; the
+        // batch route's only ones are its region boundaries.
         if let Some(i) = self
             .lemma_clause
             .iter()

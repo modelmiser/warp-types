@@ -1,4 +1,4 @@
-//! GPU intrinsics for nvptx64 and amdgpu targets.
+//! GPU intrinsics for nvptx64, and placeholders for amdgpu (not buildable: see `lib.rs`).
 //!
 //! Provides actual PTX/GCN instructions for shuffle, ballot, and sync operations.
 //! Gated behind `#[cfg(target_arch = "nvptx64")]` or `#[cfg(target_arch = "amdgpu")]`.
@@ -368,7 +368,9 @@ pub unsafe fn shfl_sync_up_i32_width(mask: u32, val: i32, delta: u32, width: u32
 /// `.target sm_6x` and below.
 ///
 /// Unlike shuffle, an unnamed lane is not a data hazard here: lanes not named
-/// in `mask` contribute 0 to the ballot, which is defined. `Warp<All>::ballot`
+/// in `mask` contribute 0 to the ballot, which is defined. (What a NAMED lane
+/// that was never launched, or has exited, contributes is not stated by the
+/// ISA; see the residual assumptions on `Warp::sync`.) `Warp<All>::ballot`
 /// supplies `0xFFFFFFFF` behind a full-warp witness.
 #[cfg(target_arch = "nvptx64")]
 #[inline(always)]

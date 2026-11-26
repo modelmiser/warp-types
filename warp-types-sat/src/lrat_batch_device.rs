@@ -580,7 +580,14 @@ pub fn prepare_chunk(
         let (n_c, n_l, n_h, n_n, n_t, n_ls, n_hs, n_xl, n_xh) =
             (c, l, h, lemma, tab, lseg, hseg, xl, xh);
         let limit = (u32::MAX - 64) as usize;
-        if n_c > limit || n_l > limit || n_h > limit || n_t > limit || n_xl > limit {
+        if n_c > limit
+            || n_l > limit
+            || n_h > limit
+            || n_t > limit
+            || n_xl > limit
+            || n_ls > limit
+            || n_hs > limit
+        {
             return Err(GpuError::Cuda(
                 "batch_device: chunk too large for the kernels' 32-bit indices".into(),
             ));
@@ -1081,13 +1088,21 @@ pub fn check_pipelined(
             }
             Ok(out)
         };
-        let out = check_all();
-        // `rx_prep` is gone (moved into `check_all`), so a preparer's next
-        // send fails and it returns. Dropping the bytes receiver does the
-        // same for the reader. A preparer blocked in `recv` holds this lock
-        // only until the reader sends or finishes, so this cannot deadlock.
-        rx_bytes.lock().unwrap().take();
-        out
+        // Close the bytes channel however this closure is left — by return or
+        // by a panic in `check_all` (panel round 4: a panic skipped a plain
+        // `take()` and left the reader blocked, so the scope never joined).
+        // `rx_prep` is moved into `check_all` and dropped with it, so a
+        // preparer's next send fails and it returns; dropping the bytes
+        // receiver does the same for the reader. A preparer blocked in `recv`
+        // holds the lock only until the reader sends or finishes.
+        struct Close<'a, T>(&'a Mutex<Option<T>>);
+        impl<T> Drop for Close<'_, T> {
+            fn drop(&mut self) {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+            }
+        }
+        let _close = Close(rx_bytes);
+        check_all()
     })
 }
 
