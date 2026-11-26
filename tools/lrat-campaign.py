@@ -26,13 +26,20 @@ def verified(rc, out, banner):
     code alone is not a verdict; a substring match alone accepts a checker that printed the banner and died."""
     return rc == 0 and banner in {l.strip() for l in out.replace("\r", "\n").split("\n")}
 
+class Out(str):
+    """A finished command's STDOUT, with its stderr kept beside it as `.err`. Verdicts are read from stdout only:
+    until 2026-11-25 the two streams were concatenated, so a banner printed on stderr counted as a verdict, and a
+    stdout without a final newline ran into the first stderr line (cross-vendor panel, round 4)."""
+    def __new__(cls, out, err=""):
+        s = super().__new__(cls, out); s.err = err; return s
+
 def run(cmd, timeout):
     t0 = time.perf_counter()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return time.perf_counter() - t0, p.returncode, p.stdout + p.stderr
+        return time.perf_counter() - t0, p.returncode, Out(p.stdout, p.stderr)
     except subprocess.TimeoutExpired:
-        return timeout, 124, "TIMEOUT"
+        return timeout, 124, Out("TIMEOUT")
 
 def verdict_line(out, prefix="s "):
     for l in out.split("\n"):
@@ -79,7 +86,7 @@ def main():
             t_lrat, rc, out = run([a.solve, "--lrat", lrat, cnf], a.timeout)
             row["t_lrat"] = f"{t_lrat:.3f}"
             row["lrat_bytes"] = os.path.getsize(lrat) if os.path.exists(lrat) else ""
-            stat = [l for l in out.split("\n") if "LRAT proof written" in l]
+            stat = [l for l in out.err.split("\n") if "LRAT proof written" in l]  # `solve` prints it on stderr
             row["lrat_stats"] = stat[0].split("(", 1)[1].rstrip(")") if stat else ""
             t_lc, rc, out = run([a.lrat_check, cnf, lrat], a.timeout)
             row["lrat_check"] = "VERIFIED" if verified(rc, out, "c VERIFIED") else "NOT"

@@ -97,6 +97,11 @@
   repository; every number is in `research/edp-record.md`.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
+- **Fixed: the campaign tools read a checker's verdict from stdout only** (`tools/cert-campaign.py`,
+  `tools/lrat-campaign.py`, `tools/lrat-mutate.py`). They concatenated stdout and stderr before looking for the
+  banner, so a banner printed on stderr counted (tried with a stand-in checker: accepted before, refused now).
+  Failure markers still count on either stream; the solver's proof statistics, which it prints on stderr, are
+  read from there.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any
   stdout containing `s VERIFIED` and ignored the checker's exit status, so a checker that printed the banner and
   then died, or only mentioned it in a comment line, certified the answer. The same match was in

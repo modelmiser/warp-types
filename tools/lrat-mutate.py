@@ -86,12 +86,19 @@ def verified(rc, out, banner):
     code alone is not a verdict; a substring match alone accepts a checker that printed the banner and died."""
     return rc == 0 and banner in {l.strip() for l in out.replace("\r", "\n").split("\n")}
 
+class Out(str):
+    """A finished command's STDOUT, with its stderr kept beside it as `.err`. Verdicts are read from stdout only:
+    until 2026-11-25 the two streams were concatenated, so a banner printed on stderr counted as a verdict, and a
+    stdout without a final newline ran into the first stderr line (cross-vendor panel, round 4)."""
+    def __new__(cls, out, err=""):
+        s = super().__new__(cls, out); s.err = err; return s
+
 def run(cmd, timeout=600):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout + p.stderr
+        return p.returncode, Out(p.stdout, p.stderr)
     except subprocess.TimeoutExpired:
-        return 124, "TIMEOUT"
+        return 124, Out("TIMEOUT")
 
 def main():
     ap = argparse.ArgumentParser()

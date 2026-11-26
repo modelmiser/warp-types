@@ -89,13 +89,20 @@ def gen_tseitin(nv_graph, seed, path):
 # ----------------------------------------------------------------------------- helpers
 def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
 
+class Out(str):
+    """A finished command's STDOUT, with its stderr kept beside it as `.err`. Verdicts are read from stdout only:
+    until 2026-11-25 the two streams were concatenated, so a banner printed on stderr counted as a verdict, and a
+    stdout without a final newline ran into the first stderr line (cross-vendor panel, round 4)."""
+    def __new__(cls, out, err=""):
+        s = super().__new__(cls, out); s.err = err; return s
+
 def run(cmd, timeout):
     t = time.time()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout + p.stderr, time.time() - t
+        return p.returncode, Out(p.stdout, p.stderr), time.time() - t
     except subprocess.TimeoutExpired:
-        return -9, "TIMEOUT", time.time() - t
+        return -9, Out("TIMEOUT"), time.time() - t
 
 VERIFIED_LINES = {"s VERIFIED", "c VERIFIED", "s VERIFIED UNSAT"}  # drat-trim, lrat-check, cake_lpr
 
@@ -105,11 +112,14 @@ def verdict(out, rc=None):
     cake_lpr exits 0 on a proof it rejects (measured 2026-11-25), so the exit code cannot stand in for the banner;
     and until 2026-11-25 the banner was matched as a substring with the exit code ignored, so a checker that
     printed it and then died counted as VERIFIED. All three exit 0 when they do verify (measured the same day).
-    Pass `rc` for every checker run; leave it out only for solver output (`s UNSATISFIABLE` …)."""
+    Pass `rc` for every checker run; leave it out only for solver output (`s UNSATISFIABLE` …).
+    `out` is STDOUT (an `Out`); banners and solver answers are read from it alone. A failure marker counts on
+    either stream, since that direction is the safe one."""
     lines = {l.strip() for l in out.replace("\r", "\n").split("\n")}
     if "s NOT VERIFIED" in lines: return "NOT VERIFIED"
     if lines & VERIFIED_LINES: return "VERIFIED" if rc in (None, 0) else "NOT VERIFIED"
-    if "c FAILED" in out or "c ERROR" in out: return "NOT VERIFIED"
+    err = getattr(out, "err", "")
+    if "c FAILED" in out or "c ERROR" in out or "c FAILED" in err or "c ERROR" in err: return "NOT VERIFIED"
     if "s UNSATISFIABLE" in out: return "UNSAT"
     if "s SATISFIABLE" in out: return "SAT"
     if "s UNKNOWN" in out: return "UNKNOWN"
