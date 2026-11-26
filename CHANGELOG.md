@@ -73,7 +73,10 @@
   itself; the counts agreed only if every lane loaded a slot before any lane stored to it, which the PTX ISA
   does not promise on sm_70 and later. Lane 0 alone inserts now; the others get the outcome and the occupancy
   by a shuffle after the barrier. The batched direct path already had one writer. Verdicts are unchanged on the
-  test proofs; the timing in the EDP record below was measured BEFORE this change and has not been re-measured.
+  test proofs. The EDP record figure below (4.54 s) was measured BEFORE this change. A same-session comparison
+  on 2026-11-25, on a host that was not quiet (four other solver jobs on the pinned cores; not comparable with
+  4.54 s), gave warm totals 5.75 / 5.87 / 5.91 s before and 5.72 / 5.77 / 6.00 s, then 5.91 / 6.01 / 6.04 s
+  after: no difference at that resolution. A quiet-host re-measurement has not been made.
 - **Docs: `# Safety` sections** on the nine `unsafe` helpers in `sat-kernels` and host obligations on
   `lrat_check_lemmas`; SAFETY comments on the special-register readers and the fence in `src/gpu.rs`.
 - **Fixed: a checker verdict needs exit 0 AND the whole banner line.** `solve --certify --drat` accepted any

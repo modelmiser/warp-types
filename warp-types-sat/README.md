@@ -313,7 +313,15 @@ fail-closed: no checker is not a pass.
   `lrat-check` 199.6 s (text) and `cake_lpr` 366.9 s (binary) on the same
   trimmed proofs and machine, one step at a time on one thread; both reruns
   predate a host reboot that sped this pipeline ≈ 4 %, so the like-for-like
-  figure inside one run is the hashed table, 6.32 s against 4.54 s. Stated
+  figure inside one run is the hashed table, 6.32 s against 4.54 s. The 4.54 s figure is
+  the 2026-11-11 measurement; the check kernel's table inserts have since
+  become single-writer (2026-11-25). The two kernels were compared in one
+  session that day on a host that was NOT quiet (four other solver jobs on
+  the pinned cores, so these totals are not comparable with 4.54 s): warm
+  5.75 / 5.87 / 5.91 s before the change, 5.72 / 5.77 / 6.00 s and
+  5.91 / 6.01 / 6.04 s after, with all 5,226 steps verified and the old
+  route's codes equal on every step. No difference shows at that
+  resolution; a quiet-host re-measurement has not been made. Stated
   with the number every time: the underlying proofs are ours, not the
   published ones (proofs of the published composition made with iglucose
   and drat-trim, 3,414 lemmas returned as strict subsets and the derivations

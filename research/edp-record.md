@@ -1349,3 +1349,26 @@ gain does not depend on that. (3) The arc remains ended by the stage-S rule (idl
 on our proofs). Aside, not pre-registered: on the A2 proofs the check thread idles 0.68–0.79 s
 per run — that pipeline is PREPARE-bound (its upload and plan stages are larger), which is
 where a scan stage would pay, if ever pursued.]
+
+[RE-TIME AFTER THE SINGLE-WRITER KERNEL, 2026-11-26 00:15–00:21Z — CONTENDED, NOT A RECORD MEASUREMENT.
+Commit `f7d06888f` made lane 0 the only writer of a lemma's literals and of a strided hint's unit
+(the occupancy no longer depends on the lanes running in lockstep). The owner said "host is clear";
+it was not: four solver processes from another session (two `yices-sat`, two `cadical`, niced 19,
+running for over two days) sat on cores 2–5 of the six the protocol pins to, and the load average
+was 6.6 / 10.3 / 10.0 at the start (my own builds had ended 60 s earlier). I found them only after
+the run. Log `~/staging/2026-11-25-edp-retime/run-all5.log`; NEW = HEAD `e9cffa4bb`, tree clean; OLD =
+a worktree at `35a66ad8d` (the commit before the change), both built the same way.
+Oracles on NEW: `--verify-b2` 0 mismatching steps of 5,226, SimWarp 50/50, 5,226/5,226 verified.
+NEW: cold 5.565; warm 5.995 / 5.773 / 5.716; again after OLD: 6.043 / 5.912 / 6.010. OLD warm
+5.912 / 5.874 / 5.750. Check stage: NEW 3.80–4.17, OLD 3.86–3.88. Serial check at 288 blocks: NEW
+3.065 / 3.106 / 3.111 / 3.133, OLD 3.226 (one run). Hashed (one run each): NEW 7.788 total / check
+5.907, OLD 7.374 / 5.607. A2: cold 7.763, warm 7.773 / 9.278 / 8.671. 415 MB check 0.107–0.108 s.
+Device memory peak (NEW, run 2) 6,070 MiB against 5,238 on 11-11; OLD was not sampled, so whether
+that is the change or the session is not known.
+**Reading.** Host-side stages were two to three times slower than on 11-11 (read proofs 3.0 s
+against 1.0), for OLD and NEW alike, so no total here can stand beside 4.54 s. Between the two
+kernels in this session the pipelined totals overlap (OLD 5.75–5.91, NEW 5.72–6.04). The single
+hashed pair differs by 5 % against NEW; one run each on a contended host does not establish it,
+and does not exclude it. **The committed kernel has no quiet-host figure; 4.54 s / 4.60 s remains
+the figure of the kernel before `f7d06888f`.** Owed: the protocol on a quiet host, with the memory
+sampler on both kernels.]
